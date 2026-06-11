@@ -93,6 +93,27 @@ const STEP_CONFIG = {
 
 type StepKey = keyof typeof STEP_CONFIG;
 
+const STEP_ORDER: StepKey[] = ["choose-plan", "account-type", "create-organization", "invite-team"];
+
+function StepIndicator({ currentStep, totalSteps }: { currentStep: number; totalSteps: number }) {
+  return (
+    <div className="flex flex-col items-start gap-2 w-full">
+      <div className="flex items-center gap-3 w-full">
+        {Array.from({ length: totalSteps }, (_, i) => (
+          <div
+            key={i}
+            className={`h-[5px] flex-1 rounded-full ${i < currentStep ? "bg-[#084734]" : "bg-gray-300"
+              }`}
+          />
+        ))}
+      </div>
+      <span className="text-sm text-gray-500">
+        <span className="font-bold text-gray-900">{currentStep}</span> of {totalSteps}
+      </span>
+    </div>
+  );
+}
+
 /**
  * Shared layout for the onboarding flow (choose plan, account type, create org, invite team).
  * The left sidebar features and illustration update based on the current step.
@@ -102,6 +123,8 @@ export default function OnboardingLayout() {
   const segment = location.pathname.split("/").pop() as StepKey;
   const currentStep = STEP_CONFIG[segment] ?? STEP_CONFIG["choose-plan"];
   const Illustration = currentStep.illustration;
+  const stepIndex = STEP_ORDER.indexOf(segment);
+  const stepNumber = stepIndex === -1 ? 1 : stepIndex + 1;
 
   return (
     // <OnboardingGuard>
@@ -129,7 +152,10 @@ export default function OnboardingLayout() {
           </div>
         </div>
 
-        <div className="w-[75%] h-full">
+        <div className="w-[75%] h-full p-10">
+          <div className="mx-auto max-w-2xl px-6 pt-10">
+            <StepIndicator currentStep={stepNumber} totalSteps={STEP_ORDER.length} />
+          </div>
           <Outlet />
         </div>
       </main>
