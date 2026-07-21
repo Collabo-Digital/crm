@@ -65,9 +65,9 @@ export function Navbar() {
   // impersonating — the impersonation token has isSuperAdmin=false).
   const navLinks = isVendor
     ? [
-      { label: "Orders", href: "/orders", icon: ShoppingCart },
-      { label: "Products", href: "/products", icon: Package },
-    ]
+        { label: "Orders", href: "/orders", icon: ShoppingCart },
+        { label: "Products", href: "/products", icon: Package },
+      ]
     : user?.isSuperAdmin && !impersonatedBy
       ? [...NAV_LINKS, { label: "Super Admin", href: "/admin/users", icon: ShieldCheck }]
       : NAV_LINKS;
@@ -140,7 +140,7 @@ export function Navbar() {
 
         {/* ── Nav — pill container ─────────────────────────────── */}
         <LayoutGroup id="navbar">
-          <nav className="hidden md:flex items-center gap-0.5 rounded-full bg-foreground/90 dark:bg-gray-900 px-2 py-1.5 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700">
+          <nav className="hidden md:flex items-center gap-0.5 rounded-full bg-white dark:bg-gray-900 px-2 py-1.5 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700">
             {navLinks.map(({ label, href, icon: Icon, badge }) => {
               const isActive = location.pathname === href;
               return (
@@ -151,7 +151,7 @@ export function Navbar() {
                     "relative flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none p-2.5",
                     isActive
                       ? "font-semibold text-gray-900 dark:text-gray-900"
-                      : "font-medium text-background hover:text-background/70 dark:text-gray-400 dark:hover:text-gray-200"
+                      : "font-medium text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
                   )}
                 >
                   {isActive && (
@@ -224,10 +224,10 @@ export function Navbar() {
                     {impersonatedBy
                       ? "Impersonating"
                       : user?.isSuperAdmin
-                        ? "Super Admin"
-                        : currentOrg?.role === "OWNER"
-                          ? "Owner"
-                          : currentOrg?.role?.toLowerCase() ?? "Member"}
+                      ? "Super Admin"
+                      : currentOrg?.role === "OWNER"
+                      ? "Owner"
+                      : currentOrg?.role?.toLowerCase() ?? "Member"}
                   </span>
                 </div>
                 <ChevronDown className="size-3.5 text-gray-400" />

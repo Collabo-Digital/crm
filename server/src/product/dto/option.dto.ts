@@ -8,7 +8,6 @@ import {
   IsString,
   Max,
   Min,
-  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -33,7 +32,6 @@ export class ProductOptionDto {
 export class UpdateOptionsDto {
   @IsArray()
   @ArrayMaxSize(3)
-  @ValidateNested({ each: true })
   @Type(() => ProductOptionDto)
   options: ProductOptionDto[];
 }

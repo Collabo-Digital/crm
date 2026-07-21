@@ -19,7 +19,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export class ProductPublishScheduler {
   private readonly logger = new Logger(ProductPublishScheduler.name);
 
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async flipDueProducts() {
@@ -49,12 +49,9 @@ export class ProductPublishScheduler {
             status: 'ACTIVE',
             metadata: wasSynced
               ? ({
-                ...meta,
-                shopifySync: {
-                  ...sync,
-                  status: 'OUT_OF_SYNC',
-                },
-              } as Prisma.InputJsonObject)
+                  ...meta,
+                  shopifySync: { ...sync, status: 'OUT_OF_SYNC' },
+                } as Prisma.InputJsonObject)
               : undefined,
           },
         });

@@ -37,9 +37,8 @@ const VIP_CLASS: Record<VipLevel, string> = {
 
 const VIP_FILTERS: Array<"All" | VipLevel> = ["All", "NONE", "BRONZE", "SILVER", "GOLD", "PLATINUM"];
 
-function getInitials(first: string | null | undefined, last: string | null | undefined) {
-  const initials = `${first?.[0] ?? ""}${last?.[0] ?? ""}`.toUpperCase();
-  return initials || "?";
+function getInitials(first: string, last: string) {
+  return `${first[0] ?? ""}${last[0] ?? ""}`.toUpperCase();
 }
 
 const AVATAR_COLORS = [
@@ -156,10 +155,11 @@ export default function CustomersPage() {
             <button
               key={filterValue}
               onClick={() => handleVipFilter(filterValue)}
-              className={`h-7 rounded-full px-3 text-xs font-medium transition-colors ${vipFilter === filterValue
-                ? "bg-[#CEF17B]/30 text-[#084734]"
-                : "bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 border border-input"
-                }`}
+              className={`h-7 rounded-full px-3 text-xs font-medium transition-colors ${
+                vipFilter === filterValue
+                  ? "bg-[#CEF17B]/30 text-[#084734]"
+                  : "bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 border border-input"
+              }`}
             >
               {filterValue === "All" ? "All" : VIP_LABEL[filterValue]}
             </button>
@@ -207,11 +207,8 @@ export default function CustomersPage() {
                             {initials}
                           </div>
                           <div className="min-w-0">
-                            {/* <p className="text-xs font-medium text-gray-900 dark:text-gray-100">
-                              {customer.firstName} {customer.lastName}
-                            </p> */}
                             <p className="text-xs font-medium text-gray-900 dark:text-gray-100">
-                              {[customer.firstName, customer.lastName].filter(Boolean).join(" ") || customer.email || "—"}
+                              {customer.firstName} {customer.lastName}
                             </p>
                             <p className="text-xs text-muted-foreground">{customer.email}</p>
                           </div>

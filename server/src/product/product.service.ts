@@ -11,7 +11,6 @@ import {
   ChannelStatus,
   Prisma,
   ProductStatus,
-  ProductVariant,
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -19,12 +18,10 @@ import { QueryProductsDto } from './dto/query-products.dto';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import {
-  BulkUpdateVariantsDto,
   CreateVariantDto,
   ReorderVariantsDto,
   UpdateVariantDto,
 } from './dto/variant.dto';
-import { DEFAULT_VARIANT_TITLE } from './variant-title.util';
 import {
   ReorderImagesDto,
   SetVariantImageDto,
@@ -33,20 +30,14 @@ import {
 import { ProductOptionDto } from './dto/option.dto';
 import { ShopifyPushEnqueuer } from '../channel/shopify-push.enqueuer';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
-import {
-  type IImageStorage,
-  IMAGE_STORAGE,
-} from './image-storage/image-storage.interface';
+import { type IImageStorage, IMAGE_STORAGE } from './image-storage/image-storage.interface';
 import {
   buildShopifyCsv,
   groupRowsIntoProducts,
   parseShopifyCsv,
   type ParsedProductCandidate,
 } from './csv/shopify-csv.format';
-import type {
-  ProductImportError,
-  ProductImportJobView,
-} from './dto/import.dto';
+import type { ProductImportError, ProductImportJobView } from './dto/import.dto';
 
 const ALLOWED_IMAGE_MIME = new Set([
   'image/jpeg',
@@ -59,14 +50,6 @@ const MAX_IMAGES_PER_PRODUCT = 10;
 
 type ShopifySyncStatus = 'PENDING' | 'SYNCED' | 'FAILED' | 'OUT_OF_SYNC';
 
-type ShopifySyncPatch = Partial<{
-  status: ShopifySyncStatus;
-  shopifyProductId: string;
-  error: string;
-  syncedAt: string;
-  attempts: number;
-}>;
-
 @Injectable()
 export class ProductService {
   private readonly logger = new Logger(ProductService.name);
@@ -76,13 +59,9 @@ export class ProductService {
     private readonly shopifyPushEnqueuer: ShopifyPushEnqueuer,
     private readonly settings: OrganizationSettingsService,
     @Inject(IMAGE_STORAGE) private readonly imageStorage: IImageStorage,
-  ) { }
+  ) {}
 
-  async findAll(
-    orgId: string,
-    query: QueryProductsDto,
-    vendorScope?: string,
-  ) {
+  async findAll(orgId: string, query: QueryProductsDto, vendorScope?: string) {
     const where: Prisma.ProductWhereInput = {
       organizationId: orgId,
       deletedAt: null,
@@ -99,37 +78,18 @@ export class ProductService {
       where.OR = [
         { title: { contains: query.search, mode: 'insensitive' } },
         { vendor: { contains: query.search, mode: 'insensitive' } },
-        {
-          variants: {
-            some: {
-              sku: {
-                contains: query.search,
-                mode: 'insensitive',
-              },
-            },
-          },
-        },
+        { variants: { some: { sku: { contains: query.search, mode: 'insensitive' } } } },
       ];
     }
 
     // Stock status filter — filter products by their variants' inventory
     if (query.stockStatus === 'out_of_stock') {
-      // some:{} excludes zero-variant products — `every` alone is vacuously
-      // true for them. Keeps this filter in lockstep with getStats.
-      where.variants = {
-        some: {},
-        every: { inventoryQuantity: { lte: 0 } },
-      };
+      where.variants = { every: { inventoryQuantity: { lte: 0 } } };
     } else if (query.stockStatus === 'low_stock') {
       // Low stock = any variant has stock > 0 but <= org threshold (default 10)
-      const org = await this.prisma.organization.findUnique({
-        where: { id: orgId },
-        select: { lowStockThreshold: true },
-      });
+      const org = await this.prisma.organization.findUnique({ where: { id: orgId }, select: { lowStockThreshold: true } });
       const threshold = org?.lowStockThreshold ?? 10;
-      where.variants = {
-        some: { inventoryQuantity: { gt: 0, lte: threshold } },
-      };
+      where.variants = { some: { inventoryQuantity: { gt: 0, lte: threshold } } };
     } else if (query.stockStatus === 'in_stock') {
       where.variants = { some: { inventoryQuantity: { gt: 0 } } };
     }
@@ -163,22 +123,13 @@ export class ProductService {
             orderBy: { position: 'asc' },
           },
           images: {
-            select: {
-              id: true,
-              src: true,
-              alt: true,
-              position: true,
-            },
+            select: { id: true, src: true, alt: true, position: true },
             orderBy: { position: 'asc' },
-            take: 1, // Only first image for list view
+            take: 1,  // Only first image for list view
           },
-          channel: {
-            select: { id: true, name: true, platform: true },
-          },
+          channel: { select: { id: true, name: true, platform: true } },
         },
-        orderBy: {
-          [query.sortBy ?? 'createdAt']: query.sortOrder ?? 'desc',
-        },
+        orderBy: { [query.sortBy ?? 'createdAt']: query.sortOrder ?? 'desc' },
         skip,
         take: limit,
       }),
@@ -188,10 +139,7 @@ export class ProductService {
     return {
       data: data.map((product) => {
         // Calculate total stock across all variants
-        const totalStock = product.variants.reduce(
-          (sum, v) => sum + v.inventoryQuantity,
-          0,
-        );
+        const totalStock = product.variants.reduce((sum, v) => sum + v.inventoryQuantity, 0);
 
         return {
           id: product.id,
@@ -222,11 +170,7 @@ export class ProductService {
    * loading the full product detail.
    */
   private extractShopifySync(metadata: Prisma.JsonValue | null) {
-    if (
-      !metadata ||
-      typeof metadata !== 'object' ||
-      Array.isArray(metadata)
-    ) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
       return null;
     }
     const sync = (metadata as Record<string, unknown>).shopifySync;
@@ -242,12 +186,7 @@ export class ProductService {
 
   async findOne(id: string, orgId: string, vendorScope?: string) {
     const product = await this.prisma.product.findFirst({
-      where: {
-        id,
-        organizationId: orgId,
-        deletedAt: null,
-        ...(vendorScope ? { vendor: vendorScope } : {}),
-      },
+      where: { id, organizationId: orgId, deletedAt: null, ...(vendorScope ? { vendor: vendorScope } : {}) },
       include: {
         variants: { orderBy: { position: 'asc' } },
         images: { orderBy: { position: 'asc' } },
@@ -256,10 +195,7 @@ export class ProductService {
     });
     if (!product) throw new NotFoundException('Product not found');
 
-    const totalStock = product.variants.reduce(
-      (sum, v) => sum + v.inventoryQuantity,
-      0,
-    );
+    const totalStock = product.variants.reduce((sum, v) => sum + v.inventoryQuantity, 0);
 
     return {
       ...product,
@@ -268,48 +204,27 @@ export class ProductService {
     };
   }
 
-  /**
-   * Distinct vendor match keys for the invite dropdown / filter. The match key is
-   * the vendor metafield value (Product.vendorKey) when present, else the built-in
-   * Product.vendor name. A VENDOR only ever sees their own key.
-   */
+  // Distinct vendor match keys for the invite dropdown / filter. The match key is
+  // the vendor metafield value (Product.vendorKey) when present, else the built-in
+  // Product.vendor name. A VENDOR only ever sees their own key.
   async getVendors(orgId: string, vendorScope?: string) {
     if (vendorScope) return [vendorScope];
-    const [byKey, byVendor] = await Promise.all([
-      this.prisma.product.findMany({
-        where: {
-          organizationId: orgId,
-          deletedAt: null,
-          vendorKey: { not: null },
-        },
-        select: { vendorKey: true },
-        distinct: ['vendorKey'],
-      }),
-      this.prisma.product.findMany({
-        where: {
-          organizationId: orgId,
-          deletedAt: null,
-          vendorKey: null,
-          vendor: { not: null },
-        },
-        select: { vendor: true },
-        distinct: ['vendor'],
-      }),
-    ]);
+    const products = await this.prisma.product.findMany({
+      where: { organizationId: orgId, deletedAt: null },
+      select: { vendor: true, vendorKey: true },
+    });
     const keys = new Set<string>();
-    for (const r of byKey) if (r.vendorKey) keys.add(r.vendorKey);
-    for (const r of byVendor) if (r.vendor) keys.add(r.vendor);
+    for (const p of products) {
+      const key = p.vendorKey ?? p.vendor;
+      if (key) keys.add(key);
+    }
     return Array.from(keys).sort();
   }
 
   // Get unique product types for filter dropdown
   async getProductTypes(orgId: string) {
     const types = await this.prisma.product.findMany({
-      where: {
-        organizationId: orgId,
-        deletedAt: null,
-        productType: { not: null },
-      },
+      where: { organizationId: orgId, deletedAt: null, productType: { not: null } },
       select: { productType: true },
       distinct: ['productType'],
       orderBy: { productType: 'asc' },
@@ -341,32 +256,21 @@ export class ProductService {
       totalInventory,
     ] = await Promise.all([
       this.prisma.product.count({ where: baseWhere }),
-      this.prisma.product.count({
-        where: { ...baseWhere, status: 'ACTIVE' },
-      }),
-      this.prisma.product.count({
-        where: { ...baseWhere, status: 'DRAFT' },
-      }),
-      this.prisma.product.count({
-        where: { ...baseWhere, status: 'ARCHIVED' },
-      }),
+      this.prisma.product.count({ where: { ...baseWhere, status: 'ACTIVE' } }),
+      this.prisma.product.count({ where: { ...baseWhere, status: 'DRAFT' } }),
+      this.prisma.product.count({ where: { ...baseWhere, status: 'ARCHIVED' } }),
       this.prisma.product.count({
         where: {
           ...baseWhere,
           status: 'ACTIVE',
-          variants: {
-            some: {},
-            every: { inventoryQuantity: { lte: 0 } },
-          },
+          variants: { every: { inventoryQuantity: { lte: 0 } } },
         },
       }),
       this.prisma.product.count({
         where: {
           ...baseWhere,
           status: 'ACTIVE',
-          variants: {
-            some: { inventoryQuantity: { gt: 0, lte: threshold } },
-          },
+          variants: { some: { inventoryQuantity: { gt: 0, lte: threshold } } },
         },
       }),
       this.prisma.productVariant.aggregate({
@@ -388,23 +292,16 @@ export class ProductService {
   }
 
   // ─── UPDATE GST FIELDS ───
-  async updateGst(
-    id: string,
-    orgId: string,
-    dto: { hsnCode?: string; gstRate?: number },
-    vendorScope?: string,
-  ) {
+  async updateGst(id: string, orgId: string, dto: { hsnCode?: string; gstRate?: number }) {
     const product = await this.prisma.product.findFirst({
       where: { id, organizationId: orgId, deletedAt: null },
     });
-    if (!product) throw new NotFoundException('Product not found');
 
-    // GST/HSN are tax fields — vendors may never edit them (matches update()).
-    if (vendorScope) {
-      throw new ForbiddenException('Vendors cannot edit tax fields.');
+    if (!product) {
+      throw new NotFoundException('Product not found');
     }
 
-    const updated = await this.prisma.product.update({
+    return this.prisma.product.update({
       where: { id },
       data: {
         ...(dto.hsnCode !== undefined && { hsnCode: dto.hsnCode }),
@@ -415,18 +312,12 @@ export class ProductService {
         images: { orderBy: { position: 'asc' }, take: 1 },
       },
     });
-
-    await this.markOutOfSyncIfNeeded(id);
-    return updated;
   }
 
   private getPriceRange(variants: Array<{ price: any }>) {
     if (variants.length === 0) return { min: '0', max: '0' };
     const prices = variants.map((v) => parseFloat(String(v.price)));
-    return {
-      min: Math.min(...prices).toFixed(2),
-      max: Math.max(...prices).toFixed(2),
-    };
+    return { min: Math.min(...prices).toFixed(2), max: Math.max(...prices).toFixed(2) };
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -473,9 +364,7 @@ export class ProductService {
 
       // Build variants payload.
       const variantsCreate = hasMulti
-        ? dto.variants!.map((v, idx) =>
-          this.buildVariantCreate(v, idx + 1, dto.options),
-        )
+        ? dto.variants!.map((v, idx) => this.buildVariantCreate(v, idx + 1, dto.options))
         : [this.buildVariantCreate(dto.variant!, 1, undefined)];
 
       const created = await tx.product.create({
@@ -491,22 +380,16 @@ export class ProductService {
           bodyHtml: dto.bodyHtml ?? null,
           hsnCode: dto.hsnCode ?? null,
           gstRate: dto.gstRate ?? null,
-          options: hasMulti
-            ? (dto.options as unknown as Prisma.InputJsonValue)
-            : Prisma.JsonNull,
+          options: hasMulti ? (dto.options as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
           metadata: { source: 'crm' } as Prisma.InputJsonObject,
           externalCreatedAt: new Date(),
-          ...(dto.publishedAt && {
-            publishedAt: new Date(dto.publishedAt),
-          }),
+          ...(dto.publishedAt && { publishedAt: new Date(dto.publishedAt) }),
           variants: { create: variantsCreate },
         },
         include: {
           variants: { orderBy: { position: 'asc' } },
           images: true,
-          channel: {
-            select: { id: true, name: true, platform: true },
-          },
+          channel: { select: { id: true, name: true, platform: true } },
         },
       });
 
@@ -516,8 +399,7 @@ export class ProductService {
     // Auto-push to Shopify (gated on org settings).
     let shopifyPushQueued = false;
     try {
-      const productSettings =
-        await this.settings.getProductSettings(orgId);
+      const productSettings = await this.settings.getProductSettings(orgId);
       if (productSettings.autoSyncToShopify) {
         const shopify = await this.prisma.channel.findUnique({
           where: {
@@ -537,10 +419,10 @@ export class ProductService {
           await this.prisma.product.update({
             where: { id: product.id },
             data: {
-              metadata: this.mergeShopifySync(product.metadata, {
-                status: 'PENDING',
-                attempts: 0,
-              }),
+              metadata: {
+                ...((product.metadata as Prisma.JsonObject) ?? {}),
+                shopifySync: { status: 'PENDING', attempts: 0 },
+              } as Prisma.InputJsonObject,
             },
           });
         }
@@ -567,31 +449,25 @@ export class ProductService {
     position: number,
     options: ProductOptionDto[] | undefined,
   ): Prisma.ProductVariantCreateWithoutProductInput {
-    const optionLabels = [v.option1, v.option2, v.option3].filter(
-      Boolean,
-    ) as string[];
+    const optionLabels = [v.option1, v.option2, v.option3].filter(Boolean) as string[];
     const isMulti = !!options && options.length > 0;
-    const title =
-      isMulti && optionLabels.length > 0
-        ? optionLabels.join(' / ')
-        : DEFAULT_VARIANT_TITLE;
+    const title = isMulti && optionLabels.length > 0 ? optionLabels.join(' / ') : 'Default Title';
     return {
       externalId: `manual_${randomUUID()}`,
       title,
       sku: v.sku ?? null,
       barcode: v.barcode ?? null,
-      price: v.price ?? 0,
+      price: v.price,
       compareAtPrice: v.compareAtPrice ?? null,
       cost: v.cost ?? null,
       inventoryQuantity: v.inventoryQuantity ?? 0,
       trackQuantity: v.trackQuantity ?? true,
-      continueSellingWhenOutOfStock:
-        v.continueSellingWhenOutOfStock ?? false,
+      continueSellingWhenOutOfStock: v.continueSellingWhenOutOfStock ?? false,
       weight: v.weight ?? null,
       weightUnit: v.weightUnit ?? null,
       hsCode: v.hsCode ?? null,
       countryOfOrigin: v.countryOfOrigin ?? null,
-      option1: isMulti ? (v.option1 ?? null) : DEFAULT_VARIANT_TITLE,
+      option1: isMulti ? (v.option1 ?? null) : 'Default Title',
       option2: isMulti ? (v.option2 ?? null) : null,
       option3: isMulti ? (v.option3 ?? null) : null,
       position: v.position ?? position,
@@ -627,9 +503,9 @@ export class ProductService {
     }
 
     const meta = (product.metadata as Prisma.JsonObject) ?? {};
-    const sync = (meta.shopifySync ?? null) as {
-      status: ShopifySyncStatus;
-    } | null;
+    const sync = (meta.shopifySync ?? null) as
+      | { status: ShopifySyncStatus }
+      | null;
 
     if (sync?.status === 'SYNCED') {
       return { status: 'ALREADY_SYNCED' as const, productId: product.id };
@@ -646,28 +522,20 @@ export class ProductService {
     await this.prisma.product.update({
       where: { id: product.id },
       data: {
-        metadata: this.mergeShopifySync(product.metadata, {
-          status: 'PENDING',
-          attempts: 0,
-        }),
+        metadata: {
+          ...meta,
+          shopifySync: { status: 'PENDING', attempts: 0 },
+        } as Prisma.InputJsonObject,
       },
     });
     return { status: 'QUEUED' as const, productId: product.id };
   }
 
   // ─── UPDATE PRODUCT (top-level fields + optional default-variant fields) ───
-  async update(
-    id: string,
-    orgId: string,
-    dto: UpdateProductDto,
-    vendorScope?: string,
-  ) {
+  async update(id: string, orgId: string, dto: UpdateProductDto, vendorScope?: string) {
     const product = await this.prisma.product.findFirst({
       where: { id, organizationId: orgId, deletedAt: null },
-      include: {
-        channel: true,
-        variants: { orderBy: { position: 'asc' }, take: 1 },
-      },
+      include: { channel: true, variants: { orderBy: { position: 'asc' }, take: 1 } },
     });
     if (!product) throw new NotFoundException('Product not found');
     this.assertVendorOwnsProduct(product.vendor, vendorScope);
@@ -680,22 +548,15 @@ export class ProductService {
     const updated = await this.prisma.$transaction(async (tx) => {
       const productPatch: Prisma.ProductUpdateInput = {};
       if (dto.title !== undefined) productPatch.title = dto.title;
-      if (!isVendor && dto.vendor !== undefined)
-        productPatch.vendor = dto.vendor;
-      if (dto.productType !== undefined)
-        productPatch.productType = dto.productType;
+      if (!isVendor && dto.vendor !== undefined) productPatch.vendor = dto.vendor;
+      if (dto.productType !== undefined) productPatch.productType = dto.productType;
       if (dto.status !== undefined) productPatch.status = dto.status;
       if (dto.tags !== undefined) productPatch.tags = dto.tags;
-      if (dto.bodyHtml !== undefined)
-        productPatch.bodyHtml = dto.bodyHtml;
-      if (!isVendor && dto.hsnCode !== undefined)
-        productPatch.hsnCode = dto.hsnCode;
-      if (!isVendor && dto.gstRate !== undefined)
-        productPatch.gstRate = dto.gstRate;
+      if (dto.bodyHtml !== undefined) productPatch.bodyHtml = dto.bodyHtml;
+      if (!isVendor && dto.hsnCode !== undefined) productPatch.hsnCode = dto.hsnCode;
+      if (!isVendor && dto.gstRate !== undefined) productPatch.gstRate = dto.gstRate;
       if (dto.publishedAt !== undefined) {
-        productPatch.publishedAt = dto.publishedAt
-          ? new Date(dto.publishedAt)
-          : null;
+        productPatch.publishedAt = dto.publishedAt ? new Date(dto.publishedAt) : null;
       }
 
       if (Object.keys(productPatch).length > 0) {
@@ -705,15 +566,10 @@ export class ProductService {
       // Patch the default variant if singular variant fields provided.
       if (dto.variant && product.variants[0]) {
         const variantPatch: Prisma.ProductVariantUpdateInput = {};
-        if (dto.variant.price !== undefined)
-          variantPatch.price = dto.variant.price;
-        if (dto.variant.sku !== undefined)
-          variantPatch.sku = dto.variant.sku;
-        if (dto.variant.compareAtPrice !== undefined)
-          variantPatch.compareAtPrice = dto.variant.compareAtPrice;
-        if (dto.variant.inventoryQuantity !== undefined)
-          variantPatch.inventoryQuantity =
-            dto.variant.inventoryQuantity;
+        if (dto.variant.price !== undefined) variantPatch.price = dto.variant.price;
+        if (dto.variant.sku !== undefined) variantPatch.sku = dto.variant.sku;
+        if (dto.variant.compareAtPrice !== undefined) variantPatch.compareAtPrice = dto.variant.compareAtPrice;
+        if (dto.variant.inventoryQuantity !== undefined) variantPatch.inventoryQuantity = dto.variant.inventoryQuantity;
 
         if (Object.keys(variantPatch).length > 0) {
           await tx.productVariant.update({
@@ -728,9 +584,7 @@ export class ProductService {
         include: {
           variants: { orderBy: { position: 'asc' } },
           images: { orderBy: { position: 'asc' } },
-          channel: {
-            select: { id: true, name: true, platform: true },
-          },
+          channel: { select: { id: true, name: true, platform: true } },
         },
       });
     });
@@ -767,7 +621,6 @@ export class ProductService {
    * re-tighten the rule in the future without re-threading every call site —
    * just put the throw back here.
    */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   protected assertCrmEditable(_platform: ChannelPlatform) {
     // Intentionally empty.
   }
@@ -781,14 +634,9 @@ export class ProductService {
    * whose `vendor` column matches their scope. No-op for admins (vendorScope
    * undefined), so existing behavior is unchanged.
    */
-  private assertVendorOwnsProduct(
-    productVendor: string | null,
-    vendorScope?: string,
-  ) {
+  private assertVendorOwnsProduct(productVendor: string | null, vendorScope?: string) {
     if (vendorScope && productVendor !== vendorScope) {
-      throw new ForbiddenException(
-        'You can only edit your own products.',
-      );
+      throw new ForbiddenException('You can only edit your own products.');
     }
   }
 
@@ -796,16 +644,9 @@ export class ProductService {
    * Resolve a variant scoped to the org and assert MANUAL editability. Returns
    * the loaded variant + parent product. Throws 404 / 403 as appropriate.
    */
-  private async loadVariantForEdit(
-    variantId: string,
-    orgId: string,
-    vendorScope?: string,
-  ) {
+  private async loadVariantForEdit(variantId: string, orgId: string, vendorScope?: string) {
     const variant = await this.prisma.productVariant.findFirst({
-      where: {
-        id: variantId,
-        product: { organizationId: orgId, deletedAt: null },
-      },
+      where: { id: variantId, product: { organizationId: orgId, deletedAt: null } },
       include: { product: { include: { channel: true } } },
     });
     if (!variant) throw new NotFoundException('Variant not found');
@@ -818,11 +659,7 @@ export class ProductService {
    * Resolve a product scoped to the org and assert MANUAL editability. Returns
    * the loaded product. Throws 404 / 403 as appropriate.
    */
-  private async loadProductForEdit(
-    productId: string,
-    orgId: string,
-    vendorScope?: string,
-  ) {
+  private async loadProductForEdit(productId: string, orgId: string, vendorScope?: string) {
     const product = await this.prisma.product.findFirst({
       where: { id: productId, organizationId: orgId, deletedAt: null },
       include: { channel: true },
@@ -833,17 +670,8 @@ export class ProductService {
     return product;
   }
 
-  async createVariant(
-    productId: string,
-    orgId: string,
-    dto: CreateVariantDto,
-    vendorScope?: string,
-  ) {
-    const product = await this.loadProductForEdit(
-      productId,
-      orgId,
-      vendorScope,
-    );
+  async createVariant(productId: string, orgId: string, dto: CreateVariantDto, vendorScope?: string) {
+    const product = await this.loadProductForEdit(productId, orgId, vendorScope);
 
     const last = await this.prisma.productVariant.findFirst({
       where: { productId },
@@ -852,26 +680,8 @@ export class ProductService {
     });
     const nextPosition = (last?.position ?? 0) + 1;
 
-    // Shopify parity: a new variant added without an explicit price inherits
-    // the product's base price (the first variant by position) — the merchant
-    // adjusts it afterwards. An explicit price (including 0) always wins.
-    let price: number | Prisma.Decimal = dto.price ?? 0;
-    if (dto.price === undefined) {
-      const base = await this.prisma.productVariant.findFirst({
-        where: { productId },
-        orderBy: { position: 'asc' },
-        select: { price: true },
-      });
-      if (base) price = base.price;
-    }
-
-    const optionLabels = [dto.option1, dto.option2, dto.option3].filter(
-      Boolean,
-    ) as string[];
-    const title =
-      optionLabels.length > 0
-        ? optionLabels.join(' / ')
-        : DEFAULT_VARIANT_TITLE;
+    const optionLabels = [dto.option1, dto.option2, dto.option3].filter(Boolean) as string[];
+    const title = optionLabels.length > 0 ? optionLabels.join(' / ') : 'Default Title';
 
     const created = await this.prisma.productVariant.create({
       data: {
@@ -880,13 +690,12 @@ export class ProductService {
         title,
         sku: dto.sku ?? null,
         barcode: dto.barcode ?? null,
-        price,
+        price: dto.price,
         compareAtPrice: dto.compareAtPrice ?? null,
         cost: dto.cost ?? null,
         inventoryQuantity: dto.inventoryQuantity ?? 0,
         trackQuantity: dto.trackQuantity ?? true,
-        continueSellingWhenOutOfStock:
-          dto.continueSellingWhenOutOfStock ?? false,
+        continueSellingWhenOutOfStock: dto.continueSellingWhenOutOfStock ?? false,
         weight: dto.weight ?? null,
         weightUnit: dto.weightUnit ?? null,
         hsCode: dto.hsCode ?? null,
@@ -906,190 +715,61 @@ export class ProductService {
     return created;
   }
 
-  /**
-   * Build the Prisma patch for a variant update. Shared by updateVariant and
-   * bulkUpdateVariants so vendor rules and title re-derivation stay identical.
-   */
-  private buildVariantPatch(
-    dto: UpdateVariantDto,
-    current: {
-      option1: string | null;
-      option2: string | null;
-      option3: string | null;
-    },
-    vendorScope?: string,
-  ): Prisma.ProductVariantUpdateInput {
+  async updateVariant(variantId: string, orgId: string, dto: UpdateVariantDto, vendorScope?: string) {
+    const variant = await this.loadVariantForEdit(variantId, orgId, vendorScope);
+
     const patch: Prisma.ProductVariantUpdateInput = {};
     if (dto.price !== undefined) patch.price = dto.price;
     if (dto.sku !== undefined) patch.sku = dto.sku;
     if (dto.barcode !== undefined) patch.barcode = dto.barcode;
-    if (dto.compareAtPrice !== undefined)
-      patch.compareAtPrice = dto.compareAtPrice;
+    if (dto.compareAtPrice !== undefined) patch.compareAtPrice = dto.compareAtPrice;
     if (dto.cost !== undefined) patch.cost = dto.cost;
-    if (dto.inventoryQuantity !== undefined)
-      patch.inventoryQuantity = dto.inventoryQuantity;
-    if (dto.trackQuantity !== undefined)
-      patch.trackQuantity = dto.trackQuantity;
+    if (dto.inventoryQuantity !== undefined) patch.inventoryQuantity = dto.inventoryQuantity;
+    if (dto.trackQuantity !== undefined) patch.trackQuantity = dto.trackQuantity;
     if (dto.continueSellingWhenOutOfStock !== undefined)
-      patch.continueSellingWhenOutOfStock =
-        dto.continueSellingWhenOutOfStock;
-    if (dto.requiresShipping !== undefined)
-      patch.requiresShipping = dto.requiresShipping;
+      patch.continueSellingWhenOutOfStock = dto.continueSellingWhenOutOfStock;
+    if (dto.requiresShipping !== undefined) patch.requiresShipping = dto.requiresShipping;
     if (dto.weight !== undefined) patch.weight = dto.weight;
     if (dto.weightUnit !== undefined) patch.weightUnit = dto.weightUnit;
     if (dto.hsCode !== undefined) patch.hsCode = dto.hsCode;
-    if (dto.countryOfOrigin !== undefined)
-      patch.countryOfOrigin = dto.countryOfOrigin;
+    if (dto.countryOfOrigin !== undefined) patch.countryOfOrigin = dto.countryOfOrigin;
     // Vendors cannot change the per-variant tax flag.
-    if (!vendorScope && dto.taxable !== undefined)
-      patch.taxable = dto.taxable;
+    if (!vendorScope && dto.taxable !== undefined) patch.taxable = dto.taxable;
     if (dto.option1 !== undefined) patch.option1 = dto.option1;
     if (dto.option2 !== undefined) patch.option2 = dto.option2;
     if (dto.option3 !== undefined) patch.option3 = dto.option3;
     if (dto.position !== undefined) patch.position = dto.position;
 
     // If any option changed, recompute the title.
-    if (
-      dto.option1 !== undefined ||
-      dto.option2 !== undefined ||
-      dto.option3 !== undefined
-    ) {
+    if (dto.option1 !== undefined || dto.option2 !== undefined || dto.option3 !== undefined) {
       const merged = {
-        option1:
-          dto.option1 !== undefined ? dto.option1 : current.option1,
-        option2:
-          dto.option2 !== undefined ? dto.option2 : current.option2,
-        option3:
-          dto.option3 !== undefined ? dto.option3 : current.option3,
+        option1: dto.option1 !== undefined ? dto.option1 : variant.option1,
+        option2: dto.option2 !== undefined ? dto.option2 : variant.option2,
+        option3: dto.option3 !== undefined ? dto.option3 : variant.option3,
       };
-      const labels = [
-        merged.option1,
-        merged.option2,
-        merged.option3,
-      ].filter(Boolean) as string[];
-      patch.title =
-        labels.length > 0 ? labels.join(' / ') : DEFAULT_VARIANT_TITLE;
+      const labels = [merged.option1, merged.option2, merged.option3].filter(Boolean) as string[];
+      patch.title = labels.length > 0 ? labels.join(' / ') : 'Default Title';
     }
-    return patch;
-  }
-
-  async updateVariant(
-    variantId: string,
-    orgId: string,
-    dto: UpdateVariantDto,
-    vendorScope?: string,
-  ) {
-    const variant = await this.loadVariantForEdit(
-      variantId,
-      orgId,
-      vendorScope,
-    );
 
     const updated = await this.prisma.productVariant.update({
       where: { id: variantId },
-      data: this.buildVariantPatch(dto, variant, vendorScope),
+      data: patch,
     });
 
     await this.markOutOfSyncIfNeeded(variant.product.id);
     return updated;
   }
 
-  /**
-   * Patch many variants of ONE product in a single transaction. Powers the
-   * grouped-variant editor's parent-row edits (e.g. set price for every
-   * "black" variant at once). One OUT_OF_SYNC stamp for the whole batch.
-   */
-  async bulkUpdateVariants(
-    productId: string,
-    orgId: string,
-    dto: BulkUpdateVariantsDto,
-    vendorScope?: string,
-  ) {
-    const product = await this.loadProductForEdit(
-      productId,
-      orgId,
-      vendorScope,
-    );
-
-    const own = await this.prisma.productVariant.findMany({
-      where: { productId },
-    });
-    const byId = new Map(own.map((v) => [v.id, v]));
-    const unknown = dto.updates.filter((u) => !byId.has(u.variantId));
-    if (unknown.length > 0) {
-      throw new BadRequestException(
-        `Variants not on this product: ${unknown
-          .map((u) => u.variantId)
-          .join(', ')}`,
-      );
-    }
-
-    const variants = await this.prisma.$transaction(async (tx) => {
-      const updated: ProductVariant[] = [];
-      for (const u of dto.updates) {
-        updated.push(
-          await tx.productVariant.update({
-            where: { id: u.variantId },
-            data: this.buildVariantPatch(
-              u,
-              byId.get(u.variantId)!,
-              vendorScope,
-            ),
-          }),
-        );
-      }
-      await this.markOutOfSyncIfNeeded(product.id, tx);
-      return updated;
-    });
-
-    return { ok: true, updated: variants.length, variants };
-  }
-
-  async deleteVariant(
-    variantId: string,
-    orgId: string,
-    vendorScope?: string,
-  ) {
-    const variant = await this.loadVariantForEdit(
-      variantId,
-      orgId,
-      vendorScope,
-    );
+  async deleteVariant(variantId: string, orgId: string, vendorScope?: string) {
+    const variant = await this.loadVariantForEdit(variantId, orgId, vendorScope);
 
     const total = await this.prisma.productVariant.count({
       where: { productId: variant.productId },
     });
-
-    // Shopify parity: "deleting" the last variant reverts the product to
-    // the single-variant default state instead of erroring. Unlike Shopify
-    // we KEEP the row (same id, price, sku, stock) — order line items
-    // reference variant ids, and Shopify's wipe-to-zero reset is a known
-    // data-loss gotcha we deliberately avoid.
     if (total <= 1) {
-      const reset = await this.prisma.$transaction(async (tx) => {
-        const updated = await tx.productVariant.update({
-          where: { id: variantId },
-          data: {
-            option1: DEFAULT_VARIANT_TITLE,
-            option2: null,
-            option3: null,
-            title: DEFAULT_VARIANT_TITLE,
-            position: 1,
-          },
-        });
-        await tx.product.update({
-          where: { id: variant.productId },
-          data: { options: Prisma.JsonNull },
-        });
-        await this.markOutOfSyncIfNeeded(variant.productId, tx);
-        return updated;
-      });
-      return {
-        id: variantId,
-        deleted: false,
-        resetToDefault: true,
-        variant: reset,
-      };
+      throw new BadRequestException(
+        'Cannot delete the last variant. Delete or archive the product instead.',
+      );
     }
 
     await this.prisma.productVariant.delete({ where: { id: variantId } });
@@ -1097,11 +777,7 @@ export class ProductService {
     return { id: variantId, deleted: true };
   }
 
-  async reorderVariants(
-    productId: string,
-    orgId: string,
-    dto: ReorderVariantsDto,
-  ) {
+  async reorderVariants(productId: string, orgId: string, dto: ReorderVariantsDto) {
     const product = await this.loadProductForEdit(productId, orgId);
 
     const own = await this.prisma.productVariant.findMany({
@@ -1129,111 +805,18 @@ export class ProductService {
     return { ok: true };
   }
 
-  async updateOptions(
-    productId: string,
-    orgId: string,
-    options: ProductOptionDto[],
-    vendorScope?: string,
-  ) {
-    await this.loadProductForEdit(productId, orgId, vendorScope);
+  async updateOptions(productId: string, orgId: string, options: ProductOptionDto[], vendorScope?: string) {
+    const product = await this.loadProductForEdit(productId, orgId, vendorScope);
 
-    // Shopify parity: options can only be fully removed once a single
-    // variant remains (Shopify likewise refuses to drop options while
-    // combinations exist). With one survivor, clearing options resets it
-    // to the default placeholder — the exact reverse of generate()'s
-    // single→multi conversion.
-    if (options.length === 0) {
-      const variantCount = await this.prisma.productVariant.count({
-        where: { productId },
-      });
-      if (variantCount > 1) {
-        throw new BadRequestException(
-          'Delete variants down to one before removing all options.',
-        );
-      }
-      await this.prisma.$transaction(async (tx) => {
-        await tx.product.update({
-          where: { id: productId },
-          data: { options: Prisma.JsonNull },
-        });
-        await tx.productVariant.updateMany({
-          where: { productId },
-          data: {
-            option1: DEFAULT_VARIANT_TITLE,
-            option2: null,
-            option3: null,
-            title: DEFAULT_VARIANT_TITLE,
-            position: 1,
-          },
-        });
-        await this.markOutOfSyncIfNeeded(productId, tx);
-      });
-      return { ok: true, options: [] };
-    }
-
-    const current = await this.prisma.product.findUnique({
+    await this.prisma.product.update({
       where: { id: productId },
-      select: { options: true },
-    });
-    const oldNames = (
-      Array.isArray(current?.options)
-        ? (current.options as unknown as ProductOptionDto[])
-        : []
-    )
-      .map((o) => o?.name)
-      .filter(Boolean);
-
-    // position is derived, not authoritative — normalize to array index.
-    const normalized = options.map((o, i) => ({ ...o, position: i + 1 }));
-
-    // For each NEW slot, which OLD slot held that option? (name-matched;
-    // -1 = brand-new option → its slot starts empty on existing variants).
-    // Rename+reorder in ONE call is ambiguous — the client must send them
-    // as separate operations (Shopify's UI enforces the same).
-    const slotMap = normalized.map((o) => oldNames.indexOf(o.name));
-    const structureChanged =
-      oldNames.length > 0 &&
-      slotMap.some((oldIdx, newIdx) => oldIdx !== newIdx);
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.product.update({
-        where: { id: productId },
-        data: { options: normalized as unknown as Prisma.InputJsonValue },
-      });
-
-      // Reorder/removal: carry each variant's values to their option's new
-      // slot so combinations stay intact (Shopify remaps the same way).
-      if (structureChanged) {
-        const variants = await tx.productVariant.findMany({
-          where: { productId },
-        });
-        for (const v of variants) {
-          const oldVals = [v.option1, v.option2, v.option3];
-          const next = [0, 1, 2].map((i) =>
-            slotMap[i] !== undefined && slotMap[i] !== -1
-              ? oldVals[slotMap[i]]
-              : null,
-          );
-          const labels = next.filter(Boolean) as string[];
-          await tx.productVariant.update({
-            where: { id: v.id },
-            data: {
-              option1: next[0],
-              option2: next[1],
-              option3: next[2],
-              title:
-                labels.length > 0
-                  ? labels.join(' / ')
-                  : DEFAULT_VARIANT_TITLE,
-            },
-          });
-        }
-      }
-
-      await this.markOutOfSyncIfNeeded(productId, tx);
+      data: {
+        options: options as unknown as Prisma.InputJsonValue,
+      },
     });
 
-    return { ok: true, options: normalized };
+    await this.markOutOfSyncIfNeeded(product.id);
+    return { ok: true, options };
   }
 
   /**
@@ -1242,12 +825,8 @@ export class ProductService {
    * (option1, option2, option3) triple). Useful when the merchant adds a new
    * value to an existing option type.
    */
-  async generateVariantsFromOptions(
-    productId: string,
-    orgId: string,
-    vendorScope?: string,
-  ) {
-    await this.loadProductForEdit(productId, orgId, vendorScope);
+  async generateVariantsFromOptions(productId: string, orgId: string, vendorScope?: string) {
+    const product = await this.loadProductForEdit(productId, orgId, vendorScope);
 
     const full = await this.prisma.product.findUnique({
       where: { id: productId },
@@ -1260,117 +839,52 @@ export class ProductService {
       );
     }
 
+    // Cartesian product across up to 3 option types.
+    const combos: Array<{ option1: string | null; option2: string | null; option3: string | null }> = [];
     const valuesAt = (i: number) => options[i]?.values ?? [null];
-    const combos: Array<{
-      option1: string | null;
-      option2: string | null;
-      option3: string | null;
-    }> = [];
-    for (const v1 of valuesAt(0))
-      for (const v2 of valuesAt(1))
-        for (const v3 of valuesAt(2))
+    for (const v1 of valuesAt(0)) {
+      for (const v2 of valuesAt(1)) {
+        for (const v3 of valuesAt(2)) {
           combos.push({
             option1: v1 as string | null,
             option2: v2 as string | null,
             option3: v3 as string | null,
           });
-
-    const variants = full?.variants ?? [];
-
-    // Single → multi transition: if the only variant is the "Default Title"
-    // placeholder, convert it into the FIRST combination (Shopify does the
-    // same), preserving its price / sku / stock instead of stranding them.
-    // Mutating the snapshot BEFORE building the dedupe set makes the set see
-    // the converted key, not the old sentinel.
-    const defaultVariant =
-      variants.length === 1 &&
-        variants[0].option1 === DEFAULT_VARIANT_TITLE
-        ? variants[0]
-        : null;
-    if (defaultVariant && combos.length > 0) {
-      const first = combos[0];
-      defaultVariant.option1 = first.option1;
-      defaultVariant.option2 = first.option2;
-      defaultVariant.option3 = first.option3;
+        }
+      }
     }
 
     const existing = new Set(
-      variants.map(
-        (v) =>
-          `${v.option1 ?? ''}|${v.option2 ?? ''}|${v.option3 ?? ''}`,
-      ),
+      (full?.variants ?? []).map((v) => `${v.option1 ?? ''}|${v.option2 ?? ''}|${v.option3 ?? ''}`),
     );
-    const lastPos = variants.reduce(
-      (m, v) => Math.max(m, v.position),
-      0,
-    );
-    const fallbackPrice =
-      (variants[0]?.price as unknown as Prisma.Decimal) ??
-      new Prisma.Decimal(0);
 
-    const toCreate = combos
-      .filter(
-        (c) =>
-          !existing.has(
-            `${c.option1 ?? ''}|${c.option2 ?? ''}|${c.option3 ?? ''}`,
-          ),
-      )
-      .map((combo, idx) => {
-        const labels = [
-          combo.option1,
-          combo.option2,
-          combo.option3,
-        ].filter(Boolean) as string[];
-        return {
+    const lastPos = (full?.variants ?? []).reduce((m, v) => Math.max(m, v.position), 0);
+    const fallbackPrice = (full?.variants?.[0]?.price as unknown as Prisma.Decimal) ?? new Prisma.Decimal(0);
+    let createdCount = 0;
+
+    for (const combo of combos) {
+      const key = `${combo.option1 ?? ''}|${combo.option2 ?? ''}|${combo.option3 ?? ''}`;
+      if (existing.has(key)) continue;
+
+      const labels = [combo.option1, combo.option2, combo.option3].filter(Boolean) as string[];
+      await this.prisma.productVariant.create({
+        data: {
           productId,
           externalId: `manual_${randomUUID()}`,
-          title:
-            labels.length > 0
-              ? labels.join(' / ')
-              : DEFAULT_VARIANT_TITLE,
+          title: labels.length > 0 ? labels.join(' / ') : 'Default Title',
           price: fallbackPrice,
           option1: combo.option1,
           option2: combo.option2,
           option3: combo.option3,
-          position: lastPos + idx + 1,
+          position: lastPos + ++createdCount,
           requiresShipping: true,
           taxable: true,
-        };
-      });
-
-    if (defaultVariant || toCreate.length > 0) {
-      await this.prisma.$transaction(async (tx) => {
-        if (defaultVariant) {
-          const labels = [
-            defaultVariant.option1,
-            defaultVariant.option2,
-            defaultVariant.option3,
-          ].filter(Boolean) as string[];
-          await tx.productVariant.update({
-            where: { id: defaultVariant.id },
-            data: {
-              option1: defaultVariant.option1,
-              option2: defaultVariant.option2,
-              option3: defaultVariant.option3,
-              title:
-                labels.length > 0
-                  ? labels.join(' / ')
-                  : DEFAULT_VARIANT_TITLE,
-            },
-          });
-        }
-        if (toCreate.length > 0) {
-          await tx.productVariant.createMany({ data: toCreate });
-        }
-        await this.markOutOfSyncIfNeeded(productId, tx);
+        },
       });
     }
 
-    return {
-      ok: true,
-      created: toCreate.length,
-      converted: defaultVariant ? 1 : 0,
-    };
+    await this.markOutOfSyncIfNeeded(product.id);
+    return { ok: true, created: createdCount };
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -1380,12 +894,7 @@ export class ProductService {
   async addImage(
     productId: string,
     orgId: string,
-    file: {
-      buffer: Buffer;
-      originalname: string;
-      mimetype: string;
-      size: number;
-    },
+    file: { buffer: Buffer; originalname: string; mimetype: string; size: number },
   ) {
     const product = await this.loadProductForEdit(productId, orgId);
 
@@ -1398,9 +907,7 @@ export class ProductService {
       throw new BadRequestException('Image exceeds 5MB limit.');
     }
 
-    const count = await this.prisma.productImage.count({
-      where: { productId },
-    });
+    const count = await this.prisma.productImage.count({ where: { productId } });
     if (count >= MAX_IMAGES_PER_PRODUCT) {
       throw new BadRequestException(
         `Each product can have at most ${MAX_IMAGES_PER_PRODUCT} images.`,
@@ -1452,15 +959,11 @@ export class ProductService {
       // Recover storageKey from the URL: /uploads/products/<orgId>/<filename>
       const idx = image.src.indexOf('/uploads/products/');
       if (idx >= 0) {
-        const storageKey = image.src.substring(
-          idx + '/uploads/products/'.length,
-        );
+        const storageKey = image.src.substring(idx + '/uploads/products/'.length);
         await this.imageStorage.delete(storageKey);
       }
     } catch (err) {
-      this.logger.warn(
-        `Failed to delete image file for ${imageId}: ${err}`,
-      );
+      this.logger.warn(`Failed to delete image file for ${imageId}: ${err}`);
     }
 
     await this.prisma.productImage.delete({ where: { id: imageId } });
@@ -1468,11 +971,7 @@ export class ProductService {
     return { id: imageId, deleted: true };
   }
 
-  async reorderImages(
-    productId: string,
-    orgId: string,
-    dto: ReorderImagesDto,
-  ) {
+  async reorderImages(productId: string, orgId: string, dto: ReorderImagesDto) {
     const product = await this.loadProductForEdit(productId, orgId);
 
     const own = await this.prisma.productImage.findMany({
@@ -1500,11 +999,7 @@ export class ProductService {
     return { ok: true };
   }
 
-  async setVariantImage(
-    variantId: string,
-    orgId: string,
-    dto: SetVariantImageDto,
-  ) {
+  async setVariantImage(variantId: string, orgId: string, dto: SetVariantImageDto) {
     const variant = await this.loadVariantForEdit(variantId, orgId);
 
     if (dto.imageId !== null) {
@@ -1529,10 +1024,7 @@ export class ProductService {
 
   private async loadImageForEdit(imageId: string, orgId: string) {
     const image = await this.prisma.productImage.findFirst({
-      where: {
-        id: imageId,
-        product: { organizationId: orgId, deletedAt: null },
-      },
+      where: { id: imageId, product: { organizationId: orgId, deletedAt: null } },
       include: { product: { include: { channel: true } } },
     });
     if (!image) throw new NotFoundException('Image not found');
@@ -1545,72 +1037,29 @@ export class ProductService {
   // SYNCED product gets a local edit. UI surfaces this as an amber pill +
   // Sync button so the merchant can re-push when ready. We do NOT auto-enqueue
   // because that would surprise users who're mid-edit.
-
-  /** Merge a shopifySync patch into an existing metadata blob. Pure — no DB. */
-  private mergeShopifySync(
-    metadata: Prisma.JsonValue | null,
-    patch: ShopifySyncPatch,
-  ): Prisma.InputJsonObject {
-    const meta = (metadata as Prisma.JsonObject) ?? {};
-    const current = (meta.shopifySync as Prisma.JsonObject) ?? {};
-    return {
-      ...meta,
-      shopifySync: { ...current, ...patch },
-    } as Prisma.InputJsonObject;
-  }
-
-  private async markOutOfSyncIfNeeded(
-    productId: string,
-    tx?: Prisma.TransactionClient,
-  ) {
-    const run = async (client: Prisma.TransactionClient) => {
-      const row = await client.product.findUnique({
-        where: { id: productId },
-        select: { metadata: true },
-      });
-      const sync = (row?.metadata as Prisma.JsonObject)?.shopifySync as
-        | { status?: ShopifySyncStatus }
-        | undefined;
-      if (sync?.status !== 'SYNCED') return;
-      await client.product.update({
+  private async markOutOfSyncIfNeeded(productId: string) {
+    const p = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: { metadata: true },
+    });
+    const meta = (p?.metadata as Prisma.JsonObject) ?? {};
+    const sync = meta.shopifySync as
+      | { status: ShopifySyncStatus; shopifyProductId?: string; attempts?: number }
+      | undefined;
+    if (sync?.status === 'SYNCED') {
+      await this.prisma.product.update({
         where: { id: productId },
         data: {
-          metadata: this.mergeShopifySync(row!.metadata, {
-            status: 'OUT_OF_SYNC',
-          }),
+          metadata: {
+            ...meta,
+            shopifySync: {
+              ...sync,
+              status: 'OUT_OF_SYNC',
+            },
+          } as Prisma.InputJsonObject,
         },
       });
-    };
-    // Default isolation on purpose: this is a last-write-wins status stamp.
-    // Serializable would abort one of two concurrent editors (P2034) with no
-    // retry — a 500 for the user — while buying nothing for correctness.
-    return tx ? run(tx) : this.prisma.$transaction(run);
-  }
-
-  /** Bulk restamp SYNCED → OUT_OF_SYNC. One read + one batched transaction. */
-  private async markManyOutOfSync(ids: string[]) {
-    if (ids.length === 0) return;
-    const rows = await this.prisma.product.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, metadata: true },
-    });
-    const updates = rows.flatMap((r) => {
-      const sync = (r.metadata as Prisma.JsonObject)?.shopifySync as
-        | { status?: ShopifySyncStatus }
-        | undefined;
-      if (sync?.status !== 'SYNCED') return [];
-      return [
-        this.prisma.product.update({
-          where: { id: r.id },
-          data: {
-            metadata: this.mergeShopifySync(r.metadata, {
-              status: 'OUT_OF_SYNC',
-            }),
-          },
-        }),
-      ];
-    });
-    if (updates.length > 0) await this.prisma.$transaction(updates);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -1626,11 +1075,7 @@ export class ProductService {
    * merchants can manage their full catalog from the CRM. Only `not found`
    * lands in `skipped`.
    */
-  private async resolveBulkTargets(
-    orgId: string,
-    ids: string[],
-    vendorScope?: string,
-  ) {
+  private async resolveBulkTargets(orgId: string, ids: string[], vendorScope?: string) {
     const products = await this.prisma.product.findMany({
       where: {
         id: { in: ids },
@@ -1649,36 +1094,29 @@ export class ProductService {
     return { ok, skipped };
   }
 
-  async bulkSetStatus(
-    orgId: string,
-    productIds: string[],
-    status: ProductStatus,
-  ) {
-    const { ok, skipped } = await this.resolveBulkTargets(
-      orgId,
-      productIds,
-    );
+  async bulkSetStatus(orgId: string, productIds: string[], status: ProductStatus) {
+    const { ok, skipped } = await this.resolveBulkTargets(orgId, productIds);
     if (ok.length > 0) {
       await this.prisma.product.updateMany({
         where: { id: { in: ok }, organizationId: orgId },
         data: { status },
       });
-      await this.markManyOutOfSync(ok);
+      // Restamp OUT_OF_SYNC for any that were already SYNCED. updateMany
+      // can't read+conditionally-write, so we do this via individual passes
+      // — the set is bounded by MAX_BULK = 250.
+      for (const id of ok) await this.markOutOfSyncIfNeeded(id);
     }
     return { ok, skipped };
   }
 
   async bulkArchive(orgId: string, productIds: string[]) {
-    const { ok, skipped } = await this.resolveBulkTargets(
-      orgId,
-      productIds,
-    );
+    const { ok, skipped } = await this.resolveBulkTargets(orgId, productIds);
     if (ok.length > 0) {
+      const now = new Date();
       await this.prisma.product.updateMany({
         where: { id: { in: ok }, organizationId: orgId },
-        data: { status: 'ARCHIVED' },
+        data: { status: 'ARCHIVED', deletedAt: now },
       });
-      await this.markManyOutOfSync(ok);
     }
     return { ok, skipped };
   }
@@ -1690,10 +1128,7 @@ export class ProductService {
    * is `onDelete: SetNull` in the schema, preserving order history.
    */
   async bulkDelete(orgId: string, productIds: string[]) {
-    const { ok, skipped } = await this.resolveBulkTargets(
-      orgId,
-      productIds,
-    );
+    const { ok, skipped } = await this.resolveBulkTargets(orgId, productIds);
     if (ok.length === 0) return { ok: [], skipped, deleted: 0 };
 
     const archivedOnly = await this.prisma.product.findMany({
@@ -1720,69 +1155,35 @@ export class ProductService {
   }
 
   async bulkAddTags(orgId: string, productIds: string[], tags: string[]) {
-    const { ok, skipped } = await this.resolveBulkTargets(
-      orgId,
-      productIds,
-    );
-    if (ok.length === 0 || tags.length === 0) return { ok, skipped };
-
-    const rows = await this.prisma.product.findMany({
-      where: { id: { in: ok } },
-      select: { id: true, tags: true, metadata: true },
-    });
-
-    const updates = rows.map((p) => {
-      const data: Prisma.ProductUpdateInput = {
-        tags: Array.from(new Set([...(p.tags ?? []), ...tags])),
-      };
-      const meta = (p.metadata as Prisma.JsonObject) ?? {};
-      const sync = meta.shopifySync as
-        | { status?: ShopifySyncStatus }
-        | undefined;
-      if (sync?.status === 'SYNCED') {
-        data.metadata = {
-          ...meta,
-          shopifySync: { ...sync, status: 'OUT_OF_SYNC' },
-        } as Prisma.InputJsonObject;
-      }
-      return this.prisma.product.update({ where: { id: p.id }, data });
-    });
-
-    await this.prisma.$transaction(updates);
+    const { ok, skipped } = await this.resolveBulkTargets(orgId, productIds);
+    // Postgres array_cat would be faster, but Prisma's native types don't
+    // expose it. With MAX_BULK=250 the per-row pass is acceptable.
+    for (const id of ok) {
+      const p = await this.prisma.product.findUnique({
+        where: { id },
+        select: { tags: true },
+      });
+      if (!p) continue;
+      const merged = Array.from(new Set([...(p.tags ?? []), ...tags]));
+      await this.prisma.product.update({ where: { id }, data: { tags: merged } });
+      await this.markOutOfSyncIfNeeded(id);
+    }
     return { ok, skipped };
   }
 
   async bulkRemoveTags(orgId: string, productIds: string[], tags: string[]) {
-    const { ok, skipped } = await this.resolveBulkTargets(
-      orgId,
-      productIds,
-    );
-    if (ok.length === 0 || tags.length === 0) return { ok, skipped };
-
+    const { ok, skipped } = await this.resolveBulkTargets(orgId, productIds);
     const removeSet = new Set(tags);
-    const rows = await this.prisma.product.findMany({
-      where: { id: { in: ok } },
-      select: { id: true, tags: true, metadata: true },
-    });
-
-    const updates = rows.map((p) => {
-      const data: Prisma.ProductUpdateInput = {
-        tags: (p.tags ?? []).filter((t) => !removeSet.has(t)),
-      };
-      const meta = (p.metadata as Prisma.JsonObject) ?? {};
-      const sync = meta.shopifySync as
-        | { status?: ShopifySyncStatus }
-        | undefined;
-      if (sync?.status === 'SYNCED') {
-        data.metadata = {
-          ...meta,
-          shopifySync: { ...sync, status: 'OUT_OF_SYNC' },
-        } as Prisma.InputJsonObject;
-      }
-      return this.prisma.product.update({ where: { id: p.id }, data });
-    });
-
-    await this.prisma.$transaction(updates);
+    for (const id of ok) {
+      const p = await this.prisma.product.findUnique({
+        where: { id },
+        select: { tags: true },
+      });
+      if (!p) continue;
+      const filtered = (p.tags ?? []).filter((t) => !removeSet.has(t));
+      await this.prisma.product.update({ where: { id }, data: { tags: filtered } });
+      await this.markOutOfSyncIfNeeded(id);
+    }
     return { ok, skipped };
   }
 
@@ -1792,11 +1193,7 @@ export class ProductService {
    * products. Returns the count of jobs queued.
    */
   async bulkSync(orgId: string, productIds: string[], vendorScope?: string) {
-    const { ok, skipped } = await this.resolveBulkTargets(
-      orgId,
-      productIds,
-      vendorScope,
-    );
+    const { ok, skipped } = await this.resolveBulkTargets(orgId, productIds, vendorScope);
     if (ok.length === 0) return { ok: [], skipped, queued: 0 };
 
     const shopify = await this.prisma.channel.findUnique({
@@ -1813,50 +1210,40 @@ export class ProductService {
       );
     }
 
-    const results = await Promise.allSettled(
-      ok.map((id) =>
-        this.shopifyPushEnqueuer.enqueueProductPush({
+    let queued = 0;
+    for (const id of ok) {
+      try {
+        await this.shopifyPushEnqueuer.enqueueProductPush({
           type: 'product',
           productId: id,
           organizationId: orgId,
-        }),
-      ),
-    );
-
-    const queuedIds: string[] = [];
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled') {
-        queuedIds.push(ok[i]);
-      } else {
+        });
+        // Stamp PENDING immediately so the row badge updates.
+        const product = await this.prisma.product.findUnique({
+          where: { id },
+          select: { metadata: true },
+        });
+        const meta = (product?.metadata as Prisma.JsonObject) ?? {};
+        await this.prisma.product.update({
+          where: { id },
+          data: {
+            metadata: {
+              ...meta,
+              shopifySync: { status: 'PENDING', attempts: 0 },
+            } as Prisma.InputJsonObject,
+          },
+        });
+        queued++;
+      } catch (err) {
         skipped.push({
-          id: ok[i],
-          reason: `Failed to enqueue: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`,
+          id,
+          reason: `Failed to enqueue: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
-    });
-
-    if (queuedIds.length > 0) {
-      const rows = await this.prisma.product.findMany({
-        where: { id: { in: queuedIds } },
-        select: { id: true, metadata: true },
-      });
-      await this.prisma.$transaction(
-        rows.map((p) =>
-          this.prisma.product.update({
-            where: { id: p.id },
-            data: {
-              metadata: this.mergeShopifySync(p.metadata, {
-                status: 'PENDING',
-                attempts: 0,
-              }),
-            },
-          }),
-        ),
-      );
     }
-
-    return { ok: queuedIds, skipped, queued: queuedIds.length };
+    return { ok: ok.filter((id) => !skipped.find((s) => s.id === id)), skipped, queued };
   }
+
   // ═══════════════════════════════════════════════════════════════════════
   // PHASE 3 — DUPLICATE
   // ═══════════════════════════════════════════════════════════════════════
@@ -1871,10 +1258,7 @@ export class ProductService {
   async duplicate(productId: string, orgId: string) {
     const original = await this.prisma.product.findFirst({
       where: { id: productId, organizationId: orgId, deletedAt: null },
-      include: {
-        variants: { orderBy: { position: 'asc' } },
-        images: { orderBy: { position: 'asc' } },
-      },
+      include: { variants: { orderBy: { position: 'asc' } }, images: { orderBy: { position: 'asc' } } },
     });
     if (!original) throw new NotFoundException('Product not found');
 
@@ -1911,12 +1295,8 @@ export class ProductService {
         tags: original.tags,
         hsnCode: original.hsnCode,
         gstRate: original.gstRate,
-        options: (original.options ??
-          Prisma.JsonNull) as Prisma.InputJsonValue,
-        metadata: {
-          source: 'crm',
-          duplicatedFrom: original.id,
-        } as Prisma.InputJsonObject,
+        options: (original.options ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+        metadata: { source: 'crm', duplicatedFrom: original.id } as Prisma.InputJsonObject,
         externalCreatedAt: new Date(),
         variants: {
           create: original.variants.map((v) => ({
@@ -1929,8 +1309,7 @@ export class ProductService {
             cost: v.cost,
             inventoryQuantity: v.inventoryQuantity,
             trackQuantity: v.trackQuantity,
-            continueSellingWhenOutOfStock:
-              v.continueSellingWhenOutOfStock,
+            continueSellingWhenOutOfStock: v.continueSellingWhenOutOfStock,
             weight: v.weight,
             weightUnit: v.weightUnit,
             hsCode: v.hsCode,
@@ -2008,9 +1387,9 @@ export class ProductService {
         status: p.status,
         publishedAt: p.publishedAt,
         options: Array.isArray(p.options)
-          ? (
-            p.options as Array<{ name: string; values: string[] }>
-          ).filter((o) => o && typeof o === 'object')
+          ? (p.options as Array<{ name: string; values: string[] }>).filter(
+              (o) => o && typeof o === 'object',
+            )
           : [],
         variants: p.variants.map((v) => ({
           sku: v.sku,
@@ -2020,8 +1399,7 @@ export class ProductService {
           cost: v.cost?.toString() ?? null,
           inventoryQuantity: v.inventoryQuantity,
           trackQuantity: v.trackQuantity,
-          continueSellingWhenOutOfStock:
-            v.continueSellingWhenOutOfStock,
+          continueSellingWhenOutOfStock: v.continueSellingWhenOutOfStock,
           weight: v.weight?.toString() ?? null,
           weightUnit: v.weightUnit,
           requiresShipping: v.requiresShipping,
@@ -2069,10 +1447,7 @@ export class ProductService {
         createdCount: 0,
         updatedCount: 0,
         errorCount: 0,
-        previewRows: rows.slice(
-          0,
-          10,
-        ) as unknown as Prisma.InputJsonValue,
+        previewRows: rows.slice(0, 10) as unknown as Prisma.InputJsonValue,
       },
     });
     return this.toImportJobView(job);
@@ -2153,10 +1528,7 @@ export class ProductService {
     const updated = await this.prisma.productImportJob.update({
       where: { id: jobId },
       data: {
-        status:
-          errorList.length > 0 && createdCount === 0
-            ? 'FAILED'
-            : 'COMPLETED',
+        status: errorList.length > 0 && createdCount === 0 ? 'FAILED' : 'COMPLETED',
         processedRows: processed,
         createdCount,
         errorCount: errorList.length,
@@ -2167,10 +1539,7 @@ export class ProductService {
     return this.toImportJobView(updated);
   }
 
-  async getImportJob(
-    orgId: string,
-    jobId: string,
-  ): Promise<ProductImportJobView> {
+  async getImportJob(orgId: string, jobId: string): Promise<ProductImportJobView> {
     const job = await this.prisma.productImportJob.findFirst({
       where: { id: jobId, organizationId: orgId },
     });
@@ -2207,15 +1576,10 @@ export class ProductService {
         externalCreatedAt: new Date(),
         variants: {
           create: candidate.variants.map((v, idx) => {
-            const labels = [v.option1, v.option2, v.option3].filter(
-              Boolean,
-            ) as string[];
+            const labels = [v.option1, v.option2, v.option3].filter(Boolean) as string[];
             return {
               externalId: `manual_${randomUUID()}`,
-              title:
-                labels.length > 0
-                  ? labels.join(' / ')
-                  : DEFAULT_VARIANT_TITLE,
+              title: labels.length > 0 ? labels.join(' / ') : 'Default Title',
               sku: v.sku ?? null,
               barcode: v.barcode ?? null,
               price: v.price,
@@ -2223,8 +1587,7 @@ export class ProductService {
               cost: v.cost ?? null,
               inventoryQuantity: v.inventoryQuantity,
               trackQuantity: v.trackQuantity,
-              continueSellingWhenOutOfStock:
-                v.continueSellingWhenOutOfStock,
+              continueSellingWhenOutOfStock: v.continueSellingWhenOutOfStock,
               weight: v.weight ?? null,
               weightUnit: v.weightUnit ?? null,
               option1: v.option1 ?? null,
@@ -2272,9 +1635,7 @@ export class ProductService {
       createdCount: job.createdCount,
       updatedCount: job.updatedCount,
       errorCount: job.errorCount,
-      errors: Array.isArray(job.errors)
-        ? (job.errors as unknown as ProductImportError[])
-        : [],
+      errors: Array.isArray(job.errors) ? (job.errors as unknown as ProductImportError[]) : [],
       previewRows: Array.isArray(job.previewRows)
         ? (job.previewRows as unknown as Record<string, string>[])
         : [],

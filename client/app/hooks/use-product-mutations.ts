@@ -24,9 +24,13 @@ export function useCreateProductMutation() {
 
       const queued = (result as { shopifyPushQueued?: boolean }).shopifyPushQueued;
       if (queued) {
-        // Sync-status freshness is handled by useProduct's refetchInterval,
-        // which polls only while the push is PENDING.
         toast.success("Product created. Syncing to Shopify…");
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: productKeys.all });
+        }, 3000);
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: productKeys.all });
+        }, 8000);
       } else {
         toast.success(
           "Product created. Sync to Shopify manually when you're ready.",
@@ -38,8 +42,8 @@ export function useCreateProductMutation() {
   });
 }
 
-/** Edit a MANUAL-channel product. Pass `silent` when the caller owns the toasts. */
-export function useUpdateProductMutation(options?: { silent?: boolean }) {
+/** Edit a MANUAL-channel product. */
+export function useUpdateProductMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -48,13 +52,10 @@ export function useUpdateProductMutation(options?: { silent?: boolean }) {
     onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: productKeys.all });
       queryClient.invalidateQueries({ queryKey: productKeys.detail(vars.id) });
-      if (!options?.silent) toast.success("Product updated.");
+      toast.success("Product updated.");
     },
-    onError: (error) => {
-      if (!options?.silent) {
-        handleMutationError(error, "Failed to update product.");
-      }
-    },
+    onError: (error) =>
+      handleMutationError(error, "Failed to update product."),
   });
 }
 
@@ -112,11 +113,8 @@ export function useCreateVariantMutation(productId: string) {
   });
 }
 
-/** Edit a single variant. Pass `silent` when the caller owns the toasts. */
-export function useUpdateVariantMutation(
-  productId: string,
-  options?: { silent?: boolean },
-) {
+/** Edit a single variant. */
+export function useUpdateVariantMutation(productId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ variantId, data }: { variantId: string; data: UpdateVariantRequest }) =>
@@ -124,31 +122,9 @@ export function useUpdateVariantMutation(
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: productKeys.detail(productId) });
       queryClient.invalidateQueries({ queryKey: productKeys.all });
-      if (!options?.silent) toast.success("Variant updated.");
+      toast.success("Variant updated.");
     },
-    onError: (error) => {
-      if (!options?.silent) handleMutationError(error, "Failed to update variant.");
-    },
-  });
-}
-
-/** Bulk-edit variants on a product (price/cost/stock, etc.). Pass `silent` when the caller owns the toasts. */
-export function useBulkUpdateVariantsMutation(
-  productId: string,
-  options?: { silent?: boolean },
-) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (updates: Array<UpdateVariantRequest & { variantId: string }>) =>
-      productService.bulkUpdateVariants(productId, updates),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: productKeys.detail(productId) });
-      queryClient.invalidateQueries({ queryKey: productKeys.all });
-      if (!options?.silent) toast.success("Variants updated.");
-    },
-    onError: (error) => {
-      if (!options?.silent) handleMutationError(error, "Failed to update variants.");
-    },
+    onError: (error) => handleMutationError(error, "Failed to update variant."),
   });
 }
 
@@ -179,24 +155,17 @@ export function useReorderVariantsMutation(productId: string) {
   });
 }
 
-/** Generate variants from defined options (cartesian product, skip existing). Pass `silent` when the caller owns the toasts. */
-export function useGenerateVariantsMutation(
-  productId: string,
-  options?: { silent?: boolean },
-) {
+/** Generate variants from defined options (cartesian product, skip existing). */
+export function useGenerateVariantsMutation(productId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => productService.generateVariants(productId),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: productKeys.detail(productId) });
       queryClient.invalidateQueries({ queryKey: productKeys.all });
-      if (!options?.silent) {
-        toast.success(`Generated ${result.created} new variant${result.created === 1 ? "" : "s"}.`);
-      }
+      toast.success(`Generated ${result.created} new variant${result.created === 1 ? "" : "s"}.`);
     },
-    onError: (error) => {
-      if (!options?.silent) handleMutationError(error, "Failed to generate variants.");
-    },
+    onError: (error) => handleMutationError(error, "Failed to generate variants."),
   });
 }
 
@@ -215,11 +184,8 @@ export function useSetVariantImageMutation(productId: string) {
 
 // ─── OPTIONS MUTATIONS ──────────────────────────────────────────────────────
 
-/** Replace the product's option types definition. Pass `silent` when the caller owns the toasts. */
-export function useUpdateOptionsMutation(
-  productId: string,
-  opts?: { silent?: boolean },
-) {
+/** Replace the product's option types definition. */
+export function useUpdateOptionsMutation(productId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (options: ProductOption[]) =>
@@ -227,9 +193,7 @@ export function useUpdateOptionsMutation(
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: productKeys.detail(productId) });
     },
-    onError: (error) => {
-      if (!opts?.silent) handleMutationError(error, "Failed to update options.");
-    },
+    onError: (error) => handleMutationError(error, "Failed to update options."),
   });
 }
 

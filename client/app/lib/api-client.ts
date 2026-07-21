@@ -12,7 +12,6 @@ export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || "/api/v1",
   headers: { "Content-Type": "application/json" },
   withCredentials: true,
-  timeout: 30_000,
 });
 
 // Attach access token to every request
