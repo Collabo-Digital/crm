@@ -1,33 +1,25 @@
 import {
-  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsBoolean,
   IsIn,
   IsInt,
   IsISO31661Alpha2,
-  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
   Length,
   Min,
-  ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
 
 export const WEIGHT_UNITS = ['g', 'kg', 'oz', 'lb'] as const;
 export type WeightUnit = (typeof WEIGHT_UNITS)[number];
 
 export class CreateVariantDto {
   // ── Pricing ──────────────────────────────────────────────────────────────
-  // Optional (Shopify parity): when omitted on POST :id/variants the variant
-  // inherits the product's base price; on product create it defaults to 0.
-  // An explicit value — including 0 — always wins.
-  @IsOptional()
   @IsNumber()
   @Min(0)
-  price?: number;
+  price: number;
 
   @IsOptional()
   @IsNumber()
@@ -204,19 +196,4 @@ export class ReorderVariantsDto {
   @IsString({ each: true })
   @ArrayMinSize(1)
   variantIds: string[];
-}
-
-export class BulkVariantUpdateItemDto extends UpdateVariantDto {
-  @IsString()
-  @IsNotEmpty()
-  variantId: string;
-}
-
-export class BulkUpdateVariantsDto {
-  @IsArray()
-  @ArrayMinSize(1)
-  @ArrayMaxSize(100)
-  @ValidateNested({ each: true })
-  @Type(() => BulkVariantUpdateItemDto)
-  updates: BulkVariantUpdateItemDto[];
 }

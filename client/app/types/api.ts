@@ -701,7 +701,6 @@ export interface Product {
   image: ProductImage | null;
   channel: ChannelRef;
   createdAt: string;
-  updatedAt?: string;
   variants: ProductVariant[];
   /** Set when the product has been pushed (or attempted to be pushed) to Shopify. */
   shopifySync: ProductShopifySync | null;
@@ -832,16 +831,7 @@ export interface CreateVariantRequest {
   imageId?: string;
 }
 
-export type UpdateVariantRequest = Omit<
-  Partial<CreateVariantRequest>,
-  "imageId" | "sku" | "barcode" | "cost" | "compareAtPrice"
-> & {
-  /** `null` clears the stored value; omit the field to leave it unchanged. */
-  sku?: string | null;
-  barcode?: string | null;
-  cost?: number | null;
-  compareAtPrice?: number | null;
-};
+export type UpdateVariantRequest = Partial<Omit<CreateVariantRequest, "imageId">>;
 
 /** Query parameters for the product list endpoint. */
 export interface ProductListParams {

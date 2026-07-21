@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { productService } from "~/services/product.service";
 import type { ProductListParams } from "~/types/api";
 
@@ -17,7 +17,6 @@ export function useProducts(params?: ProductListParams) {
   return useQuery({
     queryKey: productKeys.list(params),
     queryFn: () => productService.list(params),
-    placeholderData: keepPreviousData,
   });
 }
 
@@ -27,22 +26,6 @@ export function useProduct(id?: string | null) {
     queryKey: productKeys.detail(id!),
     queryFn: () => productService.get(id!),
     enabled: !!id,
-    // Poll only while a Shopify push is in flight; stops by itself once it
-    // resolves (replaces the old blind 3s/8s setTimeout invalidations).
-    // The detail endpoint reports sync under metadata (only the list response
-    // maps it top-level), so check both places.
-    refetchInterval: (query) => {
-      const data = query.state.data;
-      const status =
-        data?.shopifySync?.status ??
-        (
-          data?.metadata as
-            | { shopifySync?: { status?: string } }
-            | null
-            | undefined
-        )?.shopifySync?.status;
-      return status === "PENDING" ? 3000 : false;
-    },
   });
 }
 

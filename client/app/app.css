@@ -202,27 +202,3 @@ body {
   background-color: #111827;  /* gray-900 */
   color: #f3f4f6;            /* gray-100 */
 }
-
-/* ── Quill rich text editor ─────────────────────────────────────────────── */
-.ql-toolbar.ql-snow {
-  border-color: var(--border);
-  border-radius: 0.5rem 0.5rem 0 0;
-  background: transparent;
-  padding: 6px 8px;
-}
-
-.ql-toolbar.ql-snow .ql-formats {
-  margin-right: 8px;
-}
-
-.ql-container.ql-snow {
-  border-color: var(--border);
-  border-radius: 0 0 0.5rem 0.5rem;
-  font-size: 0.875rem;
-  min-height: 120px;
-}
-
-.ql-editor.ql-blank::before {
-  color: var(--muted-foreground);
-  font-style: normal;
-}

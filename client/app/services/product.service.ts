@@ -61,14 +61,6 @@ export const productService = {
   updateVariant: (variantId: string, data: UpdateVariantRequest) =>
     apiClient.patch<ProductVariant>(`/products/variants/${variantId}`, data).then((r) => r.data),
 
-  bulkUpdateVariants: (
-    productId: string,
-    updates: Array<UpdateVariantRequest & { variantId: string }>,
-  ) =>
-    apiClient
-      .patch<{ ok: true }>(`/products/${productId}/variants/bulk`, { updates })
-      .then((r) => r.data),
-
   deleteVariant: (variantId: string) =>
     apiClient.delete<{ id: string; deleted: true }>(`/products/variants/${variantId}`).then((r) => r.data),
 
@@ -92,8 +84,6 @@ export const productService = {
     return apiClient
       .post<ProductImage>(`/products/${productId}/images`, fd, {
         headers: { "Content-Type": "multipart/form-data" },
-        // Uploads on slow links can legitimately exceed the client-wide 30s.
-        timeout: 120_000,
       })
       .then((r) => r.data);
   },
@@ -178,7 +168,6 @@ export const productService = {
     return apiClient
       .post<ProductImportJob>("/products/import", fd, {
         headers: { "Content-Type": "multipart/form-data" },
-        timeout: 120_000,
       })
       .then((r) => r.data);
   },
@@ -189,7 +178,6 @@ export const productService = {
     return apiClient
       .post<ProductImportJob>(`/products/import/${jobId}/confirm`, fd, {
         headers: { "Content-Type": "multipart/form-data" },
-        timeout: 120_000,
       })
       .then((r) => r.data);
   },

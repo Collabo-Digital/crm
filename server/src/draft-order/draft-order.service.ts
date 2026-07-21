@@ -19,7 +19,6 @@ import { ShopifyGraphqlClient } from '../channel/shopify-graphql.client';
 import { ShopifyOAuthService } from '../channel/shopify-oauth.service';
 import { ShopifySyncService } from '../channel/shopify-sync.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
-import { displayVariantTitle } from '../product/variant-title.util';
 import { DraftMirrorEnqueuer } from './draft-mirror.enqueuer';
 import {
   DRAFT_ORDER_COMPLETE_MUTATION,
@@ -313,7 +312,7 @@ export class DraftOrderService {
         lineRows.push({
           variantId: v.id,
           title: v.product.title,
-          variantTitle: displayVariantTitle(v.title),
+          variantTitle: v.title || null,
           sku: v.sku ?? null,
           quantity: li.quantity,
           unitPrice,
@@ -588,7 +587,7 @@ export class DraftOrderService {
         lineRows.push({
           variantId: v.id,
           title: v.product.title,
-          variantTitle: displayVariantTitle(v.title),
+          variantTitle: v.title || null,
           sku: v.sku ?? null,
           quantity: li.quantity,
           unitPrice,

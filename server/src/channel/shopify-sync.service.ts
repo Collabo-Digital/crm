@@ -608,27 +608,13 @@ export class ShopifySyncService {
         // Only touch vendor_key when a value was resolved (string|null). undefined = leave as-is.
         const vendorKeyUpdate = vendorKey === undefined ? {} : { vendorKey };
 
-        // Shopify signals "no real options" with a placeholder option named
-        // "Title" whose only value is "Default Title". Store null instead —
-        // our convention for single-variant products — so the UI never renders
-        // a fake "Title" option. (The CSV importer already filters this; the
-        // pull path must match.)
-        const isPlaceholderOptions =
-            Array.isArray(sp.options) &&
-            sp.options.length === 1 &&
-            sp.options[0]?.name === 'Title' &&
-            Array.isArray(sp.options[0]?.values) &&
-            sp.options[0].values.length === 1 &&
-            sp.options[0].values[0] === 'Default Title';
-        const normalizedOptions = isPlaceholderOptions ? null : (sp.options || null);
-
         const product = await this.prisma.product.upsert({
             where: { channelId_externalId: { channelId, externalId } },
             create: {
                 organizationId: orgId, channelId, externalId,
                 title: sp.title, bodyHtml: sp.body_html, vendor: sp.vendor, vendorKey: vendorKey ?? null,
                 productType: sp.product_type, status: this.mapProductStatus(sp.status),
-                tags, options: normalizedOptions,
+                tags, options: sp.options || null,
                 publishedAt: sp.published_at ? new Date(sp.published_at) : null,
                 externalCreatedAt: sp.created_at ? new Date(sp.created_at) : null,
                 externalUpdatedAt: sp.updated_at ? new Date(sp.updated_at) : null,
@@ -636,7 +622,7 @@ export class ShopifySyncService {
             update: {
                 title: sp.title, bodyHtml: sp.body_html, vendor: sp.vendor, ...vendorKeyUpdate,
                 productType: sp.product_type, status: this.mapProductStatus(sp.status),
-                tags, options: normalizedOptions,
+                tags, options: sp.options || null,
                 publishedAt: sp.published_at ? new Date(sp.published_at) : null,
                 externalUpdatedAt: sp.updated_at ? new Date(sp.updated_at) : null,
             },
