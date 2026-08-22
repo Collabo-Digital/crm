@@ -172,19 +172,7 @@ export default function ChoosePlanPage() {
 
   return (
     <div>
-      {/* Step indicator — 4 dots, first active */}
-      <div className="mb-8 flex items-center justify-center gap-2">
-        <div className="flex items-center gap-1.5">
-          <div className="size-2 rounded-full bg-[#CEF17B]" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-200" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-200" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-200" />
-        </div>
-        <span className="ml-2 text-xs text-gray-400">Step 1 of 4</span>
-      </div>
+
 
       {/* Heading */}
       <div className="mb-8 text-center">

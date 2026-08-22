@@ -37,30 +37,19 @@ export default function AccountTypePage() {
 
   return (
     <div>
-      {/* Step indicator */}
-      <div className="mb-8 flex items-center justify-center gap-2">
-        <div className="flex items-center gap-1.5">
-          <div className="size-2 rounded-full bg-gray-300" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-[#CEF17B]" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-200" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-200" />
-        </div>
-        <span className="ml-2 text-xs text-gray-400">Step 2 of 4</span>
-      </div>
+
 
       {/* Heading */}
-      <div className="mb-8 text-center">
-        <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
+      <div className="mb-8 text-center pt-8">
+        {/* <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
           <Sparkles className="size-5 text-[#084734]" />
-        </div>
-        <h2 className="text-2xl font-bold text-gray-900">
-          Welcome, {firstName}!
+        </div> */}
+        <h2 className="text-[38px] font-bold text-gray-900">
+          How will you use Collabo?
         </h2>
-        <p className="mt-1.5 text-sm text-gray-500">
-          How would you like to use Collabo CRM?
+        <p className="mt-1.5 text-[12px] text-gray-500">
+          Choose the workspace setup that best
+          matches how you manage your business.
         </p>
       </div>
 
