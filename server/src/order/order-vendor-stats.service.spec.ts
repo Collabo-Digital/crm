@@ -160,8 +160,11 @@ describe('OrderService.getVendorComparison', () => {
 
     const curFrom = new Date(period.current.from).getTime();
     const curTo = new Date(period.current.to).getTime();
-    const prevFrom = new Date(period.previous.from).getTime();
-    expect(new Date(period.previous.to).getTime()).toBe(curFrom - 1);
+    // `previous` is null only for an unbounded ("All Time") window; this test
+    // passes an explicit range, so it must be present.
+    expect(period.previous).not.toBeNull();
+    const prevFrom = new Date(period.previous!.from).getTime();
+    expect(new Date(period.previous!.to).getTime()).toBe(curFrom - 1);
     expect(curTo - curFrom).toBe(curFrom - prevFrom);
   });
 });

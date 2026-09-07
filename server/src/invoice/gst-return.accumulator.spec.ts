@@ -228,6 +228,77 @@ describe('Gstr3bAccumulator', () => {
     expect(outwardSupplies[1].totalTax).toBe(540);
   });
 
+  it('reports a zero-rated export in 3.1(b) only, never also in 3.1(a)', () => {
+    // 3.1(a) is defined as "outward taxable supplies (OTHER THAN zero-rated,
+    // nil-rated and exempted)", so (b), (c) and (e) are alternatives to it.
+    // The classifying switch used to fall through into the rate buckets, so an
+    // export was declared twice — at 18% in (a) and again as zero-rated in (b)
+    // — overstating outward supplies by its full value. On the live data that
+    // was ₹1,479.90 counted twice out of a ₹6,374.22 return.
+    const acc = new Gstr3bAccumulator();
+    acc.addInvoice(
+      invoice({
+        gstType: GstType.IGST,
+        placeOfSupply: '96',
+        placeOfSupplyName: 'Other Country',
+        subtotal: '1000.00',
+        totalIgst: '0.00',
+        totalTax: '0.00',
+        lineItems: [
+          line({
+            supplyType: GstSupplyType.ZERO_RATED,
+            taxableValue: '1000.00',
+            gstRate: '0.00',
+            igstAmount: '0.00',
+            totalTax: '0.00',
+          }),
+        ],
+      }),
+    );
+
+    const out = acc.finish();
+
+    expect(out.otherSupplies.zeroRated).toBe(1000);
+    // Nothing in (a) at all — not a 0% row, not an 18% row.
+    expect(out.outwardSupplies).toHaveLength(0);
+    // 3.2 is a memo OF 3.1(a); a supply absent from the parent cannot appear
+    // in the memo.
+    expect(out.interState.byState).toHaveLength(0);
+    expect(out.interState.totalTaxable).toBe(0);
+  });
+
+  it('keeps the taxable part of a mixed invoice in 3.1(a) and only the rest in (b)', () => {
+    // A part-export invoice must split, not land wholly in one row.
+    const acc = new Gstr3bAccumulator();
+    acc.addInvoice(
+      invoice({
+        gstType: GstType.IGST,
+        subtotal: '1500.00',
+        totalIgst: '90.00',
+        totalTax: '90.00',
+        lineItems: [
+          line({ taxableValue: '500.00', gstRate: '18.00', igstAmount: '90.00', totalTax: '90.00' }),
+          line({
+            supplyType: GstSupplyType.ZERO_RATED,
+            taxableValue: '1000.00',
+            gstRate: '0.00',
+            igstAmount: '0.00',
+            totalTax: '0.00',
+          }),
+        ],
+      }),
+    );
+
+    const out = acc.finish();
+
+    expect(out.otherSupplies.zeroRated).toBe(1000);
+    expect(out.outwardSupplies).toHaveLength(1);
+    expect(out.outwardSupplies[0].gstRate).toBe(18);
+    expect(out.outwardSupplies[0].taxableValue).toBe(500);
+    // The memo carries the 3.1(a) portion only, not the whole subtotal.
+    expect(out.interState.totalTaxable).toBe(500);
+  });
+
   it('excludes registered buyers from table 3.2 but keeps them in the aggregate', () => {
     // This is the distinction the CSV exporter used to lose: 3.2 is inter-state
     // supplies to UNREGISTERED persons, while the sibling aggregate spans every
@@ -240,6 +311,12 @@ describe('Gstr3bAccumulator', () => {
         placeOfSupply: '29',
         subtotal: '5000.00',
         totalIgst: '900.00',
+        // Table 3.2 is a memo of 3.1(a) and is now built from the same lines
+        // that feed it, so a fixture's lines have to agree with its subtotal.
+        // Overriding only the subtotal described an invoice that cannot exist.
+        lineItems: [
+          line({ taxableValue: '5000.00', igstAmount: '900.00', totalTax: '900.00' }),
+        ],
       }),
     );
     acc.addInvoice(
@@ -1029,6 +1106,11 @@ describe('Gstr3bAccumulator — credit notes', () => {
         subtotal: '400.00',
         totalIgst: '72.00',
         totalTax: '72.00',
+        // Lines have to match the subtotal — 3.2 is now derived from them, so
+        // a credit note that reverses 400 has to say so on its line too.
+        lineItems: [
+          line({ taxableValue: '400.00', igstAmount: '72.00', totalTax: '72.00' }),
+        ],
       }),
     );
 

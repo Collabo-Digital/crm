@@ -157,6 +157,12 @@ interface ComparisonPeriods {
   currentEnd: Date;
   previousStart: Date;
   previousEnd: Date;
+  /**
+   * False for an unbounded ("All Time") window: there is no earlier period to
+   * compare against, so every metric's trend is null rather than a fabricated
+   * "100% up" against an empty window.
+   */
+  hasPrevious: boolean;
 }
 
 @Injectable()
@@ -431,10 +437,12 @@ export class OrderService {
       previousOrders,
       currentPendingOrders,
       previousPendingOrders,
-      currentSales,
-      previousSales,
+      currentSalesConverted,
+      previousSalesConverted,
+      currentSalesByCurrency,
       currentProductsSold,
       previousProductsSold,
+      orgRow,
     ] = await Promise.all([
       // Total new orders (current period)
       this.prisma.order.count({
@@ -468,23 +476,24 @@ export class OrderService {
         },
       }),
 
-      // Total sales revenue (current period)
-      this.prisma.order.aggregate({
+      // Total sales revenue, converted into the org currency at each order's
+      // own stored rate (current period, then the one before it).
+      this.convertedSales(orgId, query.channelId, currentStart, currentEnd),
+      this.convertedSales(orgId, query.channelId, previousStart, previousEnd),
+
+      // The same current-period sales, split by the currency each order was
+      // actually placed in. Supporting detail under the converted headline —
+      // the `_sum.totalPrice` aggregates above are pre-conversion and are
+      // superseded by the converted figures computed below.
+      this.prisma.order.groupBy({
+        by: ['currency'],
         where: {
           organizationId: orgId, deletedAt: null, ...channelFilter,
           financialStatus: { in: ['PAID', 'PARTIALLY_PAID'] },
           externalCreatedAt: { gte: currentStart, lte: currentEnd },
         },
         _sum: { totalPrice: true },
-      }),
-      // Total sales revenue (previous period)
-      this.prisma.order.aggregate({
-        where: {
-          organizationId: orgId, deletedAt: null, ...channelFilter,
-          financialStatus: { in: ['PAID', 'PARTIALLY_PAID'] },
-          externalCreatedAt: { gte: previousStart, lte: previousEnd },
-        },
-        _sum: { totalPrice: true },
+        _count: { _all: true },
       }),
 
       // Total products sold / volume (current period)
@@ -507,14 +516,28 @@ export class OrderService {
         },
         _sum: { quantity: true },
       }),
+      // What the converted figures above are denominated in.
+      this.prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { currency: true },
+      }),
     ]);
 
     return this.buildComparison(periods, {
       orders: { current: currentOrders, previous: previousOrders },
       pending: { current: currentPendingOrders, previous: previousPendingOrders },
       sales: {
-        current: currentSales._sum.totalPrice ?? 0,
-        previous: previousSales._sum.totalPrice ?? 0,
+        current: currentSalesConverted.total,
+        previous: previousSalesConverted.total,
+        currency: (orgRow?.currency ?? 'USD').toUpperCase(),
+        unconverted: currentSalesConverted.unconverted,
+        byCurrency: currentSalesByCurrency
+          .map((r) => ({
+            currency: r.currency,
+            amount: Number(r._sum.totalPrice ?? 0),
+            orders: r._count._all,
+          }))
+          .sort((a, b) => b.amount - a.amount),
       },
       sold: {
         current: currentProductsSold._sum.quantity ?? 0,
@@ -651,15 +674,85 @@ export class OrderService {
   }
 
   /**
+   * Sales for a window, converted into the organisation's currency at each
+   * order's own stored rate.
+   *
+   * Raw SQL because Prisma's `aggregate` can only sum a column, and this has to
+   * sum a product (`total_price * exchange_rate`). Summing `total_price` alone
+   * — which is what this replaced — added currencies together: an INR
+   * workspace with a USD store reported "₹4,456.94" for a figure that was part
+   * rupees and part dollars.
+   *
+   * Orders whose rate never resolved are EXCLUDED from the total and counted
+   * separately, so a caller can say the figure is incomplete rather than
+   * quietly under-reporting. Defaulting them to 1 would book $2,545 as ₹2,545.
+   *
+   * The date predicate deliberately matches the aggregates it sits beside
+   * (`external_created_at`, inclusive both ends) so the converted figure covers
+   * exactly the same orders as the counts next to it.
+   */
+  private async convertedSales(
+    orgId: string,
+    channelId: string | undefined,
+    from: Date,
+    to: Date,
+  ): Promise<{ total: number; unconverted: number }> {
+    const channelFilter = channelId
+      ? Prisma.sql`AND o."channel_id" = ${channelId}`
+      : Prisma.empty;
+
+    const rows = await this.prisma.$queryRaw<
+      { total: string | null; unconverted: bigint }[]
+    >`
+      SELECT
+        COALESCE(SUM(o."total_price" * o."exchange_rate"), 0) AS total,
+        COUNT(*) FILTER (WHERE o."exchange_rate" IS NULL)     AS unconverted
+      FROM "orders" o
+      WHERE o."organization_id" = ${orgId}
+        AND o."deleted_at" IS NULL
+        AND o."financial_status"::text IN ('PAID', 'PARTIALLY_PAID')
+        AND o."external_created_at" >= ${from}
+        AND o."external_created_at" <= ${to}
+        ${channelFilter}
+    `;
+
+    const row = rows[0];
+    return {
+      total: Number(row?.total ?? 0),
+      unconverted: Number(row?.unconverted ?? 0),
+    };
+  }
+
+  /**
    * The window to report on, plus the same-length window immediately before it.
    * Shared by the org-wide and vendor comparisons so both quote the same dates.
    */
   private comparisonPeriods(query: QueryDashboardDto): ComparisonPeriods {
     const now = new Date();
-    const currentStart = query.dateFrom
-      ? new Date(query.dateFrom)
-      : new Date(now.getFullYear(), now.getMonth(), 1);
     const currentEnd = query.dateTo ? new Date(query.dateTo) : now;
+
+    // No `dateFrom` means the caller asked for ALL TIME — the Orders page's
+    // own "All Time" option sends nothing. This used to default to the 1st of
+    // the current month, so "All Time" silently reported month-to-date: on the
+    // live data 3 orders and ₹4,456.94 instead of 9 and ₹12,235.20, and
+    // "Pending Orders 0" directly above a table listing four unfulfilled ones.
+    //
+    // Unbounded is expressed as the epoch rather than by dropping the
+    // predicate, so every query below keeps one code path and one shape.
+    if (!query.dateFrom) {
+      const epoch = new Date(0);
+      return {
+        currentStart: epoch,
+        currentEnd,
+        // Never read — `hasPrevious: false` suppresses the comparison — but a
+        // valid range keeps the queries that receive them well-formed.
+        previousStart: epoch,
+        previousEnd: epoch,
+        hasPrevious: false,
+      };
+    }
+
+    const currentStart = new Date(query.dateFrom);
 
     // Previous period = same duration, shifted back
     const duration = currentEnd.getTime() - currentStart.getTime();
@@ -668,6 +761,7 @@ export class OrderService {
       currentEnd,
       previousStart: new Date(currentStart.getTime() - duration),
       previousEnd: new Date(currentStart.getTime() - 1), // 1ms before current starts
+      hasPrevious: true,
     };
   }
 
@@ -684,47 +778,72 @@ export class OrderService {
       // vendor path (raw SQL). Both serialize fine — the client applies
       // `Number()` before formatting either way.
       sales: {
+        /** Converted into the org currency at each order's own stored rate. */
         current: Prisma.Decimal | number;
         previous: Prisma.Decimal | number;
+        /** What `current` and `previous` are denominated in. */
+        currency?: string;
+        /**
+         * Orders excluded from `current` because their rate never resolved.
+         * >0 means the figure is incomplete and the UI must say so.
+         */
+        unconverted?: number;
+        /**
+         * Pre-conversion make-up of `current`, as supporting detail. Optional:
+         * the vendor-scoped variant (raw SQL) does not compute it.
+         */
+        byCurrency?: { currency: string; amount: number; orders: number }[];
       };
       sold: { current: number; previous: number };
     },
   ) {
     const { orders, pending, sales, sold } = metrics;
+
+    // An unbounded window has nothing before it. `calcChange` would report
+    // "100% up" against an empty previous period — a green trend badge on
+    // every tile, asserting growth that was never measured.
+    const change = (current: number, previous: number) =>
+      periods.hasPrevious ? this.calcChange(current, previous) : null;
+
     return {
       period: {
         current: {
           from: periods.currentStart.toISOString(),
           to: periods.currentEnd.toISOString(),
         },
-        previous: {
-          from: periods.previousStart.toISOString(),
-          to: periods.previousEnd.toISOString(),
-        },
+        previous: periods.hasPrevious
+          ? {
+            from: periods.previousStart.toISOString(),
+            to: periods.previousEnd.toISOString(),
+          }
+          : null,
       },
 
       totalNewOrders: {
         current: orders.current,
         previous: orders.previous,
-        change: this.calcChange(orders.current, orders.previous),
+        change: change(orders.current, orders.previous),
       },
 
       pendingOrders: {
         current: pending.current,
         previous: pending.previous,
-        change: this.calcChange(pending.current, pending.previous),
+        change: change(pending.current, pending.previous),
       },
 
       totalSales: {
         current: sales.current,
         previous: sales.previous,
-        change: this.calcChange(Number(sales.current), Number(sales.previous)),
+        change: change(Number(sales.current), Number(sales.previous)),
+        currency: sales.currency,
+        unconverted: sales.unconverted,
+        byCurrency: sales.byCurrency,
       },
 
       totalProductsSold: {
         current: sold.current,
         previous: sold.previous,
-        change: this.calcChange(sold.current, sold.previous),
+        change: change(sold.current, sold.previous),
       },
     };
   }
@@ -1202,6 +1321,13 @@ export class OrderService {
             fulfillmentStatus:
               dto.fulfillmentStatus ?? OrderFulfillmentStatus.FULFILLED,
             currency: org.currency || 'INR',
+            // A counter sale is priced in the org's own currency by
+            // construction (the line above), so it converts at exactly 1 — no
+            // rate lookup, and no dependence on the FX provider being up.
+            // Set explicitly rather than left NULL, because NULL means
+            // "unknown rate" and would exclude the order from every total.
+            exchangeRate: 1,
+            baseCurrency: org.currency || 'INR',
             subtotalPrice: subtotal,
             totalPrice: grandTotal,
             totalTax,

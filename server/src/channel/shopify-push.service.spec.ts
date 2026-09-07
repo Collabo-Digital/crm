@@ -98,6 +98,11 @@ function build(order: ReturnType<typeof offlineOrder> | null, channel: unknown =
     channel: { findUnique: jest.fn().mockResolvedValue(channel), update: jest.fn() },
     order: { findFirst: jest.fn().mockResolvedValue(order) },
     orderLineItem: { update: jest.fn((args) => args) },
+    // The org's currency is the source side of a catalogue-price conversion —
+    // a CRM-native product is priced in it.
+    organization: {
+      findUnique: jest.fn().mockResolvedValue({ currency: 'INR' }),
+    },
     $transaction: jest.fn().mockResolvedValue(undefined),
     $executeRaw: jest.fn().mockResolvedValue(1),
   };
@@ -111,14 +116,18 @@ function build(order: ReturnType<typeof offlineOrder> | null, channel: unknown =
       return { order: { fulfillmentOrders: { nodes: [] } } };
     }),
   };
+  // Catalogue prices are restated in the destination store's currency on push.
+  // A fixed rate keeps the assertions arithmetic rather than network-dependent.
+  const fx = { getRate: jest.fn().mockResolvedValue(95) };
   const service = new ShopifyPushService(
     prisma as any,
     shopifyOAuth as any,
     graphql as any,
     {} as any,
     {} as any,
+    fx as any,
   );
-  return { service, prisma, graphql, shopifyOAuth };
+  return { service, prisma, graphql, shopifyOAuth, fx };
 }
 
 /** The metadata patch `writeSyncMeta` sent through mergeJsonMetadata. */
@@ -293,5 +302,66 @@ describe('readStoredTaxLines', () => {
     expect(readStoredTaxLines(null)).toEqual([]);
     expect(readStoredTaxLines({ title: 'x' } as any)).toEqual([]);
     expect(readStoredTaxLines([{ title: 'CGST' }, 'junk', { rate: 0.09, price: '1' }] as any)).toEqual([]);
+  });
+});
+
+describe('ShopifyPushService — catalogue prices on push', () => {
+  // Pushing REBADGES the product onto the destination channel, so its price is
+  // afterwards read in that store's currency. Sending the number unchanged
+  // therefore re-denominates it: a ₹120 counter-sale product became a $120
+  // listing, roughly 95x its intended price.
+  const product = (currency: string | null) => ({
+    organizationId: 'org_1',
+    channel: currency === null ? null : { currency },
+  });
+
+  it('restates prices in the destination store currency', async () => {
+    const { service, prisma, fx } = build(null);
+
+
+    const convert = await (service as any).priceConverter(
+      product('INR'),
+      { id: 'ch_shopify', currency: 'USD' },
+      'tok',
+      'collabo-test.myshopify.com',
+    );
+
+    expect(fx.getRate).toHaveBeenCalledWith('INR', 'USD', expect.any(Date));
+    // 120 INR at the stubbed rate of 95 — the point is that it is NOT "120".
+    expect(convert(120)).toBe('11400.00');
+    expect(convert(null)).toBeNull();
+  });
+
+  it('leaves prices alone when both sides use the same currency', async () => {
+    const { service, prisma, fx } = build(null);
+
+
+    const convert = await (service as any).priceConverter(
+      product('INR'),
+      { id: 'ch_shopify', currency: 'INR' },
+      'tok',
+      'shop',
+    );
+
+    expect(fx.getRate).not.toHaveBeenCalled();
+    expect(convert(120)).toBe('120');
+  });
+
+  it('refuses the push when a needed rate cannot be reached', async () => {
+    // Publishing a wrong price to a live storefront is worse than not
+    // publishing, so an unreachable rate fails rather than sending the raw
+    // number — which is precisely the bug this replaced.
+    const { service, prisma, fx } = build(null);
+
+    fx.getRate.mockResolvedValueOnce(null);
+
+    await expect(
+      (service as any).priceConverter(
+        product('INR'),
+        { id: 'ch_shopify', currency: 'USD' },
+        'tok',
+        'shop',
+      ),
+    ).rejects.toThrow(/exchange rate unavailable/i);
   });
 });

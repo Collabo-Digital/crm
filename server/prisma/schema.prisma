@@ -449,6 +449,11 @@ model Channel {
   credentials      Json?           @db.JsonB // Encrypted OAuth tokens
   externalStoreId  String?         @map("external_store_id") // Shopify shop ID
   externalStoreUrl String?         @map("external_store_url") // https://mystore.myshopify.com
+  /// The currency this channel trades in — the SHOP's currency for Shopify,
+  /// the org's own for manual/in-store. Product prices are bare decimals with
+  /// no currency of their own, so this is what says whether a catalogue price
+  /// is dollars or rupees. Null until a first order reveals it.
+  currency         String?
   lastSyncedAt     DateTime?       @map("last_synced_at")
   syncStatus       SyncStatus      @default(IDLE) @map("sync_status")
   metadata         Json?           @db.JsonB
@@ -769,6 +774,20 @@ model Order {
   financialStatus     OrderFinancialStatus   @map("financial_status")
   fulfillmentStatus   OrderFulfillmentStatus @default(UNFULFILLED) @map("fulfillment_status")
   currency            String                 @default("USD")
+  /// Units of `baseCurrency` per 1 unit of `currency`, as at the order's own
+  /// date — NOT today's rate. A report for last July must return the same
+  /// figure every time it is run, and must still agree with a GST return
+  /// already filed; converting live would move both every day.
+  ///
+  /// 1 when `currency` already is the org currency. NULL means "not yet
+  /// resolved" (rate provider unreachable, or an order predating the
+  /// backfill): callers must treat NULL as unknown and exclude it, never
+  /// coerce it to 1, which would silently book $2,545 as ₹2,545.
+  exchangeRate        Decimal?               @map("exchange_rate") @db.Decimal(18, 8)
+  /// What `exchangeRate` converts INTO — the org currency at the time it was
+  /// captured. Stored so that changing the org currency later invalidates
+  /// these rates loudly instead of quietly reinterpreting them.
+  baseCurrency        String?                @map("base_currency")
   subtotalPrice       Decimal                @map("subtotal_price") @db.Decimal(12, 2)
   totalPrice          Decimal                @map("total_price") @db.Decimal(12, 2)
   totalTax            Decimal                @default(0) @map("total_tax") @db.Decimal(12, 2)
@@ -850,6 +869,8 @@ model Order {
   @@index([orderNumber])
   @@index([createdAt])
   @@index([organizationId, financialStatus])
+  // Finding orders that still need an FX rate, and grouping totals per currency.
+  @@index([organizationId, currency])
   @@index([organizationId, fulfillmentStatus])
   @@map("orders")
 }

@@ -32,16 +32,24 @@ export function useEnableInventoryMutation() {
   });
 }
 
-export function useCreateAdjustmentMutation() {
+/**
+ * `silent` hands the toast and the error to the caller. The variant editor
+ * fires one adjustment per changed warehouse inside a larger save, so the
+ * default per-call toast would stack three "Stock adjusted." on top of its own
+ * result, and its own catch needs the rejection to reach it.
+ */
+export function useCreateAdjustmentMutation(options: { silent?: boolean } = {}) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (data: CreateAdjustmentRequest) => inventoryService.createAdjustment(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: inventoryKeys.all });
       queryClient.invalidateQueries({ queryKey: productKeys.all });
-      toast.success("Stock adjusted.");
+      if (!options.silent) toast.success("Stock adjusted.");
     },
-    onError: (error) => handleMutationError(error, "Failed to adjust stock."),
+    onError: (error) => {
+      if (!options.silent) handleMutationError(error, "Failed to adjust stock.");
+    },
   });
 }
 

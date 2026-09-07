@@ -29,6 +29,11 @@ interface Window {
   unit: 'day' | 'month';
   label: string;
   timezone: string;
+  /**
+   * The organisation's reporting currency — what every money figure in the
+   * response has been converted into, using each order's own stored rate.
+   */
+  currency: string;
 }
 
 export interface SalesProfitPoint extends ProfitBucket {
@@ -278,7 +283,7 @@ export class DashboardService {
     const window = await this.resolveWindow(orgId, query);
     const previous = this.precedingWindow(window);
 
-    const [rows, customerRows, previousRows] = await Promise.all([
+    const [rows, customerRows, previousRows, currencyRows, unconvertedOrders] = await Promise.all([
       this.fetchProfitRows(orgId, window, query.channelId),
       this.fetchNewCustomerRows(orgId, window, query.channelId),
       // The trend compares this window against the one immediately before it,
@@ -286,6 +291,35 @@ export class DashboardService {
       // was pinned to 30-vs-30 days regardless of what the chart beside it
       // actually covered.
       this.fetchProfitRows(orgId, previous, query.channelId),
+      // What the money above was made of, before conversion. Same window and
+      // same filter as the CTE — via the shared `salesOrderWhere` — so this is
+      // the same set of orders, just not yet converted. Shown as supporting
+      // detail under the converted headline ("of which $10,323.70").
+      this.prisma.order.groupBy({
+        by: ['currency'],
+        where: salesOrderWhere({
+          orgId,
+          channelId: query.channelId,
+          from: window.from,
+          to: window.to,
+        }),
+        _sum: { totalPrice: true },
+        _count: { _all: true },
+      }),
+      // Orders the CTE had to leave out because their rate never resolved.
+      // Counted and surfaced rather than dropped silently — a total quietly
+      // missing three orders is worse than one that says so.
+      this.prisma.order.count({
+        where: {
+          ...salesOrderWhere({
+            orgId,
+            channelId: query.channelId,
+            from: window.from,
+            to: window.to,
+          }),
+          exchangeRate: null,
+        },
+      }),
     ]);
 
     const newCustomersByBucket = new Map(
@@ -313,6 +347,22 @@ export class DashboardService {
       totals: {
         ...totals,
         newCustomers: data.reduce((s, d) => s + d.newCustomers, 0),
+        // Every money figure above is now in this currency, converted at each
+        // order's own stored rate. Stated explicitly so a client never has to
+        // assume which currency it is formatting.
+        currency: window.currency,
+        // The pre-conversion make-up of that figure, biggest first. Supporting
+        // detail only — the headline is the converted total.
+        salesByCurrency: currencyRows
+          .map((r) => ({
+            currency: r.currency,
+            amount: round2(Number(r._sum.totalPrice ?? 0)),
+            orders: r._count._all,
+          }))
+          .sort((a, b) => b.amount - a.amount),
+        // >0 means the totals above exclude this many orders whose rate could
+        // not be resolved. The UI says so rather than showing a quiet undercount.
+        unconvertedOrders,
       },
       // Null rather than a zero trend when there is no profit to trend.
       profitTrend:
@@ -364,9 +414,17 @@ export class DashboardService {
             COALESCE(o."external_created_at", o."created_at")
               AT TIME ZONE 'UTC' AT TIME ZONE ${tz}
           ) AS bucket,
-          o."total_price"          AS gross_sales,
-          o."total_tax"            AS tax,
-          o."total_shipping_price" AS shipping,
+          -- Every money column is converted into the ORG's currency using the
+          -- rate stored on the order itself, captured at the order's own date.
+          -- Without this the sums added currencies together: an INR workspace
+          -- with a USD store reported ₹1,911.50 + $10,323.70 as "₹12,235.20".
+          -- "exchange_rate" is 1 for orders already in the org currency, and
+          -- orders where it is still NULL are excluded by the WHERE below
+          -- rather than defaulted — 1 is a real and very wrong answer.
+          o."exchange_rate"                             AS fx,
+          o."total_price"          * o."exchange_rate"  AS gross_sales,
+          o."total_tax"            * o."exchange_rate"  AS tax,
+          o."total_shipping_price" * o."exchange_rate"  AS shipping,
           -- subtotal_price is already post-discount and pre-shipping on both
           -- write paths (Shopify's own subtotal_price; the manual order
           -- builder's subtotal), which is what makes it the one revenue basis
@@ -375,15 +433,19 @@ export class DashboardService {
           -- which subtotal_price never contained. A null taxes_included means
           -- the channel never told us; treat it as exclusive, matching the
           -- manual-order convention.
-          o."subtotal_price" - CASE
+          (o."subtotal_price" - CASE
             WHEN o."taxes_included" IS TRUE
             THEN GREATEST(o."total_tax" - COALESCE(o."channel_shipping_tax_amount", 0), 0)
             ELSE 0
-          END AS net_sales_gross
+          END) * o."exchange_rate" AS net_sales_gross
         FROM "orders" o
         WHERE o."organization_id" = ${orgId}
           AND o."deleted_at"   IS NULL
           AND o."cancelled_at" IS NULL
+          -- An order with no resolved rate cannot be added to a converted
+          -- total. It is counted separately and surfaced to the user rather
+          -- than dropped silently — see unconvertedOrders.
+          AND o."exchange_rate" IS NOT NULL
           AND o."financial_status"::text IN (${Prisma.join(SALES_FINANCIAL_STATUSES)})
           AND COALESCE(o."external_created_at", o."created_at") >= ${window.from}::timestamptz AT TIME ZONE 'UTC'
           AND COALESCE(o."external_created_at", o."created_at") <  ${window.to}::timestamptz AT TIME ZONE 'UTC'
@@ -402,18 +464,26 @@ export class DashboardService {
         FROM scoped GROUP BY bucket
       ),
       lines AS (
+        -- Line amounts are denominated in their ORDER's currency, so they take
+        -- that order's rate (s.fx) — not one rate for the whole bucket, which
+        -- would be wrong the moment a bucket holds two currencies.
+        --
+        -- pv."cost" is assumed to be in the same currency as the order that
+        -- sold it. Nothing on ProductVariant records a currency (there is no
+        -- such field on Product, Variant or Channel), so this is the closest
+        -- defensible reading: catalogue and order come from the same store.
         SELECT s.bucket,
-               SUM(li."price" * li."quantity" - li."total_discount") AS line_net,
+               SUM((li."price" * li."quantity" - li."total_discount") * s.fx) AS line_net,
                -- A line whose variant is gone (variant_id is SET NULL on
                -- delete) or whose variant has no cost must LOWER COVERAGE, not
                -- contribute cost-free profit. The LEFT JOIN leaves pv."cost"
                -- null and both branches fall to 0, which is the correct
                -- treatment on both sides of the ratio.
                SUM(CASE WHEN pv."cost" IS NOT NULL
-                        THEN li."price" * li."quantity" - li."total_discount"
+                        THEN (li."price" * li."quantity" - li."total_discount") * s.fx
                         ELSE 0 END) AS line_net_with_cost,
                SUM(CASE WHEN pv."cost" IS NOT NULL
-                        THEN pv."cost" * li."quantity"
+                        THEN pv."cost" * li."quantity" * s.fx
                         ELSE 0 END) AS cogs_gross
         FROM scoped s
         JOIN "order_line_items" li ON li."order_id" = s."id"
@@ -424,8 +494,12 @@ export class DashboardService {
         -- Attributed to the ORDER's bucket, not the refund's, so each bucket
         -- stays internally reconcilable with the orders in it. A past bar can
         -- therefore move when a refund lands; that is the intent.
+        --
+        -- Converted at the ORDER's rate, not the refund date's: a refund gives
+        -- back part of a sale already booked at a rate, and re-converting it at
+        -- a later rate would leave a residue on a fully refunded order.
         SELECT s.bucket,
-               SUM(GREATEST(r."amount" - COALESCE(r."total_tax", 0), 0)) AS refunded_net
+               SUM(GREATEST(r."amount" - COALESCE(r."total_tax", 0), 0) * s.fx) AS refunded_net
         FROM scoped s
         JOIN "order_refunds" r ON r."order_id" = s."id"
         GROUP BY s.bucket
@@ -499,7 +573,7 @@ export class DashboardService {
   ): Promise<Window> {
     const org = await this.prisma.organization.findUnique({
       where: { id: orgId },
-      select: { timezone: true },
+      select: { timezone: true, currency: true },
     });
 
     const range = rangeToWindow(query.range);
@@ -515,6 +589,7 @@ export class DashboardService {
       unit: explicit ? 'month' : range.unit,
       label: explicit ? 'Selected range' : range.label,
       timezone: org?.timezone || 'UTC',
+      currency: (org?.currency || 'USD').toUpperCase(),
     };
   }
 

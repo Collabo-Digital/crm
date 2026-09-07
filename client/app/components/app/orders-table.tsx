@@ -50,6 +50,11 @@ function customerOf(order: OrderRow) {
 
 interface OrdersTableProps {
   orders: OrderRow[];
+  /**
+   * Fallback only — every row renders in its own `order.currency`. A store
+   * selling in USD inside an INR workspace must not get rupee signs stamped
+   * on its orders, which is what passing the org currency here used to do.
+   */
   currency: string;
   showCustomerName?: boolean;
   onViewDetail?: (orderId: string) => void;
@@ -167,7 +172,7 @@ export function OrdersTable({ orders, currency, showCustomerName = false, onView
                 </TableCell>
 
                 <TableCell className="text-right text-caption font-semibold tabular-nums text-foreground">
-                  {formatCurrency(order.totalPrice, currency)}
+                  {formatCurrency(order.totalPrice, order.currency || currency)}
                 </TableCell>
               </TableRow>
             );
@@ -262,7 +267,7 @@ export function OrdersTable({ orders, currency, showCustomerName = false, onView
               {new Date(order.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
             </TableCell>
             <TableCell className="text-sm font-medium">
-              {formatCurrency(order.totalPrice, currency)}
+              {formatCurrency(order.totalPrice, order.currency || currency)}
             </TableCell>
             <TableCell>
               <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium", FINANCIAL_CLASSES[order.financialStatus])}>

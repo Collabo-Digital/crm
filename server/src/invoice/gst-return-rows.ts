@@ -338,11 +338,19 @@ export function buildGstr3bSections(data: Gstr3bReturn): CsvSection[] {
     },
     {
       title: GSTR3B_SECTION_OTHER,
-      headers: ['Nature of supply', 'Taxable value'],
+      // 3.1(b) carries an integrated-tax column on the form: an export made
+      // WITHOUT an LUT is zero-rated but made on payment of IGST, and that tax
+      // is declared here. (c) and (e) never carry tax, so their cell is blank
+      // rather than a zero that invites a total down the column.
+      headers: ['Nature of supply', 'Taxable value', 'IGST'],
       rows: [
-        ['(b) Zero-rated (exports / SEZ)', data.otherSupplies?.zeroRated ?? 0],
-        ['(c) Nil-rated and exempted', data.otherSupplies?.nilRatedExempt ?? 0],
-        ['(e) Non-GST outward supplies', data.otherSupplies?.nonGst ?? 0],
+        [
+          '(b) Zero-rated (exports / SEZ)',
+          data.otherSupplies?.zeroRated ?? 0,
+          data.otherSupplies?.zeroRatedIgst ?? 0,
+        ],
+        ['(c) Nil-rated and exempted', data.otherSupplies?.nilRatedExempt ?? 0, ''],
+        ['(e) Non-GST outward supplies', data.otherSupplies?.nonGst ?? 0, ''],
       ],
     },
     {

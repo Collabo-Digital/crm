@@ -419,10 +419,32 @@ export class InvoiceService {
     // this transaction held the first. The priority chain is unchanged;
     // toNullableNumber still preserves null (unset) vs 0 (explicitly exempt),
     // and the taxable flags still short-circuit to 0%.
+    // Classification is resolved BEFORE the rates, because it decides whether
+    // a rate applies at all. It used to run afterwards, inside the loop below,
+    // so `resolveLineGstRates` never learned that an export line is ZERO_RATED
+    // and handed it the goods' ordinary rate — invoice INV-26-27/000007 was
+    // raised with ₹266.38 of IGST on a supply the sales channel had charged
+    // nothing for. Under an LUT an export is zero-rated without payment of tax.
+    //
+    // HSN / UQC / supply type resolve variant → product → fallback, field by
+    // field. HSN is NULL, never the invented '0000', when nobody classified
+    // the goods — `hsnMissing` below makes that visible before filing. UQC
+    // falls back to the org default so Table 12 always has a unit.
+    // ZERO_RATED is DERIVED from an export place of supply and cannot be
+    // overridden by either side.
+    const lineClassifications = order.lineItems.map((item) =>
+      resolveLineTaxClassification({
+        variant: item.variant,
+        product: item.variant?.product,
+        defaultUnitOfMeasure: taxSettings.defaultUnitOfMeasure,
+        isExportSupply,
+      }),
+    );
+
     const lineGstRates = await this.taxResolver.resolveLineGstRates(
       orgId,
       placeOfSupplyCode,
-      order.lineItems.map((item) => ({
+      order.lineItems.map((item, index) => ({
         productId: item.variant?.product?.id ?? null,
         // A variant classified differently from its product carries its own
         // rate; null on the variant means "same as the product".
@@ -432,24 +454,15 @@ export class InvoiceService {
         ),
         lineTaxable: item.taxable,
         variantTaxable: item.variant?.taxable,
+        supplyType: lineClassifications[index].supplyType,
       })),
       tx,
     );
 
     for (const [index, item] of order.lineItems.entries()) {
       const gstRate = lineGstRates[index];
-      // HSN / UQC / supply type resolve variant → product → fallback, field by
-      // field. HSN is NULL, never the invented '0000', when nobody classified
-      // the goods — `hsnMissing` below makes that visible before filing. UQC
-      // falls back to the org default so Table 12 always has a unit.
-      // ZERO_RATED is DERIVED from an export place of supply and cannot be
-      // overridden by either side.
-      const { hsnCode, unitOfMeasure, supplyType } = resolveLineTaxClassification({
-        variant: item.variant,
-        product: item.variant?.product,
-        defaultUnitOfMeasure: taxSettings.defaultUnitOfMeasure,
-        isExportSupply,
-      });
+      // Resolved above, before the rates — see the note there.
+      const { hsnCode, unitOfMeasure, supplyType } = lineClassifications[index];
 
       const calculation = this.calculator.calculateLineItem(
         {
@@ -1726,18 +1739,9 @@ export class InvoiceService {
       invoicesFromUnlinkedWarehouse,
       refundsNeedingCreditNoteRows,
     ] = await Promise.all([
-      this.prisma.invoice.aggregate({
-        where: issuedInMonth(currentMonth),
-        _sum: { grandTotal: true, totalTax: true },
-      }),
-      this.prisma.invoice.aggregate({
-        where: issuedInMonth(previousMonth),
-        _sum: { grandTotal: true, totalTax: true },
-      }),
-      this.prisma.invoice.aggregate({
-        where: outstandingWhere,
-        _sum: { grandTotal: true },
-      }),
+      this.sumConverted(issuedInMonth(currentMonth)),
+      this.sumConverted(issuedInMonth(previousMonth)),
+      this.sumConverted(outstandingWhere),
       this.prisma.invoice.count({ where: scope }),
       this.prisma.invoice.count({
         where: { ...scope, status: InvoiceStatus.ISSUED },
@@ -1774,7 +1778,15 @@ export class InvoiceService {
       }),
       // Invoices whose declared tax diverged from what the channel charged.
       // Backed by the partial index invoices_org_tax_mismatch_idx.
-      this.prisma.invoice.count({ where: { ...scope, taxMismatch: true } }),
+      //
+      // ISSUED only, matching the HSN warning below. A CANCELLED invoice is not
+      // filable and cannot need reconciling before filing, but it was still
+      // counted — so cancelling a wrongly-taxed invoice and reissuing it
+      // correctly RAISED the warning count instead of clearing it, which is the
+      // exact remedy the warning is asking the merchant to perform.
+      this.prisma.invoice.count({
+        where: { ...scope, status: InvoiceStatus.ISSUED, taxMismatch: true },
+      }),
       // Issued invoices carrying a line with no HSN. Table 12 cannot be filed
       // until this is zero. Backed by invoices_org_hsn_missing_idx.
       this.prisma.invoice.count({
@@ -1839,10 +1851,14 @@ export class InvoiceService {
     const decimal = (value: Prisma.Decimal | null | undefined) =>
       value ? Math.round(parseFloat(value.toString()) * 100) / 100 : 0;
 
-    const invoicedNow = decimal(thisMonth._sum.grandTotal);
-    const invoicedPrev = decimal(lastMonth._sum.grandTotal);
-    const taxNow = decimal(thisMonth._sum.totalTax);
-    const taxPrev = decimal(lastMonth._sum.totalTax);
+    // `sumConverted` already multiplies by an FX rate, so it returns plain
+    // numbers rather than Decimals — round them the same way.
+    const round2 = (value: number) => Math.round(value * 100) / 100;
+
+    const invoicedNow = round2(thisMonth.grandTotal);
+    const invoicedPrev = round2(lastMonth.grandTotal);
+    const taxNow = round2(thisMonth.totalTax);
+    const taxPrev = round2(lastMonth.totalTax);
 
     return {
       invoicedThisMonth: {
@@ -1854,7 +1870,7 @@ export class InvoiceService {
         changePct: this.percentChange(taxNow, taxPrev),
       },
       outstanding: {
-        amount: decimal(outstanding._sum.grandTotal),
+        amount: round2(outstanding.grandTotal),
         invoiceCount: unpaid,
         // Outstanding is a running balance, not a monthly flow. Reporting a
         // month-over-month delta would need a historical snapshot of what was
@@ -1881,6 +1897,56 @@ export class InvoiceService {
       ),
       currency: org?.currency ?? 'INR',
     };
+  }
+
+  /**
+   * Sum invoice money in the ORGANISATION's currency.
+   *
+   * An invoice is denominated in its order's currency, so `_sum(grandTotal)`
+   * added currencies together — "₹7,408 invoiced this month" was ₹1,911.50 of
+   * rupee invoices plus $5,496.07 of dollar ones counted as rupees.
+   *
+   * Prisma's `aggregate` can only sum a column, never a product, so the rows
+   * are summed here instead of in SQL. Deliberately NOT rewritten as raw SQL:
+   * the `where` clauses are shared with the counts beside them, and restating
+   * those filters in SQL would give the same tile two definitions that could
+   * drift apart. Volumes are per-organisation and per-month, so this stays a
+   * small read.
+   *
+   * The rate lives on the ORDER, not the invoice: the invoice is raised from
+   * the order and inherits its currency, so re-deriving a rate here could
+   * disagree with the figure the order was already booked at.
+   */
+  private async sumConverted(
+    where: Prisma.InvoiceWhereInput,
+  ): Promise<{ grandTotal: number; totalTax: number; unconverted: number }> {
+    const rows = await this.prisma.invoice.findMany({
+      where,
+      select: {
+        grandTotal: true,
+        totalTax: true,
+        order: { select: { exchangeRate: true } },
+      },
+    });
+
+    let grandTotal = 0;
+    let totalTax = 0;
+    let unconverted = 0;
+
+    for (const row of rows) {
+      const rate = row.order?.exchangeRate;
+      // No resolved rate means no honest way to add this invoice to a total in
+      // another currency. Counted, not coerced to 1.
+      if (rate == null) {
+        unconverted += 1;
+        continue;
+      }
+      const factor = Number(rate);
+      grandTotal += Number(row.grandTotal) * factor;
+      totalTax += Number(row.totalTax) * factor;
+    }
+
+    return { grandTotal, totalTax, unconverted };
   }
 
   /**

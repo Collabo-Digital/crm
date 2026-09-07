@@ -722,6 +722,12 @@ export interface ChannelRef {
   id: string;
   name: string;
   platform: ChannelPlatform;
+  /**
+   * What this channel trades in. Catalogue prices are bare decimals with no
+   * currency of their own, so this is what says whether a product price is
+   * dollars or rupees. Null until a first order reveals it.
+   */
+  currency?: string | null;
 }
 
 /** Per-product Shopify sync status (sub-object of `Product.metadata.shopifySync`). */
@@ -1861,14 +1867,42 @@ export interface UpdateCustomerRequest {
 /** Direction of a period-over-period change. */
 export type ChangeDirection = "up" | "down" | "same";
 
+/**
+ * One currency's share of a money total.
+ *
+ * Orders are stored in the currency the channel sold in, and nothing in the
+ * schema carries an FX rate, so a workspace whose store sells in a different
+ * currency cannot have its revenue expressed as one number. Totals that can
+ * span currencies carry this breakdown and are rendered one line per currency.
+ */
+export interface CurrencyAmount {
+  currency: string;
+  amount: number;
+  orders: number;
+}
+
 /** A single metric with current/previous values and change percentage. */
 export interface StatMetric {
   current: number;
   previous: number;
+  /**
+   * Null for an unbounded ("All Time") window — there is no earlier period to
+   * compare against, and a fabricated "100% up" against an empty one put a
+   * green growth badge on every tile. The card omits its badge instead.
+   */
   change: {
     percentage: number;
     direction: ChangeDirection;
-  };
+  } | null;
+  /** Money metrics only: what `current` is denominated in after conversion. */
+  currency?: string;
+  /** Orders excluded from `current` because their FX rate never resolved. */
+  unconverted?: number;
+  /**
+   * Money metrics only: the pre-conversion make-up of `current`, largest
+   * first. Supporting detail — `current` is already a single real figure.
+   */
+  byCurrency?: CurrencyAmount[];
 }
 
 /** Period-over-period comparison stats returned by GET /orders/stats. */
@@ -2661,6 +2695,12 @@ export interface GstReturnGstr3B {
    */
   otherSupplies: {
     zeroRated: number;
+    /**
+     * IGST on zero-rated supplies. An export made without an LUT is zero-rated
+     * but made ON PAYMENT of IGST, and 3.1(b) has a tax column for it. Nil-rated
+     * and non-GST never carry tax, so only this row has one.
+     */
+    zeroRatedIgst?: number;
     nilRatedExempt: number;
     nonGst: number;
   };

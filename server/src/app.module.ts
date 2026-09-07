@@ -16,6 +16,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
+import { FxModule } from './common/fx/fx.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
@@ -69,6 +70,7 @@ import { InventoryModule } from './inventory/inventory.module';
     }),
     PrismaModule,
     RedisModule,
+    FxModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({

@@ -231,15 +231,15 @@ export function InvoicesTable({
                 </TableCell>
 
                 <TableCell className="text-right text-caption tabular-nums text-foreground">
-                  {formatCurrency(invoice.subtotal, currency)}
+                  {formatCurrency(invoice.subtotal, invoice.currency || currency)}
                 </TableCell>
 
                 <TableCell className="text-right text-caption tabular-nums text-muted-foreground">
-                  {formatCurrency(invoice.totalTax, currency)}
+                  {formatCurrency(invoice.totalTax, invoice.currency || currency)}
                 </TableCell>
 
                 <TableCell className="text-right text-caption font-semibold tabular-nums text-foreground">
-                  {formatCurrency(invoice.grandTotal, currency)}
+                  {formatCurrency(invoice.grandTotal, invoice.currency || currency)}
                 </TableCell>
 
                 <TableCell>

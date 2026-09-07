@@ -522,9 +522,17 @@ export default function ProductsPage() {
                       <td className="px-4 py-3 text-xs text-muted-foreground">{product.productType ?? "—"}</td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">{product.vendor ?? "—"}</td>
                       <td className="px-4 py-3 text-xs font-semibold text-gray-900 dark:text-gray-100 text-right">
-                        {product.priceRange.min === product.priceRange.max
-                          ? formatCurrency(product.priceRange.min, orgCurrency)
-                          : `${formatCurrency(product.priceRange.min, orgCurrency)} – ${formatCurrency(product.priceRange.max, orgCurrency)}`}
+                        {/* A catalogue price is in the CHANNEL's currency, not
+                            the workspace's — a USD store's $749.95 snowboard
+                            was being listed as "₹749.95". Falls back to the org
+                            currency for a channel whose currency is not yet
+                            known (no order has arrived from it). */}
+                        {(() => {
+                          const priceCurrency = product.channel?.currency ?? orgCurrency;
+                          return product.priceRange.min === product.priceRange.max
+                            ? formatCurrency(product.priceRange.min, priceCurrency)
+                            : `${formatCurrency(product.priceRange.min, priceCurrency)} – ${formatCurrency(product.priceRange.max, priceCurrency)}`;
+                        })()}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <span className={`text-xs font-medium ${product.totalStock === 0 ? "text-red-600" : product.totalStock < 100 ? "text-orange-600" : "text-gray-900 dark:text-gray-100"}`}>

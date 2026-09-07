@@ -28,7 +28,7 @@ const gstr3b: Gstr3bReturn = {
     { gstRate: 5, taxableValue: 400, cgst: 0, sgst: 0, igst: 20, totalTax: 20 },
     { gstRate: 18, taxableValue: 3000, cgst: 0, sgst: 0, igst: 540, totalTax: 540 },
   ],
-  otherSupplies: { zeroRated: 5000, nilRatedExempt: 300, nonGst: 120 },
+  otherSupplies: { zeroRated: 5000, zeroRatedIgst: 0, nilRatedExempt: 300, nonGst: 120 },
   // A Shopify subscription: 1,000 of imported service, 180 of IGST self-paid
   // under reverse charge and reclaimed in the same period.
   reverseCharge: { taxableValue: 1000, igst: 180, entriesWithUnknownTax: 0 },
@@ -94,17 +94,20 @@ describe('buildGstr3bSections', () => {
     // permanently empty and the panel said so to the user.
     const section = find(buildGstr3bSections(gstr3b), '3.1(b)');
 
+    // 3.1(b) also carries IGST — an export made without an LUT is zero-rated
+    // but made on payment of tax. (c) and (e) never carry tax, so their cell is
+    // blank rather than a zero that invites a total down the column.
     expect(section.rows).toEqual([
-      ['(b) Zero-rated (exports / SEZ)', 5000],
-      ['(c) Nil-rated and exempted', 300],
-      ['(e) Non-GST outward supplies', 120],
+      ['(b) Zero-rated (exports / SEZ)', 5000, gstr3b.otherSupplies.zeroRatedIgst ?? 0],
+      ['(c) Nil-rated and exempted', 300, ''],
+      ['(e) Non-GST outward supplies', 120, ''],
     ]);
   });
 
   it('always emits tax payable, even for an empty period', () => {
     const sections = buildGstr3bSections({
       outwardSupplies: [],
-      otherSupplies: { zeroRated: 0, nilRatedExempt: 0, nonGst: 0 },
+      otherSupplies: { zeroRated: 0, zeroRatedIgst: 0, nilRatedExempt: 0, nonGst: 0 },
       interState: { invoiceCount: 0, totalTaxable: 0, totalIgst: 0, byState: [] },
       reverseCharge: { taxableValue: 0, igst: 0, entriesWithUnknownTax: 0 },
       taxPayable: { cgst: 0, sgst: 0, igst: 0, total: 0 },

@@ -4,6 +4,7 @@ import type {
   DashboardPeriod,
   DashboardQueryParams,
   StatMetric,
+  CurrencyAmount,
 } from "~/types/api";
 
 /**
@@ -41,6 +42,19 @@ export interface SalesProfitPoint {
 export interface SalesProfitTotals extends Omit<SalesProfitPoint, "bucket" | "bucketKey"> {
   /** `grossProfit ÷ netSalesWithCost × 100`. NULL whenever `grossProfit` is. */
   grossMarginPct: number | null;
+  /**
+   * The currency every money figure here has been converted into — the org's
+   * own. Each order is converted at the rate stored on it, captured at that
+   * order's date, so a past window returns the same figure every time.
+   */
+  currency: string;
+  /** Pre-conversion make-up of `grossSales`, largest first. Detail only. */
+  salesByCurrency: CurrencyAmount[];
+  /**
+   * Orders excluded from every figure above because their rate never
+   * resolved. >0 means the totals are incomplete and the UI says so.
+   */
+  unconvertedOrders: number;
 }
 
 export interface SalesProfitData {

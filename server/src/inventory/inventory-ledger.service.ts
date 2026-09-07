@@ -111,6 +111,64 @@ export class InventoryLedgerService {
     this.flagCache.delete(orgId);
   }
 
+  /**
+   * Give each new variant a stock row in the default warehouse.
+   *
+   * For a warehousing org the Inventory screen lists StockLevel rows, not
+   * variants — so a variant with no row is invisible there, has no "Adjust"
+   * control, and can never be given stock. The order builder then disables it
+   * as out of stock, and the product is unsellable for ever. Rows were only
+   * ever created by the one-time `runEnableSeed` backfill, so EVERY product
+   * created after inventory was switched on landed in that state.
+   *
+   * Runs in the caller's transaction so a variant and its stock row commit
+   * together: a variant that exists without a row is precisely the bug.
+   *
+   * `skipDuplicates` makes it idempotent, so callers may call it freely on
+   * paths that sometimes create and sometimes update.
+   */
+  async ensureStockRows(
+    db: Db,
+    orgId: string,
+    variants: Array<{
+      id: string;
+      inventoryQuantity?: number | null;
+      trackQuantity?: boolean | null;
+    }>,
+  ): Promise<void> {
+    if (variants.length === 0) return;
+    if (!(await this.isWarehousingEnabled(orgId))) return;
+
+    // Matches `runEnableSeed`: an untracked variant deliberately has no stock
+    // row, because its quantity is not managed. `trackQuantity` is optional
+    // here so callers that did not select it are not silently skipped —
+    // undefined means "not told", which the schema default treats as tracked.
+    const tracked = variants.filter((v) => v.trackQuantity !== false);
+    if (tracked.length === 0) return;
+
+    const warehouse = await db.warehouse.findFirst({
+      where: { organizationId: orgId, isDefault: true },
+      select: { id: true },
+    });
+    // No default warehouse means warehousing was never finished being set up.
+    // Nothing to attach a row to, and inventing one here would race the enable
+    // flow that creates it.
+    if (!warehouse) return;
+
+    await db.stockLevel.createMany({
+      data: tracked.map((v) => ({
+        organizationId: orgId,
+        variantId: v.id,
+        warehouseId: warehouse.id,
+        // Seeded AT the variant's own quantity, not zero: a product created
+        // with an opening stock figure must not silently lose it. Matches what
+        // runEnableSeed does for pre-existing variants.
+        available: v.inventoryQuantity ?? 0,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
   // ─────────────────────────── legacy path ───────────────────────────
 
   /**

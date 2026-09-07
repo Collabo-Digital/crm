@@ -39,7 +39,10 @@ import {
   OrderFulfillmentOrdersResponse,
   FULFILLMENT_CREATE_MUTATION,
   FulfillmentCreateResponse,
+  SHOP_INFO_QUERY,
+  ShopInfoResponse,
 } from './shopify-graphql.types';
+import { FxRateService } from '../common/fx/fx-rate.service';
 import {
   isNoopPlan,
   isPlaceholderRemoteOptions,
@@ -144,6 +147,9 @@ export class ShopifyPushService {
     // Warehousing decides where stock quantities are written. ChannelModule
     // already imports InventoryModule for the ledger, so no cycle.
     private readonly inventoryLedger: InventoryLedgerService,
+    // Restates catalogue prices in the destination store's currency — see
+    // `priceConverter`.
+    private readonly fx: FxRateService,
   ) { }
 
   /**
@@ -672,6 +678,13 @@ export class ShopifyPushService {
 
     const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(shopify.id);
 
+    // Catalogue prices are bare decimals whose currency is whatever their
+    // channel trades in. Pushing sends them to a store that may price in a
+    // different one AND rebadges the product onto that store — so an
+    // unconverted push does not merely mislabel, it re-denominates: a ₹120
+    // counter-sale product became a $120 listing, ~95x its intended price.
+    const convertPrice = await this.priceConverter(product, shopify, token, shopDomain);
+
     // Read the org's product settings once per push so the global
     // overrides flow through to Shopify's per-variant inventory fields.
     const productSettings = await this.orgSettings.getProductSettings(orgId);
@@ -720,6 +733,7 @@ export class ShopifyPushService {
       trackGlobally,
       pushGeneratedBarcodes,
       locationId,
+      convertPrice,
     );
 
     const result = await this.graphql.request<ProductSetResponse>(auth, PRODUCT_SET_MUTATION, {
@@ -753,6 +767,20 @@ export class ShopifyPushService {
       for (let i = 0; i < product.variants.length && i < remoteVariants.length; i++) {
         const localVariant = product.variants[i];
         const remoteVariant = remoteVariants[i];
+        // The prices sent to Shopify are stored back, because this same
+        // transaction rebadges the product onto the destination channel — and
+        // a catalogue price is read in ITS channel's currency. Keeping the
+        // pre-conversion number here would leave the local record claiming
+        // "$120" for a listing Shopify holds at $1.26.
+        const converted = {
+          price: convertPrice(localVariant.price),
+          compareAtPrice:
+            localVariant.compareAtPrice != null
+              ? convertPrice(localVariant.compareAtPrice)
+              : null,
+          cost: localVariant.cost != null ? convertPrice(localVariant.cost) : null,
+        };
+
         await tx.productVariant.update({
           where: { id: localVariant.id },
           data: {
@@ -760,6 +788,13 @@ export class ShopifyPushService {
             inventoryItemId: remoteVariant.inventoryItem
               ? ShopifyGraphqlClient.extractId(remoteVariant.inventoryItem.id)
               : null,
+            ...(converted.price != null ? { price: converted.price } : {}),
+            ...(localVariant.compareAtPrice != null && converted.compareAtPrice != null
+              ? { compareAtPrice: converted.compareAtPrice }
+              : {}),
+            ...(localVariant.cost != null && converted.cost != null
+              ? { cost: converted.cost }
+              : {}),
           },
         });
       }
@@ -831,6 +866,12 @@ export class ShopifyPushService {
     trackGlobally: boolean,
     pushGeneratedBarcodes: boolean,
     locationId: number | null,
+    /**
+     * Restates money in the destination store's currency — see
+     * `priceConverter`. Passed in rather than resolved here because it needs an
+     * async rate lookup and this builder is pure.
+     */
+    convertPrice: (value: Prisma.Decimal | number | string | null) => string | null,
   ): Record<string, unknown> {
     const optionNames = this.deriveOptionTypes(product);
     const hasRealOptions = optionNames.length > 0;
@@ -862,8 +903,13 @@ export class ShopifyPushService {
             name: v[optionKeys[i]] ?? 'Default',
           }))
         : [{ optionName: 'Title', name: 'Default Title' }],
-      price: v.price.toString(),
-      ...(v.compareAtPrice != null ? { compareAtPrice: v.compareAtPrice.toString() } : {}),
+      // Money fields go through `convertPrice` — see `priceConverter`. Cost is
+      // money too: leaving it unconverted would make every margin on the store
+      // nonsense in the other direction.
+      price: convertPrice(v.price)!,
+      ...(v.compareAtPrice != null
+        ? { compareAtPrice: convertPrice(v.compareAtPrice)! }
+        : {}),
       ...(v.sku ? { sku: v.sku } : {}),
       ...(this.barcodeForPush(v, pushGeneratedBarcodes)),
       taxable: v.taxable,
@@ -872,7 +918,7 @@ export class ShopifyPushService {
       inventoryItem: {
         tracked: trackGlobally || v.trackQuantity,
         requiresShipping: v.requiresShipping,
-        ...(v.cost != null ? { cost: Number(v.cost).toFixed(2) } : {}),
+        ...(v.cost != null ? { cost: convertPrice(v.cost)! } : {}),
         ...(v.hsCode ? { harmonizedSystemCode: v.hsCode } : {}),
         ...(v.countryOfOrigin ? { countryCodeOfOrigin: v.countryOfOrigin } : {}),
         ...(v.weight
@@ -1390,6 +1436,106 @@ export class ShopifyPushService {
       this.logger.error(
         `Inventory update failed for ${quantities.length} quantity write(s): ${err instanceof Error ? err.message : err}`,
       );
+    }
+  }
+
+  /**
+   * A function that restates a catalogue price in the destination store's
+   * currency, or the identity when no conversion is needed.
+   *
+   * Pushing a product REBADGES it onto the destination channel (see the
+   * rebadge transaction in `pushProduct`), so after the push its price is read
+   * in that store's currency. Sending the number unchanged therefore does not
+   * mislabel the price, it re-denominates it — a ₹120 counter-sale product
+   * became a $120 listing.
+   *
+   * Unlike an order's rate, this is deliberately TODAY's rate and is not
+   * stored: a catalogue price is a live figure being set now, not an
+   * accounting fact being recorded about the past.
+   *
+   * Fails the push when a conversion is needed but the rate cannot be reached.
+   * Publishing a wrong price to a live storefront is worse than not publishing.
+   */
+  private async priceConverter(
+    product: { channel: { currency: string | null } | null; organizationId: string },
+    shopify: { id: string; currency: string | null },
+    token: string,
+    shopDomain: string,
+  ): Promise<(value: Prisma.Decimal | number | string | null) => string | null> {
+    const identity = (value: Prisma.Decimal | number | string | null) =>
+      value === null || value === undefined ? null : String(value);
+
+    const target = await this.destinationCurrency(shopify, token, shopDomain);
+
+    // The product's own channel says what its prices are denominated in; a
+    // CRM-native product has none, and is priced in the org's currency — the
+    // same rule `OrderService` applies to a counter sale.
+    const org = await this.prisma.organization.findUnique({
+      where: { id: product.organizationId },
+      select: { currency: true },
+    });
+    const source = (product.channel?.currency ?? org?.currency ?? '').toUpperCase();
+
+    // Unknown on either side means there is no pair to convert — pushing
+    // unchanged is the only honest option, and is what already happens today.
+    if (!target || !source || source === target) return identity;
+
+    const rate = await this.fx.getRate(source, target, new Date());
+    if (rate == null) {
+      throw new Error(
+        `Cannot push: ${source}→${target} exchange rate unavailable, and sending ` +
+          `${source} prices to a ${target} store would publish wrong prices.`,
+      );
+    }
+
+    this.logger.log(
+      `Converting catalogue prices ${source}→${target} at ${rate} for push to ${shopDomain}`,
+    );
+
+    return (value) => {
+      if (value === null || value === undefined) return null;
+      const num = Number(value);
+      if (!Number.isFinite(num)) return null;
+      // 2dp is what Shopify stores for every currency this app serves.
+      return (num * rate).toFixed(2);
+    };
+  }
+
+  /**
+   * The currency a Shopify store prices in.
+   *
+   * Prefers the value already learned from that store's orders, and otherwise
+   * asks Shopify directly — a store that has never synced an order still has a
+   * currency, and guessing it would be exactly the mistake this fixes. The
+   * answer is cached back onto the channel so later pushes skip the call.
+   */
+  private async destinationCurrency(
+    shopify: { id: string; currency: string | null },
+    token: string,
+    shopDomain: string,
+  ): Promise<string | null> {
+    if (shopify.currency) return shopify.currency.toUpperCase();
+
+    try {
+      const res = await this.graphql.request<ShopInfoResponse>(
+        { shopDomain, accessToken: token },
+        SHOP_INFO_QUERY,
+      );
+      const code = res?.shop?.currencyCode?.toUpperCase() ?? null;
+      if (code) {
+        // `currency: null` in the where clause keeps this fill-once: a store's
+        // currency should not silently change under a running catalogue.
+        await this.prisma.channel.updateMany({
+          where: { id: shopify.id, currency: null },
+          data: { currency: code },
+        });
+      }
+      return code;
+    } catch (err) {
+      this.logger.warn(
+        `Could not read shop currency for ${shopDomain}: ${(err as Error).message}`,
+      );
+      return null;
     }
   }
 

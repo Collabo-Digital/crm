@@ -21,6 +21,8 @@
     "db:audit:shopify-orders": "node prisma/scripts/print-target.js && node prisma/scripts/audit-shopify-order-sync.js",
     "db:reconcile:shopify-products": "node prisma/scripts/print-target.js && node prisma/scripts/reconcile-shopify-products.js",
     "db:fix:recompute-stock-cache": "node prisma/scripts/print-target.js && node prisma/scripts/recompute-stock-cache.js",
+    "db:fix:backfill-fx-rates": "node prisma/scripts/print-target.js && node prisma/scripts/backfill-order-fx-rates.js",
+    "db:fix:seed-missing-stock-rows": "node prisma/scripts/print-target.js && node prisma/scripts/seed-missing-stock-rows.js",
     "db:fix:dedupe-invoices": "node prisma/scripts/print-target.js && prisma db execute --schema prisma/schema.prisma --file prisma/scripts/dedupe-active-invoices.sql",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",

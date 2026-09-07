@@ -201,7 +201,7 @@ export class ProductService {
             take: 1, // Only first image for list view
           },
           channel: {
-            select: { id: true, name: true, platform: true },
+            select: { id: true, name: true, platform: true, currency: true },
           },
         },
         orderBy: {
@@ -279,7 +279,7 @@ export class ProductService {
       include: {
         variants: { orderBy: { position: 'asc' } },
         images: { orderBy: { position: 'asc' } },
-        channel: { select: { id: true, name: true, platform: true } },
+        channel: { select: { id: true, name: true, platform: true, currency: true } },
       },
     });
     if (!product) throw new NotFoundException('Product not found');
@@ -484,6 +484,34 @@ export class ProductService {
         )
         : [this.buildVariantCreate(orgId, dto.variant!, 1, undefined)];
 
+      // SKUs and barcodes must be free — the same check `createVariant`,
+      // `updateVariant` and the bulk update already run. Product create was
+      // the ONE path that skipped it, so a whole catalogue could be built on
+      // colliding codes: three products were created here sharing SKU
+      // "QA-DUP-001". Inventory, label printing and barcode scanning all
+      // identify a variant by these codes, so a duplicate is not cosmetic.
+      const incoming = hasMulti ? dto.variants! : [dto.variant!];
+      for (const v of incoming) {
+        await this.assertVariantCodesFree(orgId, v);
+      }
+
+      // Codes must also be unique WITHIN the payload — the check above compares
+      // against what is already stored, and two new variants carrying the same
+      // SKU would each pass it and then both be written.
+      const seen = new Set<string>();
+      for (const v of incoming) {
+        for (const code of [v.sku, v.barcode]) {
+          if (!code) continue;
+          const key = code.trim().toLowerCase();
+          if (seen.has(key)) {
+            throw new BadRequestException(
+              `Duplicate code "${code}" appears on more than one variant of this product.`,
+            );
+          }
+          seen.add(key);
+        }
+      }
+
       const created = await tx.product.create({
         data: {
           organizationId: orgId,
@@ -515,7 +543,7 @@ export class ProductService {
           variants: { orderBy: { position: 'asc' } },
           images: true,
           channel: {
-            select: { id: true, name: true, platform: true },
+            select: { id: true, name: true, platform: true, currency: true },
           },
         },
       });
@@ -530,6 +558,11 @@ export class ProductService {
         created.id,
         _userId,
       );
+
+      // …and a stock row per variant, in the same transaction. Without this a
+      // warehousing org's new product never appears in Inventory, so it can
+      // never be given stock, so the order builder permanently disables it.
+      await this.inventoryLedger.ensureStockRows(tx, orgId, created.variants);
 
       return created;
     });
@@ -833,7 +866,7 @@ export class ProductService {
           variants: { orderBy: { position: 'asc' } },
           images: { orderBy: { position: 'asc' } },
           channel: {
-            select: { id: true, name: true, platform: true },
+            select: { id: true, name: true, platform: true, currency: true },
           },
         },
       });
@@ -1024,6 +1057,9 @@ export class ProductService {
         'variant',
         row.id,
       );
+      // A variant added to an existing product needs its stock row for the
+      // same reason a brand-new product's does.
+      await this.inventoryLedger.ensureStockRows(tx, orgId, [row]);
       return row;
     });
 
@@ -1553,6 +1589,16 @@ export class ProductService {
         }
         if (toCreate.length > 0) {
           await tx.productVariant.createMany({ data: toCreate });
+
+          // `createMany` returns no rows, so re-read the product's variants
+          // and seed across all of them. `ensureStockRows` skips duplicates,
+          // making the wider sweep harmless — and it also repairs any earlier
+          // variant that predates this seeding.
+          const all = await tx.productVariant.findMany({
+            where: { productId, organizationId: orgId },
+            select: { id: true, inventoryQuantity: true, trackQuantity: true },
+          });
+          await this.inventoryLedger.ensureStockRows(tx, orgId, all);
         }
         await this.markOutOfSyncIfNeeded(productId, tx);
       });
@@ -2163,7 +2209,7 @@ export class ProductService {
       include: {
         variants: { orderBy: { position: 'asc' } },
         images: { orderBy: { position: 'asc' } },
-        channel: { select: { id: true, name: true, platform: true } },
+        channel: { select: { id: true, name: true, platform: true, currency: true } },
       },
     });
     // Ledger: duplicated variants carry the original's stock — record it as

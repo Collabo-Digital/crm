@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { GstSupplyType, Prisma } from '@prisma/client';
 import { isLineTaxable } from './taxability.util';
 
 /** One sale line, as the batch resolver needs to see it. */
@@ -15,6 +15,12 @@ export interface BatchLineInput {
   productGstRate: number | null;
   lineTaxable?: boolean | null;
   variantTaxable?: boolean | null;
+  /**
+   * Statutory classification, when the caller has resolved it. A zero-rated
+   * export, or a nil-rated/exempt/non-GST supply, attracts no output tax and
+   * short-circuits to 0% before the rate chain is consulted at all.
+   */
+  supplyType?: GstSupplyType | null;
 }
 
 /**

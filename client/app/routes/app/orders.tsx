@@ -14,6 +14,7 @@ import {
   PageHeaderActions,
 } from "~/components/ui/page-header";
 import { StatCard } from "~/components/app/stat-card";
+import { MoneyTotal } from "~/components/app/money-total";
 import { SectionCard } from "~/components/app/section-card";
 import { OrdersTable } from "~/components/app/orders-table";
 import { TableSkeleton } from "~/components/app/table-skeleton";
@@ -219,12 +220,23 @@ export default function OrdersPage() {
                   variant="inline"
                   label={label}
                   value={
-                    currency
-                      ? formatCurrency(Number(metric.current), orgCurrency)
-                      : Number(metric.current).toLocaleString()
+                    currency ? (
+                      <MoneyTotal
+                        amount={Number(metric.current)}
+                        currency={metric.currency ?? orgCurrency}
+                        breakdown={metric.byCurrency}
+                        unconverted={metric.unconverted}
+                      />
+                    ) : (
+                      Number(metric.current).toLocaleString()
+                    )
                   }
-                  change={formatChange(metric.change.direction, metric.change.percentage)}
-                  changeLabel="vs previous period"
+                  {...(metric.change
+                    ? {
+                      change: formatChange(metric.change.direction, metric.change.percentage),
+                      changeLabel: "vs previous period",
+                    }
+                    : {})}
                   icon={icon}
                   className="flex-1"
                 />

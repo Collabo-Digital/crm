@@ -133,14 +133,22 @@ it shifts every corner in the app.
 `conversation.tsx` · `components/app/conversation/*` (21 files) ·
 `lib/conversation-format.ts` · `lib/session-window.ts` · `lib/product-drag.ts` ·
 `routes/app/logistics/*` (5 screens) · `components/app/logistics/*` (4 files) ·
-`lib/logistics-status.ts` · `lib/logistics-format.ts` · `ui/{radio-group,alert}.tsx`
+`lib/logistics-status.ts` · `lib/logistics-format.ts` · `ui/{radio-group,alert}.tsx` ·
+`components/app/product-variants/*` (5 files) · `lib/variant-grouping.ts` ·
+`lib/variant-draft.ts`
 
 ## Remaining debt, ranked
 
 1. `routes/app/settings.tsx` — 1,730 LOC, 86 hex, 126 palette utils, 46 raw buttons
-2. `routes/app/products/$id.tsx` — 2,793 LOC
-3. `routes/app/orders/$id.tsx`
+2. `routes/app/orders/$id.tsx`
+3. `routes/app/products/$id.tsx` — 2,322 LOC (was 3,397; the Variants tab moved out to
+   `components/app/product-variants/` and is on the system. The Overview tab, the sidebar
+   and the local `Section` wrapper are the rest of the debt.)
 4. `routes/auth/*`, `routes/onboarding/*`
 
 `routes/app/products/inventory*`, `products.tsx` and `admin/*` are already partly on
 the system and are the best model to standardise against.
+
+Note `routes/app/products/$id.tsx` now imports two token-clean cards into a route that is
+otherwise pre-migration — expect `text-[12px]` next to `text-caption` in the same file
+until the Overview tab follows.

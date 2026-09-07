@@ -1,6 +1,19 @@
 import type { ProductOption } from "~/types/api";
 
 /**
+ * Local editable option with a stable client-side key for React lists.
+ * The `uid` never leaves the client — normalizeProductOptions strips it from
+ * payloads and comparisons.
+ */
+export type EditableOption = ProductOption & { uid: string };
+
+export const newOptionUid = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : // crypto.randomUUID needs a secure context; fall back for plain-HTTP dev.
+    `uid-${Math.random().toString(36).slice(2)}`;
+
+/**
  * Rebuild product options as fresh literals carrying exactly the three keys the
  * server's `ProductOptionDto` accepts.
  *

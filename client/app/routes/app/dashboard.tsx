@@ -35,6 +35,7 @@ import type { DashboardQueryParams, DashboardRange } from "~/types/api";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { formatCurrency } from "~/lib/utils";
 import { StatCard } from "~/components/app/stat-card";
+import { MoneyTotal } from "~/components/app/money-total";
 import { ProductsPanel } from "~/components/app/products-panel";
 import { SectionCard } from "~/components/app/section-card";
 
@@ -124,7 +125,16 @@ export default function DashboardPage() {
             sparkline
             sparklineData={sparklineFor(series, "grossSales")}
             label="Total Sales"
-            value={totals ? formatCurrency(totals.grossSales, orgCurrency) : undefined}
+            value={
+              totals ? (
+                <MoneyTotal
+                  amount={totals.grossSales}
+                  currency={totals.currency ?? orgCurrency}
+                  breakdown={totals.salesByCurrency}
+                  unconverted={totals.unconvertedOrders}
+                />
+              ) : undefined
+            }
             changeLabel={periodLabel}
             icon={<Target className="size-4" />}
             linkTo="/orders"

@@ -8,8 +8,12 @@ import { ChartLineDefault, type SparklinePoint } from "./chart-line-default";
 
 interface StatCardProps {
     label: string;
-    /** Undefined renders an em dash — callers pass undefined while loading. */
-    value?: string;
+    /**
+     * Undefined renders an em dash — callers pass undefined while loading.
+     * A node rather than a string so a money total spanning several currencies
+     * can stack one line per currency (see `MoneyTotal`).
+     */
+    value?: ReactNode;
     /**
      * Omit when there is no trend to show — a failed request, or a metric with
      * no comparison period. Callers used to pass 0 in that case, which rendered

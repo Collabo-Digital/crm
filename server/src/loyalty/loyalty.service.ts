@@ -61,8 +61,19 @@ export class LoyaltyService {
                 "total_spent"  = s.total,
                 "updated_at"   = CURRENT_TIMESTAMP
             FROM (
+                -- total_spent is money in the ORG's currency, so each order is
+                -- converted at the rate stored on it. Summing total_price raw
+                -- added currencies together: a customer with USD orders showed
+                -- "₹6,418.36" for what was $6,418.36.
+                --
+                -- The COUNT deliberately covers every order while the SUM skips
+                -- any whose rate never resolved: a count is currency-free and
+                -- always correct, whereas adding an unconverted amount would
+                -- book dollars as rupees. The two can therefore disagree, which
+                -- is the honest outcome — and is rare, since both order-creation
+                -- paths now set a rate.
                 SELECT COUNT(*)::int AS cnt,
-                       COALESCE(SUM("total_price"), 0) AS total
+                       COALESCE(SUM("total_price" * "exchange_rate"), 0) AS total
                 FROM "orders"
                 WHERE "customer_id" = ${customerId}
                   AND "organization_id" = ${orgId}
@@ -84,9 +95,11 @@ export class LoyaltyService {
                 "total_spent"  = s.total,
                 "updated_at"   = CURRENT_TIMESTAMP
             FROM (
+                -- Same conversion as deriveCounters above: money in the org's
+                -- currency, at each order's own stored rate.
                 SELECT cu."id" AS customer_id,
                        COUNT(o."id")::int AS cnt,
-                       COALESCE(SUM(o."total_price"), 0) AS total
+                       COALESCE(SUM(o."total_price" * o."exchange_rate"), 0) AS total
                 FROM "customers" cu
                 LEFT JOIN "orders" o
                        ON o."customer_id" = cu."id"

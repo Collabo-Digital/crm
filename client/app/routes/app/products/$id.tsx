@@ -1,5 +1,4 @@
 import {
-  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -10,15 +9,11 @@ import {
 import { Link, useBlocker, useParams } from "react-router";
 import {
   Loader2,
-  Pencil,
-  Trash2,
   Check,
   AlertTriangle,
   Package,
   Plus,
   Calendar,
-  ChevronDown,
-  ChevronRight,
   UploadCloud,
 } from "lucide-react";
 import {
@@ -37,12 +32,27 @@ import {
 } from "~/hooks/use-product-mutations";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { useOrganizationSettings } from "~/hooks/use-settings-queries";
-import { useInventoryStatus, useVariantStock } from "~/hooks/use-inventory-queries";
+import { useInventoryStatus } from "~/hooks/use-inventory-queries";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { calcMargin, cn, formatCurrency } from "~/lib/utils";
 import { formatDate, formatDateTime } from "~/lib/format-date";
 import { handleMutationError } from "~/lib/handle-mutation-error";
-import { normalizeProductOptions } from "~/lib/product-options";
+import {
+  newOptionUid,
+  normalizeProductOptions,
+  type EditableOption,
+} from "~/lib/product-options";
+import {
+  areVariantDraftsDirty,
+  buildVariantDrafts,
+  isVariantDraftDirty,
+  toGstRateOption,
+  toInputNumber,
+  toNullableNumber,
+  type VariantDraft,
+} from "~/lib/variant-draft";
+import { VariantOptionsCard } from "~/components/app/product-variants/variant-options-card";
+import { VariantPriceStockCard } from "~/components/app/product-variants/variant-price-stock-card";
 import { COMMON_UQC, GST_RATE_OPTIONS, GST_SUPPLY_TYPES } from "~/lib/gst-uqc";
 import { toast } from "sonner";
 import type {
@@ -86,7 +96,6 @@ import { Button } from "~/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
@@ -100,7 +109,6 @@ import { Switch } from "~/components/ui/switch";
 import { Separator } from "~/components/ui/separator";
 import { Item, ItemMedia } from "~/components/ui/item";
 import { motion } from "framer-motion";
-import { Badge } from "~/components/ui/badge";
 
 export function meta() {
   return [{ title: "Product Detail | Collabo CRM" }];
@@ -137,70 +145,9 @@ const PRODUCT_TABS = [
 
 type ProductTab = (typeof PRODUCT_TABS)[number]["id"];
 
-function toInputNumber(value: number | string | null | undefined): string {
-  if (value == null || value === "") return "";
-  const n = typeof value === "string" ? Number(value) : value;
-  return Number.isFinite(n) ? String(n) : "";
-}
-
-/** "" → null (clear the field); valid number → number; garbage → undefined (skip). */
-function toNullableNumber(input: string): number | null | undefined {
-  if (!input.trim()) return null;
-  const parsed = Number(input);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function optionsEqual(a: ProductOption[], b: ProductOption[]): boolean {
   return (
     JSON.stringify(normalizeProductOptions(a)) === JSON.stringify(normalizeProductOptions(b))
-  );
-}
-
-/**
- * Local editable option with a stable client-side key for React lists.
- * The `uid` never leaves the client — normalizeProductOptions strips it from
- * payloads and comparisons.
- */
-type EditableOption = ProductOption & { uid: string };
-
-const newUid = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : // crypto.randomUUID needs a secure context; fall back for plain-HTTP dev.
-    `uid-${Math.random().toString(36).slice(2)}`;
-
-type VariantDraft = {
-  price: string;
-  cost: string;
-  inventoryQuantity: string;
-  sku: string;
-};
-
-function buildVariantDrafts(
-  variants: ProductVariant[],
-): Record<string, VariantDraft> {
-  const drafts: Record<string, VariantDraft> = {};
-  for (const variant of variants) {
-    drafts[variant.id] = {
-      price: toInputNumber(variant.price),
-      cost: toInputNumber(variant.cost),
-      inventoryQuantity: toInputNumber(variant.inventoryQuantity ?? 0),
-      sku: variant.sku ?? "",
-    };
-  }
-  return drafts;
-}
-
-function isVariantDraftDirty(
-  variant: ProductVariant,
-  draft?: VariantDraft,
-): boolean {
-  if (!draft) return false;
-  return (
-    draft.price !== toInputNumber(variant.price) ||
-    draft.cost !== toInputNumber(variant.cost) ||
-    draft.inventoryQuantity !== toInputNumber(variant.inventoryQuantity ?? 0) ||
-    draft.sku !== (variant.sku ?? "")
   );
 }
 
@@ -239,13 +186,6 @@ type FormBaseline = {
   variantDrafts: Record<string, VariantDraft>;
 };
 
-/** GST rate as the select option string ("18", "0.25"), "" when unset. */
-function toGstRateOption(value: number | string | null | undefined): string {
-  if (value == null || value === "") return "";
-  const n = Number(value);
-  return Number.isFinite(n) ? String(n) : "";
-}
-
 function captureBaseline(p: ProductDetail): FormBaseline {
   const defaultVariant = p.variants?.[0];
   return {
@@ -278,46 +218,6 @@ function captureBaseline(p: ProductDetail): FormBaseline {
   };
 }
 
-function areVariantDraftsDirty(
-  current: Record<string, VariantDraft>,
-  baseline: Record<string, VariantDraft>,
-): boolean {
-  for (const id of Object.keys(baseline)) {
-    const draft = current[id];
-    const base = baseline[id];
-    if (!draft || !base) continue;
-    if (
-      draft.price !== base.price ||
-      draft.cost !== base.cost ||
-      draft.inventoryQuantity !== base.inventoryQuantity ||
-      draft.sku !== base.sku
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function getGroupFieldDisplay(
-  variants: ProductVariant[],
-  drafts: Record<string, VariantDraft>,
-  field: "price" | "cost" | "inventoryQuantity",
-): { kind: "single"; value: string } | { kind: "range"; value: string } {
-  const values = variants
-    .map((variant) => {
-      const raw = drafts[variant.id]?.[field] ?? "";
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : null;
-    })
-    .filter((n): n is number => n != null);
-
-  if (values.length === 0) return { kind: "single", value: "" };
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  if (min === max) return { kind: "single", value: String(min) };
-  return { kind: "range", value: `${min} – ${max}` };
-}
-
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { isVendor } = useCurrentRole();
@@ -329,6 +229,12 @@ export default function ProductDetailPage() {
   const { data: orgSettings } = useOrganizationSettings();
   const oversellForced = orgSettings?.productSettings?.allowOversellGlobally === true;
   const trackForced = orgSettings?.productSettings?.trackQuantityGlobally === true;
+  // With warehousing on, a variant's stock is the sum of its per-warehouse
+  // buckets and `inventoryQuantity` is only a cache of it. Writing that field
+  // directly bypasses the movement ledger — and the server rejects it outright
+  // unless a warehouseId travels with it — so quantity edits go out as
+  // adjustments instead. See VariantInlineEditor.
+  const warehousingEnabled = useInventoryStatus().data?.warehousingEnabled === true;
   const { data: productTypes = [] } = useProductTypes();
   const { data: vendors = [] } = useProductVendors();
   const currency = org?.currency ?? "INR";
@@ -360,15 +266,11 @@ export default function ProductDetailPage() {
   const [supplyType, setSupplyType] = useState<GstSupplyType>("TAXABLE");
   const [activeTab, setActiveTab] = useState<ProductTab>("overview");
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
-  const [expandedVariantGroups, setExpandedVariantGroups] = useState<Set<string>>(
-    new Set(),
-  );
   const [options, setOptions] = useState<EditableOption[]>([]);
   const [optionValueDrafts, setOptionValueDrafts] = useState<string[]>([]);
   const [variantDrafts, setVariantDrafts] = useState<Record<string, VariantDraft>>(
     {},
   );
-  const [editingVariantId, setEditingVariantId] = useState<string | null>(null);
   const [hydratedProductId, setHydratedProductId] = useState<string | null>(
     null,
   );
@@ -382,6 +284,30 @@ export default function ProductDetailPage() {
   const updateOptionsMutation = useUpdateOptionsMutation(id ?? "", { silent: true });
   const generateVariantsMutation = useGenerateVariantsMutation(id ?? "", { silent: true });
 
+  /**
+   * Re-seed ONLY the options and the variant table from a freshly saved
+   * product.
+   *
+   * Saving options from the Variants tab has to pick up server-side
+   * normalisation and any newly generated rows, but it must not touch the
+   * Overview fields: a merchant with an unsaved title or tag edit would
+   * otherwise lose it by pressing a button in a different tab.
+   */
+  const hydrateVariantsFromProduct = useCallback((p: ProductDetail) => {
+    const nextOptions = normalizeProductOptions(p.options ?? []);
+    const nextDrafts = buildVariantDrafts(p.variants ?? []);
+    setOptions(nextOptions.map((option) => ({ ...option, uid: newOptionUid() })));
+    setOptionValueDrafts(nextOptions.map(() => ""));
+    setVariantDrafts(nextDrafts);
+    if (baselineRef.current) {
+      baselineRef.current = {
+        ...baselineRef.current,
+        options: nextOptions,
+        variantDrafts: nextDrafts,
+      };
+    }
+  }, []);
+
   const hydrateFormFromProduct = useCallback((p: ProductDetail) => {
     setTitle(p.title);
     setBodyHtml(p.bodyHtml ?? "");
@@ -390,7 +316,7 @@ export default function ProductDetailPage() {
     setStatus(p.status);
     setTags(p.tags ?? []);
     const nextOptions = normalizeProductOptions(p.options ?? []);
-    setOptions(nextOptions.map((option) => ({ ...option, uid: newUid() })));
+    setOptions(nextOptions.map((option) => ({ ...option, uid: newOptionUid() })));
     setOptionValueDrafts(nextOptions.map(() => ""));
     setVariantDrafts(buildVariantDrafts(p.variants ?? []));
     const defaultVariant = p.variants?.[0];
@@ -457,10 +383,6 @@ export default function ProductDetailPage() {
     );
   }, [product?.id, product?.images, product?.image]);
 
-  useEffect(() => {
-    setExpandedVariantGroups(new Set());
-  }, [product?.id]);
-
   const typeItems = useMemo(() => {
     const items = [...productTypes];
     if (productType && !items.includes(productType)) items.unshift(productType);
@@ -477,14 +399,6 @@ export default function ProductDetailPage() {
     const set = new Set([...tags, ...(product?.tags ?? [])]);
     return Array.from(set).filter(Boolean).sort();
   }, [tags, product?.tags]);
-
-  const variantGroups = useMemo(
-    () => groupVariantsByOption1(product?.variants ?? []),
-    [product?.variants],
-  );
-  const hasNestedVariants = (product?.variants ?? []).some((v) => v.option2);
-  const option1Name = product?.options?.[0]?.name ?? "Variant";
-  const option2Name = product?.options?.[1]?.name ?? "Option";
 
   // Recent orders that contain this product (filtered server-side via the
   // new productId param we just added).
@@ -651,30 +565,6 @@ export default function ProductDetailPage() {
     }
   }
 
-  function applyDraftToGroup(
-    variants: ProductVariant[],
-    patch: Partial<VariantDraft>,
-  ) {
-    setVariantDrafts((prev) => {
-      const next = { ...prev };
-      for (const variant of variants) {
-        next[variant.id] = {
-          ...(next[variant.id] ?? buildVariantDrafts([variant])[variant.id]),
-          ...patch,
-        };
-      }
-      return next;
-    });
-    if (defaultVariant && variants.some((v) => v.id === defaultVariant.id)) {
-      if (patch.price !== undefined) setPrice(patch.price);
-      if (patch.cost !== undefined) setCost(patch.cost);
-      if (patch.inventoryQuantity !== undefined) {
-        setInventoryQuantity(patch.inventoryQuantity);
-      }
-      if (patch.sku !== undefined) setSku(patch.sku);
-    }
-  }
-
   function handleDiscardChanges() {
     if (!product) return;
     hydrateFormFromProduct(product);
@@ -761,7 +651,11 @@ export default function ProductDetailPage() {
       ) {
         variantData.continueSellingWhenOutOfStock = continueSelling;
       }
+      // Warehousing orgs must not send a bare quantity: the server needs a
+      // warehouseId with it and 409s the whole save without one. Those edits
+      // belong to the variant editor's adjustment path.
       if (
+        !warehousingEnabled &&
         inventoryQuantity !==
         toInputNumber(defaultVariant.inventoryQuantity ?? 0)
       ) {
@@ -834,7 +728,9 @@ export default function ProductDetailPage() {
           const next = toNullableNumber(draft.cost);
           if (next !== undefined) update.cost = next;
         }
+        // Same warehousing guard as the default-variant branch above.
         if (
+          !warehousingEnabled &&
           draft.inventoryQuantity !==
           toInputNumber(variant.inventoryQuantity ?? 0)
         ) {
@@ -855,16 +751,7 @@ export default function ProductDetailPage() {
       }
 
       if (isOptionsDirty) {
-        const normalized = normalizeProductOptions(options);
-        const canGenerate =
-          normalized.length > 0 &&
-          normalized.every((option) => option.name && option.values.length > 0);
-
-        await updateOptionsMutation.mutateAsync(normalized);
-
-        if (canGenerate) {
-          await generateVariantsMutation.mutateAsync();
-        }
+        await persistOptionsAndGenerate();
       }
 
       // Re-sync the form from the saved product so server-side normalization
@@ -881,11 +768,89 @@ export default function ProductDetailPage() {
     }
   }
 
+  /**
+   * Persist the option structure, then fill in any combination that has no
+   * variant yet. Shared by the page-level Save and the Variants tab's own
+   * "Save and generate" so the two can't drift apart.
+   */
+  async function persistOptionsAndGenerate(): Promise<{ created: number } | null> {
+    const normalized = normalizeProductOptions(options);
+    const canGenerate =
+      normalized.length > 0 &&
+      normalized.every((option) => option.name && option.values.length > 0);
+
+    await updateOptionsMutation.mutateAsync(normalized);
+    return canGenerate ? await generateVariantsMutation.mutateAsync() : null;
+  }
+
+  async function handleSaveAndGenerate() {
+    if (!product) return;
+    try {
+      const result = await persistOptionsAndGenerate();
+      const { data: refreshed } = await refetch();
+      // Narrow re-hydrate: an unsaved title or tag edit in Overview has to
+      // survive pressing a button over here.
+      if (refreshed) hydrateVariantsFromProduct(refreshed);
+      toast.success(
+        result && result.created > 0
+          ? `Options saved · ${result.created} new variant${result.created === 1 ? "" : "s"}.`
+          : "Options saved.",
+      );
+    } catch (error) {
+      handleMutationError(error, "Couldn't save options.");
+    }
+  }
+
+  async function handleSaveVariant(variantId: string, data: UpdateVariantRequest) {
+    await updateVariantMutation.mutateAsync({ variantId, data });
+    // The editor writes fields the Overview cards mirror (compare-at, barcode,
+    // the switches). Sync them so the page-level dirty check doesn't resurrect
+    // the stale values on the next Save.
+    if (defaultVariant && variantId === defaultVariant.id) {
+      if (data.compareAtPrice !== undefined) {
+        setCompareAtPrice(toInputNumber(data.compareAtPrice));
+      }
+      if (data.barcode !== undefined) setBarcode(data.barcode ?? "");
+      if (data.taxable !== undefined) setTaxable(data.taxable);
+      if (data.trackQuantity !== undefined) setTrackQuantity(data.trackQuantity);
+      if (data.continueSellingWhenOutOfStock !== undefined) {
+        setContinueSelling(data.continueSellingWhenOutOfStock);
+      }
+    }
+  }
+
+  /**
+   * Called after the editor's save has fully landed.
+   *
+   * Moves the baseline as well as the draft: hydration is keyed on the product
+   * id, so a per-variant save never refreshes `baselineRef`, and without this
+   * the Save/Discard bar would light up and stay lit immediately after a
+   * successful "Variant updated". Safe to trust — these values just round
+   * tripped through the server.
+   */
+  function handleVariantPersisted(
+    variant: ProductVariant,
+    patch: Partial<VariantDraft>,
+  ) {
+    patchVariantDraft(variant, patch);
+    const base = baselineRef.current;
+    if (!base) return;
+    base.variantDrafts = {
+      ...base.variantDrafts,
+      [variant.id]: {
+        ...(base.variantDrafts[variant.id] ??
+          buildVariantDrafts([variant])[variant.id]),
+        ...patch,
+      },
+    };
+    toast.success("Variant updated.");
+  }
+
   function handleAddOption() {
     if (options.length >= 3) return;
     setOptions((prev) => [
       ...prev,
-      { name: "", values: [], position: prev.length + 1, uid: newUid() },
+      { name: "", values: [], position: prev.length + 1, uid: newOptionUid() },
     ]);
     setOptionValueDrafts((prev) => [...prev, ""]);
   }
@@ -931,15 +896,6 @@ export default function ProductDetailPage() {
     setOptionValueDrafts((prev) =>
       prev.map((value, i) => (i === optionIndex ? "" : value)),
     );
-  }
-
-  function toggleVariantGroup(key: string) {
-    setExpandedVariantGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
   }
 
   return (
@@ -1569,353 +1525,53 @@ export default function ProductDetailPage() {
 
           {activeTab === "variants" && (
             <>
-              <Section title="Options">
-                <div className="space-y-4">
-                  {options.length === 0 ? (
-                    <p className="text-[12px] text-muted-foreground">
-                      No options yet. Add Size, Color, or Material to create variants.
-                    </p>
-                  ) : (
-                    <div className="flex flex-col gap-4">
-                      {options.map((option, optionIndex) => (
-                        <div key={option.uid} className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <Input
-                              value={option.name}
-                              onChange={(e) =>
-                                handleOptionNameChange(optionIndex, e.target.value)
-                              }
-                              placeholder="Option name (e.g. Size)"
-                              className="h-8 max-w-xs text-[12px]"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveOption(optionIndex)}
-                              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-red-600"
-                              aria-label="Remove option"
-                              title="Remove option"
-                            >
-                              <Trash2 className="size-3.5" />
-                            </button>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            {option.values.map((value, valueIndex) => (
-                              <Badge
-                                key={`${value}-${valueIndex}`}
-                                className="gap-1 text-[12px]"
-                                variant="outline"
-                              >
-                                {value}
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleRemoveOptionValue(optionIndex, valueIndex)
-                                  }
-                                  className="ml-0.5 text-muted-foreground hover:text-foreground"
-                                  aria-label={`Remove ${value}`}
-                                >
-                                  ×
-                                </button>
-                              </Badge>
-                            ))}
-                            <Input
-                              value={optionValueDrafts[optionIndex] ?? ""}
-                              onChange={(e) =>
-                                setOptionValueDrafts((prev) =>
-                                  prev.map((draft, i) =>
-                                    i === optionIndex ? e.target.value : draft,
-                                  ),
-                                )
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  handleAddOptionValue(optionIndex);
-                                }
-                              }}
-                              placeholder="Add value"
-                              className="h-7 w-28 text-[12px]"
-                            />
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 px-2 text-[11px]"
-                              onClick={() => handleAddOptionValue(optionIndex)}
-                              disabled={!optionValueDrafts[optionIndex]?.trim()}
-                            >
-                              Add
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="flex flex-wrap items-center gap-2">
-                    {options.length < 3 && (
-                      <Button type="button" variant="outline" onClick={handleAddOption}>
-                        <Plus className="size-4" />
-                        Add option
-                      </Button>
-                    )}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={async () => {
-                        try {
-                          const result =
-                            await generateVariantsMutation.mutateAsync();
-                          toast.success(
-                            `Generated ${result.created} new variant${result.created === 1 ? "" : "s"}.`,
-                          );
-                        } catch (error) {
-                          handleMutationError(
-                            error,
-                            "Failed to generate variants.",
-                          );
-                        }
-                      }}
-                      disabled={
-                        generateVariantsMutation.isPending ||
-                        options.length === 0 ||
-                        options.some(
-                          (option) => !option.name.trim() || option.values.length === 0,
-                        ) ||
-                        isOptionsDirty
-                      }
-                      title={
-                        isOptionsDirty
-                          ? "Save options first, then generate variants"
-                          : "Create missing variant combinations from options"
-                      }
-                    >
-                      {generateVariantsMutation.isPending ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <Plus className="size-4" />
-                      )}
-                      Generate variants
-                    </Button>
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    Saving options also generates any missing variants for the table.
-                  </p>
-                </div>
-              </Section>
-
-
-              <Section title={`Variants (${product.variants.length})`}>
-                <div className="overflow-x-auto -mx-5">
-                  <table className="w-full text-xs">
-                    <thead className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      <tr className="border-b">
-                        <th className="px-5 py-2 text-left font-medium">
-                          {hasNestedVariants ? option1Name : "Title"}
-                        </th>
-                        <th className="px-5 py-2 text-left font-medium">SKU</th>
-                        <th className="px-5 py-2 text-right font-medium">Price</th>
-                        <th className="px-5 py-2 text-right font-medium">Stock</th>
-                        <th className="px-5 py-2 text-right font-medium">Edit</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {hasNestedVariants
-                        ? variantGroups.map((group) => {
-                          const isOpen = expandedVariantGroups.has(group.key);
-                          const priceDisplay = getGroupFieldDisplay(
-                            group.variants,
-                            variantDrafts,
-                            "price",
-                          );
-                          const stockDisplay = getGroupFieldDisplay(
-                            group.variants.filter((v) => v.trackQuantity !== false),
-                            variantDrafts,
-                            "inventoryQuantity",
-                          );
-
-                          return (
-                            <Fragment key={group.key}>
-                              <tr className="bg-muted/30 hover:bg-muted/50">
-                                <td className="px-5 py-3">
-                                  <button
-                                    type="button"
-                                    className="inline-flex items-center gap-2 text-left"
-                                    onClick={() => toggleVariantGroup(group.key)}
-                                  >
-                                    {isOpen ? (
-                                      <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-                                    ) : (
-                                      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                                    )}
-                                    <span className="font-semibold text-gray-900 dark:text-gray-100">
-                                      {group.key}
-                                    </span>
-                                    <span className="text-[10px] font-normal text-muted-foreground">
-                                      {group.variants.length}{" "}
-                                      {option2Name.toLowerCase()}
-                                      {group.variants.length === 1 ? "" : "s"}
-                                    </span>
-                                  </button>
-                                </td>
-                                <td className="px-5 py-3 text-muted-foreground">—</td>
-                                <td className="px-5 py-3 text-right">
-                                  <VariantGroupBulkInput
-                                    display={priceDisplay}
-                                    ariaLabel={`Set price for all ${group.key} variants`}
-                                    onApply={(value) =>
-                                      applyDraftToGroup(group.variants, {
-                                        price: value,
-                                      })
-                                    }
-                                  />
-                                </td>
-                                <td className="px-5 py-3 text-right">
-                                  {group.variants.every(
-                                    (v) => v.trackQuantity === false,
-                                  ) ? (
-                                    <span className="text-[10px] italic text-muted-foreground">
-                                      Untracked
-                                    </span>
-                                  ) : (
-                                    <VariantGroupBulkInput
-                                      display={stockDisplay}
-                                      integer
-                                      ariaLabel={`Set stock for all ${group.key} variants`}
-                                      onApply={(value) =>
-                                        applyDraftToGroup(
-                                          group.variants.filter(
-                                            (v) => v.trackQuantity !== false,
-                                          ),
-                                          { inventoryQuantity: value },
-                                        )
-                                      }
-                                    />
-                                  )}
-                                </td>
-                                <td className="px-5 py-3" />
-                              </tr>
-                              {isOpen &&
-                                group.variants.map((v) => (
-                                  <VariantTableRow
-                                    key={v.id}
-                                    variant={v}
-                                    draft={
-                                      variantDrafts[v.id] ?? {
-                                        price: toInputNumber(v.price),
-                                        cost: toInputNumber(v.cost),
-                                        inventoryQuantity: toInputNumber(
-                                          v.inventoryQuantity ?? 0,
-                                        ),
-                                        sku: v.sku ?? "",
-                                      }
-                                    }
-                                    onDraftChange={(patch) =>
-                                      patchVariantDraft(v, patch)
-                                    }
-                                    onEdit={() => setEditingVariantId(v.id)}
-                                    productTitle={product.title}
-                                    indented
-                                    titleLabel={v.option2 ?? v.title}
-                                    subtitle={
-                                      v.option3 && v.option3 !== "Default Title"
-                                        ? v.option3
-                                        : null
-                                    }
-                                  />
-                                ))}
-                            </Fragment>
-                          );
-                        })
-                        : product.variants.map((v) => (
-                          <VariantTableRow
-                            key={v.id}
-                            variant={v}
-                            draft={
-                              variantDrafts[v.id] ?? {
-                                price: toInputNumber(v.price),
-                                cost: toInputNumber(v.cost),
-                                inventoryQuantity: toInputNumber(
-                                  v.inventoryQuantity ?? 0,
-                                ),
-                                sku: v.sku ?? "",
-                              }
-                            }
-                            onDraftChange={(patch) =>
-                              patchVariantDraft(v, patch)
-                            }
-                            onEdit={() => setEditingVariantId(v.id)}
-                            productTitle={product.title}
-                          />
-                        ))}
-                    </tbody>
-                  </table>
-                </div>
-              </Section>
-
-              <VariantEditDialog
-                variant={
-                  editingVariantId
-                    ? (product.variants.find((v) => v.id === editingVariantId) ??
-                      null)
-                    : null
+              <VariantOptionsCard
+                options={options}
+                valueDrafts={optionValueDrafts}
+                committedOptionNames={(product.options ?? []).map((o) => o.name)}
+                variants={product.variants}
+                isDirty={isOptionsDirty}
+                isSaving={
+                  updateOptionsMutation.isPending ||
+                  generateVariantsMutation.isPending
                 }
+                isSyncedToShopify={!!sync}
+                onAddOption={handleAddOption}
+                onRemoveOption={handleRemoveOption}
+                onOptionNameChange={handleOptionNameChange}
+                onValueDraftChange={(index, value) =>
+                  setOptionValueDrafts((prev) =>
+                    prev.map((draft, i) => (i === index ? value : draft)),
+                  )
+                }
+                onAddValue={handleAddOptionValue}
+                onRemoveValue={handleRemoveOptionValue}
+                onSaveAndGenerate={handleSaveAndGenerate}
+              />
+
+              <VariantPriceStockCard
+                productTitle={product.title}
+                productImages={galleryImages}
+                productStatus={product.status}
+                variants={product.variants}
+                committedOptions={product.options ?? []}
+                // A catalogue price is in the CHANNEL's currency, not the org's
+                // — a Shopify store selling in USD must not render as ₹.
+                currency={product.channel?.currency ?? currency}
+                drafts={variantDrafts}
                 productTax={{
                   hsnCode: product.hsnCode ?? null,
                   gstRate: toGstRateOption(product.gstRate),
                   unitOfMeasure: product.unitOfMeasure ?? null,
                   supplyType: product.supplyType ?? "TAXABLE",
                 }}
-                draft={
-                  editingVariantId
-                    ? variantDrafts[editingVariantId] ?? null
-                    : null
-                }
-                currency={currency}
-                open={!!editingVariantId}
-                onOpenChange={(open) => {
-                  if (!open) setEditingVariantId(null);
-                }}
-                onSaveDraft={(patch) => {
-                  const editingVariant = editingVariantId
-                    ? product.variants.find((v) => v.id === editingVariantId)
-                    : null;
-                  if (editingVariant) {
-                    patchVariantDraft(editingVariant, patch);
-                  }
-                }}
-                onSave={async (data) => {
-                  if (!editingVariantId) return;
-                  try {
-                    await updateVariantMutation.mutateAsync({
-                      variantId: editingVariantId,
-                      data,
-                    });
-                    // The dialog persists fields the Overview mirrors also
-                    // hold (compare-at, barcode, switches). Sync them so the
-                    // dirty check doesn't resurrect stale values on the next
-                    // page-level Save.
-                    if (defaultVariant && editingVariantId === defaultVariant.id) {
-                      if (data.compareAtPrice !== undefined) {
-                        setCompareAtPrice(toInputNumber(data.compareAtPrice));
-                      }
-                      if (data.barcode !== undefined) {
-                        setBarcode(data.barcode ?? "");
-                      }
-                      if (data.taxable !== undefined) setTaxable(data.taxable);
-                      if (data.trackQuantity !== undefined) {
-                        setTrackQuantity(data.trackQuantity);
-                      }
-                      if (data.continueSellingWhenOutOfStock !== undefined) {
-                        setContinueSelling(data.continueSellingWhenOutOfStock);
-                      }
-                    }
-                    toast.success("Variant updated.");
-                    setEditingVariantId(null);
-                  } catch (error) {
-                    handleMutationError(error, "Failed to update variant.");
-                  }
-                }}
-                isSaving={updateVariantMutation.isPending}
+                onSaveVariant={handleSaveVariant}
+                onVariantPersisted={handleVariantPersisted}
+                isSavingVariant={updateVariantMutation.isPending}
+                warehousingEnabled={warehousingEnabled}
+                trackForced={trackForced}
+                oversellForced={oversellForced}
+                isVendor={isVendor}
               />
             </>
           )}
@@ -2307,759 +1963,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </h2>
       <div className="px-5 py-4">{children}</div>
     </section>
-  );
-}
-
-function groupVariantsByOption1(variants: ProductVariant[]) {
-  const map = new Map<string, ProductVariant[]>();
-
-  for (const v of variants) {
-    const key =
-      !v.option1 || v.option1 === "Default Title" ? "Default" : v.option1;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key)!.push(v);
-  }
-
-  return Array.from(map.entries())
-    .map(([key, items]) => ({
-      key,
-      variants: items.sort((a, b) => a.position - b.position),
-    }))
-    .sort((a, b) => a.variants[0].position - b.variants[0].position);
-}
-
-function isDefaultVariantLabel(value?: string | null): boolean {
-  return !value || value === "Default Title";
-}
-
-function formatVariantTitle(
-  variant: ProductVariant,
-  productTitle?: string,
-  titleLabel?: string,
-): string {
-  if (titleLabel && !isDefaultVariantLabel(titleLabel)) return titleLabel;
-  if (
-    isDefaultVariantLabel(variant.title) ||
-    isDefaultVariantLabel(variant.option1)
-  ) {
-    return productTitle?.trim() || "Default";
-  }
-  return variant.title;
-}
-
-function formatVariantOptionLabel(variant: ProductVariant): string | null {
-  const parts = [variant.option1, variant.option2, variant.option3].filter(
-    (value): value is string => !!value && value !== "Default Title",
-  );
-  return parts.length > 0 ? parts.join(" / ") : null;
-}
-
-function VariantGroupBulkInput({
-  display,
-  onApply,
-  integer = false,
-  ariaLabel,
-}: {
-  display: { kind: "single"; value: string } | { kind: "range"; value: string };
-  onApply: (value: string) => void;
-  integer?: boolean;
-  ariaLabel: string;
-}) {
-  const [focused, setFocused] = useState(false);
-  const [editValue, setEditValue] = useState("");
-
-  useEffect(() => {
-    if (!focused) {
-      setEditValue(display.kind === "single" ? display.value : "");
-    }
-  }, [display, focused]);
-
-  function commit() {
-    const next = editValue.trim();
-    setFocused(false);
-    if (!next) {
-      setEditValue(display.kind === "single" ? display.value : "");
-      return;
-    }
-    const parsed = integer ? Number.parseInt(next, 10) : Number(next);
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      setEditValue(display.kind === "single" ? display.value : "");
-      return;
-    }
-    onApply(String(parsed));
-  }
-
-  return (
-    <Input
-      type="text"
-      inputMode={integer ? "numeric" : "decimal"}
-      aria-label={ariaLabel}
-      className="ml-auto h-7 w-28 text-right text-xs"
-      value={
-        focused
-          ? editValue
-          : display.kind === "single"
-            ? display.value
-            : display.value
-      }
-      placeholder={display.kind === "range" ? display.value : undefined}
-      onFocus={() => {
-        setFocused(true);
-        setEditValue(display.kind === "single" ? display.value : "");
-      }}
-      onChange={(e) => setEditValue(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          (e.target as HTMLInputElement).blur();
-        }
-        if (e.key === "Escape") {
-          setFocused(false);
-          setEditValue(display.kind === "single" ? display.value : "");
-          (e.target as HTMLInputElement).blur();
-        }
-      }}
-      onClick={(e) => e.stopPropagation()}
-    />
-  );
-}
-
-function VariantTableRow({
-  variant: v,
-  draft,
-  onDraftChange,
-  onEdit,
-  productTitle,
-  indented = false,
-  titleLabel,
-  subtitle,
-}: {
-  variant: ProductVariant;
-  draft: VariantDraft;
-  onDraftChange: (patch: Partial<VariantDraft>) => void;
-  onEdit: () => void;
-  productTitle?: string;
-  indented?: boolean;
-  titleLabel?: string;
-  subtitle?: string | null;
-}) {
-  const stockTracked = v.trackQuantity !== false;
-  const title = formatVariantTitle(v, productTitle, titleLabel);
-  const optionLabel = !indented ? formatVariantOptionLabel(v) : null;
-
-  return (
-    <tr className={indented ? "bg-muted/10" : undefined}>
-      <td className={cn("px-5 py-3", indented && "pl-12")}>
-        <p className="font-medium text-gray-900 dark:text-gray-100">{title}</p>
-        {optionLabel && (
-          <p className="text-[10px] text-muted-foreground">{optionLabel}</p>
-        )}
-        {subtitle && !isDefaultVariantLabel(subtitle) && (
-          <p className="text-[10px] text-muted-foreground">{subtitle}</p>
-        )}
-        {hasGstOverride(v) && (
-          <span
-            className="mt-1 inline-flex rounded-full bg-amber-50 dark:bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
-            title="This variant overrides the product's GST classification"
-          >
-            GST override
-          </span>
-        )}
-      </td>
-      <td className="px-5 py-3">
-        <Input
-          className="h-7 w-28 font-mono text-[11px]"
-          placeholder="SKU"
-          aria-label={`SKU for ${v.title}`}
-          value={draft.sku}
-          onChange={(e) => onDraftChange({ sku: e.target.value })}
-        />
-      </td>
-      <td className="px-5 py-3 text-right">
-        <Input
-          type="number"
-          inputMode="decimal"
-          min="0"
-          step="0.01"
-          aria-label={`Price for ${v.title}`}
-          className="ml-auto h-7 w-24 text-right text-xs"
-          value={draft.price}
-          onChange={(e) => onDraftChange({ price: e.target.value })}
-        />
-      </td>
-      <td className="px-5 py-3 text-right">
-        {!stockTracked ? (
-          <span
-            className="text-[10px] italic text-muted-foreground"
-            title="Not tracked"
-          >
-            Untracked
-          </span>
-        ) : (
-          <Input
-            type="number"
-            inputMode="numeric"
-            min="0"
-            step="1"
-            aria-label={`Stock for ${v.title}`}
-            className="ml-auto h-7 w-20 text-right text-xs"
-            value={draft.inventoryQuantity}
-            onChange={(e) =>
-              onDraftChange({ inventoryQuantity: e.target.value })
-            }
-          />
-        )}
-      </td>
-      <td className="px-5 py-3 text-right">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-7 px-2 text-[11px]"
-          onClick={onEdit}
-        >
-          <Pencil className="size-3.5" />
-          Edit
-        </Button>
-      </td>
-    </tr>
-  );
-}
-
-/**
- * Per-warehouse bucket breakdown for one variant, shown in place of the single
- * editable quantity once warehousing is on. Read-only by design: every write
- * has to go through the movement ledger so it leaves an audit row, which is
- * what the Inventory screen's Adjust action does.
- */
-function VariantWarehouseStock({ variantId }: { variantId: string }) {
-  const stock = useVariantStock(variantId);
-  const levels = stock.data?.levels ?? [];
-
-  if (stock.isLoading) {
-    return (
-      <p className="rounded-lg bg-gray-50 dark:bg-gray-800/50 px-3 py-2 text-[11px] text-muted-foreground">
-        Loading stock by warehouse…
-      </p>
-    );
-  }
-  if (stock.isError) {
-    return (
-      <p className="rounded-lg bg-gray-50 dark:bg-gray-800/50 px-3 py-2 text-[11px] text-muted-foreground">
-        Couldn't load stock by warehouse.
-      </p>
-    );
-  }
-  if (levels.length === 0) {
-    return (
-      <p className="rounded-lg bg-gray-50 dark:bg-gray-800/50 px-3 py-2 text-[11px] text-muted-foreground">
-        No stock recorded for this variant in any warehouse yet.
-      </p>
-    );
-  }
-
-  return (
-    <div className="overflow-x-auto rounded-lg ring-1 ring-border">
-      <table className="w-full text-left text-[11px]">
-        <thead>
-          <tr className="border-b text-muted-foreground">
-            <th className="px-2.5 py-1.5 font-medium">Warehouse</th>
-            <th className="px-2.5 py-1.5 text-right font-medium">Available</th>
-            <th className="px-2.5 py-1.5 text-right font-medium">Reserved</th>
-            <th className="px-2.5 py-1.5 text-right font-medium">QC</th>
-            <th className="px-2.5 py-1.5 text-right font-medium">Damaged</th>
-            <th className="px-2.5 py-1.5 text-right font-medium">On hand</th>
-          </tr>
-        </thead>
-        <tbody>
-          {levels.map((l) => (
-            <tr key={l.id} className="border-b last:border-b-0">
-              <td className="px-2.5 py-1.5">
-                {l.warehouse.name}
-                {l.defaultLocation?.fullCode && (
-                  <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">
-                    {l.defaultLocation.fullCode}
-                  </span>
-                )}
-              </td>
-              <td
-                className={cn(
-                  "px-2.5 py-1.5 text-right font-semibold tabular-nums",
-                  l.available < 0 && "text-red-600",
-                  l.available === 0 && "text-orange-500",
-                )}
-              >
-                {l.available}
-              </td>
-              <td className="px-2.5 py-1.5 text-right tabular-nums">{l.reserved}</td>
-              <td className="px-2.5 py-1.5 text-right tabular-nums">{l.qc}</td>
-              <td className="px-2.5 py-1.5 text-right tabular-nums">{l.damaged}</td>
-              <td className="px-2.5 py-1.5 text-right font-semibold tabular-nums">
-                {l.available + l.reserved + l.qc + l.damaged}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/** The product's Tax (GST) values, shown as the "inherit" hint in the dialog. */
-type ProductTaxDefaults = {
-  hsnCode: string | null;
-  /** Select option string ("18"), "" when unset. */
-  gstRate: string;
-  unitOfMeasure: string | null;
-  supplyType: GstSupplyType;
-};
-
-function hasGstOverride(v: ProductVariant): boolean {
-  return (
-    v.hsnCode != null ||
-    v.gstRate != null ||
-    v.unitOfMeasure != null ||
-    v.supplyType != null
-  );
-}
-
-function VariantEditDialog({
-  variant,
-  draft,
-  currency,
-  productTax,
-  open,
-  onOpenChange,
-  onSaveDraft,
-  onSave,
-  isSaving,
-}: {
-  variant: ProductVariant | null;
-  draft: VariantDraft | null;
-  currency: string;
-  productTax: ProductTaxDefaults;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSaveDraft: (patch: Partial<VariantDraft>) => void;
-  onSave: (data: UpdateVariantRequest) => Promise<void>;
-  isSaving: boolean;
-}) {
-  const { isVendor } = useCurrentRole();
-  const [price, setPrice] = useState("");
-  const [compareAtPrice, setCompareAtPrice] = useState("");
-  const [cost, setCost] = useState("");
-  const [sku, setSku] = useState("");
-  const [barcode, setBarcode] = useState("");
-  const [inventoryQuantity, setInventoryQuantity] = useState("0");
-  const [trackQuantity, setTrackQuantity] = useState(true);
-  const [continueSelling, setContinueSelling] = useState(false);
-  const [taxable, setTaxable] = useState(true);
-  const [requiresShipping, setRequiresShipping] = useState(true);
-  const [weight, setWeight] = useState("");
-  const [weightUnit, setWeightUnit] = useState("kg");
-  const [hsCode, setHsCode] = useState("");
-  const [countryOfOrigin, setCountryOfOrigin] = useState("");
-  // GST override — "" everywhere means "inherit from the product".
-  const [gstHsnCode, setGstHsnCode] = useState("");
-  const [gstRateOverride, setGstRateOverride] = useState("");
-  const [uqcOverride, setUqcOverride] = useState("");
-  const [supplyTypeOverride, setSupplyTypeOverride] = useState("");
-
-  // With warehousing on, this variant's stock is the sum of per-warehouse
-  // buckets and `inventoryQuantity` is only a cache of it. Writing the field
-  // directly would bypass the movement ledger and be silently recomputed away
-  // by the next stock movement, so it becomes read-only and the real numbers
-  // are shown below instead.
-  const warehousingEnabled = useInventoryStatus().data?.warehousingEnabled === true;
-  // The org-wide "(all products)" toggles in Settings → Sync force what is
-  // pushed to Shopify, so the per-variant switch has no effect while they are
-  // on. Show that instead of letting the merchant flip a switch that syncs
-  // back the other way.
-  const { data: orgSettings } = useOrganizationSettings();
-  const oversellForced = orgSettings?.productSettings?.allowOversellGlobally === true;
-  const trackForced = orgSettings?.productSettings?.trackQuantityGlobally === true;
-
-  useEffect(() => {
-    if (!variant || !open) return;
-    setPrice(draft?.price ?? toInputNumber(variant.price));
-    setCompareAtPrice(toInputNumber(variant.compareAtPrice));
-    setCost(draft?.cost ?? toInputNumber(variant.cost));
-    setSku(draft?.sku ?? variant.sku ?? "");
-    setBarcode(variant.barcode ?? "");
-    setInventoryQuantity(
-      draft?.inventoryQuantity ?? toInputNumber(variant.inventoryQuantity ?? 0),
-    );
-    setTrackQuantity(variant.trackQuantity ?? true);
-    setContinueSelling(variant.continueSellingWhenOutOfStock ?? false);
-    setTaxable(variant.taxable ?? true);
-    setRequiresShipping(variant.requiresShipping ?? true);
-    setWeight(toInputNumber(variant.weight));
-    setWeightUnit(variant.weightUnit ?? "kg");
-    setHsCode(variant.hsCode ?? "");
-    setCountryOfOrigin(variant.countryOfOrigin ?? "");
-    setGstHsnCode(variant.hsnCode ?? "");
-    setGstRateOverride(toGstRateOption(variant.gstRate));
-    setUqcOverride(variant.unitOfMeasure ?? "");
-    setSupplyTypeOverride(variant.supplyType ?? "");
-    // Seed once per open (or when switching variants). Depending on `draft`
-    // or the `variant` object identity would re-seed over the user's typing
-    // whenever a background refetch re-renders the parent.
-  }, [open, variant?.id]);
-
-  if (!variant) return null;
-
-  async function handleSave() {
-    const data: UpdateVariantRequest = {};
-    const parsedPrice = Number(price);
-    if (price.trim() && Number.isFinite(parsedPrice)) data.price = parsedPrice;
-    const nextCompareAt = toNullableNumber(compareAtPrice);
-    if (nextCompareAt !== undefined) data.compareAtPrice = nextCompareAt;
-    const nextCost = toNullableNumber(cost);
-    if (nextCost !== undefined) data.cost = nextCost;
-    data.sku = sku.trim() || null;
-    data.barcode = barcode.trim() || null;
-    const parsedQty = Number.parseInt(inventoryQuantity, 10);
-    if (Number.isFinite(parsedQty)) data.inventoryQuantity = parsedQty;
-    data.trackQuantity = trackQuantity;
-    data.continueSellingWhenOutOfStock = continueSelling;
-    data.taxable = taxable;
-    data.requiresShipping = requiresShipping;
-    const nextWeight = toNullableNumber(weight);
-    if (nextWeight !== undefined) data.weight = nextWeight;
-    if (nextWeight) data.weightUnit = weightUnit as UpdateVariantRequest["weightUnit"];
-    data.hsCode = hsCode.trim() || null;
-    data.countryOfOrigin = countryOfOrigin.trim().toUpperCase() || null;
-    if (!isVendor) {
-      // null = back to inheriting from the product.
-      data.hsnCode = gstHsnCode.trim() || null;
-      data.gstRate = gstRateOverride === "" ? null : Number(gstRateOverride);
-      data.unitOfMeasure = uqcOverride || null;
-      data.supplyType =
-        supplyTypeOverride === "" ? null : (supplyTypeOverride as GstSupplyType);
-    }
-
-    onSaveDraft({
-      price,
-      cost,
-      inventoryQuantity,
-      sku,
-    });
-    await onSave(data);
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Edit variant</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 py-2">
-          <p className="text-[12px] text-muted-foreground">
-            {[variant.option1, variant.option2, variant.option3]
-              .filter((v) => v && v !== "Default Title")
-              .join(" / ") || variant.title}
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label htmlFor="ve-price" className="text-[12px]">Price ({currency})</Label>
-              <Input
-                id="ve-price"
-                type="number"
-                min="0"
-                step="0.01"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ve-compare" className="text-[12px]">Compare at</Label>
-              <Input
-                id="ve-compare"
-                type="number"
-                min="0"
-                step="0.01"
-                value={compareAtPrice}
-                onChange={(e) => setCompareAtPrice(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ve-cost" className="text-[12px]">Cost</Label>
-              <Input
-                id="ve-cost"
-                type="number"
-                min="0"
-                step="0.01"
-                value={cost}
-                onChange={(e) => setCost(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ve-stock" className="text-[12px]">Stock</Label>
-              <Input
-                id="ve-stock"
-                type="number"
-                min="0"
-                step="1"
-                value={inventoryQuantity}
-                onChange={(e) => setInventoryQuantity(e.target.value)}
-                disabled={!trackQuantity || warehousingEnabled}
-              />
-              {warehousingEnabled && (
-                <p className="text-[11px] text-muted-foreground">
-                  Set per warehouse in{" "}
-                  <Link to="/products/inventory" className="underline">Inventory</Link>
-                </p>
-              )}
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ve-sku" className="text-[12px]">SKU</Label>
-              <Input id="ve-sku" value={sku} onChange={(e) => setSku(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ve-barcode" className="text-[12px]">Barcode</Label>
-              <Input
-                id="ve-barcode"
-                value={barcode}
-                onChange={(e) => setBarcode(e.target.value)}
-              />
-            </div>
-          </div>
-          {warehousingEnabled && <VariantWarehouseStock variantId={variant.id} />}
-          <Field orientation="horizontal">
-            <FieldContent>
-              <FieldLabel className="text-[13px]" htmlFor="ve-track">
-                Track quantity
-              </FieldLabel>
-              {trackForced && (
-                <FieldDescription className="text-[11px] text-amber-700 dark:text-amber-300">
-                  Forced ON for all products in{" "}
-                  <Link to="/settings" className="underline">Settings → Sync</Link>.
-                  Shopify receives "tracked" regardless of this switch.
-                </FieldDescription>
-              )}
-            </FieldContent>
-            <Switch
-              id="ve-track"
-              checked={trackForced ? true : trackQuantity}
-              onCheckedChange={setTrackQuantity}
-              disabled={trackForced}
-            />
-          </Field>
-          <Field orientation="horizontal">
-            <FieldContent>
-              <FieldLabel className="text-[13px]" htmlFor="ve-continue">
-                Continue selling when out of stock
-              </FieldLabel>
-              {oversellForced && (
-                <FieldDescription className="text-[11px] text-amber-700 dark:text-amber-300">
-                  Forced ON for all products in{" "}
-                  <Link to="/settings" className="underline">Settings → Sync</Link>.
-                  Shopify receives "continue" regardless of this switch.
-                </FieldDescription>
-              )}
-            </FieldContent>
-            <Switch
-              id="ve-continue"
-              checked={oversellForced ? true : continueSelling}
-              onCheckedChange={setContinueSelling}
-              disabled={oversellForced}
-            />
-          </Field>
-          <Field orientation="horizontal">
-            <FieldContent>
-              <FieldLabel className="text-[13px]" htmlFor="ve-taxable">
-                Charge tax
-              </FieldLabel>
-            </FieldContent>
-            <Switch id="ve-taxable" checked={taxable} onCheckedChange={setTaxable} />
-          </Field>
-
-          <Separator />
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Shipping
-          </p>
-          <Field orientation="horizontal">
-            <FieldContent>
-              <FieldLabel className="text-[13px]" htmlFor="ve-physical">
-                This is a physical product
-              </FieldLabel>
-              <FieldDescription className="text-[11px]">
-                Off for digital downloads, services, etc.
-              </FieldDescription>
-            </FieldContent>
-            <Switch
-              id="ve-physical"
-              checked={requiresShipping}
-              onCheckedChange={setRequiresShipping}
-            />
-          </Field>
-          {requiresShipping && (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="ve-weight" className="text-[12px]">Weight</Label>
-                <Input
-                  id="ve-weight"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="0.0"
-                  value={weight}
-                  onChange={(e) => setWeight(e.target.value)}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="ve-weight-unit" className="text-[12px]">Weight unit</Label>
-                <select
-                  id="ve-weight-unit"
-                  value={weightUnit}
-                  onChange={(e) => setWeightUnit(e.target.value)}
-                  className="h-9 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[13px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
-                >
-                  <option value="g">g</option>
-                  <option value="kg">kg</option>
-                  <option value="oz">oz</option>
-                  <option value="lb">lb</option>
-                </select>
-              </div>
-            </div>
-          )}
-
-          <Separator />
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Customs
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label htmlFor="ve-hs-code" className="text-[12px]">HS code (customs)</Label>
-              <Input
-                id="ve-hs-code"
-                placeholder="6109.10"
-                className="font-mono"
-                value={hsCode}
-                onChange={(e) => setHsCode(e.target.value)}
-              />
-              <p className="text-[11px] text-muted-foreground">
-                Sent to Shopify for shipping. Invoices use the GST HSN below.
-              </p>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ve-country" className="text-[12px]">Country of origin</Label>
-              <Input
-                id="ve-country"
-                placeholder="IN"
-                maxLength={2}
-                className="font-mono uppercase"
-                value={countryOfOrigin}
-                onChange={(e) => setCountryOfOrigin(e.target.value.toUpperCase())}
-              />
-              <p className="text-[11px] text-muted-foreground">Two-letter ISO code</p>
-            </div>
-          </div>
-
-          <Separator />
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Tax (GST) override
-          </p>
-          <p className="text-[11px] text-muted-foreground">
-            Leave blank to use the product&apos;s values. Set a field only when this
-            variant is classified differently from the product.
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label htmlFor="ve-hsn" className="text-[12px]">HSN / SAC code</Label>
-              <Input
-                id="ve-hsn"
-                placeholder={productTax.hsnCode ? `Product: ${productTax.hsnCode}` : "Same as product"}
-                className="font-mono"
-                value={gstHsnCode}
-                onChange={(e) => setGstHsnCode(e.target.value)}
-                disabled={isVendor}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ve-gst-rate" className="text-[12px]">GST rate</Label>
-              <select
-                id="ve-gst-rate"
-                value={gstRateOverride}
-                onChange={(e) => setGstRateOverride(e.target.value)}
-                disabled={isVendor}
-                className="h-9 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[13px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
-              >
-                <option value="">
-                  Same as product ({productTax.gstRate ? `${productTax.gstRate}%` : "not set"})
-                </option>
-                {GST_RATE_OPTIONS.map((rate) => (
-                  <option key={rate} value={rate}>
-                    {rate}%
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ve-uqc" className="text-[12px]">Unit of measure (UQC)</Label>
-              <select
-                id="ve-uqc"
-                value={uqcOverride}
-                onChange={(e) => setUqcOverride(e.target.value)}
-                disabled={isVendor}
-                className="h-9 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[13px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
-              >
-                <option value="">
-                  Same as product ({productTax.unitOfMeasure || "NOS"})
-                </option>
-                {COMMON_UQC.map((u) => (
-                  <option key={u.code} value={u.code}>
-                    {u.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ve-supply-type" className="text-[12px]">Supply type</Label>
-              <select
-                id="ve-supply-type"
-                value={supplyTypeOverride}
-                onChange={(e) => setSupplyTypeOverride(e.target.value)}
-                disabled={isVendor}
-                className="h-9 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[13px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
-              >
-                <option value="">
-                  Same as product (
-                  {GST_SUPPLY_TYPES.find((t) => t.value === productTax.supplyType)?.label ??
-                    productTax.supplyType}
-                  )
-                </option>
-                {GST_SUPPLY_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          {isVendor && (
-            <p className="text-[11px] text-muted-foreground">
-              Tax fields are managed by the store owner.
-            </p>
-          )}
-        </div>
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={isSaving}
-          >
-            Cancel
-          </Button>
-          <Button type="button" onClick={handleSave} disabled={isSaving}>
-            {isSaving && <Loader2 className="size-3.5 animate-spin" />}
-            Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 

@@ -62,6 +62,12 @@ function build(opts: {
   customers?: Array<{ bucket: Date; count: number }>;
   previous?: SalesProfitRow[];
   timezone?: string;
+  /** Rows behind `totals.salesByCurrency`. Defaults to a single-currency window. */
+  currencies?: Array<{ currency: string; _sum: { totalPrice: unknown }; _count: { _all: number } }>;
+  /** The org's reporting currency — what every figure is converted into. */
+  currency?: string;
+  /** Orders excluded from the totals because their FX rate never resolved. */
+  unconvertedOrders?: number;
 } = {}) {
   const $queryRaw = jest
     .fn()
@@ -69,11 +75,24 @@ function build(opts: {
     .mockResolvedValueOnce(opts.customers ?? [])
     .mockResolvedValueOnce(opts.previous ?? []);
 
+  const groupBy = jest
+    .fn()
+    .mockResolvedValue(
+      opts.currencies ?? [{ currency: 'INR', _sum: { totalPrice: 1270 }, _count: { _all: 1 } }],
+    );
+
   const prisma = {
     $queryRaw,
+    order: {
+      // Pre-conversion make-up behind `totals.salesByCurrency`.
+      groupBy,
+      // Orders whose FX rate never resolved, excluded from the converted CTE.
+      count: jest.fn().mockResolvedValue(opts.unconvertedOrders ?? 0),
+    },
     organization: {
       findUnique: jest.fn().mockResolvedValue({
         timezone: opts.timezone ?? 'UTC',
+        currency: opts.currency ?? 'INR',
         lowStockThreshold: 10,
       }),
     },
@@ -82,6 +101,7 @@ function build(opts: {
   return {
     prisma,
     $queryRaw,
+    groupBy,
     service: new DashboardService(prisma as any),
   };
 }

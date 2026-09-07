@@ -178,16 +178,21 @@ export class CustomerService {
         _avg: { totalSpent: true },
       }),
 
-      // Average order value (from orders, not customers)
-      this.prisma.order.aggregate({
-        where: {
-          organizationId: orgId,
-          deletedAt: null,
-          financialStatus: { in: ['PAID', 'PARTIALLY_PAID'] },
-          ...(channelId && { channelId }),
-        },
-        _avg: { totalPrice: true },
-      }),
+      // Average order value (from orders, not customers), in the org's own
+      // currency. Raw SQL because Prisma's `_avg` can only average a column,
+      // never a column times a rate — averaging `total_price` alone mixed
+      // dollars into rupees and produced "₹1,359.47" from a set that was
+      // mostly USD. Orders with no resolved rate are excluded rather than
+      // averaged in at parity.
+      this.prisma.$queryRaw<{ avg: string | null }[]>`
+        SELECT AVG(o."total_price" * o."exchange_rate") AS avg
+        FROM "orders" o
+        WHERE o."organization_id" = ${orgId}
+          AND o."deleted_at" IS NULL
+          AND o."exchange_rate" IS NOT NULL
+          AND o."financial_status"::text IN ('PAID', 'PARTIALLY_PAID')
+          ${channelId ? Prisma.sql`AND o."channel_id" = ${channelId}` : Prisma.empty}
+      `,
     ]);
 
     // Calculate new customers change
@@ -212,7 +217,7 @@ export class CustomerService {
 
       totalRevenue: totalRevenue._sum.totalSpent ?? 0,
       averageCustomerValue: totalRevenue._avg.totalSpent ?? 0,
-      averageOrderValue: averageOrderValue._avg.totalPrice ?? 0,
+      averageOrderValue: Number(averageOrderValue[0]?.avg ?? 0),
 
       vipBreakdown: {
         none: vipBreakdown['NONE'] ?? 0,

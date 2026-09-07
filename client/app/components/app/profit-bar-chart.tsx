@@ -23,6 +23,7 @@ interface CustomTooltipProps {
   active?: boolean;
   payload?: Array<{ value: number | null; name: string; dataKey?: string }>;
   label?: string;
+  /** The org's reporting currency — every bar is already converted into it. */
   currency: string;
 }
 
@@ -92,13 +93,26 @@ export function ProfitBarChart({
   const coverage = totals?.costCoverage ?? 0;
   const hasCostData = coverage > 0;
 
+  // Every figure here is now converted into the org's currency by the server,
+  // at each order's own stored rate — so the walk below is a valid single-
+  // currency sum again, whatever mix of currencies the orders came in.
+  //
+  // The one thing that can still make it incomplete is an order whose rate
+  // never resolved: those are excluded from the sums rather than counted at
+  // 1:1, and saying so is the difference between a total that is smaller than
+  // expected and one that is quietly wrong.
+  const reportingCurrency = totals?.currency ?? currency;
+  const unconvertedOrders = totals?.unconvertedOrders ?? 0;
+
   // `previous === 0` means there is no comparison period yet — the API reports
   // that as a nominal 100% up, so the badge is hidden rather than presenting
   // growth-from-nothing as a trend.
   const trend = sales?.profitTrend;
+  // `change` is null for an unbounded window, where there is no earlier period
+  // to trend against — same reason the badge is hidden when `previous` is 0.
   const showTrend =
-    !!trend && trend.previous !== 0 && trend.change.direction !== "same";
-  const isUp = trend?.change.direction === "up";
+    !!trend?.change && trend.previous !== 0 && trend.change.direction !== "same";
+  const isUp = trend?.change?.direction === "up";
 
   return (
     <div className="flex h-full flex-col rounded-xl bg-card p-5 shadow-sm ring-1 ring-border">
@@ -124,7 +138,9 @@ export function ProfitBarChart({
                 hasCostData ? "text-foreground" : "text-muted-foreground"
               )}
             >
-              {grossProfit === null ? "—" : formatCurrency(grossProfit, currency)}
+              {grossProfit === null
+                ? "—"
+                : formatCurrency(grossProfit, reportingCurrency)}
             </p>
             {totals?.grossMarginPct != null && (
               <span className="text-caption font-medium text-muted-foreground">
@@ -140,7 +156,7 @@ export function ProfitBarChart({
                   )}
                 >
                   {isUp ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
-                  {trend.change.percentage}%
+                  {trend.change?.percentage}%
                 </span>
                 <span className="text-caption text-muted-foreground">
                   vs. previous period
@@ -154,20 +170,26 @@ export function ProfitBarChart({
               those reasons is what stops the pair looking arbitrary. */}
           {totals && (
             <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-caption">
-              <Term label="Sales" value={totals.grossSales} currency={currency} />
-              <Term label="tax" value={totals.tax} currency={currency} sign="minus" />
-              <Term label="shipping" value={totals.shipping} currency={currency} sign="minus" />
+              <Term label="Sales" value={totals.grossSales} currency={reportingCurrency} />
+              <Term label="tax" value={totals.tax} currency={reportingCurrency} sign="minus" />
+              <Term label="shipping" value={totals.shipping} currency={reportingCurrency} sign="minus" />
               {totals.refunds > 0 && (
-                <Term label="refunds" value={totals.refunds} currency={currency} sign="minus" />
+                <Term label="refunds" value={totals.refunds} currency={reportingCurrency} sign="minus" />
               )}
               <span className="whitespace-nowrap">
                 <span className="text-muted-foreground">= net sales </span>
                 <span className="font-medium text-foreground">
-                  {formatCurrency(totals.netSales, currency)}
+                  {formatCurrency(totals.netSales, reportingCurrency)}
                 </span>
               </span>
               {hasCostData && (
-                <Term label="COGS" value={totals.cogs} currency={currency} sign="minus" />
+                <Term label="COGS" value={totals.cogs} currency={reportingCurrency} sign="minus" />
+              )}
+              {unconvertedOrders > 0 && (
+                <span className="whitespace-nowrap text-warning">
+                  excludes {unconvertedOrders} order
+                  {unconvertedOrders === 1 ? "" : "s"} with no exchange rate
+                </span>
               )}
             </div>
           )}
@@ -219,7 +241,7 @@ export function ProfitBarChart({
                       and the baseline has to be visible when it does. */}
                   <YAxis hide domain={["auto", "auto"]} />
                   <ReferenceLine y={0} stroke="var(--border)" />
-                  <Tooltip content={<CustomTooltip currency={currency} />} cursor={{ fill: "rgba(0,0,0,0.04)" }} />
+                  <Tooltip content={<CustomTooltip currency={reportingCurrency} />} cursor={{ fill: "rgba(0,0,0,0.04)" }} />
                   <Bar dataKey="netSales" fill="var(--border)" radius={[4, 4, 0, 0]} />
                   {/* Recharts skips null, so a month with no cost data draws a
                       sales bar and no profit bar — which is the truth. */}

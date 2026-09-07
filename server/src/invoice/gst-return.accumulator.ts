@@ -278,12 +278,20 @@ export interface Gstr3bReturn {
     totalTax: number;
   }>;
   /**
-   * 3.1(b), (c) and (e) — taxable value only, since none of these carry tax.
-   * Before Phase 2 nothing classified a supply, so every invoice was row (a)
-   * and these were permanently empty.
+   * 3.1(b), (c) and (e). Before Phase 2 nothing classified a supply, so every
+   * invoice was row (a) and these were permanently empty.
+   *
+   * (c) and (e) genuinely carry no tax. (b) can: an export is zero-rated either
+   * way, but a supplier who has NOT furnished an LUT exports on payment of
+   * IGST and reports that tax on this row — the form gives 3.1(b) an integrated
+   * tax column for exactly that case. Without `zeroRatedIgst` such an export
+   * had its taxable value in (b) and its IGST nowhere, so `taxPayable` could
+   * not be reconciled against the rows above it.
    */
   otherSupplies: {
     zeroRated: number;
+    /** IGST on zero-rated supplies — exports made on payment of tax. */
+    zeroRatedIgst: number;
     nilRatedExempt: number;
     nonGst: number;
   };
@@ -965,6 +973,7 @@ export class Gstr3bAccumulator {
   >();
 
   private zeroRated = ZERO;
+  private zeroRatedIgst = ZERO;
   private nilRatedExempt = ZERO;
   private nonGst = ZERO;
 
@@ -1014,6 +1023,12 @@ export class Gstr3bAccumulator {
       this.payableTotal = this.payableTotal.plus(signed(dec(invoice.totalTax)));
     }
 
+    // The part of this invoice that actually lands in 3.1(a). Table 3.2 is a
+    // memo OF 3.1(a), so it has to be built from the same subset rather than
+    // from the invoice subtotal — otherwise an invoice whose lines are
+    // zero-rated reports nothing in (a) but still shows up in 3.2.
+    let taxableInA = ZERO;
+
     for (const item of invoice.lineItems ?? []) {
       const rate = dec(item.gstRate).toNumber();
       const taxable = dec(item.taxableValue);
@@ -1021,16 +1036,31 @@ export class Gstr3bAccumulator {
       // 3.1(b), (c) and (e). Before Phase 2 nothing classified a supply, so
       // every line landed in (a) and these three were permanently empty —
       // which the panel's own comment admitted to the user.
+      //
+      // These rows are ALTERNATIVES to (a), not additions to it: the form
+      // defines 3.1(a) as "outward taxable supplies (other than zero-rated,
+      // nil-rated and exempted)". Classifying a line here therefore has to
+      // stop it also being counted as a taxable supply below — which it did
+      // not, so a zero-rated export was declared twice, once at 18% in (a)
+      // and again as zero-rated in (b), overstating outward supplies by its
+      // full value.
+      let reportedOutsideA = false;
       switch (item.supplyType) {
         case GstSupplyType.ZERO_RATED:
           this.zeroRated = this.zeroRated.plus(signed(taxable));
+          // Export on payment of IGST. Zero for an LUT export, which is the
+          // usual case, so this row stays tax-free unless tax was charged.
+          this.zeroRatedIgst = this.zeroRatedIgst.plus(signed(dec(item.igstAmount)));
+          reportedOutsideA = true;
           break;
         case GstSupplyType.NIL_RATED:
         case GstSupplyType.EXEMPT:
           this.nilRatedExempt = this.nilRatedExempt.plus(signed(taxable));
+          reportedOutsideA = true;
           break;
         case GstSupplyType.NON_GST:
           this.nonGst = this.nonGst.plus(signed(taxable));
+          reportedOutsideA = true;
           break;
         default:
           break;
@@ -1045,6 +1075,12 @@ export class Gstr3bAccumulator {
         }
         continue;
       }
+
+      // Already declared in (b), (c) or (e). Falling through to the rate
+      // buckets below is what produced the double count.
+      if (reportedOutsideA) continue;
+
+      taxableInA = taxableInA.plus(taxable);
 
       const existing = this.rates.get(rate) ?? {
         taxable: ZERO,
@@ -1075,9 +1111,17 @@ export class Gstr3bAccumulator {
 
     if (invoice.gstType !== GstType.IGST) return;
 
-    // The aggregate spans EVERY inter-state invoice, net of credit notes.
+    // 3.2 is a memo OF 3.1(a), so an invoice contributing nothing to (a) —
+    // a pure export, or an entirely nil-rated supply — contributes nothing
+    // here either. Reporting it would put a supply in the memo that its
+    // parent row does not contain.
+    if (taxableInA.isZero()) return;
+
+    // The aggregate spans EVERY inter-state invoice, net of credit notes, but
+    // only the portion that reached 3.1(a) — `subtotal` would drag zero-rated
+    // and exempt lines back in through the memo.
     this.interStateCount += sign;
-    this.interStateTaxable = this.interStateTaxable.plus(signed(subtotal));
+    this.interStateTaxable = this.interStateTaxable.plus(signed(taxableInA));
     this.interStateIgst = this.interStateIgst.plus(signed(igst));
 
     // Table 3.2 is narrower: inter-state supplies to *unregistered* persons
@@ -1094,7 +1138,9 @@ export class Gstr3bAccumulator {
     };
 
     existing.invoiceCount += sign;
-    existing.taxable = existing.taxable.plus(signed(subtotal));
+    // Same subset as the aggregate above — the per-state rows have to add up
+    // to it, and both have to stay inside 3.1(a).
+    existing.taxable = existing.taxable.plus(signed(taxableInA));
     existing.igst = existing.igst.plus(signed(igst));
 
     this.byState.set(key, existing);
@@ -1114,6 +1160,7 @@ export class Gstr3bAccumulator {
         })),
       otherSupplies: {
         zeroRated: toMoney(this.zeroRated),
+        zeroRatedIgst: toMoney(this.zeroRatedIgst),
         nilRatedExempt: toMoney(this.nilRatedExempt),
         nonGst: toMoney(this.nonGst),
       },

@@ -235,16 +235,22 @@ export function Gstr3bOtherSuppliesPanel({ data, currency }: PanelProps) {
       key: "zero",
       label: "(b) Zero-rated supplies (exports, SEZ)",
       value: data.otherSupplies?.zeroRated ?? 0,
+      // Only this row can carry tax: an export without an LUT is zero-rated
+      // but made ON PAYMENT of IGST. Nil-rated and non-GST never do, so their
+      // cell stays blank rather than showing a zero that reads as a figure.
+      igst: data.otherSupplies?.zeroRatedIgst ?? 0,
     },
     {
       key: "nil",
       label: "(c) Nil-rated and exempted supplies",
       value: data.otherSupplies?.nilRatedExempt ?? 0,
+      igst: null,
     },
     {
       key: "nongst",
       label: "(e) Non-GST outward supplies",
       value: data.otherSupplies?.nonGst ?? 0,
+      igst: null,
     },
   ];
 
@@ -263,6 +269,7 @@ export function Gstr3bOtherSuppliesPanel({ data, currency }: PanelProps) {
             <TableRow>
               <TableHead>Nature of supply</TableHead>
               <TableHead className="text-right">Taxable value</TableHead>
+              <TableHead className="text-right">IGST</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -271,6 +278,13 @@ export function Gstr3bOtherSuppliesPanel({ data, currency }: PanelProps) {
                 <TableCell>{row.label}</TableCell>
                 <TableCell className="text-right tabular-nums">
                   <Amount value={row.value} currency={currency} />
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {row.igst == null ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : (
+                    <Amount value={row.igst} currency={currency} />
+                  )}
                 </TableCell>
               </TableRow>
             ))}

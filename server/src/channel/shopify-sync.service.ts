@@ -38,6 +38,7 @@ import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { ShopifyLocationSyncService } from './shopify-location-sync.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
+import { FxRateService } from '../common/fx/fx-rate.service';
 import { becamePaid } from './order-paid-transition.util';
 import { CRM_SOURCE_NAME, carriesCrmMarker, isLocallyPushedPayload, localOrderIdOf } from './order-rebadge.util';
 import {
@@ -202,6 +203,9 @@ export class ShopifySyncService {
         // on the live-webhook path — see `maybeAutoInvoice`.
         private readonly invoiceService: InvoiceService,
         private readonly orgSettings: OrganizationSettingsService,
+        // Books each incoming order at the FX rate for its own order date, so
+        // a USD store inside an INR workspace reports real rupees.
+        private readonly fx: FxRateService,
         @InjectQueue(DRAFT_MIRROR_QUEUE)
         private readonly draftMirrorQueue: Queue<DraftMirrorJobData>,
     ) { }
@@ -1956,6 +1960,16 @@ export class ShopifySyncService {
         // became PAID, and stays null on every other payload.
         let becamePaidOrderId: string | null = null;
 
+        // Resolved BEFORE the transaction: it may call the rate provider over
+        // the network, and holding a Postgres transaction open across an HTTP
+        // round trip is how connection pools get exhausted. A failed lookup
+        // returns nulls, which simply leaves the order unconverted.
+        const fxPatch = await this.fx.ratePatch(
+            orgId,
+            so.currency || 'USD',
+            so.created_at ? new Date(so.created_at) : new Date(),
+        );
+
         // One transaction for the order and all of its children. Previously the
         // header, line items, fulfillments and refunds were four independent
         // commits, so a failure part-way left a half-written order that the
@@ -1973,7 +1987,8 @@ export class ShopifySyncService {
                         orderNumber: so.order_number, name: so.name || `#${so.order_number}`,
                         financialStatus: this.mapFinancialStatus(so.financial_status),
                         fulfillmentStatus: this.mapFulfillmentStatus(so.fulfillment_status),
-                        currency: so.currency || 'USD', subtotalPrice: so.subtotal_price || '0',
+                        currency: so.currency || 'USD', ...fxPatch,
+                        subtotalPrice: so.subtotal_price || '0',
                         totalPrice: so.total_price || '0', totalTax: so.total_tax || '0',
                         totalDiscounts: so.total_discounts || '0', totalShippingPrice: shippingPrice,
                         shippingAddress: so.shipping_address || null, billingAddress: so.billing_address || null,
@@ -2058,6 +2073,18 @@ export class ShopifySyncService {
                 }
                 orderId = existing.id;
 
+                // Fill a MISSING rate only — deliberately not part of `patch`,
+                // which runs on every Shopify update. Re-rating a booked order
+                // each time its status changed would move figures that have
+                // already been reported and filed on. `exchangeRate: null` in
+                // the where clause is what makes this fill-once.
+                if (fxPatch.exchangeRate != null) {
+                    await tx.order.updateMany({
+                        where: { id: orderId, exchangeRate: null },
+                        data: fxPatch,
+                    });
+                }
+
                 // Sits after the `applied.count === 0` return above, so a stale
                 // payload that lost the compare-and-set never reaches here and
                 // cannot trigger an invoice out of order.
@@ -2127,6 +2154,38 @@ export class ShopifySyncService {
             // document without a dispatch block for ever.
             await this.ensureDispatchWarehouseFromShopify(orgId, becamePaidOrderId);
             await this.maybeAutoInvoice(orgId, becamePaidOrderId);
+        }
+
+        // Learn the shop's currency from the order that just landed. Product
+        // prices are bare decimals with no currency of their own, so this is
+        // what stops a USD catalogue being rendered in rupees. Written once —
+        // `currency: null` in the where clause — because a channel has exactly
+        // one shop currency and later orders should not be able to flip it.
+        if (so.currency) {
+            await this.prisma.channel
+                .updateMany({
+                    where: { id: channelId, currency: null },
+                    data: { currency: so.currency.toUpperCase() },
+                })
+                .catch(() => undefined);
+        }
+
+        // `ordersCount` / `totalSpent` are derived from the order table, so an
+        // arriving order has to trigger the derivation. This was only wired to
+        // the CUSTOMER sync, which meant a customer's totals only refreshed if
+        // Shopify happened to resend the customer: dummy@gmail.com sat at
+        // "5 orders / 6,418.36" while six orders actually referenced them,
+        // short by exactly the value of order #1006.
+        //
+        // Soft-fail for the same reason as the customer-sync call: a loyalty
+        // recompute must never cost us the order write, which has already
+        // committed above.
+        if (customerId) {
+            await this.loyalty.recomputeForCustomer(customerId, orgId).catch((err) => {
+                this.logger.warn(
+                    `Loyalty recompute failed for customer ${customerId}: ${err?.message ?? err}`,
+                );
+            });
         }
     }
 
