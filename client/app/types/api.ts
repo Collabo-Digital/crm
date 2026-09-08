@@ -752,6 +752,15 @@ export interface Product {
   totalStock: number;
   variantCount: number;
   priceRange: { min: number; max: number };
+  /**
+   * The currency `priceRange` and every `variants[].price` below are in.
+   *
+   * Normally the product's own channel currency. When the request asked for
+   * `priceIn` it is that currency instead — unless the rate could not be
+   * reached, in which case the prices are left alone and this still names the
+   * channel's currency. Never assume the org's currency from it.
+   */
+  priceCurrency?: string | null;
   image: ProductImage | null;
   channel: ChannelRef;
   createdAt: string;
@@ -952,6 +961,15 @@ export interface ProductListParams {
   sortBy?: string;
   sortOrder?: "asc" | "desc";
   stockStatus?: StockStatus;
+  /**
+   * Restate every variant price in this ISO currency (e.g. "INR").
+   *
+   * Catalogue prices are normally read in their own channel's currency, which
+   * is what the product screens show. The counter-sale builder asks for one
+   * currency instead, because it prices a single order in the org's currency
+   * and must display the number it will actually charge.
+   */
+  priceIn?: string;
 }
 
 // ─── Order Types ─────────────────────────────────────────────────────────────

@@ -306,9 +306,11 @@ export class DashboardService {
         _sum: { totalPrice: true },
         _count: { _all: true },
       }),
-      // Orders the CTE had to leave out because their rate never resolved.
-      // Counted and surfaced rather than dropped silently — a total quietly
-      // missing three orders is worse than one that says so.
+      // Orders the CTE had to leave out: no resolved rate, or a rate that
+      // converts into a currency the org no longer reports in. Counted and
+      // surfaced rather than dropped silently — a total quietly missing three
+      // orders is worse than one that says so. Must stay in step with the two
+      // guards in `fetchProfitRows`, or the UI under-reports what it excluded.
       this.prisma.order.count({
         where: {
           ...salesOrderWhere({
@@ -317,7 +319,11 @@ export class DashboardService {
             from: window.from,
             to: window.to,
           }),
-          exchangeRate: null,
+          OR: [
+            { exchangeRate: null },
+            { baseCurrency: null },
+            { baseCurrency: { not: window.currency, mode: 'insensitive' } },
+          ],
         },
       }),
     ]);
@@ -446,6 +452,16 @@ export class DashboardService {
           -- total. It is counted separately and surfaced to the user rather
           -- than dropped silently — see unconvertedOrders.
           AND o."exchange_rate" IS NOT NULL
+          -- ...and neither can one whose rate converts into a DIFFERENT
+          -- currency than the org reports in today. "exchange_rate" is only
+          -- meaningful together with "base_currency" (see the schema comment on
+          -- both columns): it was captured against whatever the org currency
+          -- was at the time. Changing the org currency therefore does not
+          -- restate history — every stored rate still targets the old currency.
+          -- Without this guard those old products were summed unchanged and
+          -- then labelled with the NEW currency, so switching INR→USD reported
+          -- an unchanged ₹9,84,955.50 as "$984,955.50".
+          AND UPPER(o."base_currency") = ${window.currency}
           AND o."financial_status"::text IN (${Prisma.join(SALES_FINANCIAL_STATUSES)})
           AND COALESCE(o."external_created_at", o."created_at") >= ${window.from}::timestamptz AT TIME ZONE 'UTC'
           AND COALESCE(o."external_created_at", o."created_at") <  ${window.to}::timestamptz AT TIME ZONE 'UTC'
