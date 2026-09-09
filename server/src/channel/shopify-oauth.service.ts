@@ -141,8 +141,8 @@ export class ShopifyOAuthService {
         // A DISCONNECTED channel (app uninstalled / dead token) may
         // reconnect — the callback then updates the row instead of creating
         // a duplicate (which would trip the org+platform unique constraint).
-        const existing = await this.prisma.channel.findUnique({
-            where: { organizationId_platform: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY } },
+        const existing = await this.prisma.channel.findFirst({
+            where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
         });
         if (existing && existing.status === ChannelStatus.CONNECTED && existing.credentials) {
             // Same shop re-authing (e.g. to grant newly added scopes) is fine —
@@ -407,8 +407,8 @@ export class ShopifyOAuthService {
         // "Disconnect it first" as the only way out. Reconnecting the same
         // domain, or replacing a DISCONNECTED channel, updates the row in
         // place (which is also what the public-app Reconnect button does).
-        const existing = await this.prisma.channel.findUnique({
-            where: { organizationId_platform: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY } },
+        const existing = await this.prisma.channel.findFirst({
+            where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
         });
         const sameStore =
             existing?.externalStoreUrl === `https://${shopDomain}`;

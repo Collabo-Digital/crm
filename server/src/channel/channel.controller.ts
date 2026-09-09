@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Controller, Post, Get, Patch, Delete, Body, Param, Query, Res, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Response, Request } from 'express';
-import { ChannelPlatform, ChannelStatus, SyncStatus } from '@prisma/client';
+import { ChannelPlatform, ChannelStatus, SyncStatus, UserRole } from '@prisma/client';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { SYNC_QUEUE, SyncJobData } from './sync.queue';
@@ -10,11 +10,15 @@ import { SYNC_RESUME_MAX_AGE_MS } from './shopify-sync.service';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
-import { Roles, ORG_MANAGERS } from '../auth/decorators/roles.decorator';
+import { Roles, ORG_MANAGERS, CHANNEL_MANAGERS } from '../auth/decorators/roles.decorator';
+import { AllowInfluencer } from '../auth/decorators/allow-influencer.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChannelService } from './channel.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { ConnectShopifyDto } from './dto/connect-shopify.dto';
+import { ConnectInstagramDto } from './dto/connect-instagram.dto';
+import { CompleteInstagramDto } from './dto/complete-instagram.dto';
+import { WhatsAppInstallDto } from './dto/whatsapp-install.dto';
 import { ManualConnectShopifyDto } from './dto/manual-connect-shopify.dto';
 import { UpdateChannelDto } from './dto/update-channel.dto';
 import { TriggerSyncDto } from './dto/trigger-sync.dto';
@@ -22,6 +26,7 @@ import { UpdateSyncSettingsDto } from './dto/update-sync-settings.dto';
 import { InstagramOAuthService } from './instagram-oauth.service';
 import { WhatsAppOAuthService } from './whatsapp-oauth.service';
 import { WhatsAppCallbackDto } from './dto/whatsapp-callback.dto';
+import { classifyMetaCallbackError } from './channel-connection.util';
 import { ShopifyPixelService } from './shopify-pixel.service';
 
 @Controller('channels')
@@ -166,51 +171,137 @@ export class ChannelController {
     return result;
   }
 
-  // POST /channels/instagram/install — start Meta OAuth flow
+  // POST /channels/instagram/install — start Meta OAuth flow.
+  //
+  // OWNER/ADMIN across every connect route: linking a channel hands a third
+  // party ongoing access to the org's data and, for WhatsApp, the ability to
+  // message its customers. Matches the role check ChannelService.disconnect
+  // has always applied — connecting was simply never gated.
   @Post('instagram/install')
-  async installInstagram(@CurrentUser() user: JwtPayload) {
-    const authUrl = await this.instagramOAuth.getInstallUrl(user.orgId!, user.sub);
+  @Roles(...CHANNEL_MANAGERS)
+  @AllowInfluencer()
+  async installInstagram(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ConnectInstagramDto,
+  ) {
+    const authUrl = await this.instagramOAuth.getInstallUrl(
+      user.orgId!,
+      user.sub,
+      dto.reconnectChannelId,
+    );
     return { authUrl };
   }
 
-  // GET /channels/instagram/callback — Meta redirects here after OAuth
+  // GET /channels/instagram/callback — Meta redirects here after OAuth.
+  //
+  // The merchant's browser is sitting on this URL, so EVERY outcome has to end
+  // in a redirect back to the frontend carrying a reason slug — never a JSON
+  // error page, which is what an uncaught throw here used to render. Same
+  // contract as shopifyCallback above.
   @Public()
   @Get('instagram/callback')
   async instagramCallback(
-    @Query() query: { code: string; state: string },
+    @Query()
+    query: {
+      code?: string;
+      state?: string;
+      error?: string;
+      error_reason?: string;
+      error_description?: string;
+    },
     @Res() res: Response,
   ) {
-    const { redirectUrl } = await this.instagramOAuth.handleCallback(query);
-    return res.redirect(redirectUrl);
+    const frontendUrl = this.config.get<string>('frontendUrl');
+    try {
+      const { redirectUrl } = await this.instagramOAuth.handleCallback(query);
+      return res.redirect(redirectUrl);
+    } catch (error) {
+      const reason = classifyMetaCallbackError(query, error);
+      this.logger.warn(
+        `Instagram OAuth callback failed (${reason}): ${error instanceof Error ? error.message : ''}`,
+      );
+      return res.redirect(
+        `${frontendUrl}/settings/channels?error=instagram_connect_failed&reason=${reason}`,
+      );
+    }
+  }
+
+  // GET /channels/instagram/pending/:id — the accounts one login granted, for
+  // the picker. Tokens are stripped server-side; this returns display fields
+  // only.
+  @Get('instagram/pending/:id')
+  @Roles(...CHANNEL_MANAGERS)
+  @AllowInfluencer()
+  async instagramPending(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.instagramOAuth.listPending(id, user.orgId!);
+  }
+
+  // POST /channels/instagram/complete — connect the account the merchant picked.
+  @Post('instagram/complete')
+  @Roles(...CHANNEL_MANAGERS)
+  @AllowInfluencer()
+  async completeInstagram(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CompleteInstagramDto,
+  ) {
+    return this.instagramOAuth.completePending(
+      dto.pendingId,
+      dto.igUserId,
+      user.orgId!,
+      user.sub,
+    );
   }
 
   // POST /channels/whatsapp/install — returns configId + state for the Meta JS SDK
   // (Embedded Signup runs in a popup launched by the frontend, not a browser redirect)
   @Post('whatsapp/install')
-  async installWhatsApp(@CurrentUser() user: JwtPayload) {
-    return this.whatsappOAuth.getSignupConfig(user.orgId!, user.sub);
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  async installWhatsApp(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: WhatsAppInstallDto,
+  ) {
+    return this.whatsappOAuth.getSignupConfig(
+      user.orgId!,
+      user.sub,
+      dto.reconnectChannelId,
+    );
   }
 
   // POST /channels/whatsapp/callback — frontend forwards the code returned by FB.login
   @Post('whatsapp/callback')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   async whatsappCallback(@Body() dto: WhatsAppCallbackDto) {
     return this.whatsappOAuth.handleSignupCallback(dto.code, dto.state);
   }
 
-  // GET /channels — list org's channels
+  // GET /channels — list org's channels.
+  //
+  // Open to influencers: this is how they reach their own Instagram connection.
+  // The list is scoped by role inside the service, so an influencer receives
+  // only the channels they personally connected.
   @Get()
+  @AllowInfluencer()
   findAll(@CurrentUser() user: JwtPayload) {
-    return this.channelService.findAllForOrg(user.orgId!);
+    return this.channelService.findAllForOrg(user.orgId!, {
+      userId: user.sub,
+      role: user.role,
+    });
   }
 
   // GET /channels/:id — get channel details + sync logs
   @Get(':id')
+  @AllowInfluencer()
   findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.channelService.findOne(id, user.orgId!);
+    return this.channelService.findOne(id, user.orgId!, {
+      userId: user.sub,
+      role: user.role,
+    });
   }
 
   // PATCH /channels/:id — update name or toggle
   @Patch(':id')
+  @Roles(...CHANNEL_MANAGERS)
+  @AllowInfluencer()
   update(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -221,6 +312,8 @@ export class ChannelController {
 
   // DELETE /channels/:id — disconnect
   @Delete(':id')
+  @Roles(...CHANNEL_MANAGERS)
+  @AllowInfluencer()
   disconnect(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.channelService.disconnect(id, user.orgId!, user.sub);
   }

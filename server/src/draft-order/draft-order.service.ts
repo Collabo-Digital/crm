@@ -22,6 +22,7 @@ import {
 import { GstCalculatorService } from '../gst/gst-calculator.service';
 import { TaxResolverService } from '../gst/tax-resolver.service';
 import { OrderService } from '../order/order.service';
+import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { ShopifyGraphqlClient } from '../channel/shopify-graphql.client';
 import { ShopifyOAuthService } from '../channel/shopify-oauth.service';
 import { ShopifySyncService } from '../channel/shopify-sync.service';
@@ -351,22 +352,7 @@ export class DraftOrderService {
 
     const draft = await this.prisma.$transaction(async (tx) => {
       // 1. Resolve or lazy-create the MANUAL channel for this org.
-      const channel = await tx.channel.upsert({
-        where: {
-          organizationId_platform: {
-            organizationId: orgId,
-            platform: ChannelPlatform.MANUAL,
-          },
-        },
-        create: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-          name: 'In-Store / Manual',
-          status: ChannelStatus.CONNECTED,
-          isEnabled: true,
-        },
-        update: {},
-      });
+      const channel = await ensureManualChannel(tx, orgId);
 
       // 2. Resolve customer (optional — drafts can be anonymous).
       const customer = dto.customer
@@ -1311,13 +1297,8 @@ export class DraftOrderService {
 
   /** Returns the org's connected Shopify channel, or null. */
   private async findShopifyChannel(orgId: string) {
-    return this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.SHOPIFY,
-        },
-      },
+    return this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
   }
 

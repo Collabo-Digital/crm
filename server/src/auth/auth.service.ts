@@ -17,6 +17,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { UserService } from '../user/user.service';
 import { JwtPayload, TokenPair } from './interfaces/jwt-payload.interface';
+import { defaultGrantsForRole } from './permissions';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -335,24 +336,79 @@ export class AuthService {
       where: { token },
       include: { organization: { select: { id: true, name: true, slug: true, logo: true } } },
     });
-    if (!invite) throw new NotFoundException('Invite not found');
-    if (invite.status !== InviteStatus.PENDING) throw new BadRequestException(`Invite has been ${invite.status.toLowerCase()}`);
-    if (invite.expiresAt < new Date()) throw new BadRequestException('Invite has expired');
+    if (!invite) throw new NotFoundException('Invitation not found');
+    if (invite.status !== InviteStatus.PENDING) {
+      throw new BadRequestException(
+        invite.status === InviteStatus.ACCEPTED
+          ? 'This invitation has already been used.'
+          : `This invitation has been ${invite.status.toLowerCase()}.`,
+      );
+    }
+    if (invite.expiresAt < new Date()) throw new BadRequestException('This invitation has expired.');
 
     const userExists = !!(await this.userService.findByEmail(invite.email));
-    return { email: invite.email, role: invite.role, vendorScope: invite.vendorScope, organization: invite.organization, userExists };
+    return {
+      email: invite.email,
+      name: invite.name,
+      role: invite.role,
+      vendorScope: invite.vendorScope,
+      organization: invite.organization,
+      userExists,
+      expiresAt: invite.expiresAt,
+    };
   }
 
-  async acceptInvite(dto: AcceptInviteDto) {
+  /**
+   * Claim an invitation.
+   *
+   * `callerUserId` is the authenticated user, when there is one — this endpoint
+   * is `@Public()` because a brand-new person must be able to reach it, so the
+   * caller is resolved from the header rather than by a guard.
+   *
+   * It is also what closes a real hole: previously, ANY holder of the token
+   * could accept an invitation addressed to an existing account, which silently
+   * joined that person's account to an organization they had never heard of. A
+   * forwarded invitation email was enough. Now an invitation to an address that
+   * already has an account can only be claimed while signed in as that account.
+   */
+  async acceptInvite(dto: AcceptInviteDto, callerUserId?: string) {
     const invite = await this.prisma.teamInvite.findUnique({
       where: { token: dto.token },
       include: { organization: true },
     });
-    if (!invite) throw new NotFoundException('Invite not found');
-    if (invite.status !== InviteStatus.PENDING) throw new BadRequestException(`Invite has been ${invite.status.toLowerCase()}`);
-    if (invite.expiresAt < new Date()) throw new BadRequestException('Invite has expired');
+    if (!invite) throw new NotFoundException('Invitation not found');
+    if (invite.status !== InviteStatus.PENDING) {
+      throw new BadRequestException(
+        invite.status === InviteStatus.ACCEPTED
+          ? 'This invitation has already been used.'
+          : `This invitation has been ${invite.status.toLowerCase()}.`,
+      );
+    }
+    if (invite.expiresAt < new Date()) throw new BadRequestException('This invitation has expired.');
 
     let user = await this.userService.findByEmail(invite.email);
+
+    // Whoever is signed in must be the person the invitation names. Being
+    // signed in as someone else is the confusing case, so it is named plainly
+    // rather than silently creating a second account or joining the wrong one.
+    if (callerUserId) {
+      const caller = await this.prisma.user.findUnique({
+        where: { id: callerUserId },
+        select: { id: true, email: true },
+      });
+      if (caller && caller.email !== invite.email) {
+        throw new ForbiddenException(
+          `This invitation was sent to ${invite.email}. You are signed in as ${caller.email}. Sign out and open the invitation link again.`,
+        );
+      }
+    } else if (user) {
+      // The address already has an account, and nobody is signed in. Proving
+      // ownership of that account is the price of joining it to an org.
+      throw new UnauthorizedException(
+        `An account already exists for ${invite.email}. Sign in to accept this invitation.`,
+      );
+    }
+
     if (!user) {
       if (!dto.password || !dto.firstName || !dto.lastName) {
         throw new BadRequestException('firstName, lastName, and password are required for new users');
@@ -360,18 +416,48 @@ export class AuthService {
       user = await this.userService.create({
         email: invite.email, password: dto.password, firstName: dto.firstName, lastName: dto.lastName,
       });
+      // Holding the emailed token IS proof of address ownership, so there is
+      // nothing left for a verification code to establish.
       await this.prisma.user.update({
         where: { id: user.id },
         data: { emailVerified: true, emailVerifiedAt: new Date(), emailVerifyCode: null, emailVerifyExpires: null },
       });
     }
 
-    await this.prisma.organizationMember.create({
-      data: { organizationId: invite.organizationId, userId: user.id, role: invite.role, vendorScope: invite.vendorScope },
+    // Upsert, not create: removal from an organization is a soft `isActive:
+    // false`, so a returning member already has a row and `create` threw P2002
+    // — which made re-inviting anyone who had ever been removed impossible.
+    // Re-joining also re-seeds the role's default grants, so a returning
+    // influencer is not left with a stale permission set.
+    await this.prisma.organizationMember.upsert({
+      where: {
+        organizationId_userId: { organizationId: invite.organizationId, userId: user.id },
+      },
+      create: {
+        organizationId: invite.organizationId,
+        userId: user.id,
+        role: invite.role,
+        vendorScope: invite.vendorScope,
+        permissions: { grants: defaultGrantsForRole(invite.role) },
+      },
+      update: {
+        role: invite.role,
+        vendorScope: invite.vendorScope,
+        isActive: true,
+        permissions: { grants: defaultGrantsForRole(invite.role) },
+      },
     });
+
     await this.prisma.teamInvite.update({
       where: { id: invite.id },
-      data: { status: InviteStatus.ACCEPTED, acceptedAt: new Date() },
+      // acceptedUserId is what ties the invitation to the account that claimed
+      // it — the influencer list joins on it, and the invited address alone
+      // could not answer "who actually joined".
+      data: {
+        status: InviteStatus.ACCEPTED,
+        acceptedAt: new Date(),
+        acceptedUserId: user.id,
+      },
     });
 
     // Invalidate session cache — stale orgId/memberships need to refresh
@@ -383,8 +469,30 @@ export class AuthService {
     return {
       ...tokens,
       user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName },
+      // The role travels with the response so the client can put the correct
+      // one in its store; it used to assume AGENT and get every later role
+      // check wrong until the next full reload.
+      role: invite.role,
       organization: { id: invite.organization.id, name: invite.organization.name, slug: invite.organization.slug },
     };
+  }
+
+  /**
+   * The user id inside a Bearer token, or undefined.
+   *
+   * Used only by the public invite-accept route, which must behave differently
+   * for a signed-in caller but cannot use a guard to find one. An invalid or
+   * expired token is treated as "not signed in" rather than an error: the
+   * request is still a legitimate attempt to accept an invitation.
+   */
+  verifyAccessTokenSubject(authorization?: string): string | undefined {
+    const raw = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : null;
+    if (!raw) return undefined;
+    try {
+      return this.jwt.verify<JwtPayload>(raw).sub;
+    } catch {
+      return undefined;
+    }
   }
 
   // ─── TOKEN MANAGEMENT ───

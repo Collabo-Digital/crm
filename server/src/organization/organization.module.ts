@@ -6,6 +6,7 @@ import { MembersService } from './members.service';
 import { InvitesService } from './invites.service';
 import { OrganizationController } from './organization.controller';
 import { MembersController } from './members.controller';
+import { InfluencersController } from './influencers.controller';
 import { InvitesController } from './invites.controller';
 
 // WHY import UserModule?
@@ -16,7 +17,7 @@ import { InvitesController } from './invites.controller';
 // inside a transaction to gate org creation behind a paid subscription.
 @Module({
   imports: [UserModule, BillingModule],
-  controllers: [OrganizationController, MembersController, InvitesController],
+  controllers: [OrganizationController, MembersController, InvitesController, InfluencersController],
   providers: [OrganizationService, MembersService, InvitesService],
   exports: [OrganizationService, MembersService],
 })

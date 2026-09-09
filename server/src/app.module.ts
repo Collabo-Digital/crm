@@ -5,6 +5,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { ScheduleModule } from '@nestjs/schedule';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { BullModule } from '@nestjs/bullmq';
+import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { join } from 'path';
 
 import { AppController } from './app.controller';
@@ -22,6 +23,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { OrgRequiredGuard } from './auth/guards/org-required.guard';
 import { VendorAccessGuard } from './auth/guards/vendor-access.guard';
+import { InfluencerAccessGuard } from './auth/guards/influencer-access.guard';
 import { PermissionsGuard } from './auth/guards/permissions.guard';
 import { SuperAdminGuard } from './auth/guards/super-admin.guard';
 import { UserModule } from './user/user.module';
@@ -54,11 +56,11 @@ import { InventoryModule } from './inventory/inventory.module';
     // doesn't try to serve a non-existent client/build/client/ directory.
     ...(process.env.SERVE_STATIC === 'true'
       ? [
-          ServeStaticModule.forRoot({
-            rootPath: join(__dirname, '..', '..', '..', 'client', 'build', 'client'),
-            exclude: ['/api/(.*)', '/uploads/(.*)'],
-          }),
-        ]
+        ServeStaticModule.forRoot({
+          rootPath: join(__dirname, '..', '..', '..', 'client', 'build', 'client'),
+          exclude: ['/api/(.*)', '/uploads/(.*)'],
+        }),
+      ]
       : []),
     // Always mount /uploads (product images, future attachments). Local image
     // storage writes here; the path matches LocalImageStorage's URL builder.
@@ -107,7 +109,10 @@ import { InventoryModule } from './inventory/inventory.module';
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: OrgRequiredGuard },
     { provide: APP_GUARD, useClass: VendorAccessGuard },
-    // After VendorAccess so vendor rules resolve first; enforces
+    // The other deny-by-default outside role. Sits beside VendorAccess: both
+    // close every route their role has not been explicitly opened to.
+    { provide: APP_GUARD, useClass: InfluencerAccessGuard },
+    // After the outside-role guards so their rules resolve first; enforces
     // @RequirePermissions on top of @Roles (allow-by-default without it).
     { provide: APP_GUARD, useClass: PermissionsGuard },
     { provide: APP_GUARD, useClass: SuperAdminGuard },

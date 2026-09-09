@@ -26,6 +26,28 @@ const VENDOR_DENIED_PREFIXES = [
   "/products/inventory",
 ];
 
+// Influencers are an outside party, like vendors, so the same shape applies:
+// an allow list rather than a deny list, because a section added tomorrow must
+// be closed to them until someone decides otherwise.
+//
+// /settings is here and NOT in the vendor list on purpose: connecting their own
+// Instagram is the whole reason an influencer has an account. /campaigns is
+// added at render time only while they hold `campaigns.view`.
+const INFLUENCER_ALLOWED_PREFIXES = ["/settings", "/profile"];
+
+// Settings pages an influencer must not reach. Checked first, because the allow
+// list is a prefix match that would otherwise sweep every settings tab in —
+// including the team page, where they could see and manage other members.
+const INFLUENCER_DENIED_PREFIXES = [
+  "/settings/members",
+  "/settings/general",
+  "/settings/store-profile",
+  "/settings/products",
+  "/settings/orders",
+  "/settings/tax-gst",
+  "/settings/loyalty",
+];
+
 /** Prefix match on a segment boundary, so /orders never matches /ordersomething. */
 function isUnder(pathname: string, prefix: string) {
   return pathname === prefix || pathname.startsWith(`${prefix}/`);
@@ -59,7 +81,7 @@ const FULL_HEIGHT_PREFIXES = ["/conversation"];
 const FULL_WIDTH_ROUTE_IDS = ["routes/app/orders/$id"];
 
 export default function AppLayout() {
-  const { isVendor } = useCurrentRole();
+  const { isVendor, isInfluencer, can } = useCurrentRole();
   const location = useLocation();
   // Read before the print-route early return below, so the hook order is the
   // same on every route.
@@ -70,15 +92,41 @@ export default function AppLayout() {
     (VENDOR_DENIED_PREFIXES.some((p) => isUnder(location.pathname, p)) ||
       !VENDOR_ALLOWED_PREFIXES.some((p) => isUnder(location.pathname, p)));
 
+  // Influencers reach their own settings, their profile, and whatever their
+  // permissions name. Campaigns is in the allow list only while they hold
+  // `campaigns.view` — revoking that grant removes the section with no edit
+  // here, which is the point of routing it through the permission model.
+  const influencerAllowed = [
+    ...INFLUENCER_ALLOWED_PREFIXES,
+    ...(can("campaigns.view") ? ["/campaigns"] : []),
+  ];
+  const influencerBlocked =
+    isInfluencer &&
+    (INFLUENCER_DENIED_PREFIXES.some((p) => isUnder(location.pathname, p)) ||
+      !influencerAllowed.some((p) => isUnder(location.pathname, p)));
+
   // Chat / Campaigns / Logistics are UI-only previews running on mock data.
   // The navbar already hides their pills outside dev; this stops a typed or
   // bookmarked URL from rendering placeholder data in a production build.
-  const previewBlocked = !showPreviewModules && isPreviewPath(location.pathname);
+  //
+  // Influencers are exempt for Campaigns: it is the section they were invited
+  // to use, so hiding it from them in a production build would leave them with
+  // an invitation to nothing. Everyone else still waits for the flag.
+  const previewExempt = isInfluencer && isUnder(location.pathname, "/campaigns") && can("campaigns.view");
+  const previewBlocked =
+    !previewExempt && !showPreviewModules && isPreviewPath(location.pathname);
 
-  // Vendors bounce to /orders (their home), everyone else to /dashboard. Vendor
-  // first on purpose: a vendor on /logistics is already outside the allow list
-  // and should keep landing where every other blocked vendor route sends them.
-  const redirectTo = vendorBlocked ? "/orders" : previewBlocked ? "/dashboard" : null;
+  // Vendors bounce to /orders (their home), influencers to their channels page,
+  // everyone else to /dashboard. The role checks come first on purpose: someone
+  // outside their allow list should land where every other blocked route sends
+  // them, not on a dashboard they also cannot see.
+  const redirectTo = vendorBlocked
+    ? "/orders"
+    : influencerBlocked
+      ? "/settings/channels"
+      : previewBlocked
+        ? "/dashboard"
+        : null;
 
   // Print/document routes render bare (no navbar/sidebar) so the app chrome
   // never bleeds into the printed PDF. AuthGuard still gates them.

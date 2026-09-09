@@ -32,6 +32,7 @@ import {
   UpdateImageDto,
 } from './dto/image.dto';
 import { ProductOptionDto } from './dto/option.dto';
+import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { ShopifyPushEnqueuer } from '../channel/shopify-push.enqueuer';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
@@ -521,22 +522,7 @@ export class ProductService {
 
     const product = await this.prisma.$transaction(async (tx) => {
       // Lazy-create the MANUAL channel.
-      const channel = await tx.channel.upsert({
-        where: {
-          organizationId_platform: {
-            organizationId: orgId,
-            platform: ChannelPlatform.MANUAL,
-          },
-        },
-        create: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-          name: 'In-Store / Manual',
-          status: ChannelStatus.CONNECTED,
-          isEnabled: true,
-        },
-        update: {},
-      });
+      const channel = await ensureManualChannel(tx, orgId);
 
       // Build variants payload.
       // Product create is admin-only (no @AllowVendor on the route), so no
@@ -662,13 +648,8 @@ export class ProductService {
       const productSettings =
         await this.settings.getProductSettings(orgId);
       if (productSettings.autoSyncToShopify) {
-        const shopify = await this.prisma.channel.findUnique({
-          where: {
-            organizationId_platform: {
-              organizationId: orgId,
-              platform: ChannelPlatform.SHOPIFY,
-            },
-          },
+        const shopify = await this.prisma.channel.findFirst({
+          where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
         });
         if (shopify?.status === ChannelStatus.CONNECTED) {
           await this.shopifyPushEnqueuer.enqueueProductPush({
@@ -788,13 +769,8 @@ export class ProductService {
     if (!product) throw new NotFoundException('Product not found');
     this.assertVendorOwnsProduct(product.vendor, vendorScope);
 
-    const shopify = await this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.SHOPIFY,
-        },
-      },
+    const shopify = await this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
     if (!shopify || shopify.status !== ChannelStatus.CONNECTED) {
       throw new ForbiddenException(
@@ -2100,13 +2076,8 @@ export class ProductService {
     );
     if (ok.length === 0) return { ok: [], skipped, queued: 0 };
 
-    const shopify = await this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.SHOPIFY,
-        },
-      },
+    const shopify = await this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
     if (!shopify || shopify.status !== ChannelStatus.CONNECTED) {
       throw new ForbiddenException(
@@ -2182,22 +2153,7 @@ export class ProductService {
     // We allow duplicating SHOPIFY-channel products as a quick way to seed a
     // new MANUAL product from a synced one. The duplicate lives on MANUAL
     // and starts unsynced, so the read-only constraint isn't relevant.
-    const manual = await this.prisma.channel.upsert({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-        },
-      },
-      create: {
-        organizationId: orgId,
-        platform: ChannelPlatform.MANUAL,
-        name: 'In-Store / Manual',
-        status: ChannelStatus.CONNECTED,
-        isEnabled: true,
-      },
-      update: {},
-    });
+    const manual = await ensureManualChannel(this.prisma, orgId);
 
     const created = await this.prisma.product.create({
       data: {
@@ -2458,22 +2414,7 @@ export class ProductService {
     let processed = 0;
 
     // Lazy MANUAL channel
-    const manual = await this.prisma.channel.upsert({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-        },
-      },
-      create: {
-        organizationId: orgId,
-        platform: ChannelPlatform.MANUAL,
-        name: 'In-Store / Manual',
-        status: ChannelStatus.CONNECTED,
-        isEnabled: true,
-      },
-      update: {},
-    });
+    const manual = await ensureManualChannel(this.prisma, orgId);
 
     for (const candidate of products) {
       try {

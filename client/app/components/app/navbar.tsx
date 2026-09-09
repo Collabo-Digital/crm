@@ -141,19 +141,32 @@ export function Navbar() {
     useAuthStore();
   const stopImpersonating = useStopImpersonating();
 
-  const { isVendor } = useCurrentRole();
+  const { isVendor, isInfluencer, can } = useCurrentRole();
 
-  // Vendors are locked down to Orders + Products only. Otherwise, an extra
-  // Super Admin link is visible to real Collabo-team super admins (never while
-  // impersonating — the impersonation token has isSuperAdmin=false).
+  // Vendors are locked down to Orders + Products only.
+  //
+  // Influencers get whatever their PERMISSIONS name, not a hardcoded list —
+  // Campaigns appears because they hold `campaigns.view`, and revoking that
+  // grant removes the pill with no change here. That indirection is deliberate:
+  // influencer campaign access is a temporary decision awaiting review, and it
+  // should be revisable as data. Their Settings link lives in the avatar menu,
+  // as it does for every role.
+  //
+  // Otherwise, an extra Super Admin link is visible to real Collabo-team super
+  // admins (never while impersonating — the impersonation token has
+  // isSuperAdmin=false).
   const navLinks: NavItem[] = isVendor
     ? [
       { label: "Orders", href: "/orders", icon: ShoppingCart },
       { label: "Products", href: "/products", icon: Package },
     ]
-    : user?.isSuperAdmin && !impersonatedBy
-      ? [...BASE_NAV_LINKS, { label: "Super Admin", href: "/admin/users", icon: ShieldCheck }]
-      : BASE_NAV_LINKS;
+    : isInfluencer
+      ? NAV_LINKS.filter(
+        (item) => item.href === "/campaigns" && can("campaigns.view"),
+      )
+      : user?.isSuperAdmin && !impersonatedBy
+        ? [...BASE_NAV_LINKS, { label: "Super Admin", href: "/admin/users", icon: ShieldCheck }]
+        : BASE_NAV_LINKS;
 
   // Longest-prefix match, so a child route keeps its parent pill lit.
   const activeTop = matchNav(navLinks, location.pathname);

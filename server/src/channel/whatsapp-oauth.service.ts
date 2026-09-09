@@ -6,12 +6,18 @@ import {
     Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ChannelPlatform, ChannelStatus, SyncStatus } from '@prisma/client';
+import { ChannelPlatform, ChannelStatus, SyncStatus, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
-import { REDIS_TTL } from '../redis/redis.constants';
+import { REDIS_KEYS, REDIS_TTL } from '../redis/redis.constants';
 import { EncryptionService } from './encryption.service';
+import {
+    assertCanConnect,
+    resolveConnectTarget,
+    describeAccount,
+    type ChannelAccountSummary,
+} from './channel-connection.util';
 
 interface MetaTokenResponse {
     access_token: string;
@@ -65,23 +71,48 @@ export class WhatsAppOAuthService {
         return `https://graph.facebook.com/${this.graphVersion}${path}`;
     }
 
+    /** The org's WhatsApp rows, in the shape the decision helpers want. */
+    private async whatsappRows(orgId: string) {
+        return this.prisma.channel.findMany({
+            where: { organizationId: orgId, platform: ChannelPlatform.WHATSAPP },
+            select: {
+                id: true,
+                platform: true,
+                status: true,
+                externalStoreId: true,
+                metadata: true,
+            },
+        });
+    }
+
     // Step 1: Hand the frontend the configId + a CSRF state to feed into FB.login
-    async getSignupConfig(orgId: string, userId: string): Promise<{ configId: string; state: string }> {
+    //
+    // One ACTIVE WhatsApp account per org. The check used to reject on ANY
+    // existing row, which meant an org that had ever disconnected WhatsApp could
+    // never connect it again — the row is kept as history for its message logs.
+    async getSignupConfig(
+        orgId: string,
+        userId: string,
+        reconnectChannelId?: string,
+    ): Promise<{ configId: string; state: string }> {
         if (!this.configId) {
             throw new BadRequestException(
                 'WhatsApp integration is not configured on the server. Missing WHATSAPP_CONFIG_ID.',
             );
         }
 
-        const existing = await this.prisma.channel.findUnique({
-            where: { organizationId_platform: { organizationId: orgId, platform: ChannelPlatform.WHATSAPP } },
-        });
-        if (existing) {
-            throw new ConflictException('This organization already has a WhatsApp Business account connected');
+        const rows = await this.whatsappRows(orgId);
+        const decision = assertCanConnect(rows, ChannelPlatform.WHATSAPP, reconnectChannelId);
+        if (decision.kind === 'blocked') {
+            throw new ConflictException(decision.message);
         }
 
         const state = randomBytes(16).toString('hex');
-        await this.redis.set(`oauth:whatsapp:${state}`, { userId, orgId }, REDIS_TTL.OAUTH_STATE);
+        await this.redis.set(
+            `${REDIS_KEYS.OAUTH_WHATSAPP}${state}`,
+            { userId, orgId, reconnectChannelId },
+            REDIS_TTL.OAUTH_STATE,
+        );
 
         return { configId: this.configId, state };
     }
@@ -90,15 +121,22 @@ export class WhatsAppOAuthService {
     async handleSignupCallback(
         code: string,
         state: string,
-    ): Promise<{ channelId: string; redirectUrl: string }> {
+    ): Promise<{
+        channelId: string;
+        redirectUrl: string;
+        account: ChannelAccountSummary | null;
+    }> {
         // 1. Validate CSRF state
-        const stateData = await this.redis.get<{ userId: string; orgId: string }>(
-            `oauth:whatsapp:${state}`,
-        );
+        const stateKey = `${REDIS_KEYS.OAUTH_WHATSAPP}${state}`;
+        const stateData = await this.redis.get<{
+            userId: string;
+            orgId: string;
+            reconnectChannelId?: string;
+        }>(stateKey);
         if (!stateData) {
             throw new UnauthorizedException('Invalid or expired state parameter');
         }
-        await this.redis.del(`oauth:whatsapp:${state}`);
+        await this.redis.del(stateKey);
 
         // 2. Exchange the short-lived code for an access token.
         const tokenUrl =
@@ -129,9 +167,13 @@ export class WhatsAppOAuthService {
         }
         const longLivedData = (await longLivedRes.json()) as MetaTokenResponse;
         const longLivedToken = longLivedData.access_token;
+        // Null, NOT a fabricated 60 days: Embedded Signup issues a
+        // business-integration system-user token, which does not expire and so
+        // reports no `expires_in`. Inventing a date here made the channels page
+        // brand a perfectly healthy connection "Expired" two months in.
         const tokenExpiresAt = longLivedData.expires_in
             ? new Date(Date.now() + longLivedData.expires_in * 1000)
-            : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+            : null;
 
         // 4. Inspect the token to find which WABA(s) the merchant authorized.
         const debugUrl =
@@ -193,38 +235,108 @@ export class WhatsAppOAuthService {
         }
 
         // 7. Persist the Channel row with encrypted token.
-        const channel = await this.prisma.channel.create({
-            data: {
-                organizationId: stateData.orgId,
-                name: phoneNumber.verified_name || phoneNumber.display_phone_number || wabaName || 'WhatsApp',
-                platform: ChannelPlatform.WHATSAPP,
-                status: ChannelStatus.CONNECTED,
-                credentials: {
-                    wabaId,
-                    wabaName,
-                    businessId,
-                    phoneNumberId: phoneNumber.id,
-                    displayPhoneNumber: phoneNumber.display_phone_number,
-                    verifiedName: phoneNumber.verified_name,
-                    codeVerificationStatus: phoneNumber.code_verification_status,
-                    qualityRating: phoneNumber.quality_rating,
-                    accessToken: this.encryption.encrypt(longLivedToken),
-                    tokenExpiresAt: tokenExpiresAt.toISOString(),
-                    scopes: 'whatsapp_business_management,whatsapp_business_messaging',
-                    connectedAt: new Date().toISOString(),
-                },
-                externalStoreId: wabaId,
-                syncStatus: SyncStatus.IDLE,
-            },
-        });
+        //
+        // Decided again here, not before the popup: the merchant spent the
+        // intervening seconds inside Meta and may have picked a WABA that
+        // another admin connected meanwhile.
+        const rows = await this.whatsappRows(stateData.orgId);
+        const decision = resolveConnectTarget(
+            rows,
+            ChannelPlatform.WHATSAPP,
+            wabaId,
+            stateData.reconnectChannelId,
+        );
+        if (decision.kind === 'blocked') {
+            throw new ConflictException(decision.message);
+        }
+
+        // Reconnect UPDATES an existing row, so merge into its metadata rather
+        // than replacing it — the same rule ChannelService.disconnect follows.
+        const existingMeta =
+            decision.kind === 'reconnect'
+                ? ((rows.find((r) => r.id === decision.channelId)?.metadata ??
+                    {}) as Record<string, unknown>)
+                : {};
+
+        const credentials = {
+            wabaId,
+            wabaName,
+            businessId,
+            phoneNumberId: phoneNumber.id,
+            displayPhoneNumber: phoneNumber.display_phone_number,
+            verifiedName: phoneNumber.verified_name,
+            codeVerificationStatus: phoneNumber.code_verification_status,
+            qualityRating: phoneNumber.quality_rating,
+            accessToken: this.encryption.encrypt(longLivedToken),
+            // Kept as a key even when null, so the shape stays stable for
+            // readTokenExpiry and for the migration's backfill of connected_at.
+            tokenExpiresAt: tokenExpiresAt ? tokenExpiresAt.toISOString() : null,
+            scopes: 'whatsapp_business_management,whatsapp_business_messaging',
+            connectedAt: new Date().toISOString(),
+        };
+        const account = describeAccount(ChannelPlatform.WHATSAPP, credentials, null);
+
+        const data = {
+            name:
+                phoneNumber.verified_name ||
+                phoneNumber.display_phone_number ||
+                wabaName ||
+                'WhatsApp',
+            status: ChannelStatus.CONNECTED,
+            isEnabled: true,
+            credentials: credentials as unknown as Prisma.InputJsonValue,
+            externalStoreId: wabaId,
+            connectedAt: new Date(),
+            lastError: null,
+            syncStatus: SyncStatus.IDLE,
+            metadata: {
+                ...existingMeta,
+                externalAccountId: wabaId,
+                lastAccount: account,
+                // Live again — a stale disconnect date would have the UI label
+                // a connected account "Disconnected <date>".
+                disconnectedAt: null,
+            } as unknown as Prisma.InputJsonValue,
+        };
+
+        let channel: { id: string };
+        try {
+            channel =
+                decision.kind === 'reconnect'
+                    ? await this.prisma.channel.update({
+                        where: { id: decision.channelId },
+                        data,
+                    })
+                    : await this.prisma.channel.create({
+                        data: {
+                            ...data,
+                            organizationId: stateData.orgId,
+                            platform: ChannelPlatform.WHATSAPP,
+                        },
+                    });
+        } catch (error) {
+            if (
+                error instanceof Prisma.PrismaClientKnownRequestError &&
+                error.code === 'P2002'
+            ) {
+                // (platform, external_store_id) is unique table-wide, so this
+                // WABA belongs to another organization. The per-org partial
+                // unique should already have been caught by resolveConnectTarget.
+                throw new ConflictException(
+                    'This WhatsApp Business account is already connected to another organization. Disconnect it there first.',
+                );
+            }
+            throw error;
+        }
 
         this.logger.log(
-            `WhatsApp connected: WABA ${wabaId} (${phoneNumber.verified_name || phoneNumber.display_phone_number}) → org ${stateData.orgId}`,
+            `WhatsApp ${decision.kind === 'reconnect' ? 'reconnected' : 'connected'}: ` +
+            `WABA ${wabaId} (${phoneNumber.verified_name || phoneNumber.display_phone_number}) → org ${stateData.orgId}`,
         );
 
         const redirectUrl = `${this.frontendUrl}/settings/channels?connected=whatsapp&channelId=${channel.id}`;
 
-        return { channelId: channel.id, redirectUrl };
+        return { channelId: channel.id, redirectUrl, account };
     }
 
     // Pull the first WABA ID out of debug_token's granular_scopes.

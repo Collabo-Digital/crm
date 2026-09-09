@@ -4,6 +4,7 @@ import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { NoOrgRequired } from '../auth/decorators/no-org-required.decorator';
 import { AllowVendor } from '../auth/decorators/allow-vendor.decorator';
+import { AllowInfluencer } from '../auth/decorators/allow-influencer.decorator';
 import { AuthService } from '../auth/auth.service';
 import { UserService } from './user.service';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -19,6 +20,7 @@ export class UserController {
 
   @Get('me')
   @AllowVendor()
+  @AllowInfluencer()
   async getProfile(@CurrentUser() user: JwtPayload) {
     const fullUser = await this.userService.findByIdWithMemberships(user.sub);
     if (!fullUser) return null;
@@ -37,12 +39,14 @@ export class UserController {
   }
 
   @Patch('me')
+  @AllowInfluencer()
   async updateProfile(@CurrentUser() user: JwtPayload, @Body() dto: UpdateUserDto) {
     const updated = await this.userService.update(user.sub, dto);
     return { id: updated.id, email: updated.email, firstName: updated.firstName, lastName: updated.lastName, avatarUrl: updated.avatarUrl };
   }
 
   @Post('me/change-password')
+  @AllowInfluencer()
   async changePassword(@CurrentUser() user: JwtPayload, @Body() dto: ChangePasswordDto) {
     await this.userService.changePassword(user.sub, dto.currentPassword, dto.newPassword);
     await this.authService.revokeAllUserTokens(user.sub);

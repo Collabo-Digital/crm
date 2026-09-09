@@ -176,13 +176,8 @@ export class ShopifyPushService {
 
   /** Resolve the org's connected SHOPIFY channel (if any). Null = nothing to push. */
   async findShopifyChannel(orgId: string) {
-    return this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.SHOPIFY,
-        },
-      },
+    return this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
   }
 
@@ -1987,13 +1982,8 @@ export class ShopifyPushService {
    * channels-page Sync action after the pull step completes.
    */
   async bulkPushUnsyncedOrders(orgId: string): Promise<void> {
-    const manual = await this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-        },
-      },
+    const manual = await this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.MANUAL },
     });
     if (!manual) {
       this.logger.log(`Org ${orgId} has no MANUAL channel — nothing to bulk-push.`);

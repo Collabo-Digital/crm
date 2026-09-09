@@ -8,6 +8,8 @@ import type {
   OrgMember,
   UpdateMemberRoleRequest,
   SendInviteRequest,
+  InviteInfluencerRequest,
+  InfluencerRow,
   OrgInvite,
 } from "~/types/api";
 
@@ -74,5 +76,29 @@ export const orgService = {
   revokeInvite: (orgId: string, inviteId: string) =>
     apiClient
       .delete<OrgInvite>(`/organizations/${orgId}/invites/${inviteId}`)
+      .then((response) => response.data),
+
+  /**
+   * Re-issue a pending invitation. The server rotates the token, so the old
+   * link stops working the moment this succeeds.
+   */
+  resendInvite: (orgId: string, inviteId: string) =>
+    apiClient
+      .post<OrgInvite>(`/organizations/${orgId}/invites/${inviteId}/resend`)
+      .then((response) => response.data),
+
+  /**
+   * Invite an influencer. A dedicated endpoint rather than a role field, so the
+   * role cannot be swapped for something else by editing the request.
+   */
+  inviteInfluencer: (orgId: string, data: InviteInfluencerRequest) =>
+    apiClient
+      .post<OrgInvite>(`/organizations/${orgId}/invites/influencers`, data)
+      .then((response) => response.data),
+
+  /** Everyone invited as an influencer: joined and outstanding, in one list. */
+  listInfluencers: (orgId: string) =>
+    apiClient
+      .get<InfluencerRow[]>(`/organizations/${orgId}/influencers`)
       .then((response) => response.data),
 };

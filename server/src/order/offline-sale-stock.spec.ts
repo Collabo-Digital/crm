@@ -33,7 +33,13 @@ function build({
     lineItems: [{ id: 'li_1' }],
   };
   const tx: any = {
-    channel: { upsert: jest.fn().mockResolvedValue({ id: 'ch_manual' }) },
+    // ensureManualChannel() replaced the upsert: the partial unique that now
+    // guards one-MANUAL-per-org is not expressible in Prisma, so it cannot
+    // compile an upsert against it.
+    channel: {
+      findFirst: jest.fn().mockResolvedValue({ id: 'ch_manual' }),
+      create: jest.fn().mockResolvedValue({ id: 'ch_manual' }),
+    },
     customer: {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'cust_1', billingStateCode: null, gstin: null }),

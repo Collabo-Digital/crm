@@ -1,4 +1,15 @@
-// Instagram OAuth doesn't require any user input (unlike Shopify's shopDomain).
-// The user just clicks "Connect Instagram" and gets redirected to Facebook Login.
-// This empty DTO exists for consistency — the endpoint accepts an empty body.
-export class ConnectInstagramDto { }
+import { IsOptional, IsString } from 'class-validator';
+
+/**
+ * Body for `POST /channels/instagram/install`.
+ *
+ * Instagram OAuth needs no user input (unlike Shopify's shopDomain) — the
+ * merchant clicks Connect and picks the account inside Facebook Login. The one
+ * optional field says "re-authorize THIS channel" rather than "add another",
+ * which is what the Reconnect button on an errored or expired row sends.
+ */
+export class ConnectInstagramDto {
+    @IsOptional()
+    @IsString()
+    reconnectChannelId?: string;
+}

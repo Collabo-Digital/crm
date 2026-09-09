@@ -18,6 +18,7 @@ import {
   StockBucket,
 } from '@prisma/client';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
+import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { singleDistinct } from '../channel/single-distinct.util';
 import {
   sellerStateForSupply,
@@ -1048,22 +1049,7 @@ export class OrderService {
     const runSale = () => this.prisma.$transaction(
       async (tx) => {
         // 1. Resolve or lazy-create the org's MANUAL channel.
-        const channel = await tx.channel.upsert({
-          where: {
-            organizationId_platform: {
-              organizationId: orgId,
-              platform: ChannelPlatform.MANUAL,
-            },
-          },
-          create: {
-            organizationId: orgId,
-            platform: ChannelPlatform.MANUAL,
-            name: 'In-Store / Manual',
-            status: ChannelStatus.CONNECTED,
-            isEnabled: true,
-          },
-          update: {},
-        });
+        const channel = await ensureManualChannel(tx, orgId);
 
         // 2. Resolve customer (existing by id/email/phone, else create).
         const customer = await this.resolveCustomer(tx, orgId, channel.id, dto);

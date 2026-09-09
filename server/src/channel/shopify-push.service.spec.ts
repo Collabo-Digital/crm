@@ -95,7 +95,15 @@ function orderCreateResponse() {
 
 function build(order: ReturnType<typeof offlineOrder> | null, channel: unknown = SHOPIFY_CHANNEL) {
   const prisma = {
-    channel: { findUnique: jest.fn().mockResolvedValue(channel), update: jest.fn() },
+    // Both, deliberately: resolving "the org's Shopify channel" is a findFirst
+    // now that a Channel row is one connected account and (organizationId,
+    // platform) is no longer unique, while the by-id lookup in
+    // resolveChannelCredentials is still a genuine findUnique on the PK.
+    channel: {
+      findFirst: jest.fn().mockResolvedValue(channel),
+      findUnique: jest.fn().mockResolvedValue(channel),
+      update: jest.fn(),
+    },
     order: { findFirst: jest.fn().mockResolvedValue(order) },
     orderLineItem: { update: jest.fn((args) => args) },
     // The org's currency is the source side of a catalogue-price conversion —

@@ -55,6 +55,9 @@ export default () => ({
         appId: process.env.META_APP_ID,
         appSecret: process.env.META_APP_SECRET,
         webhookVerifyToken: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN,
+        // Same Graph API version as WhatsApp — one Meta app, one version to
+        // bump. Was hardcoded to v21.0 in seven places in the OAuth service.
+        graphVersion: process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
     },
     whatsapp: {
         appId: process.env.META_APP_ID,

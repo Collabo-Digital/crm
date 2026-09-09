@@ -67,6 +67,11 @@ enum UserRole {
   AGENT // View/respond to conversations, view orders. Limited write.
   VIEWER // Read-only. For stakeholders.
   VENDOR // External supplier. Locked to their own products/orders only (scoped by OrganizationMember.vendorScope).
+  /// External creator invited to collaborate. Like VENDOR, this is an OUTSIDE
+  /// party: deny-by-default, reachable only on routes marked @AllowInfluencer().
+  /// Scoped to the channels they personally connected (Channel.ownerUserId) plus
+  /// whatever PERMISSION_KEYS their membership grants.
+  INFLUENCER
 }
 
 enum InviteStatus {
@@ -249,6 +254,8 @@ model User {
   updatedAt                     DateTime            @updatedAt @map("updated_at")
 
   memberships         OrganizationMember[]
+  /// Channels this user personally connected (an influencer's own Instagram).
+  ownedChannels       Channel[]            @relation("ChannelOwner")
   refreshTokens       RefreshToken[]
   passwordResetTokens PasswordResetToken[]
   impersonationsMade  ImpersonationLog[]   @relation("ImpersonatorLogs")
@@ -420,7 +427,12 @@ model PasswordResetToken {
 model TeamInvite {
   id             String       @id @default(cuid())
   organizationId String       @map("organization_id")
+  /// Stored lower-cased and trimmed. Acceptance matches on it, so the casing a
+  /// colleague happened to type must not decide whether the invite is claimable.
   email          String
+  /// What to call the person before they have an account. Optional: an invite
+  /// only needs an address to be valid.
+  name           String?
   role           UserRole     @default(AGENT)
   vendorScope    String?      @map("vendor_scope") // For VENDOR invites: the Product.vendor value to scope the member to
   token          String       @unique
@@ -428,11 +440,23 @@ model TeamInvite {
   invitedBy      String       @map("invited_by")
   expiresAt      DateTime     @map("expires_at") // 7 days
   acceptedAt     DateTime?    @map("accepted_at")
+  /// Who accepted. Distinct from the invited email: it is the account that
+  /// actually claimed the invite, and it is what links an influencer row to the
+  /// Instagram accounts they later connect.
+  acceptedUserId String?      @map("accepted_user_id")
+  revokedAt      DateTime?    @map("revoked_at")
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  /// NOTE (not expressible in Prisma): one PENDING invite per organization and
+  /// address, as a partial unique index —
+  ///   team_invites_one_pending_per_org_email_key
+  ///     UNIQUE (organization_id, email) WHERE status = 'PENDING'
+  /// Partial because an address may legitimately hold many historical invites
+  /// (accepted, expired, revoked) and only the live one must be unique.
+  /// See migration 20260911090000_influencer_invitations.
   @@index([organizationId])
   @@index([token])
   @@index([email])
@@ -456,12 +480,32 @@ model Channel {
   currency         String?
   lastSyncedAt     DateTime?       @map("last_synced_at")
   syncStatus       SyncStatus      @default(IDLE) @map("sync_status")
+  /// When this account was linked. NOT the same as `createdAt`: a row that is
+  /// disconnected and later reconnected keeps its original creation date, so
+  /// only this column answers "connected since".
+  connectedAt      DateTime?       @map("connected_at")
+  /// Why the connection is unhealthy, in words a merchant can act on. Set
+  /// alongside `status: ERROR` (e.g. a token refresh Meta refused), cleared on
+  /// every successful (re)connect.
+  lastError        String?         @map("last_error")
+  /// The member who personally connected this account, when it belongs to one
+  /// rather than to the organization at large.
+  ///
+  /// This is the whole Organization -> Influencer -> Instagram relationship: an
+  /// influencer may only see and manage the channels where this is them, while
+  /// owners and admins see every channel in the org. Null for the org's own
+  /// channels (Shopify, the manual channel, a WhatsApp number the admin linked).
+  ownerUserId      String?         @map("owner_user_id")
   metadata         Json?           @db.JsonB
   pixelIngestToken String?         @unique @map("pixel_ingest_token")
   createdAt        DateTime        @default(now()) @map("created_at")
   updatedAt        DateTime        @updatedAt @map("updated_at")
 
   organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// SetNull, not Cascade: removing a person must not delete the channel and
+  /// with it the orders and message logs that hang off it. The row survives as
+  /// an org-level channel with no owner.
+  ownerUser          User?                @relation("ChannelOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   syncLogs           SyncLog[]
   syncStates         ChannelSyncState[]
   products           Product[]
@@ -473,22 +517,39 @@ model Channel {
   analyticsSnapshots AnalyticsSnapshot[]
   rawAnalyticsEvents RawAnalyticsEvent[]
 
-  @@unique([organizationId, platform]) // ← ONE store per platform per org
-  /// NOTE (not expressible in Prisma): two further guarantees live as SQL.
+  /// ONE ROW = ONE CONNECTED ACCOUNT. An org may hold several rows of the same
+  /// platform (many Instagram accounts); the limits are PARTIAL unique indexes,
+  /// which Prisma cannot express, so all three live in SQL:
+  ///
+  ///   channels_one_active_per_org_platform_key  UNIQUE (organization_id, platform)
+  ///     WHERE platform = 'MANUAL'
+  ///        OR (platform = 'WHATSAPP' AND status <> 'DISCONNECTED')
   ///   channels_platform_external_store_id_key   UNIQUE (platform, external_store_id)
   ///   channels_platform_external_store_url_key  UNIQUE (platform, external_store_url)
   ///                                             WHERE external_store_url IS NOT NULL
-  /// Together they stop two organizations claiming the same Shopify store —
-  /// the tenant-isolation guarantee the webhook router depends on, since HMAC
-  /// is verified with the app-level secret and so cannot identify a tenant.
-  /// See migration 20260731140000_channel_store_url_unique.
   ///
-  /// WARNING: the @@unique above is declared here but is NOT currently present
-  /// in the database — it was lost in the migration divergence (only a
-  /// non-unique channels_organization_id_platform_idx exists). Restoring it is
-  /// a deliberate product decision (it permanently forbids an org connecting
-  /// two stores of one platform) and is tracked separately.
+  /// The first caps WhatsApp at one ACTIVE account per org while letting a
+  /// disconnected row remain as history (whatsapp_message_logs still reference
+  /// it), and keeps MANUAL strictly one-per-org — the invariant
+  /// `ensureManualChannel()` depends on.
+  ///
+  /// The other two stop two organizations — or one org twice — claiming the
+  /// same external account. That is both the "an Instagram account connects
+  /// once" product rule (external_store_id holds the IG business account id)
+  /// and the tenant-isolation guarantee the webhook router depends on, since
+  /// HMAC is verified with the app-level secret and so cannot identify a
+  /// tenant. Disconnect therefore NULLs external_store_id to release the claim
+  /// and copies it to metadata.externalAccountId so the row can be revived.
+  ///
+  /// See migrations 20260731140000_channel_store_url_unique and
+  /// 20260910090000_channel_connected_accounts.
+  ///
+  /// There is deliberately NO @@unique([organizationId, platform]) — it is what
+  /// made multiple Instagram accounts impossible.
+  @@index([organizationId, platform])
   @@index([organizationId])
+  /// Drives "the channels this influencer connected" on every page load.
+  @@index([organizationId, ownerUserId])
   @@map("channels")
 }
 

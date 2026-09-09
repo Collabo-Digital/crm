@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { authService } from "~/services/auth.service";
+import { useAuthStore } from "~/stores/auth.store";
 import { useAcceptInviteMutation } from "~/hooks/use-auth-mutations";
 
 export function meta() {
@@ -35,6 +36,8 @@ export default function InvitePage() {
   const [searchParams] = useSearchParams();
   const token = searchParams.get("token") ?? "";
   const [showPassword, setShowPassword] = useState(false);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const authEmail = useAuthStore((state) => state.user?.email);
 
   const invite = useQuery({
     queryKey: ["invite", token],
@@ -129,6 +132,16 @@ export default function InvitePage() {
   }
 
   const { email, role, organization, userExists } = invite.data;
+  const isInfluencer = role === "INFLUENCER";
+  const roleLabel = isInfluencer ? "influencer" : role.toLowerCase();
+  // "an influencer", "an admin", "an agent" — every other role takes "a".
+  const roleArticle = /^[aeiou]/.test(roleLabel) ? "an" : "a";
+  // Signing in as the invited person is now required to claim an invitation
+  // addressed to an existing account — holding the link is not proof of
+  // ownership. Send them to login and back.
+  const signInHref = `/auth/login?next=${encodeURIComponent(`/auth/invite?token=${token}`)}`;
+  const mustSignIn = userExists && !isAuthenticated;
+  const wrongAccount = userExists && isAuthenticated && authEmail !== email;
 
   /* ── Invite loaded ── */
   return (
@@ -142,8 +155,8 @@ export default function InvitePage() {
         <p className="mt-2 text-sm text-gray-500">
           You've been invited to join{" "}
           <span className="font-semibold text-gray-700">{organization.name}</span>
-          {" "}as a{" "}
-          <span className="font-semibold text-gray-700">{role.toLowerCase()}</span>.
+          {" "}as {roleArticle}{" "}
+          <span className="font-semibold text-gray-700">{roleLabel}</span>.
         </p>
       </div>
 
@@ -158,7 +171,7 @@ export default function InvitePage() {
         )}
         <div>
           <p className="text-sm font-semibold text-gray-900">{organization.name}</p>
-          <p className="text-xs text-gray-400">Invited as {role.toLowerCase()}</p>
+          <p className="text-xs text-gray-400">Invited as {roleLabel}</p>
         </div>
       </div>
 
@@ -168,11 +181,43 @@ export default function InvitePage() {
         <p className="text-sm font-medium text-gray-700">{email}</p>
       </div>
 
-      {userExists ? (
-        /* ── Existing user: just accept ── */
+      {wrongAccount ? (
+        /* ── Signed in as somebody else ── */
+        <div>
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+            <p className="text-sm text-red-600">
+              This invitation was sent to {email}, but you are signed in as{" "}
+              {authEmail}. Sign out and open the invitation link again to accept it.
+            </p>
+          </div>
+          <Link
+            to="/auth/login"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#CEF17B] px-4 py-2.5 text-sm font-semibold text-gray-900 shadow-sm transition hover:bg-[#BADE6F]"
+          >
+            Go to sign in
+          </Link>
+        </div>
+      ) : mustSignIn ? (
+        /* ── Existing account: prove it is yours before joining it ── */
         <div>
           <p className="mb-4 text-sm text-gray-500">
-            You already have a Collabo account. Click below to join this workspace.
+            An account already exists for this address. Sign in to accept the
+            invitation — you will come straight back here.
+          </p>
+          <Link
+            to={signInHref}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#CEF17B] px-4 py-2.5 text-sm font-semibold text-gray-900 shadow-sm transition hover:bg-[#BADE6F]"
+          >
+            Sign in to accept
+          </Link>
+        </div>
+      ) : userExists ? (
+        /* ── Existing user, signed in as them: just accept ── */
+        <div>
+          <p className="mb-4 text-sm text-gray-500">
+            {isInfluencer
+              ? "Join this organization to connect your Instagram account and start collaborating."
+              : "You already have a Collabo account. Click below to join this workspace."}
           </p>
 
           {serverError && (
@@ -195,7 +240,7 @@ export default function InvitePage() {
             ) : (
               <>
                 <CheckCircle2 className="size-4" />
-                Accept & join workspace
+                Accept &amp; join {organization.name}
               </>
             )}
           </button>

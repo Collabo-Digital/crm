@@ -13,6 +13,7 @@ import type {
   UpgradeToOrganizationRequest,
   UpdateMemberRoleRequest,
   SendInviteRequest,
+  InviteInfluencerRequest,
 } from "~/types/api";
 
 // ─── Organization Mutations ─────────────────────────────────────────────────
@@ -231,5 +232,58 @@ export function useRevokeInviteMutation(orgId: string) {
       toast.success("Invitation revoked.");
     },
     onError: (error) => handleMutationError(error, "Failed to revoke invitation."),
+  });
+}
+
+// ─── Influencer Mutations ───────────────────────────────────────────────────
+
+/** Invite someone to join as an influencer. */
+export function useInviteInfluencerMutation(orgId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: InviteInfluencerRequest) => orgService.inviteInfluencer(orgId, data),
+    onSuccess: (invite) => {
+      queryClient.invalidateQueries({ queryKey: orgKeys.influencers(orgId) });
+      queryClient.invalidateQueries({ queryKey: orgKeys.invites(orgId) });
+      toast.success(`Invitation sent successfully to ${invite.email}.`);
+    },
+    onError: (error) => handleMutationError(error, "Failed to send the invitation."),
+  });
+}
+
+/**
+ * Re-issue a pending invitation.
+ *
+ * The server rotates the token, so this both re-sends the email and invalidates
+ * the previous link — worth knowing when a merchant asks why the old one stopped
+ * working.
+ */
+export function useResendInviteMutation(orgId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (inviteId: string) => orgService.resendInvite(orgId, inviteId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: orgKeys.influencers(orgId) });
+      queryClient.invalidateQueries({ queryKey: orgKeys.invites(orgId) });
+      toast.success("Invitation resent successfully.");
+    },
+    onError: (error) => handleMutationError(error, "Failed to resend the invitation."),
+  });
+}
+
+/** Cancel a pending invitation. Its link stops working immediately. */
+export function useCancelInviteMutation(orgId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (inviteId: string) => orgService.revokeInvite(orgId, inviteId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: orgKeys.influencers(orgId) });
+      queryClient.invalidateQueries({ queryKey: orgKeys.invites(orgId) });
+      toast.success("Invitation cancelled successfully.");
+    },
+    onError: (error) => handleMutationError(error, "Failed to cancel the invitation."),
   });
 }
