@@ -47,7 +47,7 @@ function build({ warehousing, dispatchWarehouseId = null as string | null }) {
   const service = new OrderService(
     prisma, {} as any, {} as any, {} as any, {} as any,
     {} as any, {} as any, {} as any, settings as any, { recomputeForCustomer: jest.fn() } as any,
-    ledger as any, queue as any,
+    ledger as any, {} as any /* fx */, queue as any,
   );
   // A MANUAL order with nothing to cancel remotely.
   (service as any).loadOrderWithChannel = jest.fn().mockResolvedValue({

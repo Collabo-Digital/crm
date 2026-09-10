@@ -55,12 +55,85 @@ export default () => ({
         appId: process.env.META_APP_ID,
         appSecret: process.env.META_APP_SECRET,
         webhookVerifyToken: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN,
+        // Same Graph API version as WhatsApp — one Meta app, one version to
+        // bump. Was hardcoded to v21.0 in seven places in the OAuth service.
+        graphVersion: process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
     },
     whatsapp: {
         appId: process.env.META_APP_ID,
         appSecret: process.env.META_APP_SECRET,
         configId: process.env.WHATSAPP_CONFIG_ID,
         graphVersion: process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
+    },
+    // One Meta app serves WhatsApp, Instagram and (later) Marketing. The
+    // outbound rate limiter keys the app-level wallet on this id, and the
+    // shared Graph client reads one version for every surface.
+    meta: {
+        appId: process.env.META_APP_ID,
+        graphVersion:
+            process.env.META_GRAPH_VERSION ?? process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
+    },
+    // Outbound API rate limiter (server -> Shopify / Meta). See
+    // src/rate-limit/README-in-code: rate-limiter.service.ts.
+    //
+    //   off      no Redis calls, today's behaviour (kill switch)
+    //   observe  decide + log, never wait — compare against real THROTTLEDs
+    //   enforce  reserve before every request, park jobs on long waits
+    rateLimit: {
+        mode: (process.env.RATE_LIMIT_MODE ?? 'observe') as 'enforce' | 'observe' | 'off',
+        // Cap on one limiter Redis call before that request proceeds unmetered.
+        // Measured against the dev Upstash: median ~50ms, p90 ~65ms, but a tail
+        // to ~600ms. At 250ms a few percent of calls timed out; three in a row
+        // are still needed before the limiter concludes Redis is down.
+        redisTimeoutMs: Number.parseInt(process.env.RATE_LIMIT_REDIS_TIMEOUT_MS ?? '500', 10),
+        // How long reserve() may hold the caller in-process per priority
+        // (1 interactive, 5 normal, 10 bulk), and above what single wait a
+        // job is parked instead of slept. Interactive never parks on length.
+        wait: {
+            maxWaitMs: { 1: 10_000, 5: 5_000, 10: 2_000 },
+            parkThresholdMs: { 1: Number.POSITIVE_INFINITY, 5: 5_000, 10: 2_000 },
+        },
+        shopify: {
+            defaultCostHint: Number.parseInt(process.env.RATE_LIMIT_SHOPIFY_DEFAULT_COST ?? '50', 10),
+            // Standard plan. A shop's real numbers overwrite these on the first
+            // reply, so they only matter for the very first request.
+            maximumAvailable: 1000,
+            restoreRate: 50,
+            // Fraction of the bucket each priority must leave untouched. Bulk
+            // stops at 30% so a user's click always finds room.
+            watermarks: {
+                1: 0.05,
+                5: 0.15,
+                10: Number.parseFloat(process.env.RATE_LIMIT_SHOPIFY_BULK_WATERMARK ?? '0.30'),
+            },
+            // Concurrent requests per shop per priority. Bulk is capped low so
+            // one big merchant cannot occupy every worker slot.
+            inflightCap: { 1: 8, 5: 4, 10: 2 },
+            leaseTtlMs: 45_000,
+            keyTtlS: 7 * 24 * 3600,
+            breakerMinMs: 5_000,
+            breakerMaxMs: 120_000,
+        },
+        meta: {
+            // Percent windows; aim to stay under ~75% at bulk priority.
+            watermarks: { 1: 0.05, 5: 0.15, 10: 0.25 },
+            inflightCap: { 1: 8, 5: 4, 10: 2 },
+            // Percent of the window one call costs, before any is learned.
+            defaultPpc: 0.5,
+            // WhatsApp Cloud API per-phone-number throughput.
+            phoneMps: Number.parseInt(process.env.RATE_LIMIT_META_PHONE_MPS ?? '80', 10),
+            windowSeconds: 3600,
+            leaseTtlMs: 45_000,
+            keyTtlS: 7 * 24 * 3600,
+            breakerMinMs: 30_000,
+            breakerMaxMs: 900_000,
+        },
+    },
+    queues: {
+        // Read at decoration time in the processors (process.env directly) —
+        // kept here too so the value is visible alongside its neighbours.
+        shopifyPushConcurrency: Number.parseInt(process.env.SHOPIFY_PUSH_CONCURRENCY ?? '3', 10),
+        whatsappConcurrency: Number.parseInt(process.env.WHATSAPP_MESSAGING_CONCURRENCY ?? '3', 10),
     },
     encryptionKey: process.env.ENCRYPTION_KEY || undefined,
     superAdminEmails: (process.env.SUPER_ADMIN_EMAILS || '')

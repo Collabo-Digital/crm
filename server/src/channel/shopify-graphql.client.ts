@@ -1,10 +1,38 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RedisService } from '../redis/redis.service';
+import { RateLimiterService } from '../rate-limit/rate-limiter.service';
+import { CostHintStore } from '../rate-limit/cost-hint.store';
+import {
+  Observation,
+  Priority,
+  RateLimitScope,
+} from '../rate-limit/rate-limit.types';
 
 export interface ShopifyAuthContext {
   shopDomain: string;
   accessToken: string;
+  /// Which channel row this token belongs to. Optional so the many callers
+  /// that build a context by hand still compile; when present it lets a
+  /// breaker be shown on the right channel.
+  channelId?: string;
+  /// Default priority for every request made with this context. Lets the
+  /// sync paginators inherit the job's priority without threading an
+  /// argument through every call.
+  priority?: Priority;
+}
+
+/**
+ * Per-request knobs for the outbound rate limiter. All optional: the
+ * ~200 existing call sites pass nothing and get NORMAL priority with a
+ * learned cost.
+ */
+export interface ShopifyRequestOptions {
+  priority?: Priority;
+  /// Expected `requestedQueryCost`, when the caller knows better than the
+  /// learned estimate (e.g. ShopifyQL is always expensive).
+  costHint?: number;
+  channelId?: string;
 }
 
 /**
@@ -121,9 +149,14 @@ interface ShopBucketState {
  * Thin Shopify Admin GraphQL client.
  *
  * - Versioned via SHOPIFY_API_VERSION env (default `2026-01`).
+ * - Reserves each request's expected cost from the shop's shared wallet in
+ *   Redis BEFORE sending (RateLimiterService), settles with the real cost and
+ *   Shopify's reported balance after, and opens a per-shop breaker on a real
+ *   429 / repeated THROTTLED. In `observe` mode it only logs what it would do.
  * - Auto-retries throttled requests using Shopify's cost-extension hints.
  * - Auto-retries 5xx with exponential backoff.
- * - Slows down at >80% of the throttle bucket to avoid back-to-back THROTTLEDs.
+ * - Until enforcement is on, slows down at >80% of the throttle bucket to
+ *   avoid back-to-back THROTTLEDs (the reserve floor replaces this).
  *
  * The caller resolves credentials (decrypted accessToken + shopDomain) before
  * invoking — this mirrors the existing `ShopifyOAuthService.getAccessToken()`
@@ -136,6 +169,8 @@ export class ShopifyGraphqlClient {
   constructor(
     private readonly config: ConfigService,
     private readonly redis: RedisService,
+    private readonly limiter: RateLimiterService,
+    private readonly costHints: CostHintStore,
   ) {}
 
   private bucketKey(shopDomain: string): string {
@@ -206,11 +241,26 @@ export class ShopifyGraphqlClient {
     query: string,
     variables?: TVars,
     apiVersion?: string,
+    options: ShopifyRequestOptions = {},
   ): Promise<TResponse> {
     // `apiVersion` overrides the configured version for a single call — needed for
     // mutations only available on a newer version (e.g. fulfillmentOrderReportProgress).
     const url = `https://${auth.shopDomain}/admin/api/${apiVersion ?? this.getApiVersion()}/graphql.json`;
     const body = JSON.stringify({ query, variables: variables ?? {} });
+
+    // Admission control. One wallet per shop, shared by every worker and
+    // every process through Redis; the priority decides how deep into it this
+    // request may spend (see RateLimiterService and the watermarks in config).
+    const scope: RateLimitScope = { platform: 'shopify', kind: 'bucket', id: auth.shopDomain };
+    const priority = options.priority ?? auth.priority ?? Priority.NORMAL;
+    const channelId = options.channelId ?? auth.channelId;
+    const mode = this.limiter.mode();
+    const enforce = mode === 'enforce';
+    // What this query shape cost last time, so the reservation is close to
+    // what Shopify will actually charge. Skipped entirely when the limiter is
+    // off so the kill switch really means "no extra Redis traffic".
+    const cost =
+      options.costHint ?? (mode === 'off' ? undefined : await this.costHints.get(query, variables));
 
     const budget = {
       throttle: THROTTLE_RETRIES,
@@ -221,177 +271,242 @@ export class ShopifyGraphqlClient {
     let lastError: string = 'unknown';
 
     while (attempt < TOTAL_ATTEMPT_CEILING) {
-      // What every OTHER worker on this shop has seen, not just us.
-      await this.awaitBucketHeadroom(auth.shopDomain);
+      // Until enforcement is switched on, the shared-reading pacing below is
+      // still what slows us down; the limiter only watches and logs. Once
+      // enforcing, the reserve floor replaces it.
+      if (!enforce) await this.awaitBucketHeadroom(auth.shopDomain);
 
-      let res: Response;
+      // May sleep briefly, or throw RateLimitedError when the wait is long
+      // enough that the caller should park the job instead of holding a
+      // worker. That error is deliberately not caught here.
+      const lease = await this.limiter.reserve([scope], { priority, cost, channelId });
+      let settled = false;
+      const settle = async (r: { actualCost?: number; observation?: Observation }) => {
+        if (settled) return;
+        settled = true;
+        await this.limiter.settle(lease, r).catch(() => undefined);
+      };
+
       try {
-        res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Shopify-Access-Token': auth.accessToken,
-          },
-          body,
-          // Without this the request is bounded only by undici's ~300s
-          // default. A socket that connects and then goes silent would hold
-          // the worker for minutes with no way to interrupt it.
-          signal: AbortSignal.timeout(SHOPIFY_FETCH_TIMEOUT_MS),
-        });
-      } catch (err) {
-        const aborted =
-          err instanceof Error &&
-          (err.name === 'TimeoutError' || err.name === 'AbortError');
-        if (!aborted) throw err;
-        if (budget.transport-- <= 0) {
+        let res: Response;
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Shopify-Access-Token': auth.accessToken,
+            },
+            body,
+            // Without this the request is bounded only by undici's ~300s
+            // default. A socket that connects and then goes silent would hold
+            // the worker for minutes with no way to interrupt it.
+            signal: AbortSignal.timeout(SHOPIFY_FETCH_TIMEOUT_MS),
+          });
+        } catch (err) {
+          const aborted =
+            err instanceof Error &&
+            (err.name === 'TimeoutError' || err.name === 'AbortError');
+          if (!aborted) throw err;
+          if (budget.transport-- <= 0) {
+            throw new ShopifyGraphqlError(
+              `Shopify GraphQL request to ${auth.shopDomain} timed out after ${SHOPIFY_FETCH_TIMEOUT_MS}ms (transport retries exhausted)`,
+              'TIMEOUT',
+              err,
+            );
+          }
+          this.logger.warn(
+            `GraphQL request to ${auth.shopDomain} timed out after ${SHOPIFY_FETCH_TIMEOUT_MS}ms — retrying (${budget.transport} transport retries left)`,
+          );
+          attempt++;
+          lastError = 'TIMEOUT';
+          continue;
+        }
+
+        if (res.status === 429) {
+          const header = parseInt(res.headers.get('Retry-After') || '2', 10);
+          // Clamp: this value is chosen by the remote end, and we used to obey
+          // it verbatim.
+          const waitMs = Math.min(
+            MAX_RETRY_AFTER_MS,
+            Math.max(0, Number.isFinite(header) ? header * 1000 : 2000),
+          );
+          // Nothing was spent. The shop refused us outright, which means our
+          // model was wrong: shut the door for as long as Shopify asked so
+          // every other worker on this shop backs off too.
+          await settle({ actualCost: 0 });
+          await this.limiter.recordThrottled(scope, { channelId, kind: 'HTTP_429', waitMs });
+          await this.limiter.openBreaker(scope, { hintMs: waitMs, reason: 'HTTP_429', channelId });
+          if (budget.throttle-- <= 0) {
+            lastError = 'HTTP 429';
+            break;
+          }
+          this.logger.warn(
+            `GraphQL 429 from ${auth.shopDomain}: waiting ${waitMs}ms (${budget.throttle} throttle retries left)`,
+          );
+          await this.sleep(waitMs);
+          attempt++;
+          lastError = `HTTP 429`;
+          continue;
+        }
+        if (res.status === 401 || res.status === 403) {
           throw new ShopifyGraphqlError(
-            `Shopify GraphQL request to ${auth.shopDomain} timed out after ${SHOPIFY_FETCH_TIMEOUT_MS}ms (transport retries exhausted)`,
-            'TIMEOUT',
-            err,
+            `Shopify auth failed (${res.status}). Verify access token and scopes for ${auth.shopDomain}.`,
+            'AUTH_FAILED',
+            await res.text(),
           );
         }
-        this.logger.warn(
-          `GraphQL request to ${auth.shopDomain} timed out after ${SHOPIFY_FETCH_TIMEOUT_MS}ms — retrying (${budget.transport} transport retries left)`,
-        );
-        attempt++;
-        lastError = 'TIMEOUT';
-        continue;
-      }
-
-      if (res.status === 429) {
-        const header = parseInt(res.headers.get('Retry-After') || '2', 10);
-        // Clamp: this value is chosen by the remote end, and we used to obey
-        // it verbatim.
-        const waitMs = Math.min(
-          MAX_RETRY_AFTER_MS,
-          Math.max(0, Number.isFinite(header) ? header * 1000 : 2000),
-        );
-        if (budget.throttle-- <= 0) {
-          lastError = 'HTTP 429';
-          break;
-        }
-        this.logger.warn(
-          `GraphQL 429 from ${auth.shopDomain}: waiting ${waitMs}ms (${budget.throttle} throttle retries left)`,
-        );
-        await this.sleep(waitMs);
-        attempt++;
-        lastError = `HTTP 429`;
-        continue;
-      }
-      if (res.status === 401 || res.status === 403) {
-        throw new ShopifyGraphqlError(
-          `Shopify auth failed (${res.status}). Verify access token and scopes for ${auth.shopDomain}.`,
-          'AUTH_FAILED',
-          await res.text(),
-        );
-      }
-      if (res.status >= 500) {
-        if (budget.server-- <= 0) {
+        if (res.status >= 500) {
+          if (budget.server-- <= 0) {
+            lastError = `HTTP ${res.status}`;
+            break;
+          }
+          const backoff = this.backoffWithJitter(SERVER_RETRIES - budget.server - 1);
+          this.logger.warn(
+            `GraphQL ${res.status} from ${auth.shopDomain}: backing off ${backoff}ms (${budget.server} server retries left)`,
+          );
+          await this.sleep(backoff);
+          attempt++;
           lastError = `HTTP ${res.status}`;
-          break;
+          continue;
         }
-        const backoff = this.backoffWithJitter(SERVER_RETRIES - budget.server - 1);
-        this.logger.warn(
-          `GraphQL ${res.status} from ${auth.shopDomain}: backing off ${backoff}ms (${budget.server} server retries left)`,
-        );
-        await this.sleep(backoff);
-        attempt++;
-        lastError = `HTTP ${res.status}`;
-        continue;
-      }
-      if (!res.ok) {
-        throw new ShopifyGraphqlError(
-          `Shopify HTTP ${res.status}`,
-          'HTTP_ERROR',
-          await res.text(),
-          res.status,
-        );
-      }
+        if (!res.ok) {
+          throw new ShopifyGraphqlError(
+            `Shopify HTTP ${res.status}`,
+            'HTTP_ERROR',
+            await res.text(),
+            res.status,
+          );
+        }
 
-      const envelope = (await res.json()) as ShopifyGraphqlEnvelope<TResponse>;
+        const envelope = (await res.json()) as ShopifyGraphqlEnvelope<TResponse>;
+        const costInfo = envelope.extensions?.cost;
+        const throttleStatus = costInfo?.throttleStatus;
+        // Shopify's own statement of the bucket. Handed to the limiter on
+        // every reply — success or THROTTLED — so the shared wallet is reset
+        // to the truth and can never drift by more than one request.
+        const observation: Observation | undefined = throttleStatus
+          ? {
+              available: throttleStatus.currentlyAvailable,
+              max: throttleStatus.maximumAvailable,
+              rate: throttleStatus.restoreRate,
+              at: Date.now(),
+            }
+          : undefined;
 
-      // THROTTLED is a body-level error (HTTP 200, errors array carries the
-      // signal). Back off using Shopify's restoreRate when available.
-      const throttled = envelope.errors?.some(
-        (e) => e.extensions?.code === 'THROTTLED',
-      );
-      if (throttled) {
-        const restoreRate =
-          envelope.extensions?.cost?.throttleStatus?.restoreRate ?? 50;
-        const requested = envelope.extensions?.cost?.requestedQueryCost ?? 1000;
-        const waitMs = Math.min(
-          MAX_BACKOFF_MS,
-          Math.max(500, (requested / restoreRate) * 1000),
+        // THROTTLED is a body-level error (HTTP 200, errors array carries the
+        // signal). Back off using Shopify's restoreRate when available.
+        const throttled = envelope.errors?.some(
+          (e) => e.extensions?.code === 'THROTTLED',
         );
-        if (budget.throttle-- <= 0) {
+        if (throttled) {
+          const restoreRate = throttleStatus?.restoreRate ?? 50;
+          const requested = costInfo?.requestedQueryCost ?? 1000;
+          const waitMs = Math.min(
+            MAX_BACKOFF_MS,
+            Math.max(500, (requested / restoreRate) * 1000),
+          );
+          await settle({ actualCost: 0, observation });
+          await this.limiter.recordThrottled(scope, { channelId, kind: 'THROTTLED', requested, waitMs });
+          // One THROTTLED is normal noise and the observation above already
+          // corrects the wallet. Two in quick succession on the same shop
+          // means something else is draining it: open the breaker.
+          if (this.noteConsecutiveThrottle(auth.shopDomain)) {
+            await this.limiter.openBreaker(scope, { hintMs: waitMs, reason: 'THROTTLED', channelId });
+          }
+          if (budget.throttle-- <= 0) {
+            lastError = 'THROTTLED';
+            break;
+          }
+          this.logger.warn(
+            `GraphQL THROTTLED for ${auth.shopDomain}: waiting ${waitMs}ms (${budget.throttle} throttle retries left)`,
+          );
+          await this.sleep(waitMs);
+          attempt++;
           lastError = 'THROTTLED';
-          break;
+          continue;
         }
-        this.logger.warn(
-          `GraphQL THROTTLED for ${auth.shopDomain}: waiting ${waitMs}ms (${budget.throttle} throttle retries left)`,
-        );
-        await this.sleep(waitMs);
-        attempt++;
-        lastError = 'THROTTLED';
-        continue;
-      }
 
-      if (envelope.errors && envelope.errors.length > 0) {
-        // A cost rejection is deterministic — retrying the identical query can
-        // never succeed — but it IS recoverable by asking for less. Give it its
-        // own code so callers can shrink their page size instead of failing the
-        // whole sync on a generic error.
-        const costRejected = envelope.errors.some(
-          (e) =>
-            (e as { extensions?: { code?: string } }).extensions?.code ===
-            'MAX_COST_EXCEEDED',
-        );
-        throw new ShopifyGraphqlError(
-          `GraphQL errors: ${envelope.errors.map((e) => e.message).join('; ')}`,
-          costRejected ? 'MAX_COST_EXCEEDED' : 'GRAPHQL_ERROR',
-          envelope.errors,
-        );
-      }
-
-      // Pre-emptive slow-down: avoid the next call getting THROTTLED.
-      const throttleStatus = envelope.extensions?.cost?.throttleStatus;
-      if (throttleStatus) {
-        // Cost is parsed for the sleep decisions above and was then thrown
-        // away, so there was no way to answer "which query is burning the
-        // rate limit". Debug level: one line per request is too noisy for
-        // info, but invaluable when a tenant starts getting throttled.
-        this.logger.debug(
-          `Shopify cost ${auth.shopDomain}: actual=${envelope.extensions?.cost?.actualQueryCost ?? '?'} ` +
-          `requested=${envelope.extensions?.cost?.requestedQueryCost ?? '?'} ` +
-          `bucket=${throttleStatus.currentlyAvailable}/${throttleStatus.maximumAvailable} ` +
-          `restore=${throttleStatus.restoreRate}/s`,
-        );
-        // Share the reading so concurrent workers on this shop see it too --
-        // see awaitBucketHeadroom.
-        await this.recordBucket(auth.shopDomain, throttleStatus);
-
-        const usage =
-          1 - throttleStatus.currentlyAvailable / throttleStatus.maximumAvailable;
-        if (usage > 0.8) {
-          await this.sleep(500);
+        if (envelope.errors && envelope.errors.length > 0) {
+          await settle({ actualCost: costInfo?.actualQueryCost ?? 0, observation });
+          // A cost rejection is deterministic — retrying the identical query can
+          // never succeed — but it IS recoverable by asking for less. Give it its
+          // own code so callers can shrink their page size instead of failing the
+          // whole sync on a generic error.
+          const costRejected = envelope.errors.some(
+            (e) =>
+              (e as { extensions?: { code?: string } }).extensions?.code ===
+              'MAX_COST_EXCEEDED',
+          );
+          throw new ShopifyGraphqlError(
+            `GraphQL errors: ${envelope.errors.map((e) => e.message).join('; ')}`,
+            costRejected ? 'MAX_COST_EXCEEDED' : 'GRAPHQL_ERROR',
+            envelope.errors,
+          );
         }
-      }
 
-      if (!envelope.data) {
-        throw new ShopifyGraphqlError(
-          'Shopify returned no data and no errors',
-          'EMPTY_RESPONSE',
-          envelope,
-        );
-      }
+        if (throttleStatus) {
+          // Cost is parsed for the sleep decisions above and was then thrown
+          // away, so there was no way to answer "which query is burning the
+          // rate limit". Debug level: one line per request is too noisy for
+          // info, but invaluable when a tenant starts getting throttled.
+          this.logger.debug(
+            `Shopify cost ${auth.shopDomain}: actual=${costInfo?.actualQueryCost ?? '?'} ` +
+            `requested=${costInfo?.requestedQueryCost ?? '?'} ` +
+            `bucket=${throttleStatus.currentlyAvailable}/${throttleStatus.maximumAvailable} ` +
+            `restore=${throttleStatus.restoreRate}/s`,
+          );
+          // Share the reading so concurrent workers on this shop see it too --
+          // see awaitBucketHeadroom. Kept alive for the off/observe modes.
+          await this.recordBucket(auth.shopDomain, throttleStatus);
 
-      return envelope.data;
+          if (!enforce) {
+            const usage =
+              1 - throttleStatus.currentlyAvailable / throttleStatus.maximumAvailable;
+            if (usage > 0.8) {
+              await this.sleep(500);
+            }
+          }
+        }
+
+        await settle({ actualCost: costInfo?.actualQueryCost, observation });
+        if (costInfo?.requestedQueryCost && mode !== 'off') {
+          await this.costHints
+            .learn(query, variables, costInfo.requestedQueryCost)
+            .catch(() => undefined);
+        }
+        this.recentThrottles.delete(auth.shopDomain);
+
+        if (!envelope.data) {
+          throw new ShopifyGraphqlError(
+            'Shopify returned no data and no errors',
+            'EMPTY_RESPONSE',
+            envelope,
+          );
+        }
+
+        return envelope.data;
+      } finally {
+        // Any path that did not settle above (thrown error, timeout,
+        // budget break) closes its receipt here so the wallet never leaks.
+        await settle({ actualCost: 0 });
+      }
     }
 
     throw new ShopifyGraphqlError(
       `Shopify GraphQL request to ${auth.shopDomain} failed after ${attempt} retries (last: ${lastError})`,
       'RETRY_EXHAUSTED',
     );
+  }
+
+  /// Last body-level THROTTLED per shop, for the "two in a row" breaker rule.
+  private readonly recentThrottles = new Map<string, number>();
+
+  /** True when this shop was THROTTLED less than 10 s ago as well. */
+  private noteConsecutiveThrottle(shopDomain: string): boolean {
+    const now = Date.now();
+    const last = this.recentThrottles.get(shopDomain) ?? 0;
+    this.recentThrottles.set(shopDomain, now);
+    return now - last < 10_000;
   }
 
   /**

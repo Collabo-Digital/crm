@@ -1,10 +1,11 @@
-import { Controller, Post, Get, Body, Param, Req } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, Req, Headers } from '@nestjs/common';
 import type { Request } from 'express';
 
 import { AuthService } from './auth.service';
 import { Public } from './decorators/public.decorator';
 import { NoOrgRequired } from './decorators/no-org-required.decorator';
 import { AllowVendor } from './decorators/allow-vendor.decorator';
+import { AllowInfluencer } from './decorators/allow-influencer.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import type { JwtPayload } from './interfaces/jwt-payload.interface';
 import { SignupDto } from './dto/signup.dto';
@@ -63,6 +64,7 @@ export class AuthController {
   // validates active membership in the target org, so this stays safe.
   @Post('switch-org')
   @AllowVendor()
+  @AllowInfluencer()
   switchOrg(@CurrentUser() user: JwtPayload, @Body() dto: SwitchOrgDto) {
     return this.authService.switchOrg(user.sub, dto.orgId);
   }
@@ -85,9 +87,17 @@ export class AuthController {
     return this.authService.getInviteByToken(token);
   }
 
+  // Public because someone with no account yet must be able to accept. The
+  // Authorization header is read by hand rather than by a guard for the same
+  // reason: when a caller IS signed in, acceptance must verify they are the
+  // person the invitation names.
   @Public()
   @Post('invite/accept')
-  acceptInvite(@Body() dto: AcceptInviteDto) {
-    return this.authService.acceptInvite(dto);
+  acceptInvite(
+    @Body() dto: AcceptInviteDto,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const callerUserId = this.authService.verifyAccessTokenSubject(authorization);
+    return this.authService.acceptInvite(dto, callerUserId);
   }
 }

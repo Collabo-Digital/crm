@@ -11,9 +11,14 @@ import type {
   OAuthInstallResponse,
   ManualConnectShopifyRequest,
   ManualConnectShopifyResponse,
+  WhatsAppInstallRequest,
   WhatsAppInstallResponse,
   WhatsAppCallbackRequest,
   WhatsAppCallbackResponse,
+  InstagramInstallRequest,
+  InstagramPendingResponse,
+  CompleteInstagramRequest,
+  CompleteInstagramResponse,
 } from "~/types/api";
 
 /**
@@ -55,12 +60,24 @@ export const channelService = {
   manualConnectShopify: (data: ManualConnectShopifyRequest) =>
     apiClient.post<ManualConnectShopifyResponse>("/channels/shopify/manual-connect", data).then((response) => response.data),
 
-  installInstagram: () =>
-    apiClient.post<OAuthInstallResponse>("/channels/instagram/install").then((response) => response.data),
+  /**
+   * Start Facebook Login for Instagram. Pass `reconnectChannelId` to re-authorize
+   * an existing account rather than add another one.
+   */
+  installInstagram: (data: InstagramInstallRequest = {}) =>
+    apiClient.post<OAuthInstallResponse>("/channels/instagram/install", data).then((response) => response.data),
+
+  /** The accounts one Facebook login granted, when the merchant must pick one. */
+  getInstagramPending: (pendingId: string) =>
+    apiClient.get<InstagramPendingResponse>(`/channels/instagram/pending/${pendingId}`).then((response) => response.data),
+
+  /** Connect the Instagram account the merchant picked. */
+  completeInstagramInstall: (data: CompleteInstagramRequest) =>
+    apiClient.post<CompleteInstagramResponse>("/channels/instagram/complete", data).then((response) => response.data),
 
   /** Step 1 of WhatsApp Embedded Signup: get the configId + CSRF state to feed into FB.login. */
-  installWhatsApp: () =>
-    apiClient.post<WhatsAppInstallResponse>("/channels/whatsapp/install").then((response) => response.data),
+  installWhatsApp: (data: WhatsAppInstallRequest = {}) =>
+    apiClient.post<WhatsAppInstallResponse>("/channels/whatsapp/install", data).then((response) => response.data),
 
   /** Step 2 of WhatsApp Embedded Signup: forward the code Meta returned to the backend. */
   completeWhatsAppInstall: (data: WhatsAppCallbackRequest) =>

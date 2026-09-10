@@ -65,6 +65,7 @@ function build() {
   const service = new OrderService(
     prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
     {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+    {} as any,
   );
   return { service, prisma, tx };
 }

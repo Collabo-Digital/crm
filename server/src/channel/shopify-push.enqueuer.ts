@@ -1,14 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { SHOPIFY_PUSH_QUEUE, ShopifyPushJobData } from './shopify-push.queue';
-
-const DEFAULT_JOB_OPTS = {
-  attempts: 5,
-  backoff: { type: 'exponential' as const, delay: 10_000 },
-  removeOnComplete: { age: 60 * 60 * 24 * 7 }, // 7 days
-  removeOnFail: { age: 60 * 60 * 24 * 30 }, // 30 days for inspection
-};
+import { Priority } from '../rate-limit/rate-limit.types';
+import {
+  PUSH_JOB_OPTS,
+  SHOPIFY_PUSH_QUEUE,
+  ShopifyPushJobData,
+  pushJobId,
+} from './shopify-push.queue';
 
 /**
  * Thin wrapper that owns the BullMQ Queue handle. Other modules (order,
@@ -19,6 +18,10 @@ const DEFAULT_JOB_OPTS = {
  * Retries (all jobs): 5 attempts with exponential backoff (10s → 20s → 40s
  * → 80s → 160s). Failures land on metadata fields and are inspectable from
  * BullMQ's failed list for 30 days.
+ *
+ * Every add sets an explicit `priority` (BullMQ: unset = 0 = highest) and a
+ * stable `jobId` so a repeat enqueue while the previous job is still live is
+ * a no-op rather than a duplicate Shopify mutation.
  */
 @Injectable()
 export class ShopifyPushEnqueuer {
@@ -35,34 +38,15 @@ export class ShopifyPushEnqueuer {
    * PENDING around this call, so a swallowed failure used to leave the order
    * "syncing" for ever with nothing in the queue — the caller must be able
    * to record that as FAILED instead.
-   *
-   * One job id per order: a re-claim while the previous job is still live
-   * (waiting / delayed between retries / active) is a no-op, so two Sync
-   * presses cannot run `orderCreate` twice. A finished job (completed or
-   * failed) is removed first so a retry after the 5 attempts are exhausted
-   * is not silently ignored by BullMQ's id de-duplication.
    */
-  async enqueueOrderPush(data: Extract<ShopifyPushJobData, { type: 'order' }>): Promise<boolean> {
-    const jobId = `push-order:${data.orderId}`;
+  async enqueueOrderPush(
+    data: Extract<ShopifyPushJobData, { type: 'order' }>,
+    priority: Priority = Priority.INTERACTIVE,
+  ): Promise<boolean> {
     try {
-      const existing = await this.queue.getJob(jobId);
-      if (existing) {
-        const state = await existing.getState();
-        if (state === 'completed' || state === 'failed') {
-          await existing.remove();
-        } else {
-          this.logger.log(
-            `Shopify order push for ${data.orderId} already ${state} (job ${jobId}) — not re-enqueued.`,
-          );
-          return true;
-        }
-      }
-      await this.queue.add('push-order', data, { ...DEFAULT_JOB_OPTS, jobId });
-      return true;
+      return await this.addDeduped('push-order', data, pushJobId.order(data.orderId), priority);
     } catch (err) {
-      this.logger.error(
-        `Failed to enqueue Shopify order push for ${data.orderId}: ${err}`,
-      );
+      this.logger.error(`Failed to enqueue Shopify order push for ${data.orderId}: ${err}`);
       return false;
     }
   }
@@ -74,47 +58,106 @@ export class ShopifyPushEnqueuer {
    * should agree: `pullLocationInventory` treats Shopify as authoritative, so
    * an un-pushed local change is actively reverted by the next sync.
    */
-  async enqueueAvailabilityPush(orgId: string, variantIds: string[]): Promise<void> {
+  async enqueueAvailabilityPush(
+    orgId: string,
+    variantIds: string[],
+    priority: Priority = Priority.NORMAL,
+  ): Promise<void> {
     if (variantIds.length === 0) return;
+    const ids = [...new Set(variantIds)];
     try {
-      await this.queue.add(
+      await this.addDeduped(
         'push-availability',
-        {
-          type: 'push-availability',
-          organizationId: orgId,
-          variantIds: [...new Set(variantIds)],
-        },
-        DEFAULT_JOB_OPTS,
+        { type: 'push-availability', organizationId: orgId, variantIds: ids },
+        pushJobId.availability(orgId, ids),
+        priority,
       );
     } catch (err) {
-      this.logger.error(
-        `Failed to enqueue availability push for org ${orgId}: ${err}`,
-      );
+      this.logger.error(`Failed to enqueue availability push for org ${orgId}: ${err}`);
     }
   }
 
   /** Push a single CRM-native product (one-off, e.g. created while Shopify is connected). */
-  async enqueueProductPush(data: Extract<ShopifyPushJobData, { type: 'product' }>): Promise<void> {
+  async enqueueProductPush(
+    data: Extract<ShopifyPushJobData, { type: 'product' }>,
+    priority: Priority = Priority.NORMAL,
+  ): Promise<void> {
     try {
-      await this.queue.add('push-product', data, DEFAULT_JOB_OPTS);
+      await this.addDeduped('push-product', data, pushJobId.product(data.productId), priority);
     } catch (err) {
-      this.logger.error(
-        `Failed to enqueue Shopify product push for ${data.productId}: ${err}`,
-      );
+      this.logger.error(`Failed to enqueue Shopify product push for ${data.productId}: ${err}`);
     }
   }
 
   /**
-   * Push every CRM-native (MANUAL channel) product up to the connected
-   * Shopify store. Fired by the channels-page Sync action (or via the
-   * post-pull step in `ShopifySyncService.runSync`). No longer fires
-   * automatically on Shopify connect — merchants opt in.
+   * Fan out one `product` job per id at bulk priority. Called by the
+   * `bulk-products` planner. One `addBulk` round trip; per-item ids so a
+   * second planner run while these are still queued adds nothing.
+   */
+  async enqueueProductPushMany(
+    orgId: string,
+    productIds: string[],
+    priority: Priority = Priority.BULK,
+    bulkRunId?: string,
+  ): Promise<number> {
+    const ids = [...new Set(productIds)];
+    if (ids.length === 0) return 0;
+    await this.queue.addBulk(
+      ids.map((productId) => ({
+        name: 'push-product',
+        data: {
+          type: 'product' as const,
+          productId,
+          organizationId: orgId,
+          priority,
+          bulkRunId,
+        },
+        opts: { ...PUSH_JOB_OPTS, jobId: pushJobId.product(productId), priority },
+      })),
+    );
+    return ids.length;
+  }
+
+  /** Fan out one `order` job per id at bulk priority — see `enqueueProductPushMany`. */
+  async enqueueOrderPushMany(
+    orgId: string,
+    orderIds: string[],
+    priority: Priority = Priority.BULK,
+    bulkRunId?: string,
+  ): Promise<number> {
+    const ids = [...new Set(orderIds)];
+    if (ids.length === 0) return 0;
+    await this.queue.addBulk(
+      ids.map((orderId) => ({
+        name: 'push-order',
+        data: {
+          type: 'order' as const,
+          orderId,
+          organizationId: orgId,
+          priority,
+          bulkRunId,
+        },
+        opts: { ...PUSH_JOB_OPTS, jobId: pushJobId.order(orderId), priority },
+      })),
+    );
+    return ids.length;
+  }
+
+  /**
+   * Plan a push of every CRM-native (MANUAL channel) product up to the
+   * connected Shopify store. Fired by the channels-page Sync action (or via
+   * the post-pull step in `ShopifySyncService.runSync`). The planner job
+   * itself is cheap; the work happens in the per-item jobs it fans out.
    */
   async enqueueBulkProductPush(
     data: Extract<ShopifyPushJobData, { type: 'bulk-products' }>,
   ): Promise<void> {
     try {
-      await this.queue.add('push-products-bulk', data, DEFAULT_JOB_OPTS);
+      await this.queue.add(
+        'push-products-bulk',
+        { ...data, priority: Priority.BULK },
+        { ...PUSH_JOB_OPTS, priority: Priority.BULK },
+      );
     } catch (err) {
       this.logger.error(
         `Failed to enqueue Shopify bulk product push for org ${data.organizationId}: ${err}`,
@@ -122,20 +165,55 @@ export class ShopifyPushEnqueuer {
     }
   }
 
-  /**
-   * Push every unsynced offline (MANUAL channel) order up to the connected
-   * Shopify store. Fired by the channels-page Sync action via the post-pull
-   * step in `ShopifySyncService.runSync`.
-   */
+  /** Plan a push of every unsynced offline order — see `enqueueBulkProductPush`. */
   async enqueueBulkOrderPush(
     data: Extract<ShopifyPushJobData, { type: 'bulk-orders' }>,
   ): Promise<void> {
     try {
-      await this.queue.add('push-orders-bulk', data, DEFAULT_JOB_OPTS);
+      await this.queue.add(
+        'push-orders-bulk',
+        { ...data, priority: Priority.BULK },
+        { ...PUSH_JOB_OPTS, priority: Priority.BULK },
+      );
     } catch (err) {
       this.logger.error(
         `Failed to enqueue Shopify bulk order push for org ${data.organizationId}: ${err}`,
       );
     }
+  }
+
+  /**
+   * One job id per entity: a re-enqueue while the previous job is still live
+   * (waiting / delayed between retries or parked / active) is a no-op, so two
+   * Sync presses cannot run `orderCreate` twice. A finished job (completed or
+   * failed) is removed first so a retry after the 5 attempts are exhausted is
+   * not silently ignored by BullMQ's id de-duplication.
+   *
+   * Hyphen, not colon, in every id. BullMQ reserves ":" as its Redis key
+   * separator and rejects any custom job id containing one ("Custom Ids
+   * cannot contain :"), so every offline-order push used to fail at enqueue —
+   * before a single Shopify call — and the order was stamped "Sync failed"
+   * with no usable reason.
+   */
+  private async addDeduped(
+    name: string,
+    data: ShopifyPushJobData,
+    jobId: string,
+    priority: Priority,
+  ): Promise<boolean> {
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === 'completed' || state === 'failed') {
+        await existing.remove();
+      } else {
+        this.logger.log(
+          `Shopify push ${jobId} already ${state} — not re-enqueued.`,
+        );
+        return true;
+      }
+    }
+    await this.queue.add(name, { ...data, priority }, { ...PUSH_JOB_OPTS, jobId, priority });
+    return true;
   }
 }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { isAxiosError } from "axios";
@@ -22,7 +22,10 @@ export function meta() {
  */
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
-  const login = useLoginMutation();
+  // Set when an invitation sent the visitor here to prove who they are; they
+  // are returned to it afterwards rather than dropped on the dashboard.
+  const [searchParams] = useSearchParams();
+  const login = useLoginMutation(searchParams.get("next"));
 
   const {
     register,

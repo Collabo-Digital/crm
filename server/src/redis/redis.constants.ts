@@ -7,6 +7,10 @@ export const REDIS_KEYS = {
     USER_REFRESH_TOKENS: 'user_tokens:',
     OAUTH_SHOPIFY: 'oauth:shopify:',
     OAUTH_INSTAGRAM: 'oauth:instagram:',
+    OAUTH_WHATSAPP: 'oauth:whatsapp:',
+    /// Holds the Instagram accounts one login turned out to grant, between the
+    /// Meta redirect and the merchant picking one. Short-lived and single-use.
+    OAUTH_INSTAGRAM_PENDING: 'oauth:instagram:pending:',
 };
 
 export const REDIS_TTL = {

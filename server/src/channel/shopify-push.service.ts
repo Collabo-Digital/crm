@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { mergeJsonMetadata } from '../common/utils/jsonb-merge.util';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { ShopifyGraphqlClient, ShopifyGraphqlError, ShopifyAuthContext } from './shopify-graphql.client';
+import { Priority } from '../rate-limit/rate-limit.types';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import {
@@ -176,18 +177,17 @@ export class ShopifyPushService {
 
   /** Resolve the org's connected SHOPIFY channel (if any). Null = nothing to push. */
   async findShopifyChannel(orgId: string) {
-    return this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.SHOPIFY,
-        },
-      },
+    return this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
   }
 
   /** Main entry point — invoked by the BullMQ processor. */
-  async pushOrder(orderId: string, orgId: string): Promise<void> {
+  async pushOrder(
+    orderId: string,
+    orgId: string,
+    priority: Priority = Priority.NORMAL,
+  ): Promise<void> {
     const channel = await this.findShopifyChannel(orgId);
     if (!channel || channel.status !== ChannelStatus.CONNECTED) {
       this.logger.warn(
@@ -247,7 +247,12 @@ export class ShopifyPushService {
     // CRM-only items (no Shopify mapping; externalId starts with `manual_`)
     // fall back to a custom line item — `{title, priceSet, quantity}` without
     // a variantId records the item as a one-off on the order.
-    const auth: ShopifyAuthContext = { shopDomain, accessToken: token };
+    const auth: ShopifyAuthContext = {
+      shopDomain,
+      accessToken: token,
+      channelId: channel.id,
+      priority,
+    };
     const currency = order.currency;
     const money = (amount: string) => ({ shopMoney: { amount, currencyCode: currency } });
 
@@ -645,7 +650,11 @@ export class ShopifyPushService {
    * Not carried over from the REST era: per-variant image linkage — merchants
    * can set variant images in Shopify Admin if needed.
    */
-  async pushProduct(productId: string, orgId: string): Promise<void> {
+  async pushProduct(
+    productId: string,
+    orgId: string,
+    priority: Priority = Priority.NORMAL,
+  ): Promise<void> {
     const shopify = await this.findShopifyChannel(orgId);
     if (!shopify || shopify.status !== ChannelStatus.CONNECTED) {
       this.logger.warn(
@@ -714,6 +723,7 @@ export class ShopifyPushService {
         oversellGlobally,
         trackGlobally,
         pushGeneratedBarcodes,
+        priority,
       );
       await this.recordProductSuccess(productId, orgId, product.externalId);
       this.logger.log(
@@ -725,7 +735,12 @@ export class ShopifyPushService {
     // One-shot create via productSet — options, variants, images, per-variant
     // inventory quantities AND inventory-item fields (cost / HS code / country
     // of origin / weight / tracked) all ride in a single synchronous mutation.
-    const auth: ShopifyAuthContext = { shopDomain, accessToken: token };
+    const auth: ShopifyAuthContext = {
+      shopDomain,
+      accessToken: token,
+      channelId: shopify.id,
+      priority,
+    };
     const locationId = await this.resolveLocationId(shopify.id, shopDomain, token);
     const input = this.buildProductSetInput(
       product,
@@ -1030,8 +1045,9 @@ export class ShopifyPushService {
     oversellGlobally: boolean,
     trackGlobally: boolean,
     pushGeneratedBarcodes: boolean,
+    priority: Priority = Priority.NORMAL,
   ): Promise<void> {
-    const auth: ShopifyAuthContext = { shopDomain, accessToken: token };
+    const auth: ShopifyAuthContext = { shopDomain, accessToken: token, channelId, priority };
     // The stock push below resolves its own target location(s) — per mapped
     // warehouse when the org runs multi-location, primary otherwise.
     const productGid = ShopifyGraphqlClient.toGid('Product', product.externalId);
@@ -1227,7 +1243,11 @@ export class ShopifyPushService {
    * return restock). Variants that never existed on Shopify (manual_ external
    * ids without an inventory item) are skipped — nothing to sync.
    */
-  async pushAvailability(orgId: string, variantIds: string[]): Promise<void> {
+  async pushAvailability(
+    orgId: string,
+    variantIds: string[],
+    priority: Priority = Priority.NORMAL,
+  ): Promise<void> {
     if (variantIds.length === 0) return;
     const shopify = await this.findShopifyChannel(orgId);
     if (!shopify || shopify.status !== ChannelStatus.CONNECTED) {
@@ -1237,7 +1257,12 @@ export class ShopifyPushService {
       return;
     }
     const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(shopify.id);
-    const auth: ShopifyAuthContext = { shopDomain, accessToken: token };
+    const auth: ShopifyAuthContext = {
+      shopDomain,
+      accessToken: token,
+      channelId: shopify.id,
+      priority,
+    };
 
     const variants = await this.prisma.productVariant.findMany({
       where: {
@@ -1928,7 +1953,7 @@ export class ShopifyPushService {
    * Already-SYNCED and currently-PENDING products are left alone so we don't
    * race in-flight jobs or re-push unchanged data.
    */
-  async bulkPushManualProducts(orgId: string): Promise<void> {
+  async planBulkProductPush(orgId: string): Promise<string[]> {
     // Pull every product for the org with its channel platform; filter in
     // app code because Prisma JSON-path queries against optional nested
     // fields are awkward, and the row count is bounded by the catalog size.
@@ -1955,49 +1980,28 @@ export class ShopifyPushService {
 
     if (toPush.length === 0) {
       this.logger.log(`Org ${orgId} has no products pending Shopify push.`);
-      return;
+      return [];
     }
 
     this.logger.log(
-      `Bulk-pushing ${toPush.length} pending product(s) for org ${orgId}…`,
+      `Planning bulk push of ${toPush.length} pending product(s) for org ${orgId}.`,
     );
-
-    let succeeded = 0;
-    let failed = 0;
-    for (const p of toPush) {
-      try {
-        await this.pushProduct(p.id, orgId);
-        succeeded++;
-      } catch (err) {
-        failed++;
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.error(`Bulk push: product ${p.id} failed: ${msg}`);
-        await this.recordProductFailure(p.id, orgId, msg).catch(() => undefined);
-      }
-    }
-
-    this.logger.log(
-      `Bulk product push complete for org ${orgId}: ${succeeded} succeeded, ${failed} failed.`,
-    );
+    return toPush.map((p) => p.id);
   }
 
   /**
-   * Push every unsynced offline (MANUAL channel) order to the connected
-   * Shopify store. Mirror of `bulkPushManualProducts`. Triggered by the
-   * channels-page Sync action after the pull step completes.
+   * List every unsynced offline (MANUAL channel) order that should be pushed
+   * to the connected Shopify store. Mirror of `planBulkProductPush`: the
+   * processor fans the ids out as one job each, so a large backlog no longer
+   * holds a worker slot for its whole duration.
    */
-  async bulkPushUnsyncedOrders(orgId: string): Promise<void> {
-    const manual = await this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-        },
-      },
+  async planBulkOrderPush(orgId: string): Promise<string[]> {
+    const manual = await this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.MANUAL },
     });
     if (!manual) {
       this.logger.log(`Org ${orgId} has no MANUAL channel — nothing to bulk-push.`);
-      return;
+      return [];
     }
 
     const orders = await this.prisma.order.findMany({
@@ -2012,32 +2016,13 @@ export class ShopifyPushService {
     const unsynced = orders.filter((o) => !this.isAlreadySynced(o.metadata));
     if (unsynced.length === 0) {
       this.logger.log(`Org ${orgId} has no unsynced offline orders to push.`);
-      return;
+      return [];
     }
 
     this.logger.log(
-      `Bulk-pushing ${unsynced.length} unsynced offline order(s) for org ${orgId}…`,
+      `Planning bulk push of ${unsynced.length} unsynced offline order(s) for org ${orgId}.`,
     );
-
-    let succeeded = 0;
-    let failed = 0;
-    for (const o of unsynced) {
-      try {
-        await this.pushOrder(o.id, orgId);
-        succeeded++;
-      } catch (err) {
-        failed++;
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.error(`Bulk push: order ${o.id} failed: ${msg}`);
-        await this.recordFailure(o.id, orgId, msg, /* incrementAttempt */ true).catch(
-          () => undefined,
-        );
-      }
-    }
-
-    this.logger.log(
-      `Bulk order push complete for org ${orgId}: ${succeeded} succeeded, ${failed} failed.`,
-    );
+    return unsynced.map((o) => o.id);
   }
 
   /** Returns true when metadata.shopifySync.status is exactly 'SYNCED'. */

@@ -37,6 +37,7 @@
     "gst:rcm-check": "node prisma/scripts/print-target.js && ts-node -r tsconfig-paths/register prisma/scripts/inward-supply-check.ts"
   },
   "dependencies": {
+    "@nest-lab/throttler-storage-redis": "^1.2.0",
     "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.3",
@@ -92,6 +93,7 @@
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
     "globals": "^16.0.0",
+    "ioredis-mock": "^8.13.1",
     "jest": "^30.0.0",
     "prettier": "^3.4.2",
     "prisma": "^6.19.2",

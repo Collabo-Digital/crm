@@ -151,6 +151,75 @@ export class EmailService implements OnModuleInit {
         );
     }
 
+    /**
+     * Invite an external creator to join an organization as an influencer.
+     *
+     * Separate from `sendTeamInvite` because the recipient is a different
+     * audience: someone outside the business who may never have heard of this
+     * product, so the mail has to say what they are being asked to do and what
+     * they will get access to — not just "you've been invited".
+     */
+    async sendInfluencerInvite(params: {
+        email: string;
+        inviteeName: string | null;
+        orgName: string;
+        inviterName: string | null;
+        token: string;
+        expiresAt: Date;
+    }): Promise<void> {
+        const { email, inviteeName, orgName, inviterName, token, expiresAt } = params;
+        const inviteLink = `${this.frontendUrl}/auth/invite?token=${token}`;
+
+        if (this.isDev) {
+            this.logger.log(
+                `[DEV] Influencer invite for ${email} to join ${orgName}: ${inviteLink}`,
+            );
+            return;
+        }
+
+        const greeting = inviteeName ? `Hi ${this.escape(inviteeName)},` : 'Hi,';
+        const from = inviterName
+            ? `${this.escape(inviterName)} has invited you`
+            : 'You have been invited';
+        const expiry = expiresAt.toLocaleDateString('en-GB', {
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+        });
+
+        await this.send(
+            {
+                to: email,
+                subject: `You've been invited to join ${orgName} as an influencer`,
+                html: `
+                    <h2>You've been invited to collaborate</h2>
+                    <p>${greeting}</p>
+                    <p>${from} to join <strong>${this.escape(orgName)}</strong> as an influencer.</p>
+                    <p>Accepting lets you connect your own Instagram account and collaborate on their campaigns. You keep control of your account and can disconnect it at any time.</p>
+                    <a href="${inviteLink}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: white; text-decoration: none; border-radius: 6px;">Accept Invitation</a>
+                    <p>This invitation expires on ${expiry}.</p>
+                    <p>If you weren't expecting this, you can safely ignore this email.</p>
+                `,
+            },
+            'influencer-invite',
+        );
+    }
+
+    /**
+     * Escape values interpolated into a template.
+     *
+     * Organization and inviter names are user-supplied and reach a recipient's
+     * mail client, so an unescaped `<` is a mail-client-side injection into
+     * someone else's inbox.
+     */
+    private escape(value: string): string {
+        return value
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
     async sendTeamInvite(email: string, orgName: string, token: string): Promise<void> {
         const inviteLink = `${this.frontendUrl}/auth/invite?token=${token}`;
 

@@ -43,6 +43,8 @@ import {
   ProductSettingsTab,
   OrderSettingsTab,
 } from "~/components/app/settings/sync-settings-tab";
+import { InfluencersSection } from "~/components/app/influencers/influencers-section";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import { ChannelSettingsTab } from "~/components/app/settings/channel-settings-tab";
 import { StoreProfileTab } from "~/components/app/settings/store-profile-tab";
 import { UpgradeOrganizationDialog } from "~/components/app/settings/upgrade-organization-dialog";
@@ -1396,6 +1398,11 @@ export default function SettingsPage() {
   const navigate = useNavigate();
   const { tab } = useParams();
   const activeTab = TABS.some((t) => t.id === tab) ? tab! : "general";
+  // Settings tabs an influencer may open. Anything else is an organization
+  // setting they have no business in, and the layout would bounce them off it
+  // anyway — listing it would just be a dead link. Channels is why they are
+  // here; Security is their own password.
+  const INFLUENCER_TABS = ["channels", "security"];
   const [showInvite, setShowInvite] = useState(false);
   /**
    * Drives the org-setup sheet:
@@ -1415,6 +1422,20 @@ export default function SettingsPage() {
   const { data: org, isLoading: orgLoading } = useCurrentOrg();
   const { data: members, isLoading: membersLoading } = useOrgMembers(currentOrgId);
   const { data: invites } = useOrgInvites(currentOrgId);
+  const { role: memberRole, isInfluencer } = useCurrentRole();
+  const visibleTabs = isInfluencer
+    ? TABS.filter((t) => INFLUENCER_TABS.includes(t.id))
+    : TABS;
+  // Who may invite, resend and cancel. The server is the real boundary
+  // (`requireRole` on every invite route); this hides affordances that would
+  // only be refused.
+  const canManageTeam = memberRole === "OWNER" || memberRole === "ADMIN";
+  // Staff only. Influencers hold a membership like anyone else, but they are an
+  // outside party managed in their own section, with their own lifecycle.
+  const staffMembers = (members ?? []).filter((m) => m.role !== "INFLUENCER");
+  // Same reason: an influencer's invitation belongs in the influencer table,
+  // not in the pending-team-invitations list beside it.
+  const staffInvites = (invites ?? []).filter((i) => i.role !== "INFLUENCER");
 
   // ── Mutations for organization, member, and invite operations ──
   const updateOrg = useUpdateOrganizationMutation(currentOrgId ?? "");
@@ -1503,7 +1524,7 @@ export default function SettingsPage() {
         {/* Sidebar */}
         <aside className="hidden w-52 shrink-0 md:block">
           <div className="rounded-xl bg-white dark:bg-gray-900 p-2 shadow-sm ring-1 ring-border">
-            {TABS.map(({ id, label, icon: Icon }) => (
+            {visibleTabs.map(({ id, label, icon: Icon }) => (
               <Link
                 key={id}
                 to={`/settings/${id}`}
@@ -1525,7 +1546,7 @@ export default function SettingsPage() {
 
         {/* Mobile tabs */}
         <div className="flex gap-1 overflow-x-auto md:hidden">
-          {TABS.map(({ id, label }) => (
+          {visibleTabs.map(({ id, label }) => (
             <Link
               key={id}
               to={`/settings/${id}`}
@@ -1827,7 +1848,7 @@ export default function SettingsPage() {
               <Section title="Team Members" description="Manage who has access to your workspace.">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <p className="text-xs text-muted-foreground">
-                    {membersLoading ? "Loading…" : `${members?.length ?? 0} member${(members?.length ?? 0) !== 1 ? "s" : ""}`}
+                    {membersLoading ? "Loading…" : `${staffMembers.length} member${staffMembers.length !== 1 ? "s" : ""}`}
                   </p>
                   <button
                     onClick={() => setShowInvite(true)}
@@ -1849,7 +1870,12 @@ export default function SettingsPage() {
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {members?.map((member, index) => {
+                    {/* Influencers are members too, but they are an outside
+                        party with their own lifecycle and their own section
+                        below. Listing them here would put them in the staff
+                        role dropdown, where an admin could quietly demote one
+                        into an AGENT with access to the whole organization. */}
+                    {staffMembers?.map((member, index) => {
                       const initials = `${member.user.firstName[0]}${member.user.lastName[0]}`.toUpperCase();
                       const isOwner = member.role === "OWNER";
                       const isCurrentUser = member.user.id === authUser?.id;
@@ -1909,10 +1935,10 @@ export default function SettingsPage() {
               </Section>
 
               {/* Pending invites */}
-              {invites && invites.length > 0 && (
+              {staffInvites.length > 0 && (
                 <Section title="Pending Invitations" description="Invitations that haven't been accepted yet.">
                   <div className="space-y-2">
-                    {invites.map((invite) => (
+                    {staffInvites.map((invite) => (
                       <div key={invite.id} className="flex items-center justify-between gap-3 rounded-lg bg-[#f1f7fa] dark:bg-gray-800/60 px-4 py-3">
                         <div className="flex items-center gap-3">
                           <div className="flex size-8 items-center justify-center rounded-full bg-orange-100 text-xs font-bold text-orange-700">
@@ -1935,6 +1961,16 @@ export default function SettingsPage() {
                     ))}
                   </div>
                 </Section>
+              )}
+
+              {/* Influencers: external collaborators, invited and tracked here,
+                  who connect their own Instagram from Settings -> Channels. */}
+              {currentOrgId && (
+                <InfluencersSection
+                  orgId={currentOrgId}
+                  canManage={canManageTeam}
+                  isPersonalWorkspace={org?.type === "PERSONAL"}
+                />
               )}
             </>
           )}

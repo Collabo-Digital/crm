@@ -124,12 +124,29 @@ export interface OrganizationMembership {
   role: UserRole;
   /** For VENDOR role: the Product.vendor value this membership is scoped to. */
   vendorScope?: string | null;
+  /**
+   * Fine-grained capability keys on this membership. Absent when the session
+   * predates them, in which case the role's defaults apply.
+   */
+  permissions?: string[];
   isActive: boolean;
   organization: Organization;
 }
 
 /** Possible roles a user can hold within an organization. */
-export type UserRole = "OWNER" | "ADMIN" | "MANAGER" | "AGENT" | "VIEWER" | "VENDOR";
+export type UserRole =
+  | "OWNER"
+  | "ADMIN"
+  | "MANAGER"
+  | "AGENT"
+  | "VIEWER"
+  | "VENDOR"
+  /**
+   * External creator invited to collaborate. Like VENDOR, an outside party:
+   * deny-by-default on the server, and confined here to the sections their
+   * permissions name plus the channels they personally connected.
+   */
+  | "INFLUENCER";
 
 // ─── Vendor-scoped order shapes (returned to VENDOR-role users) ──────────────
 
@@ -447,21 +464,72 @@ export interface UpdateMemberRoleRequest {
 /** Payload for sending a team invitation. */
 export interface SendInviteRequest {
   email: string;
+  /** What to call the person before they have an account. */
+  name?: string;
   role: UserRole;
   /** Required when role is VENDOR: the Product.vendor value to scope them to. */
   vendorScope?: string;
 }
 
-/** A pending team invitation record. */
+/** Payload for inviting an influencer. The role is fixed by the endpoint. */
+export interface InviteInfluencerRequest {
+  email: string;
+  name?: string;
+}
+
+/**
+ * What an invitation is, as the merchant should see it.
+ *
+ * EXPIRED is derived server-side rather than stored: nothing writes it when the
+ * date passes, so a lapsed invitation is still PENDING in the table.
+ */
+export type InviteState = "PENDING" | "ACCEPTED" | "EXPIRED" | "REVOKED";
+
+/** A team invitation record. */
 export interface OrgInvite {
   id: string;
   email: string;
+  name: string | null;
   role: UserRole;
-  status: "PENDING";
-  token?: string;
+  status: InviteState;
   invitedBy: string;
   expiresAt: string;
   createdAt: string;
+}
+
+// ─── Influencers ──────────────────────────────────────────────────────────
+
+/** An Instagram account an influencer has connected, as shown to an admin. */
+export interface InfluencerChannel {
+  id: string;
+  platform: ChannelPlatform;
+  name: string;
+  status: ChannelStatus;
+  externalStoreId: string | null;
+  externalStoreUrl: string | null;
+  connectedAt: string | null;
+}
+
+/**
+ * One row of influencer management: either someone who joined, or an invitation
+ * still in flight. The server returns both in one list because the UI shows
+ * them in one table.
+ */
+export interface InfluencerRow {
+  kind: "MEMBER" | "INVITE";
+  memberId: string | null;
+  inviteId: string | null;
+  userId: string | null;
+  email: string;
+  name: string | null;
+  avatarUrl: string | null;
+  /** ACTIVE once they have joined; otherwise the invitation's state. */
+  status: InviteState | "ACTIVE";
+  invitedAt: string;
+  joinedAt: string | null;
+  expiresAt?: string;
+  /** Comes from the channel system, not a second copy kept for display. */
+  channels: InfluencerChannel[];
 }
 
 // ─── Invite Types (Auth-level) ────────────────────────────────────────────
@@ -469,6 +537,7 @@ export interface OrgInvite {
 /** Response when fetching invite details by token (pre-accept). */
 export interface GetInviteResponse {
   email: string;
+  name: string | null;
   role: UserRole;
   organization: {
     id: string;
@@ -476,7 +545,12 @@ export interface GetInviteResponse {
     slug: string;
     logo: string | null;
   };
+  /**
+   * True when the invited address already has an account. Acceptance then
+   * requires signing in as that account — holding the link is not enough.
+   */
   userExists: boolean;
+  expiresAt: string;
 }
 
 /** Payload for accepting a team invitation (new or existing user). */
@@ -497,6 +571,11 @@ export interface AcceptInviteResponse {
     firstName: string;
     lastName: string;
   };
+  /**
+   * The role actually granted. Returned so the client stores the truth: it used
+   * to assume AGENT, which left every later role check wrong until a reload.
+   */
+  role: UserRole;
   organization: {
     id: string;
     name: string;
@@ -529,26 +608,80 @@ export type ChannelPlatform =
   | "TIKTOK"
   | "MANUAL";
 
-/** Connection status of a channel. */
+/** Raw connection status stored on the channel row. */
 export type ChannelStatus = "CONNECTED" | "DISCONNECTED" | "ERROR" | "SYNCING";
+
+/**
+ * What the merchant is shown about a connection.
+ *
+ * Derived server-side, and deliberately not `ChannelStatus`: that enum is
+ * overloaded (SYNCING is a Shopify data phase, and the sync path writes
+ * ERROR/CONNECTED to it for reasons unrelated to whether the account is linked).
+ */
+export type ChannelConnectionState =
+  | "CONNECTED"
+  | "ERROR"
+  | "EXPIRED"
+  | "DISCONNECTED";
 
 /** Current synchronization status. */
 export type SyncStatus = "IDLE" | "IN_PROGRESS" | "COMPLETED" | "FAILED";
 
-/** A connected sales channel (e.g. Shopify store). */
+/**
+ * The non-secret identity of a connected account.
+ *
+ * Built server-side by whitelisting display fields out of the encrypted
+ * credentials blob — never the blob itself.
+ */
+export interface ChannelAccountSummary {
+  /** Provider account id: Instagram business account id, WABA id, shop id. */
+  externalId: string | null;
+  /** The short label a merchant recognises: @handle, phone number, domain. */
+  handle: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
+  /** One line of context: which Facebook Page, which WhatsApp Business Account. */
+  detail: string | null;
+}
+
+/** One connected account on a channel (an Instagram handle, a WABA, a store). */
 export interface Channel {
   id: string;
-  organizationId: string;
   name: string;
   platform: ChannelPlatform;
   status: ChannelStatus;
   isEnabled: boolean;
+  connectionState: ChannelConnectionState;
+  /** Null for platforms with nothing to show, and for a never-connected row. */
+  account: ChannelAccountSummary | null;
+  externalStoreId: string | null;
   externalStoreUrl: string | null;
+  /** When this account was linked. Not `createdAt` — a revived row keeps that. */
+  connectedAt: string | null;
+  /** Why the connection is unhealthy, in words to show the merchant. */
+  lastError: string | null;
+  /** Null when the grant does not expire (Shopify offline, WhatsApp system user). */
+  tokenExpiresAt: string | null;
+  disconnectedAt: string | null;
   lastSyncedAt: string | null;
   syncStatus: SyncStatus;
-  metadata: Record<string, unknown> | null;
+  /**
+   * Set by the outbound rate limiter when Shopify / Meta actually refused a
+   * request and a cooldown is running. A past value is stale, not an error:
+   * only treat it as active while it is in the future (see `rateLimit` on
+   * ChannelDetail for the pre-computed flag).
+   */
+  rateLimitedUntil?: string | null;
+  rateLimitReason?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Live outbound rate-limit summary for a channel (from GET /channels/:id). */
+export interface ChannelRateLimit {
+  limitedUntil: string | null;
+  reason: string | null;
+  active: boolean;
 }
 
 /** A single sync log entry recording a synchronization attempt. */
@@ -569,6 +702,8 @@ export interface SyncLog {
 /** Channel detail including recent sync history. */
 export interface ChannelDetail extends Channel {
   syncLogs: SyncLog[];
+  metadata: Record<string, unknown> | null;
+  rateLimit?: ChannelRateLimit;
 }
 
 /** Payload for updating a channel's name or enabled status. */
@@ -644,6 +779,50 @@ export interface OAuthInstallResponse {
   authUrl: string;
 }
 
+/**
+ * Payload for POST /channels/instagram/install.
+ *
+ * `reconnectChannelId` means "re-authorize THIS account" rather than "add
+ * another", which is what the Reconnect action on an errored or expired row
+ * sends. Omitted for a plain connect.
+ */
+export interface InstagramInstallRequest {
+  reconnectChannelId?: string;
+}
+
+/** One Instagram account a single Facebook login turned out to grant. */
+export interface InstagramCandidate {
+  igUserId: string;
+  username: string | null;
+  name: string | null;
+  profilePictureUrl: string | null;
+  pageId: string;
+  pageName: string;
+}
+
+/** Response from GET /channels/instagram/pending/:id — the picker's options. */
+export interface InstagramPendingResponse {
+  pendingId: string;
+  candidates: InstagramCandidate[];
+}
+
+/** Payload for POST /channels/instagram/complete — the merchant's choice. */
+export interface CompleteInstagramRequest {
+  pendingId: string;
+  igUserId: string;
+}
+
+/** Response after the picked Instagram account is connected. */
+export interface CompleteInstagramResponse {
+  channelId: string;
+  account: ChannelAccountSummary | null;
+}
+
+/** Payload for POST /channels/whatsapp/install. */
+export interface WhatsAppInstallRequest {
+  reconnectChannelId?: string;
+}
+
 /** Response from POST /channels/whatsapp/install — config for the Meta JS SDK. */
 export interface WhatsAppInstallResponse {
   configId: string;
@@ -660,6 +839,7 @@ export interface WhatsAppCallbackRequest {
 export interface WhatsAppCallbackResponse {
   channelId: string;
   redirectUrl: string;
+  account: ChannelAccountSummary | null;
 }
 
 // ─── Product Types ───────────────────────────────────────────────────────────
@@ -752,6 +932,15 @@ export interface Product {
   totalStock: number;
   variantCount: number;
   priceRange: { min: number; max: number };
+  /**
+   * The currency `priceRange` and every `variants[].price` below are in.
+   *
+   * Normally the product's own channel currency. When the request asked for
+   * `priceIn` it is that currency instead — unless the rate could not be
+   * reached, in which case the prices are left alone and this still names the
+   * channel's currency. Never assume the org's currency from it.
+   */
+  priceCurrency?: string | null;
   image: ProductImage | null;
   channel: ChannelRef;
   createdAt: string;
@@ -952,6 +1141,15 @@ export interface ProductListParams {
   sortBy?: string;
   sortOrder?: "asc" | "desc";
   stockStatus?: StockStatus;
+  /**
+   * Restate every variant price in this ISO currency (e.g. "INR").
+   *
+   * Catalogue prices are normally read in their own channel's currency, which
+   * is what the product screens show. The counter-sale builder asks for one
+   * currency instead, because it prices a single order in the org's currency
+   * and must display the number it will actually charge.
+   */
+  priceIn?: string;
 }
 
 // ─── Order Types ─────────────────────────────────────────────────────────────

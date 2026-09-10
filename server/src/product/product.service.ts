@@ -32,10 +32,12 @@ import {
   UpdateImageDto,
 } from './dto/image.dto';
 import { ProductOptionDto } from './dto/option.dto';
+import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { ShopifyPushEnqueuer } from '../channel/shopify-push.enqueuer';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { SkuGeneratorService } from '../inventory/sku-generator.service';
+import { FxRateService } from '../common/fx/fx-rate.service';
 import { normalizeUqc } from '../gst/constants/uqc';
 import {
   type IImageStorage,
@@ -81,6 +83,9 @@ export class ProductService {
     private readonly settings: OrganizationSettingsService,
     private readonly inventoryLedger: InventoryLedgerService,
     private readonly skuGenerator: SkuGeneratorService,
+    // Restates catalogue prices when a caller asks for one currency across a
+    // multi-channel catalogue — see `QueryProductsDto.priceIn`.
+    private readonly fx: FxRateService,
     @Inject(IMAGE_STORAGE) private readonly imageStorage: IImageStorage,
   ) { }
 
@@ -213,6 +218,15 @@ export class ProductService {
       this.prisma.product.count({ where }),
     ]);
 
+    // Opt-in restatement of catalogue prices into one currency — see
+    // `QueryProductsDto.priceIn`. Resolved once for the whole page rather than
+    // per product, and a missing rate leaves that product's prices untouched
+    // (the response says which currency each one is in, so the caller can tell).
+    const priceIn = query.priceIn?.toUpperCase();
+    const rates = priceIn
+      ? await this.priceRatesFor(data.map((p) => p.channel?.currency), priceIn)
+      : null;
+
     return {
       data: data.map((product) => {
         // Calculate total stock across all variants
@@ -220,6 +234,22 @@ export class ProductService {
           (sum, v) => sum + v.inventoryQuantity,
           0,
         );
+
+        const source = (product.channel?.currency ?? priceIn ?? '').toUpperCase();
+        const rate = rates?.get(source) ?? null;
+        const variants =
+          rate === null || rate === 1
+            ? product.variants
+            // The list projection selects `price` only; compare-at is not part
+            // of it, so there is nothing else on the row to restate.
+            : product.variants.map((v) => ({
+                ...v,
+                price: this.convertMoney(v.price, rate),
+              }));
+        // The currency those numbers are now in, so the client never has to
+        // assume: the requested one when converted, else the channel's own.
+        const priceCurrency =
+          rate !== null ? (priceIn as string) : (product.channel?.currency ?? null);
 
         return {
           id: product.id,
@@ -231,12 +261,13 @@ export class ProductService {
           hsnCode: product.hsnCode,
           gstRate: product.gstRate,
           totalStock,
-          variantCount: product.variants.length,
-          priceRange: this.getPriceRange(product.variants),
+          variantCount: variants.length,
+          priceRange: this.getPriceRange(variants),
+          priceCurrency,
           image: product.images[0] || null,
           channel: product.channel,
           createdAt: product.externalCreatedAt || product.createdAt,
-          variants: product.variants,
+          variants,
           shopifySync: this.extractShopifySync(product.metadata),
         };
       }),
@@ -424,6 +455,39 @@ export class ProductService {
     };
   }
 
+  /**
+   * Rate per source currency for restating catalogue prices into `target`.
+   *
+   * One lookup per distinct currency on the page, not per product. A currency
+   * whose rate cannot be reached is simply absent from the map, and the caller
+   * leaves those prices in their own currency rather than inventing a number —
+   * the response's `priceCurrency` then says so.
+   */
+  private async priceRatesFor(
+    sourceCurrencies: Array<string | null | undefined>,
+    target: string,
+  ): Promise<Map<string, number>> {
+    const rates = new Map<string, number>([[target, 1]]);
+    const distinct = new Set(
+      sourceCurrencies
+        .map((c) => (c ?? '').toUpperCase())
+        .filter((c) => c && c !== target),
+    );
+    for (const source of distinct) {
+      const rate = await this.fx.getRate(source, target, new Date());
+      if (rate != null) rates.set(source, rate);
+    }
+    return rates;
+  }
+
+  /** Money × rate, at the 2dp every currency this app serves is stored to. */
+  private convertMoney(value: unknown, rate: number): string | null {
+    if (value === null || value === undefined) return null;
+    const num = parseFloat(String(value));
+    if (!Number.isFinite(num)) return null;
+    return (num * rate).toFixed(2);
+  }
+
   private getPriceRange(variants: Array<{ price: any }>) {
     if (variants.length === 0) return { min: '0', max: '0' };
     const prices = variants.map((v) => parseFloat(String(v.price)));
@@ -458,22 +522,7 @@ export class ProductService {
 
     const product = await this.prisma.$transaction(async (tx) => {
       // Lazy-create the MANUAL channel.
-      const channel = await tx.channel.upsert({
-        where: {
-          organizationId_platform: {
-            organizationId: orgId,
-            platform: ChannelPlatform.MANUAL,
-          },
-        },
-        create: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-          name: 'In-Store / Manual',
-          status: ChannelStatus.CONNECTED,
-          isEnabled: true,
-        },
-        update: {},
-      });
+      const channel = await ensureManualChannel(tx, orgId);
 
       // Build variants payload.
       // Product create is admin-only (no @AllowVendor on the route), so no
@@ -599,13 +648,8 @@ export class ProductService {
       const productSettings =
         await this.settings.getProductSettings(orgId);
       if (productSettings.autoSyncToShopify) {
-        const shopify = await this.prisma.channel.findUnique({
-          where: {
-            organizationId_platform: {
-              organizationId: orgId,
-              platform: ChannelPlatform.SHOPIFY,
-            },
-          },
+        const shopify = await this.prisma.channel.findFirst({
+          where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
         });
         if (shopify?.status === ChannelStatus.CONNECTED) {
           await this.shopifyPushEnqueuer.enqueueProductPush({
@@ -725,13 +769,8 @@ export class ProductService {
     if (!product) throw new NotFoundException('Product not found');
     this.assertVendorOwnsProduct(product.vendor, vendorScope);
 
-    const shopify = await this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.SHOPIFY,
-        },
-      },
+    const shopify = await this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
     if (!shopify || shopify.status !== ChannelStatus.CONNECTED) {
       throw new ForbiddenException(
@@ -2037,13 +2076,8 @@ export class ProductService {
     );
     if (ok.length === 0) return { ok: [], skipped, queued: 0 };
 
-    const shopify = await this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.SHOPIFY,
-        },
-      },
+    const shopify = await this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
     if (!shopify || shopify.status !== ChannelStatus.CONNECTED) {
       throw new ForbiddenException(
@@ -2119,22 +2153,7 @@ export class ProductService {
     // We allow duplicating SHOPIFY-channel products as a quick way to seed a
     // new MANUAL product from a synced one. The duplicate lives on MANUAL
     // and starts unsynced, so the read-only constraint isn't relevant.
-    const manual = await this.prisma.channel.upsert({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-        },
-      },
-      create: {
-        organizationId: orgId,
-        platform: ChannelPlatform.MANUAL,
-        name: 'In-Store / Manual',
-        status: ChannelStatus.CONNECTED,
-        isEnabled: true,
-      },
-      update: {},
-    });
+    const manual = await ensureManualChannel(this.prisma, orgId);
 
     const created = await this.prisma.product.create({
       data: {
@@ -2395,22 +2414,7 @@ export class ProductService {
     let processed = 0;
 
     // Lazy MANUAL channel
-    const manual = await this.prisma.channel.upsert({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-        },
-      },
-      create: {
-        organizationId: orgId,
-        platform: ChannelPlatform.MANUAL,
-        name: 'In-Store / Manual',
-        status: ChannelStatus.CONNECTED,
-        isEnabled: true,
-      },
-      update: {},
-    });
+    const manual = await ensureManualChannel(this.prisma, orgId);
 
     for (const candidate of products) {
       try {

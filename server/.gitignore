@@ -41,6 +41,8 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 .env.local
+# Hand-made backups of .env - plaintext secrets, never commit.
+.env.bak*
 
 # temp directory
 .temp

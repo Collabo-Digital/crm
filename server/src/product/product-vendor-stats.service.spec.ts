@@ -25,6 +25,7 @@ function build() {
   };
   const service = new ProductService(
     prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+    {} as any,
   );
   return { service, prisma };
 }
