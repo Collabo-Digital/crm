@@ -665,8 +665,23 @@ export interface Channel {
   disconnectedAt: string | null;
   lastSyncedAt: string | null;
   syncStatus: SyncStatus;
+  /**
+   * Set by the outbound rate limiter when Shopify / Meta actually refused a
+   * request and a cooldown is running. A past value is stale, not an error:
+   * only treat it as active while it is in the future (see `rateLimit` on
+   * ChannelDetail for the pre-computed flag).
+   */
+  rateLimitedUntil?: string | null;
+  rateLimitReason?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Live outbound rate-limit summary for a channel (from GET /channels/:id). */
+export interface ChannelRateLimit {
+  limitedUntil: string | null;
+  reason: string | null;
+  active: boolean;
 }
 
 /** A single sync log entry recording a synchronization attempt. */
@@ -688,6 +703,7 @@ export interface SyncLog {
 export interface ChannelDetail extends Channel {
   syncLogs: SyncLog[];
   metadata: Record<string, unknown> | null;
+  rateLimit?: ChannelRateLimit;
 }
 
 /** Payload for updating a channel's name or enabled status. */

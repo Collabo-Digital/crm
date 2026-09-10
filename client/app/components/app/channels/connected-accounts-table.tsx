@@ -22,6 +22,17 @@ import { ChannelAccountCell } from "./channel-account-cell";
 import { cn } from "~/lib/utils";
 import type { Channel } from "~/types/api";
 
+/**
+ * The moment the outbound rate limiter's cooldown on this channel ends, or
+ * null when there is none. A past value is stale (the breaker expired on its
+ * own), not an error, so it is only surfaced while still in the future.
+ */
+function rateLimitedUntil(channel: Channel): Date | null {
+  if (!channel.rateLimitedUntil) return null;
+  const at = new Date(channel.rateLimitedUntil);
+  return at.getTime() > Date.now() ? at : null;
+}
+
 /** Everything the sync queue knows how to pull for a Shopify store. */
 const SYNC_ENTITY_TYPES = [
   "locations",
@@ -111,6 +122,19 @@ export function ConnectedAccountsTable({
                     {channel.lastError && (
                       <p className="mt-1 max-w-56 text-caption text-danger">
                         {channel.lastError}
+                      </p>
+                    )}
+                    {rateLimitedUntil(channel) && (
+                      <p
+                        className="mt-1 max-w-56 text-caption text-muted-foreground"
+                        title={channel.rateLimitReason ?? undefined}
+                      >
+                        Rate limited by the store until{" "}
+                        {rateLimitedUntil(channel)!.toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                        . Syncs and pushes resume automatically.
                       </p>
                     )}
                   </TableCell>

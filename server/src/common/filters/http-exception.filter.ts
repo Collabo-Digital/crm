@@ -7,6 +7,7 @@ import {
     Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { isRateLimitedError } from '../../rate-limit/rate-limit.types';
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
@@ -37,6 +38,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
                     message = 'Validation failed';
                 }
             }
+        } else if (isRateLimitedError(exception)) {
+            // The outbound limiter refused a Shopify / Meta call made inside
+            // an HTTP request (order edit, draft mirror...). Not our fault and
+            // not the caller's: tell them when to try again.
+            statusCode = HttpStatus.SERVICE_UNAVAILABLE;
+            const retryAfterS = Math.max(1, Math.ceil((exception.retryAtMs - Date.now()) / 1000));
+            response.setHeader('Retry-After', String(retryAfterS));
+            message = `The connected store is rate limiting us. Try again in ${retryAfterS}s.`;
         } else {
             statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
 

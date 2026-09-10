@@ -13,9 +13,12 @@ import { InventoryLedgerService } from './inventory-ledger.service';
 import { WarehouseService } from './warehouse.service';
 import { INVENTORY_QUEUE, InventoryJobData } from './inventory.queue';
 import {
+  PUSH_JOB_OPTS,
   SHOPIFY_PUSH_QUEUE,
   ShopifyPushJobData,
+  pushJobId,
 } from '../channel/shopify-push.queue';
+import { Priority } from '../rate-limit/rate-limit.types';
 import { CreateAdjustmentDto } from './dto/adjustment.dto';
 import { QueryLedgerDto, QueryStockDto } from './dto/query-stock.dto';
 
@@ -227,8 +230,13 @@ export class InventoryService {
     try {
       await this.shopifyPushQueue.add(
         'sync-locations',
-        { type: 'sync-locations', organizationId: orgId },
-        { attempts: 3, backoff: { type: 'exponential', delay: 10_000 } },
+        { type: 'sync-locations', organizationId: orgId, priority: Priority.NORMAL },
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 10_000 },
+          jobId: pushJobId.locations(orgId),
+          priority: Priority.NORMAL,
+        },
       );
     } catch (err) {
       this.logger.warn(`Failed to enqueue location sync for org ${orgId}: ${err}`);
@@ -631,10 +639,15 @@ export class InventoryService {
 
   async enqueueAvailabilityPush(orgId: string, variantIds: string[]) {
     try {
+      const ids = [...new Set(variantIds)];
       await this.shopifyPushQueue.add(
         'push-availability',
-        { type: 'push-availability', organizationId: orgId, variantIds },
-        { attempts: 5, backoff: { type: 'exponential', delay: 10_000 } },
+        { type: 'push-availability', organizationId: orgId, variantIds: ids, priority: Priority.NORMAL },
+        {
+          ...PUSH_JOB_OPTS,
+          jobId: pushJobId.availability(orgId, ids),
+          priority: Priority.NORMAL,
+        },
       );
     } catch (err) {
       this.logger.warn(`Failed to enqueue availability push: ${err}`);

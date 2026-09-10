@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ChannelPlatform, ChannelStatus, SyncStatus, UserRole, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { describeRateLimit } from '../rate-limit/rate-limit-state.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { InstagramOAuthService } from './instagram-oauth.service';
 import { UpdateChannelDto } from './dto/update-channel.dto';
@@ -96,6 +97,8 @@ export class ChannelService {
     lastSyncedAt: true,
     syncStatus: true,
     ownerUserId: true,
+    rateLimitedUntil: true,
+    rateLimitReason: true,
     createdAt: true,
     updatedAt: true,
   } as const;
@@ -200,6 +203,9 @@ export class ChannelService {
       // block; the list projection drops it down to `disconnectedAt`.
       metadata: channel.metadata,
       syncLogs,
+      // "Rate limited until HH:MM" for the channel page. Active only while
+      // the stored time is still in the future; a past value is stale.
+      rateLimit: describeRateLimit(channel.rateLimitedUntil, channel.rateLimitReason),
       scopeStatus:
         channel.platform === ChannelPlatform.SHOPIFY
           ? this.shopifyOAuth.describeScopeStatus(credentials)

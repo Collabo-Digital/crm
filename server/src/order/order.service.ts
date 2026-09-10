@@ -54,7 +54,8 @@ import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { FxRateService } from '../common/fx/fx-rate.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { SHOPIFY_PUSH_QUEUE } from '../channel/shopify-push.queue';
+import { PUSH_JOB_OPTS, SHOPIFY_PUSH_QUEUE, pushJobId } from '../channel/shopify-push.queue';
+import { Priority } from '../rate-limit/rate-limit.types';
 import { displayVariantTitle } from '../product/variant-title.util';
 import {
   retryOnNumberingConflict,
@@ -2270,14 +2271,20 @@ export class OrderService {
     // per-warehouse, so it lands at the location the goods returned to.
     if (restockedVariantIds.length > 0) {
       try {
+        const variantIds = [...new Set(restockedVariantIds)];
         await this.shopifyPushQueue.add(
           'push-availability',
           {
             type: 'push-availability',
             organizationId: orgId,
-            variantIds: [...new Set(restockedVariantIds)],
+            variantIds,
+            priority: Priority.INTERACTIVE,
           },
-          { attempts: 5, backoff: { type: 'exponential', delay: 10_000 } },
+          {
+            ...PUSH_JOB_OPTS,
+            jobId: pushJobId.availability(orgId, variantIds),
+            priority: Priority.INTERACTIVE,
+          },
         );
       } catch (err) {
         this.logger.warn(

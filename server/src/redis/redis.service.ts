@@ -28,6 +28,39 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         return REDIS_PREFIX + prefix + id;
     }
 
+    // ─── LUA SCRIPTS ───
+
+    private readonly definedScripts = new Set<string>();
+
+    /**
+     * Run a Lua script atomically. Registered once per name via
+     * `defineCommand` (ioredis then sends only the SHA and re-uploads on
+     * NOSCRIPT). Keys are prefixed like every other key this service owns;
+     * args are stringified because Redis only speaks strings.
+     */
+    async runScript(
+        name: string,
+        lua: string,
+        numberOfKeys: number,
+        keys: string[],
+        args: unknown[],
+    ): Promise<unknown> {
+        if (!this.definedScripts.has(name)) {
+            this.client.defineCommand(name, { lua, numberOfKeys });
+            this.definedScripts.add(name);
+        }
+        const fn = (this.client as unknown as Record<string, (...a: string[]) => Promise<unknown>>)[name];
+        return await fn.call(
+            this.client,
+            ...keys.map((k) => REDIS_PREFIX + k),
+            ...args.map((a) => String(a)),
+        );
+    }
+
+    async hgetall(key: string): Promise<Record<string, string>> {
+        return this.client.hgetall(REDIS_PREFIX + key);
+    }
+
     // ─── GENERIC ───
 
     async set(key: string, value: unknown, ttlSeconds: number): Promise<void> {

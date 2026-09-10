@@ -496,6 +496,13 @@ model Channel {
   /// owners and admins see every channel in the org. Null for the org's own
   /// channels (Shopify, the manual channel, a WhatsApp number the admin linked).
   ownerUserId      String?         @map("owner_user_id")
+  /// Set by the outbound rate limiter when the remote API (Shopify, Meta)
+  /// actually refused us and a cooldown is running. A past value is stale,
+  /// not an error: the UI treats it as active only while it is in the future.
+  /// Plain columns rather than `metadata` JSON because a different writer
+  /// owns them and a read-modify-write on the JSON blob would race sync.
+  rateLimitedUntil DateTime?       @map("rate_limited_until")
+  rateLimitReason  String?         @map("rate_limit_reason")
   metadata         Json?           @db.JsonB
   pixelIngestToken String?         @unique @map("pixel_ingest_token")
   createdAt        DateTime        @default(now()) @map("created_at")

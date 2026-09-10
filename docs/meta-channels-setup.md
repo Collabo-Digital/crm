@@ -48,9 +48,31 @@ WhatsApp dialog cannot open the popup.
 Instagram requests these on the authorization URL:
 
 ```
-instagram_basic, instagram_manage_messages, pages_show_list,
-pages_messaging, pages_read_engagement, instagram_manage_comments
+instagram_basic, instagram_manage_messages, instagram_manage_comments,
+pages_show_list, pages_read_engagement
 ```
+
+Configure these under **Instagram -> API setup with Facebook login**, *not*
+"API setup with Instagram login" - the latter is a different flow with its own
+`instagram_business_*` scope names and its own app id, and this server does not
+use it.
+
+Two Pages scopes are deliberately NOT requested, because both belong to the
+**Messenger** use case and that product is not added to the app. Asking for
+either makes Meta reject the entire authorization with `Invalid Scopes` and the
+connect never starts:
+
+- `pages_messaging`
+- `pages_manage_metadata`
+
+The cost of leaving `pages_manage_metadata` out is that
+`POST /{page-id}/subscribed_apps` returns **403** on every connect, so the Page
+is never subscribed and no DMs or comments arrive. That failure is swallowed into
+a `logger.warn` (`instagram-oauth.service.ts:531-539`), so the channel still
+reports success and looks healthy. This is the known, accepted state: webhook
+payloads are discarded anyway until the Conversations module lands
+(`instagram-webhook.controller.ts:94`). Add the Messenger use case and re-add
+`pages_manage_metadata` at that point, not before.
 
 WhatsApp's are granted by the Embedded Signup configuration itself
 (`whatsapp_business_management`, `whatsapp_business_messaging`).

@@ -7,6 +7,8 @@ import { ShopifySyncService } from './shopify-sync.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { ShopifyPixelService } from './shopify-pixel.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { parkIfRateLimited } from '../rate-limit/bullmq-park.util';
+import { Priority } from '../rate-limit/rate-limit.types';
 
 /// How many syncs may run at once. BullMQ's default is 1 — per queue, for the
 /// whole deployment — so a single tenant's backfill blocked every other
@@ -28,19 +30,26 @@ export class SyncProcessor extends WorkerHost {
         super();
     }
 
-    async process(job: Job<SyncJobData>): Promise<void> {
+    async process(job: Job<SyncJobData>, token?: string): Promise<void> {
         if (job.data.type === 'setup') {
             await this.runSetup(job);
             return;
         }
 
         const { channelId, organizationId, entityTypes } = job.data;
+        const priority = (job.data.priority as Priority | undefined) ?? Priority.NORMAL;
 
         this.logger.log(
-            `Processing sync job ${job.id}: channel=${channelId}, entities=[${entityTypes.join(',')}]`,
+            `Processing sync job ${job.id}: channel=${channelId}, entities=[${entityTypes.join(',')}], p${priority}`,
         );
 
-        await this.syncService.runSync(channelId, organizationId, entityTypes);
+        try {
+            await this.syncService.runSync(channelId, organizationId, entityTypes, priority);
+        } catch (err) {
+            // A rate limit mid-run parks the job (no attempt consumed) and the
+            // per-entity cursors resume it later. Everything else rethrows.
+            await parkIfRateLimited(err, job, token, this.logger);
+        }
 
         this.logger.log(`Sync job ${job.id} completed`);
     }

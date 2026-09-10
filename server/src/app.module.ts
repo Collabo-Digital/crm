@@ -17,6 +17,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
+import { RateLimitModule } from './rate-limit/rate-limit.module';
 import { FxModule } from './common/fx/fx.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -49,7 +50,13 @@ import { InventoryModule } from './inventory/inventory.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true, load: [configuration], validationSchema }),
     ScheduleModule.forRoot(),
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 60 }]),
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        throttlers: [{ ttl: 60000, limit: 60 }],
+        storage: new ThrottlerStorageRedisService(config.get<string>('redis.url')),
+      }),
+    }),
     // Only mount the static SPA when explicitly enabled.
     // Set SERVE_STATIC=true on full-stack deploys (Render/Railway).
     // Leave unset on API-only deploys (DigitalOcean Droplet) so the server
@@ -72,6 +79,7 @@ import { InventoryModule } from './inventory/inventory.module';
     }),
     PrismaModule,
     RedisModule,
+    RateLimitModule,
     FxModule,
     BullModule.forRootAsync({
       inject: [ConfigService],

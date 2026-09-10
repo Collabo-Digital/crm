@@ -28,6 +28,8 @@ import { WhatsAppOAuthService } from './whatsapp-oauth.service';
 import { WhatsAppCallbackDto } from './dto/whatsapp-callback.dto';
 import { classifyMetaCallbackError } from './channel-connection.util';
 import { ShopifyPixelService } from './shopify-pixel.service';
+import { RateLimitStateService } from '../rate-limit/rate-limit-state.service';
+import { Priority } from '../rate-limit/rate-limit.types';
 
 @Controller('channels')
 export class ChannelController {
@@ -41,6 +43,7 @@ export class ChannelController {
     private readonly instagramOAuth: InstagramOAuthService,
     private readonly whatsappOAuth: WhatsAppOAuthService,
     private readonly config: ConfigService,
+    private readonly rateLimitState: RateLimitStateService,
     @InjectQueue(SYNC_QUEUE) private readonly syncQueue: Queue,
   ) { }
 
@@ -105,17 +108,20 @@ export class ChannelController {
       // redirect. The channel row is already committed by handleCallback.
       await this.enqueueChannelSetup(result.channelId, result.organizationId);
 
-      // Auto-trigger initial sync after successful connection
+      // Auto-trigger initial sync after successful connection. Bulk
+      // priority: it is a backfill nobody is waiting on click-by-click.
       try {
         await this.syncQueue.add('sync', {
           channelId: result.channelId,
           organizationId: result.organizationId,
           entityTypes: ['locations', 'products', 'orders', 'customers', 'inventory'],
+          priority: Priority.BULK,
         } satisfies SyncJobData, {
           attempts: 3,
           backoff: { type: 'exponential', delay: 5000 },
           removeOnComplete: { count: 100 },
           removeOnFail: { count: 50 },
+          priority: Priority.BULK,
         });
       } catch {
         // Non-fatal: sync can be triggered manually later
@@ -145,17 +151,19 @@ export class ChannelController {
   ) {
     const result = await this.shopifyOAuth.manualConnect(user.orgId!, dto.shopDomain, dto.apiKey, dto.apiSecret, dto.accessToken);
 
-    // Auto-trigger initial sync after successful connection
+    // Auto-trigger initial sync after successful connection (bulk priority).
     try {
       await this.syncQueue.add('sync', {
         channelId: result.channelId,
         organizationId: user.orgId!,
         entityTypes: ['locations', 'products', 'orders', 'customers', 'inventory'],
+        priority: Priority.BULK,
       } satisfies SyncJobData, {
         attempts: 3,
         backoff: { type: 'exponential', delay: 5000 },
         removeOnComplete: { count: 100 },
         removeOnFail: { count: 50 },
+        priority: Priority.BULK,
       });
     } catch {
       // Non-fatal: sync can be triggered manually later
@@ -298,6 +306,31 @@ export class ChannelController {
     });
   }
 
+  // GET /channels/:id/rate-limit — live outbound rate-limit state for the
+  // wallets this channel spends from (bucket balance, in-flight counts,
+  // breaker, today's counters). Diagnostic; nothing in the UI depends on it.
+  @Get(':id/rate-limit')
+  @AllowInfluencer()
+  async rateLimit(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    // Same visibility rule as findOne: a channel the viewer may not see 404s.
+    await this.channelService.findOne(id, user.orgId!, {
+      userId: user.sub,
+      role: user.role,
+    });
+    const channel = await this.prisma.channel.findUniqueOrThrow({
+      where: { id },
+      select: {
+        id: true,
+        platform: true,
+        externalStoreUrl: true,
+        credentials: true,
+        rateLimitedUntil: true,
+        rateLimitReason: true,
+      },
+    });
+    return this.rateLimitState.describe(channel);
+  }
+
   // PATCH /channels/:id — update name or toggle
   @Patch(':id')
   @Roles(...CHANNEL_MANAGERS)
@@ -390,16 +423,20 @@ export class ChannelController {
       });
     }
 
-    // Add job to BullMQ queue — returns immediately
+    // Add job to BullMQ queue — returns immediately. A person pressed the
+    // button, so this run is INTERACTIVE: it is picked before any queued
+    // backfill and may spend deeper into the shop's rate-limit bucket.
     const job = await this.syncQueue.add('sync', {
       channelId: id,
       organizationId: user.orgId!,
       entityTypes: dto.entityTypes,
+      priority: Priority.INTERACTIVE,
     } satisfies SyncJobData, {
       attempts: 3,                          // Retry up to 3 times
       backoff: { type: 'exponential', delay: 5000 },  // 5s, 10s, 20s
       removeOnComplete: { count: 100 },     // Keep last 100 completed jobs
       removeOnFail: { count: 50 },          // Keep last 50 failed jobs
+      priority: Priority.INTERACTIVE,
     });
 
     return {

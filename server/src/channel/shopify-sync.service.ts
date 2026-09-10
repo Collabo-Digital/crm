@@ -34,6 +34,7 @@ import {
     ShopifyAuthResolver,
 } from './shopify-graphql.client';
 import { ShopifyPushEnqueuer } from './shopify-push.enqueuer';
+import { Priority, RateLimitedError, isRateLimitedError } from '../rate-limit/rate-limit.types';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { ShopifyLocationSyncService } from './shopify-location-sync.service';
 import { InvoiceService } from '../invoice/invoice.service';
@@ -235,7 +236,12 @@ export class ShopifySyncService {
         }
     }
 
-    async runSync(channelId: string, orgId: string, entityTypes: string[]): Promise<void> {
+    async runSync(
+        channelId: string,
+        orgId: string,
+        entityTypes: string[],
+        priority: Priority = Priority.NORMAL,
+    ): Promise<void> {
         const channel = await this.prisma.channel.findUnique({ where: { id: channelId } });
         if (!channel) throw new Error(`Channel ${channelId} not found`);
 
@@ -304,6 +310,10 @@ export class ShopifySyncService {
         /// pass's skip so the catalogue is only walked once.
         const completedEntities = new Set<string>();
         let initError: Error | null = null;
+        /// Set when the outbound limiter refused to let an entity continue.
+        /// Not a failure: the job is parked and re-entered, and the per-entity
+        /// watermarks mean the parts that finished are not re-read.
+        let parked: RateLimitedError | null = null;
         let token: string | null = null;
         let shopDomain: string | null = null;
 
@@ -340,7 +350,7 @@ export class ShopifySyncService {
                 // The initial resolve above stays, purely so bad credentials
                 // fail fast before any entity runs. Everything below re-resolves
                 // per request through this.
-                const getAuth = this.authResolver(channelId);
+                const getAuth = this.authResolver(channelId, priority);
                 const enabledPull = await this.enabledEntities(channelId, 'pull');
 
                 // Run in PULL_ENTITY_TYPES order rather than the order the job
@@ -389,6 +399,14 @@ export class ShopifySyncService {
                         // three full catalogue rescans per trigger.
                         await this.markEntitySynced(channelId, entityType, syncStartedAt);
                     } catch (error) {
+                        if (isRateLimitedError(error)) {
+                            // Stop here rather than trying the remaining
+                            // entities into the same closed door; the processor
+                            // parks the job and this run resumes from the
+                            // per-entity cursors.
+                            parked = error;
+                            break;
+                        }
                         allSucceeded = false;
                         // A 401 here does NOT mean the grant is dead. It used to
                         // flip the channel to DISCONNECTED, which stranded a
@@ -413,7 +431,13 @@ export class ShopifySyncService {
             await this.prisma.channel.update({
                 where: { id: channelId },
                 data: {
-                    syncStatus: allSucceeded ? SyncStatus.COMPLETED : SyncStatus.FAILED,
+                    // A parked run is still in progress from the merchant's
+                    // point of view: it will resume when the limiter lets it.
+                    syncStatus: parked
+                        ? SyncStatus.IN_PROGRESS
+                        : allSucceeded
+                            ? SyncStatus.COMPLETED
+                            : SyncStatus.FAILED,
                     // `status` is CONNECTION health and this method no longer
                     // writes a failure into it at all -- neither ERROR (which
                     // made a rate-limited backfill look unconnectable) nor
@@ -431,6 +455,17 @@ export class ShopifySyncService {
                     err,
                 );
             });
+        }
+
+        // Rate limited mid-run: hand the error to the processor, which parks
+        // the job (no attempt consumed) and re-runs it later. Nothing below
+        // should happen for a run that did not finish.
+        if (parked) {
+            this.logger.log(
+                `Sync for channel ${channelId} parked by the rate limiter until ${new Date(parked.retryAtMs).toISOString()}; ` +
+                `${completedEntities.size} entit${completedEntities.size === 1 ? 'y' : 'ies'} completed before the pause.`,
+            );
+            throw parked;
         }
 
         // Push local items up to Shopify - but ONLY after a clean pull.
@@ -2979,10 +3014,12 @@ export class ShopifySyncService {
      * therefore costs almost nothing and is what lets a backfill outlive the
      * one-hour token lifetime.
      */
-    private authResolver(channelId: string): ShopifyAuthResolver {
+    private authResolver(channelId: string, priority: Priority = Priority.NORMAL): ShopifyAuthResolver {
         return async () => {
             const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(channelId);
-            return { shopDomain, accessToken: token };
+            // channelId + priority ride on the context so every paginator's
+            // request inherits them without a per-call argument.
+            return { shopDomain, accessToken: token, channelId, priority };
         };
     }
 

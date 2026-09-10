@@ -17,6 +17,7 @@ import { ShopifyPushService } from './shopify-push.service';
 import { ShopifyPushProcessor } from './shopify-push.processor';
 import { ShopifyPushEnqueuer } from './shopify-push.enqueuer';
 import { ShopifyGraphqlClient } from './shopify-graphql.client';
+import { MetaGraphClient } from './meta-graph.client';
 import { ShopifyPixelService } from './shopify-pixel.service';
 import { SyncProcessor } from './sync.processor';
 import { EncryptionService } from './encryption.service';
@@ -57,14 +58,14 @@ import { InvoiceModule } from '../invoice/invoice.module';
     WhatsAppMessagingService, WhatsAppMessagingProcessor, WhatsAppTriggerService,
     ShopifySyncService, ShopifyLocationSyncService, ShopifyAnalyticsService, SyncProcessor, EncryptionService,
     ShopifyPushService, ShopifyPushProcessor, ShopifyPushEnqueuer,
-    ShopifyGraphqlClient, ShopifyPixelService,
+    ShopifyGraphqlClient, MetaGraphClient, ShopifyPixelService,
   ],
   exports: [
     ChannelService, ShopifyOAuthService, InstagramOAuthService, WhatsAppOAuthService,
     WhatsAppMessagingService, WhatsAppTriggerService,
     ShopifySyncService, ShopifyLocationSyncService, ShopifyAnalyticsService, EncryptionService,
     ShopifyPushService, ShopifyPushEnqueuer,
-    ShopifyGraphqlClient,
+    ShopifyGraphqlClient, MetaGraphClient,
   ],
 })
 export class ChannelModule { }

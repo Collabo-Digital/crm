@@ -13,6 +13,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { REDIS_KEYS, REDIS_TTL } from '../redis/redis.constants';
 import { EncryptionService } from './encryption.service';
+import { MetaGraphClient } from './meta-graph.client';
+import { MetaGraphError, metaScope } from './meta-graph.types';
+import { Priority, isRateLimitedError } from '../rate-limit/rate-limit.types';
 import {
     assertCanConnect,
     resolveConnectTarget,
@@ -87,6 +90,7 @@ export class InstagramOAuthService {
         private readonly config: ConfigService,
         private readonly encryption: EncryptionService,
         private readonly redis: RedisService,
+        private readonly metaGraph: MetaGraphClient,
     ) {
         this.appId = this.config.get<string>('instagram.appId')!;
         this.appSecret = this.config.get<string>('instagram.appSecret')!;
@@ -96,7 +100,6 @@ export class InstagramOAuthService {
             'instagram_basic',
             'instagram_manage_messages',
             'pages_show_list',
-            'pages_messaging',
             'pages_read_engagement',
             'instagram_manage_comments',
         ].join(',');
@@ -132,17 +135,37 @@ export class InstagramOAuthService {
         }
     }
 
-    private async getJson<T>(url: string, init?: RequestInit): Promise<T> {
-        const res = await fetch(url, {
-            ...init,
-            signal: AbortSignal.timeout(OAUTH_FETCH_TIMEOUT_MS),
-        });
-        if (!res.ok) {
-            const body = await res.text();
-            this.logger.error(`Meta request failed (${res.status}): ${body}`);
+    /**
+     * GET through the shared, rate-limited Meta client. Accepts the absolute
+     * URLs this file builds (and Meta's `paging.next` links); an
+     * `access_token` query parameter is moved into the Authorization header
+     * so tokens stop appearing in URLs and logs.
+     *
+     * A rate limit propagates as `RateLimitedError` (the HTTP filter turns it
+     * into a 503 with Retry-After); anything else is the same 400 as before.
+     */
+    private async getJson<T>(url: string, init?: { method?: 'GET' | 'POST' | 'DELETE' }): Promise<T> {
+        const parsed = new URL(url);
+        const accessToken = parsed.searchParams.get('access_token') ?? undefined;
+        parsed.searchParams.delete('access_token');
+        try {
+            const res = await this.metaGraph.request<T>({
+                method: init?.method ?? 'GET',
+                url: parsed.toString(),
+                accessToken,
+                scopes: this.metaGraph.baseScopes(),
+                priority: Priority.INTERACTIVE,
+                timeoutMs: OAUTH_FETCH_TIMEOUT_MS,
+            });
+            return res.data;
+        } catch (err) {
+            if (isRateLimitedError(err)) throw err;
+            const status = err instanceof MetaGraphError ? err.httpStatus : undefined;
+            this.logger.error(
+                `Meta request failed (${status ?? 'network'}): ${err instanceof Error ? err.message : String(err)}`,
+            );
             throw new BadRequestException('Instagram could not be reached. Please try again.');
         }
-        return (await res.json()) as T;
     }
 
     /** The org's Instagram rows, in the narrow shape the decision helpers want. */
@@ -495,23 +518,23 @@ export class InstagramOAuthService {
         // connected but not subscribed still works for everything except inbound
         // DMs, and failing the whole connect over it would be the worse outcome.
         try {
-            const subscribed = await fetch(
-                this.graphUrl(`/${candidate.pageId}/subscribed_apps`) +
-                `?subscribed_fields=messages,messaging_postbacks&access_token=${pageToken}`,
-                { method: 'POST', signal: AbortSignal.timeout(OAUTH_FETCH_TIMEOUT_MS) },
-            );
-            if (!subscribed.ok) {
-                // A non-OK response is the common case (permissions), and fetch
-                // does not throw for it — without this check the warning below
-                // could only ever fire on a network error.
-                this.logger.warn(
-                    `Instagram connected but Page ${candidate.pageId} was not subscribed ` +
-                    `(${subscribed.status}): inbound DMs will not arrive until it is.`,
-                );
-            }
-        } catch {
+            await this.metaGraph.request({
+                method: 'POST',
+                path: `/${candidate.pageId}/subscribed_apps`,
+                query: { subscribed_fields: 'messages,messaging_postbacks' },
+                accessToken: pageToken,
+                scopes: [...this.metaGraph.baseScopes(), metaScope.page(candidate.pageId)],
+                pageId: candidate.pageId,
+                priority: Priority.INTERACTIVE,
+                timeoutMs: OAUTH_FETCH_TIMEOUT_MS,
+            });
+        } catch (err) {
+            // A non-OK response is the common case (permissions). The channel
+            // is connected either way; only inbound DMs are affected.
+            const status = err instanceof MetaGraphError ? err.httpStatus : undefined;
             this.logger.warn(
-                `Instagram connected but webhook subscription failed for Page ${candidate.pageId}`,
+                `Instagram connected but Page ${candidate.pageId} was not subscribed ` +
+                `(${status ?? 'network'}): inbound DMs will not arrive until it is.`,
             );
         }
 
@@ -584,10 +607,34 @@ export class InstagramOAuthService {
                 error instanceof Prisma.PrismaClientKnownRequestError &&
                 error.code === 'P2002'
             ) {
-                // (platform, external_store_id) is unique across the whole
-                // table, so this is another ORGANIZATION holding the account.
+                // (platform, external_store_id) is unique across the WHOLE
+                // table, so some row already claims this account. Which row is
+                // worth finding out: assuming "another organization" sends the
+                // merchant hunting through orgs they may not even own, when the
+                // holder is often a row in this very org that resolveConnectTarget
+                // did not match (a disconnected row still holding the id, or one
+                // owned by a different user).
+                const holder = await this.prisma.channel.findFirst({
+                    where: {
+                        platform: ChannelPlatform.INSTAGRAM,
+                        externalStoreId: candidate.igUserId,
+                    },
+                    select: {
+                        name: true,
+                        organizationId: true,
+                        organization: { select: { name: true } },
+                    },
+                });
+                const label = candidate.username ? `@${candidate.username}` : 'This Instagram account';
+                // Keep the words "another organization" for the genuine cross-org
+                // case — classifyMetaCallbackError matches on them to pick the
+                // `account_taken` redirect reason.
                 throw new ConflictException(
-                    'This Instagram account is already connected to another organization. Disconnect it there first.',
+                    !holder
+                        ? `${label} is already connected. Disconnect it first.`
+                        : holder.organizationId === orgId
+                          ? `${label} is already connected in this organization as "${holder.name}". Disconnect that channel first.`
+                          : `${label} is already connected to another organization ("${holder.organization?.name ?? holder.organizationId}"). Disconnect it there first.`,
                 );
             }
             throw error;
@@ -635,15 +682,27 @@ export class InstagramOAuthService {
     ): Promise<void> {
         const currentToken = this.encryption.decrypt(creds.userAccessToken);
 
-        const res = await fetch(
-            this.graphUrl('/oauth/access_token') +
-            `?grant_type=fb_exchange_token` +
-            `&client_id=${this.appId}` +
-            `&client_secret=${this.appSecret}` +
-            `&fb_exchange_token=${currentToken}`,
-            { signal: AbortSignal.timeout(OAUTH_FETCH_TIMEOUT_MS) },
-        );
-        if (!res.ok) {
+        let data: { access_token: string; expires_in: number };
+        try {
+            const res = await this.metaGraph.request<{ access_token: string; expires_in: number }>({
+                method: 'GET',
+                path: '/oauth/access_token',
+                query: {
+                    grant_type: 'fb_exchange_token',
+                    client_id: this.appId,
+                    client_secret: this.appSecret,
+                    fb_exchange_token: currentToken,
+                },
+                scopes: this.metaGraph.baseScopes(),
+                priority: Priority.INTERACTIVE,
+                channelId,
+                timeoutMs: OAUTH_FETCH_TIMEOUT_MS,
+            });
+            data = res.data;
+        } catch (err) {
+            // A rate limit is not a dead token: let it surface as such rather
+            // than branding the channel as needing a reconnect.
+            if (isRateLimitedError(err)) throw err;
             this.logger.error(`Instagram token refresh failed for channel ${channelId}`);
             await this.prisma.channel.update({
                 where: { id: channelId },
@@ -657,8 +716,6 @@ export class InstagramOAuthService {
             });
             throw new BadRequestException('Failed to refresh Instagram token');
         }
-
-        const data = (await res.json()) as { access_token: string; expires_in: number };
         const newExpiresAt = new Date(Date.now() + data.expires_in * 1000);
 
         // Re-fetch page access token with new user token
@@ -711,10 +768,16 @@ export class InstagramOAuthService {
         try {
             const pageToken = this.safeDecrypt(creds.pageAccessToken);
             if (!pageToken) return;
-            await fetch(
-                this.graphUrl(`/${creds.pageId}/subscribed_apps`) + `?access_token=${pageToken}`,
-                { method: 'DELETE', signal: AbortSignal.timeout(OAUTH_FETCH_TIMEOUT_MS) },
-            );
+            await this.metaGraph.request({
+                method: 'DELETE',
+                path: `/${creds.pageId}/subscribed_apps`,
+                accessToken: pageToken,
+                scopes: [...this.metaGraph.baseScopes(), metaScope.page(creds.pageId)],
+                pageId: creds.pageId,
+                priority: Priority.INTERACTIVE,
+                channelId: channel.id,
+                timeoutMs: OAUTH_FETCH_TIMEOUT_MS,
+            });
         } catch {
             this.logger.warn(
                 `Could not unsubscribe Page ${creds.pageId} for channel ${channel.id} — disconnecting anyway.`,
