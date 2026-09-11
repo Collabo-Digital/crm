@@ -12,6 +12,7 @@ export const inventoryKeys = {
   variantStock: (variantId: string) =>
     [...inventoryKeys.all, "variant-stock", variantId] as const,
   ledger: (params?: LedgerParams) => [...inventoryKeys.all, "ledger", params] as const,
+  codeStatus: () => [...inventoryKeys.all, "code-status"] as const,
   duplicates: () => [...inventoryKeys.all, "duplicates"] as const,
   warehouses: () => [...inventoryKeys.all, "warehouses"] as const,
   locations: (warehouseId: string) =>
@@ -27,6 +28,19 @@ export function useInventoryStatus() {
     queryKey: inventoryKeys.status(),
     queryFn: () => inventoryService.status(),
     refetchInterval: (query) => (query.state.data?.seeding ? 3000 : false),
+  });
+}
+
+/**
+ * Counts behind the Product codes dialog. Both generate mutations already
+ * invalidate `inventoryKeys.all`, so these refresh after every action with no
+ * extra wiring.
+ */
+export function useCodeStatus(enabled = true) {
+  return useQuery({
+    queryKey: inventoryKeys.codeStatus(),
+    queryFn: () => inventoryService.codeStatus(),
+    enabled,
   });
 }
 

@@ -38,8 +38,9 @@ export class GenerateCodesDto {
   /**
    * Barcode value shape (generateBarcodes only).
    *
-   *   'sku'   — copy the SKU verbatim. The default, unchanged behaviour.
-   *   'short' — a 6-digit sequence number.
+   *   'short' — a 6-digit sequence number. THE DEFAULT since 2026-08-28.
+   *   'sku'   — copy the SKU verbatim. The original behaviour, kept for
+   *             merchants who want the SKU itself to be scannable.
    *
    * 'short' exists because the generated SKU shape
    * ({PREFIX}-{PRODUCTCODE}-{SEQ}-{OPTIONS}, e.g. 9TH-SAR-001-BLK-FS) is 18

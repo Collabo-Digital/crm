@@ -3000,11 +3000,30 @@ export interface GenerateCodesRequest {
   filter?: "missing-sku" | "missing-barcode" | "missing-or-generated" | "all";
   overwrite?: boolean;
   /**
-   * Barcode value shape (generate-barcodes only). "sku" copies the SKU
-   * verbatim (default); "short" mints a 6-digit numeric code that fits small
-   * and jewellery label stock, which an 18-character SKU cannot.
+   * Barcode value shape (generate-barcodes only). "short" mints a 6-digit
+   * numeric code that fits small and jewellery label stock, which an
+   * 18-character SKU cannot — it is the default. "sku" copies the SKU
+   * verbatim, the original behaviour.
    */
   format?: "sku" | "short";
+}
+
+/**
+ * Org-wide code coverage, behind the "Product codes" dialog. Each figure is
+ * the exact target set of one action, so a zero means that action has nothing
+ * to do and is not offered.
+ */
+export interface CodeStatus {
+  totalVariants: number;
+  missingSku: number;
+  missingBarcode: number;
+  /** CRM-generated barcodes too long to print on small label stock. */
+  longBarcode: number;
+  /**
+   * The prefix a generated SKU will actually start with — already resolved
+   * through the org-name fallback, so do not re-derive it here.
+   */
+  skuPrefix: string;
 }
 
 export interface GenerateCodesResult {

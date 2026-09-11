@@ -10,7 +10,6 @@ import {
   Barcode,
   MapPin,
   Warehouse as WarehouseIcon,
-  SlidersHorizontal,
   Search,
 } from "lucide-react";
 import { StatCard } from "~/components/app/stat-card";
@@ -30,6 +29,7 @@ import {
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
 import { LocationPicker } from "~/components/app/inventory/location-picker";
+import { ProductCodesDialog } from "~/components/app/inventory/product-codes-dialog";
 import {
   StockSaveBar,
   type PendingChange,
@@ -54,6 +54,7 @@ import { useDebounced } from "~/hooks/use-debounced";
 import { useSelectedLocation } from "~/hooks/use-selected-location";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import {
+  useCodeStatus,
   useInventoryStatus,
   useStock,
   useStockStats,
@@ -61,8 +62,6 @@ import {
 import {
   useCreateAdjustmentMutation,
   useEnableInventoryMutation,
-  useGenerateBarcodesMutation,
-  useGenerateSkusMutation,
   useBulkAdjustmentMutation,
 } from "~/hooks/use-inventory-mutations";
 import type { StockBucket, StockLine, StockListParams } from "~/types/api";
@@ -171,6 +170,7 @@ function StockScreen() {
   const [page, setPage] = useState(1);
   const [adjusting, setAdjusting] = useState<StockLine | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [codesOpen, setCodesOpen] = useState(false);
   // Edited-but-unsaved Available values, keyed by stock line. Cleared whenever
   // the rows underneath change, so a draft can never be written against a row
   // the merchant is no longer looking at.
@@ -218,8 +218,6 @@ function StockScreen() {
   // the tiles. Feeding the stock filter in would make "Low stock lines" merely
   // restate the row count and pin "Oversold lines" to 0.
   const stats = useStockStats({ warehouseId: params.warehouseId }, Boolean(locationId));
-  const generateSkus = useGenerateSkusMutation();
-  const generateBarcodes = useGenerateBarcodesMutation();
 
   const rows = stock.data?.data ?? [];
   const meta = stock.data?.meta;
@@ -296,15 +294,17 @@ function StockScreen() {
       ? `/products/inventory/labels/print?variantIds=${[...selectedIds].join(",")}`
       : null;
 
-  // Code generation acts on the selection when there is one, and on the whole
-  // org otherwise. Counting the rows that actually LACK a code (rather than
-  // the rows selected) lets each button say up front what it will change —
-  // and lets it disable itself when the answer is "nothing", instead of
-  // firing a request that reports zero.
-  const selectedRows = rows.filter((r) => selectedIds.has(r.variantId));
-  const hasSelection = selectedIds.size > 0;
-  const missingSkuCount = selectedRows.filter((r) => !r.sku).length;
-  const missingBarcodeCount = selectedRows.filter((r) => !r.barcode).length;
+  // Codes are a CATALOGUE concern, not a location one, so the count comes from
+  // the server rather than from these rows. The old toolbar counted the
+  // current page's selection while the buttons acted org-wide, so the number
+  // beside a button routinely described a different set from the one it
+  // changed. Zero means nothing needs fixing and the button drops its badge.
+  const codeStatus = useCodeStatus();
+  const pendingCodes = codeStatus.data
+    ? codeStatus.data.missingSku +
+      codeStatus.data.missingBarcode +
+      codeStatus.data.longBarcode
+    : 0;
   const setDraft = (stockLineId: string, value: string | undefined) => {
     setSaveError(null);
     setDrafts((prev) => {
@@ -375,8 +375,6 @@ function StockScreen() {
     );
   };
 
-  const selectedVariantIds = [...selectedIds];
-
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -393,86 +391,10 @@ function StockScreen() {
           <Button
             variant="outline"
             size="action"
-            onClick={() =>
-              generateSkus.mutate(
-                hasSelection
-                  ? { variantIds: selectedVariantIds }
-                  : { filter: "missing-sku" },
-              )
-            }
-            disabled={generateSkus.isPending || (hasSelection && missingSkuCount === 0)}
-            title={
-              hasSelection && missingSkuCount === 0
-                ? "Every selected row already has a SKU"
-                : undefined
-            }
-          >
-            <SlidersHorizontal className="size-3.5" />
-            {generateSkus.isPending
-              ? "Generating…"
-              : hasSelection
-                ? `Generate SKUs (${missingSkuCount})`
-                : "Generate all missing SKUs"}
-          </Button>
-          <Button
-            variant="outline"
-            size="action"
-            onClick={() =>
-              generateBarcodes.mutate(
-                hasSelection
-                  ? { variantIds: selectedVariantIds }
-                  : { filter: "missing-barcode" },
-              )
-            }
-            disabled={
-              generateBarcodes.isPending || (hasSelection && missingBarcodeCount === 0)
-            }
-            title={
-              hasSelection && missingBarcodeCount === 0
-                ? "Every selected row already has a barcode"
-                : undefined
-            }
+            onClick={() => setCodesOpen(true)}
           >
             <Barcode className="size-3.5" />
-            {generateBarcodes.isPending
-              ? "Generating…"
-              : hasSelection
-                ? `Generate barcodes (${missingBarcodeCount})`
-                : "Generate all missing barcodes"}
-          </Button>
-          {/* Switching an existing catalogue over to short codes.
-              `missing-or-generated` targets gaps PLUS barcodes this CRM minted;
-              real GTINs synced from Shopify and hand-typed codes are never in
-              scope. Kept as a separate, explicit button because it REPLACES
-              working barcodes — any label already printed and stuck on stock
-              stops matching, which the confirm below spells out. */}
-          <Button
-            variant="outline"
-            size="action"
-            onClick={() => {
-              if (
-                !window.confirm(
-                  "Replace CRM-generated barcodes with short 6-digit codes?\n\n" +
-                    "Short codes fit small and jewellery label stock, which a full SKU cannot. " +
-                    "Barcodes from Shopify and ones you typed yourself are left alone.\n\n" +
-                    "Any labels already printed with the old codes will stop matching and need reprinting.",
-                )
-              )
-                return;
-              // NOT `overwrite: true` — that flag bypasses the filter entirely
-              // in loadTargets and would clobber real GTINs synced from
-              // Shopify. `missing-or-generated` is precisely the safe set.
-              generateBarcodes.mutate(
-                hasSelection
-                  ? { variantIds: selectedVariantIds, filter: "missing-or-generated", format: "short" }
-                  : { filter: "missing-or-generated", format: "short" },
-              );
-            }}
-            disabled={generateBarcodes.isPending}
-            title="Replace barcodes the CRM generated with short 6-digit codes that fit small and jewellery labels. Shopify and hand-entered barcodes are untouched."
-          >
-            <Barcode className="size-3.5" />
-            {hasSelection ? "Switch to short codes" : "Switch all to short codes"}
+            {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}
           </Button>
           {labelHref ? (
             <Button asChild variant="brand" size="action">
@@ -726,6 +648,8 @@ function StockScreen() {
         saving={bulkAdjust.isPending}
         error={saveError}
       />
+
+      <ProductCodesDialog open={codesOpen} onOpenChange={setCodesOpen} />
 
       {adjusting && <AdjustStockDialog line={adjusting} onClose={() => setAdjusting(null)} />}
     </div>

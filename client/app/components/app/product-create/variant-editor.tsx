@@ -6,6 +6,7 @@ import { COMMON_UQC, GST_RATE_OPTIONS, GST_SUPPLY_TYPES } from "~/lib/gst-uqc";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { formatMargin } from "~/lib/utils";
+import { CODE_TERMS } from "~/lib/inventory-vocabulary";
 
 /**
  * Repeating-row editor for product variants. Each row exposes the most-used
@@ -433,9 +434,10 @@ function VariantDetailPanel({
           {/* Customs */}
           <PanelSection title="Customs information">
             <PanelField
-              label="Barcode (UPC, ISBN, etc.)"
+              label={CODE_TERMS.barcode.label}
               value={variant.barcode ?? ""}
               onChange={(v) => onChange({ barcode: v || undefined })}
+              hint={CODE_TERMS.barcode.definition}
               mono
             />
             <PanelField
@@ -589,6 +591,7 @@ function PanelField({
   step,
   mono = false,
   placeholder,
+  hint,
 }: {
   label: string;
   value: string | number;
@@ -597,6 +600,7 @@ function PanelField({
   step?: string;
   mono?: boolean;
   placeholder?: string;
+  hint?: string;
 }) {
   return (
     <label className="block">
@@ -613,6 +617,11 @@ function PanelField({
           mono ? "font-mono" : ""
         }`}
       />
+      {hint && (
+        <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground">
+          {hint}
+        </span>
+      )}
     </label>
   );
 }

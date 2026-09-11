@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router";
 import {
   Search, Plus, Filter, ChevronLeft, ChevronRight, Package, ListChecks,
   PackageX, AlertTriangle, Check, Loader2, Pencil, Trash2, UploadCloud,
-  Download, Upload, X, ArrowUpDown, ChevronDown, Boxes,
+  Download, Upload, X, ArrowUpDown, ChevronDown, Boxes, Barcode,
 } from "lucide-react";
 import { StatCard } from "~/components/app/stat-card";
 import { TableSkeleton } from "~/components/app/table-skeleton";
@@ -12,9 +12,11 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { ProductFormDialog } from "~/components/app/product-create/product-form-dialog";
 import { BulkActionBar } from "~/components/app/products/bulk-action-bar";
 import { CsvImportWizard } from "~/components/app/products/csv-import-wizard";
+import { ProductCodesDialog } from "~/components/app/inventory/product-codes-dialog";
 import { formatCurrency } from "~/lib/utils";
 import { useProducts, useProductTypes, useProductStats, useProductVendors } from "~/hooks/use-product-queries";
 import { useDebounced } from "~/hooks/use-debounced";
+import { useCodeStatus } from "~/hooks/use-inventory-queries";
 import {
   useDeleteProductMutation,
   useSyncProductMutation,
@@ -113,6 +115,16 @@ export default function ProductsPage() {
   // vanished; come back and only page 1's rows were "selected".
   const [selected, setSelected] = useState<Map<string, Product>>(new Map());
   const [importOpen, setImportOpen] = useState(false);
+  const [codesOpen, setCodesOpen] = useState(false);
+
+  // Org-wide, so the badge is honest about what the dialog will change. Hidden
+  // from vendors along with the rest of the catalogue-wide actions.
+  const codeStatus = useCodeStatus(!isVendor);
+  const pendingCodes = codeStatus.data
+    ? codeStatus.data.missingSku +
+      codeStatus.data.missingBarcode +
+      codeStatus.data.longBarcode
+    : 0;
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
   const [filterValues, setFilterValues] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("createdAt");
@@ -264,6 +276,18 @@ export default function ProductsPage() {
               <Upload className="size-3.5" />
               Import
             </Button>
+            {/* Codes belong to the catalogue, not to a location, so this is
+                their home. The Inventory page carries the same dialog, but it
+                is gated on warehousing — without this trigger an org that has
+                not enabled it cannot reach the flow at all. */}
+            <Button
+              variant="outline"
+              size="action"
+              onClick={() => setCodesOpen(true)}
+            >
+              <Barcode className="size-3.5" />
+              {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}
+            </Button>
             <Button
               variant="brand"
               size="action"
@@ -275,6 +299,8 @@ export default function ProductsPage() {
           </div>
         )}
       </div>
+
+      <ProductCodesDialog open={codesOpen} onOpenChange={setCodesOpen} />
 
       {/* Bulk action bar — only visible when at least one product is selected */}
       {!isVendor && selectedProducts.length > 0 && (

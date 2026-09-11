@@ -107,7 +107,7 @@ export function LabelQuantityRows({
                     {generatingId === l.variantId && (
                       <Loader2 className="size-3.5 animate-spin" />
                     )}
-                    Generate barcode
+                    Create barcode
                   </Button>
                 ) : bigger ? (
                   <Button

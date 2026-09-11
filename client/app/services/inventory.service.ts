@@ -3,6 +3,7 @@ import type {
   BulkLocationsRequest,
   BulkAdjustmentRequest,
   BulkAdjustmentResponse,
+  CodeStatus,
   CreateAdjustmentRequest,
   CreateWarehouseRequest,
   DuplicateCodesReport,
@@ -89,6 +90,12 @@ export const inventoryService = {
   generateBarcodes: (data: GenerateCodesRequest) =>
     apiClient
       .post<GenerateCodesResult>("/inventory/labels/generate-barcodes", data)
+      .then((r) => r.data),
+
+  /** Org-wide code coverage. Not location-scoped — codes belong to the catalogue. */
+  codeStatus: () =>
+    apiClient
+      .get<CodeStatus>("/inventory/labels/code-status")
       .then((r) => r.data),
 
   duplicates: () =>

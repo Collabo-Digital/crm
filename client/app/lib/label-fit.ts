@@ -45,6 +45,16 @@ export const LABEL_LINE_HEIGHT = 1.25;
 
 const MM_PER_PT = 25.4 / 72;
 
+/**
+ * How far the SKU / price row is pulled in from the label's content edges, at
+ * scale 1. Purely visual: `justify-between` otherwise pins them further out
+ * than the barcode above them.
+ */
+export const META_INSET_MM = 1.5;
+
+/** Ceiling on that inset as a share of the panel width, for narrow stock. */
+const META_INSET_MAX_SHARE = 0.05;
+
 /** Rendered line-box height of one text row, in millimetres. */
 export function rowHeightMm(pt: number, scale: number): number {
   return pt * scale * MM_PER_PT * LABEL_LINE_HEIGHT;
@@ -60,6 +70,16 @@ export interface PanelSlots {
   hriMm: number;
   /** Whatever is left for the bars. 0 on a text-only panel. */
   barsMm: number;
+  /**
+   * Horizontal inset for the SKU / price row only.
+   *
+   * That row is `justify-between`, so without it the SKU is pinned to the left
+   * content edge and the price to the right, both further out than the barcode
+   * above them. Applied to no other row: the bars in particular are planned
+   * against the FULL `contentWidthMm`, so narrowing the box they land in
+   * without telling the planner is exactly how barcodes got clipped before.
+   */
+  metaInsetMm: number;
 }
 
 export interface LabelLayout {
@@ -91,19 +111,21 @@ export function labelLayout(
   const windows = profile.printableWindows;
 
   if (windows?.length) {
+    const bar = windowBox(profile, windows, "barcode");
+    const info = windowBox(profile, windows, "info");
     return {
       barcode: panelSlots({
-        heightMm: windowHeightMm(profile, windows, "barcode"),
+        ...bar,
         // A window panel is roughly half a label tall, so on its own height it
         // would sit at the 0.7 floor. Doubling is what the renderer has always
         // done; it lives here now so planner and renderer cannot disagree.
-        scale: typeScale(windowHeightMm(profile, windows, "barcode") * 2),
+        scale: typeScale(bar.heightMm * 2),
         hriPossible,
         carries: { bars: true, text: false },
       }),
       info: panelSlots({
-        heightMm: windowHeightMm(profile, windows, "info"),
-        scale: typeScale(windowHeightMm(profile, windows, "info") * 2),
+        ...info,
+        scale: typeScale(info.heightMm * 2),
         hriPossible,
         carries: { bars: false, text: true },
       }),
@@ -112,6 +134,7 @@ export function labelLayout(
 
   const slots = panelSlots({
     heightMm: profile.contentHeightMm,
+    widthMm: profile.contentWidthMm,
     // Scale tracks the LABEL height, not the content box — unchanged from the
     // original, so padding does not quietly shrink the type.
     scale: typeScale(profile.heightMm),
@@ -122,29 +145,41 @@ export function labelLayout(
 }
 
 /** A window's content height, with the profile's padding taken off both edges. */
-function windowHeightMm(
+function windowBox(
   profile: ResolvedProfile,
   windows: PrintableWindow[],
   role: PrintableWindow["role"],
-): number {
+): { widthMm: number; heightMm: number } {
   const w = windows.find((x) => x.role === role) ?? windows[0]!;
-  return Math.max(1, w.hMm - 2 * profile.paddingMm);
+  return {
+    widthMm: Math.max(1, w.wMm - 2 * profile.paddingMm),
+    heightMm: Math.max(1, w.hMm - 2 * profile.paddingMm),
+  };
 }
 
 function panelSlots(args: {
   heightMm: number;
+  widthMm: number;
   scale: number;
   hriPossible: boolean;
   carries: { bars: boolean; text: boolean };
 }): PanelSlots {
-  const { heightMm, scale, hriPossible, carries } = args;
+  const { heightMm, widthMm, scale, hriPossible, carries } = args;
 
   const titleMm = carries.text ? rowHeightMm(LABEL_PT.title, scale) : 0;
   const metaMm = carries.text ? rowHeightMm(LABEL_PT.price, scale) : 0;
   const hriMm = carries.bars && hriPossible ? rowHeightMm(LABEL_PT.hri, scale) : 0;
   const barsMm = carries.bars ? Math.max(0, heightMm - titleMm - metaMm - hriMm) : 0;
 
-  return { scale, titleMm, metaMm, hriMm, barsMm };
+  // Scales with the label like every other dimension, but capped as a share of
+  // the panel: on the barbell's 18 mm info window a flat 1.2 mm each side would
+  // eat 13% of a panel that is already short of room, and the SKU truncates
+  // that much earlier.
+  const metaInsetMm = carries.text
+    ? Math.min(META_INSET_MM * scale, widthMm * META_INSET_MAX_SHARE)
+    : 0;
+
+  return { scale, titleMm, metaMm, hriMm, barsMm, metaInsetMm };
 }
 
 /**

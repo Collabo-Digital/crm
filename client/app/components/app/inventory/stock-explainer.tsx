@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, HelpCircle } from "lucide-react";
 
-import { STOCK_TERMS } from "~/lib/inventory-vocabulary";
+import { CODE_TERMS, STOCK_TERMS } from "~/lib/inventory-vocabulary";
 import { cn } from "~/lib/utils";
 import type { StockStats } from "~/types/api";
 
@@ -143,6 +143,32 @@ export function StockExplainer({
               several rows first, and they are saved together. Use{" "}
               <span className="font-medium">Adjust</span> when you need to record
               a reason, or to move units into or out of QC and damaged.
+            </p>
+          </div>
+
+          {/* Codes sit with the stock figures because the buttons that create
+              them sit in the same toolbar as this panel. They used to be
+              explained nowhere at all. */}
+          <div className="rounded-lg bg-muted px-4 py-3 text-caption">
+            <p className="mb-1.5">
+              <strong className="font-semibold">Codes and labels</strong>
+            </p>
+            <ul className="space-y-1">
+              <li>
+                <strong className="font-semibold">{CODE_TERMS.sku.label}</strong>{" "}
+                — {CODE_TERMS.sku.definition}
+              </li>
+              <li>
+                <strong className="font-semibold">
+                  {CODE_TERMS.barcode.label}
+                </strong>{" "}
+                — {CODE_TERMS.barcode.definition}
+              </li>
+            </ul>
+            <p className="mt-1.5">
+              New products get both automatically. Use{" "}
+              <span className="font-medium">Product codes</span> above to fill in
+              anything older that is missing one.
             </p>
           </div>
 

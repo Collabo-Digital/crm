@@ -107,17 +107,34 @@ export function BarcodeSvg({
  */
 function Slot({
   heightMm,
+  insetMm = 0,
   center,
   children,
 }: {
   heightMm: number;
+  /**
+   * Horizontal padding, for the meta row only. NEVER pass it to the bars slot:
+   * the symbol is planned against the full `contentWidthMm`, so narrowing its
+   * box here would cut the barcode without the planner ever knowing.
+   */
+  insetMm?: number;
   center?: boolean;
   children?: React.ReactNode;
 }) {
   if (heightMm <= 0) return null;
   return (
     <div
-      style={{ height: `${heightMm.toFixed(3)}mm`, overflow: "hidden" }}
+      style={{
+        height: `${heightMm.toFixed(3)}mm`,
+        overflow: "hidden",
+        ...(insetMm > 0
+          ? {
+              paddingLeft: `${insetMm.toFixed(3)}mm`,
+              paddingRight: `${insetMm.toFixed(3)}mm`,
+              boxSizing: "border-box" as const,
+            }
+          : null),
+      }}
       className={center ? "flex items-center justify-center" : undefined}
     >
       {children}
@@ -179,9 +196,16 @@ export function LabelBody({
         )}
       </Slot>
 
-      <Slot heightMm={slots.metaMm}>
+      {/* `items-center`, not `items-baseline`, on the row below. Baseline
+          alignment makes a row as tall as the union of both children's ascent
+          and descent, which for a 6.5 pt mono SKU beside a 7 pt price came out
+          ~7% taller than either line box — so the row outgrew the height
+          reserved for it and `overflow: hidden` shaved the bottom. Centring
+          makes the row exactly `max(line boxes)`, which is what `metaMm`
+          reserves. Half a point apart, the two read as level either way. */}
+      <Slot heightMm={slots.metaMm} insetMm={slots.metaInsetMm}>
         {showMeta && (
-          <div className="flex items-baseline justify-between gap-1">
+          <div className="flex items-center justify-between gap-1">
             {options.showSku && (
               <p
                 className="truncate font-mono font-medium leading-tight text-black"

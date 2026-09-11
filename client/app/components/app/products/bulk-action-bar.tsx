@@ -23,6 +23,7 @@ import {
   useGenerateSkusMutation,
 } from "~/hooks/use-inventory-mutations";
 import type { Product, ProductStatus } from "~/types/api";
+import { Tip } from "~/components/ui/tooltip";
 
 /**
  * Sticky action bar shown above the products table when one or more rows are
@@ -197,7 +198,7 @@ export function BulkActionBar({
                 : `${missingSkuCount} of ${selectedVariants.length} variants need a SKU`
             }
           >
-            <SlidersHorizontal className="size-3.5" /> SKUs ({missingSkuCount})
+            <SlidersHorizontal className="size-3.5" /> Create SKUs ({missingSkuCount})
           </ActionButton>
           <ActionButton
             onClick={() =>
@@ -210,7 +211,7 @@ export function BulkActionBar({
                 : `${missingBarcodeCount} of ${selectedVariants.length} variants need a barcode`
             }
           >
-            <Barcode className="size-3.5" /> Barcodes ({missingBarcodeCount})
+            <Barcode className="size-3.5" /> Create barcodes ({missingBarcodeCount})
           </ActionButton>
           <ActionButton onClick={handleSync} disabled={isPending || editableCount === 0}>
             <UploadCloud className="size-3.5" /> Sync to Shopify
@@ -300,12 +301,11 @@ function ActionButton({
   tone?: "default" | "danger";
   title?: string;
 }) {
-  return (
+  const button = (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      title={title}
       className={`inline-flex items-center gap-1 rounded-md border border-input px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none ${
         tone === "danger"
           ? "bg-white dark:bg-gray-900 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
@@ -314,5 +314,17 @@ function ActionButton({
     >
       {children}
     </button>
+  );
+
+  // A real tooltip rather than the native `title`, which never appears on
+  // touch and is unreachable by keyboard — and these strings carry the only
+  // statement of how many of the selected variants an action will change.
+  // `disabled` is kept off the trigger wrapper so the tip still opens on a
+  // button that has nothing to do, which is exactly when it explains why.
+  if (!title) return button;
+  return (
+    <Tip text={title}>
+      <span className="inline-flex">{button}</span>
+    </Tip>
   );
 }

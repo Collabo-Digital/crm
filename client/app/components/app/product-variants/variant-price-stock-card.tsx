@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, ChevronUp, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "~/components/app/section-card";
@@ -14,6 +14,7 @@ import {
   TableRow,
 } from "~/components/ui/table";
 import { useDebounced } from "~/hooks/use-debounced";
+import { useGenerateSkusMutation } from "~/hooks/use-inventory-mutations";
 import { cn, formatCurrency } from "~/lib/utils";
 import type { VariantDraft } from "~/lib/variant-draft";
 import {
@@ -380,6 +381,7 @@ function VariantChildRow({
   isOpen: boolean;
   onToggle: () => void;
 }) {
+  const generateSkus = useGenerateSkusMutation();
   const tracked = v.trackQuantity !== false;
   const sku = draft?.sku ?? v.sku ?? "";
   const price = Number(draft?.price ?? v.price ?? 0);
@@ -428,9 +430,22 @@ function VariantChildRow({
         {sku.trim() ? (
           <span className="font-mono text-caption text-muted-foreground">{sku}</span>
         ) : (
-          <span className="inline-flex rounded-full bg-warning-subtle px-2 py-0.5 text-micro font-medium text-warning">
-            Needs a SKU
-          </span>
+          // The badge IS the fix. It used to only state the problem, while the
+          // only way to act on it lived on the Inventory screen — the most
+          // visible prompt in the app and a dead end. stopPropagation because
+          // the row itself opens the editor.
+          <button
+            type="button"
+            disabled={generateSkus.isPending}
+            onClick={(e) => {
+              e.stopPropagation();
+              generateSkus.mutate({ variantIds: [v.id] });
+            }}
+            className="inline-flex items-center gap-1 rounded-full bg-warning-subtle px-2 py-0.5 text-micro font-medium text-warning hover:bg-warning-subtle/70 disabled:opacity-60"
+          >
+            {generateSkus.isPending && <Loader2 className="size-3 animate-spin" />}
+            {generateSkus.isPending ? "Creating…" : "Create SKU"}
+          </button>
         )}
       </TableCell>
       <TableCell className="px-4 py-3 text-right">

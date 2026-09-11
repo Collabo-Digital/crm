@@ -414,9 +414,9 @@ export default function LabelsPrintPage() {
           : `${missing.length} products have no barcode`,
       body: `${missing
         .map((m) => m.productTitle)
-        .join(", ")} will be skipped until a barcode exists. Generating one takes a second and changes nothing else about the product.`,
+        .join(", ")} will be skipped until a barcode exists. Creating one takes a second and changes nothing else about the product.`,
       action: {
-        label: `Generate ${missing.length} barcode${missing.length === 1 ? "" : "s"}`,
+        label: `Create ${missing.length} barcode${missing.length === 1 ? "" : "s"}`,
         pending: generatingId === "all-missing",
         onClick: () =>
           generateFor(

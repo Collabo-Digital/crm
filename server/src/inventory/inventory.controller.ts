@@ -129,6 +129,14 @@ export class InventoryController {
     return this.skuGenerator.generateBarcodes(orgId, dto);
   }
 
+  // Org-wide, deliberately: codes belong to the catalogue, not to a location.
+  @Get('labels/code-status')
+  @Roles(...ORG_MEMBERS)
+  @RequirePermissions('inventory.labels')
+  codeStatus(@OrgId() orgId: string) {
+    return this.skuGenerator.codeStatus(orgId);
+  }
+
   @Get('labels/duplicates')
   @Roles(...ORG_MEMBERS)
   @RequirePermissions('inventory.labels')

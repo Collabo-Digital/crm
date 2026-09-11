@@ -44,6 +44,29 @@ export const STOCK_TERMS = {
   },
 } as const satisfies Record<string, StockTerm>;
 
+/**
+ * The two codes an item carries, defined once for the same reason the stock
+ * figures above are.
+ *
+ * The Inventory toolbar used to offer "Generate all missing SKUs", "Generate
+ * all missing barcodes" and "Switch all to short codes" side by side, and no
+ * screen in the app said what a SKU was, what a barcode was, why an item needs
+ * both, or what "short" meant. The distinction that matters to a merchant is
+ * who reads it: a person, or a scanner.
+ */
+export const CODE_TERMS = {
+  sku: {
+    label: "SKU",
+    definition:
+      "Your own code for an item. You choose it and you read it — it appears on invoices, pick lists and reports. It is not scanned.",
+  },
+  barcode: {
+    label: "Barcode",
+    definition:
+      "The number a scanner reads. We create a short 6-digit one so it fits on small labels. A real retail barcode (EAN or UPC) from your supplier or from Shopify always takes priority and is never replaced.",
+  },
+} as const satisfies Record<string, StockTerm>;
+
 /** Bucket labels, for the adjust dialog and the movement history. */
 export const BUCKET_TERMS: Record<StockBucket, StockTerm> = {
   AVAILABLE: STOCK_TERMS.available,
