@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router";
-import { ArrowLeft, History, MoveRight } from "lucide-react";
+import { History, MoveRight } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import {
   Select,
@@ -12,7 +11,11 @@ import {
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { TableSkeleton } from "~/components/app/table-skeleton";
-import { useInventoryLedger, useWarehouses } from "~/hooks/use-inventory-queries";
+import { useInventoryLedger } from "~/hooks/use-inventory-queries";
+import { useSelectedLocation } from "~/hooks/use-selected-location";
+import { InventoryTabs } from "~/components/app/inventory/inventory-tabs";
+import { LocationPicker } from "~/components/app/inventory/location-picker";
+import { bucketLabel, reasonLabel } from "~/lib/inventory-vocabulary";
 import type { InventoryEvent, LedgerParams } from "~/types/api";
 
 const PAGE_SIZE = 25;
@@ -31,11 +34,15 @@ const REASONS = [
   "migration",
 ] as const;
 
-/** Human phrasing for a movement row. */
+/**
+ * Human phrasing for a movement row. A null bucket means the stock entered or
+ * left the business entirely, which reads as In/Out rather than as a blank.
+ * Labels come from the shared vocabulary so this never says AVAILABLE again.
+ */
 function describeMovement(e: InventoryEvent): string {
-  if (e.fromBucket && e.toBucket) return `${e.fromBucket} → ${e.toBucket}`;
-  if (e.toBucket) return `In → ${e.toBucket}`;
-  if (e.fromBucket) return `${e.fromBucket} → Out`;
+  if (e.fromBucket || e.toBucket) {
+    return `${bucketLabel(e.fromBucket, "from")} → ${bucketLabel(e.toBucket, "to")}`;
+  }
   // Legacy row: signed aggregate change.
   return e.changeAmount > 0 ? `+${e.changeAmount}` : String(e.changeAmount);
 }
@@ -43,35 +50,29 @@ function describeMovement(e: InventoryEvent): string {
 export default function InventoryLedgerPage() {
   const [page, setPage] = useState(1);
   const [reason, setReason] = useState("all");
-  const [warehouseId, setWarehouseId] = useState("all");
+  const { locations, locationId, location, setLocationId } = useSelectedLocation();
 
   const params: LedgerParams = useMemo(
     () => ({
       page,
       limit: PAGE_SIZE,
       reason: reason === "all" ? undefined : reason,
-      warehouseId: warehouseId === "all" ? undefined : warehouseId,
+      warehouseId: locationId,
     }),
-    [page, reason, warehouseId],
+    [page, reason, locationId],
   );
 
-  const ledger = useInventoryLedger(params);
-  const warehouses = useWarehouses();
+  const ledger = useInventoryLedger(params, Boolean(locationId));
   const rows = ledger.data?.data ?? [];
   const meta = ledger.data?.meta;
-  const warehouseName = (id: string | null) =>
-    id ? (warehouses.data ?? []).find((w) => w.id === id)?.name ?? id : "—";
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <Button asChild variant="ghost" size="sm">
-          <Link to="/products/inventory">
-            <ArrowLeft className="size-4" />
-          </Link>
-        </Button>
-        <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Movement ledger</h1>
-      </div>
+      <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+        Movement history
+      </h1>
+
+      <InventoryTabs />
 
       <div className="flex flex-wrap items-center gap-2">
         <Select
@@ -93,25 +94,19 @@ export default function InventoryLedgerPage() {
             ))}
           </SelectContent>
         </Select>
-        <Select
-          value={warehouseId}
-          onValueChange={(v) => {
-            setWarehouseId(v);
+        <LocationPicker
+          locations={locations}
+          value={locationId}
+          onChange={(id) => {
+            setLocationId(id);
             setPage(1);
           }}
-        >
-          <SelectTrigger className="h-8 w-[170px] rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs shadow-sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All warehouses</SelectItem>
-            {(warehouses.data ?? []).map((w) => (
-              <SelectItem key={w.id} value={w.id}>
-                {w.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        />
+        {location && (
+          <span className="ml-auto text-caption text-muted-foreground">
+            Movements at {location.name}
+          </span>
+        )}
       </div>
 
       {ledger.isLoading ? (
@@ -134,9 +129,8 @@ export default function InventoryLedgerPage() {
                 <th className="px-3 py-2.5 font-medium">SKU</th>
                 <th className="px-3 py-2.5 font-medium">Movement</th>
                 <th className="px-3 py-2.5 text-right font-medium">Qty</th>
-                <th className="px-3 py-2.5 text-right font-medium">Sellable</th>
+                <th className="px-3 py-2.5 text-right font-medium">Available</th>
                 <th className="px-3 py-2.5 font-medium">Reason</th>
-                <th className="px-3 py-2.5 font-medium">Warehouse</th>
               </tr>
             </thead>
             <tbody>
@@ -166,8 +160,7 @@ export default function InventoryLedgerPage() {
                   <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
                     {e.quantityBefore} → {e.quantityAfter}
                   </td>
-                  <td className="px-3 py-2.5 capitalize">{e.reason}</td>
-                  <td className="px-3 py-2.5">{warehouseName(e.warehouseId)}</td>
+                  <td className="px-3 py-2.5">{reasonLabel(e.reason)}</td>
                 </tr>
               ))}
             </tbody>

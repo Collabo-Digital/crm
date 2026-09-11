@@ -221,7 +221,7 @@ export function GenerateInvoiceDialog({
                 <SelectContent>
                   {dispatchOptions.map((w) => (
                     <SelectItem key={w.id} value={w.id} className="text-caption">
-                      {w.name} · {w.code}
+                      {w.name}
                     </SelectItem>
                   ))}
                 </SelectContent>

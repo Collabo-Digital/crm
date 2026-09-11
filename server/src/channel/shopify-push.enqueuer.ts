@@ -43,7 +43,11 @@ export class ShopifyPushEnqueuer {
    * is not silently ignored by BullMQ's id de-duplication.
    */
   async enqueueOrderPush(data: Extract<ShopifyPushJobData, { type: 'order' }>): Promise<boolean> {
-    const jobId = `push-order:${data.orderId}`;
+    // Hyphen, not colon. BullMQ reserves ":" as its Redis key separator and
+    // rejects any custom job id containing one ("Custom Ids cannot contain :"),
+    // so every offline-order push failed at enqueue — before a single Shopify
+    // call — and the order was stamped "Sync failed" with no usable reason.
+    const jobId = `push-order-${data.orderId}`;
     try {
       const existing = await this.queue.getJob(jobId);
       if (existing) {

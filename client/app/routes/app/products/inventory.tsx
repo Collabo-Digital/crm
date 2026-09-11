@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router";
+import { AxiosError } from "axios";
+import { Link, useSearchParams } from "react-router";
 import {
   Boxes,
   IndianRupee,
@@ -7,10 +8,9 @@ import {
   PackageX,
   Printer,
   Barcode,
+  MapPin,
   Warehouse as WarehouseIcon,
-  SlidersHorizontal,
   Search,
-  History,
 } from "lucide-react";
 import { StatCard } from "~/components/app/stat-card";
 import { EmptyState } from "~/components/app/empty-state";
@@ -28,19 +28,41 @@ import {
 } from "~/components/ui/select";
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
+import { LocationPicker } from "~/components/app/inventory/location-picker";
+import { ProductCodesDialog } from "~/components/app/inventory/product-codes-dialog";
+import {
+  StockSaveBar,
+  type PendingChange,
+} from "~/components/app/inventory/stock-save-bar";
+import { StockExplainer } from "~/components/app/inventory/stock-explainer";
+import { InventoryTabs } from "~/components/app/inventory/inventory-tabs";
+import { Tip } from "~/components/ui/tooltip";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "~/components/ui/popover";
+import {
+  BUCKET_TERMS,
+  MANUAL_REASONS,
+  STOCK_TERMS,
+  reasonLabel,
+  type StockTerm,
+} from "~/lib/inventory-vocabulary";
+import { cn } from "~/lib/utils";
 import { useDebounced } from "~/hooks/use-debounced";
+import { useSelectedLocation } from "~/hooks/use-selected-location";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import {
+  useCodeStatus,
   useInventoryStatus,
   useStock,
   useStockStats,
-  useWarehouses,
 } from "~/hooks/use-inventory-queries";
 import {
   useCreateAdjustmentMutation,
   useEnableInventoryMutation,
-  useGenerateBarcodesMutation,
-  useGenerateSkusMutation,
+  useBulkAdjustmentMutation,
 } from "~/hooks/use-inventory-mutations";
 import type { StockBucket, StockLine, StockListParams } from "~/types/api";
 
@@ -85,13 +107,17 @@ function EnableInventoryCta({ seeding }: { seeding: boolean }) {
         icon={WarehouseIcon}
         title={
           seeding
-            ? "Setting up your warehouse…"
-            : "Warehouse-grade inventory, off by default"
+            ? "Setting up your locations…"
+            : "Track stock location by location"
         }
+        // Names what changes for the merchant rather than listing features. The
+        // bucket vocabulary meant nothing to anyone who had not already read
+        // the code, and "warehouse-grade" sounded like something to be scared
+        // of switching on.
         description={
           seeding
-            ? "Seeding stock levels from your catalog. This page refreshes automatically."
-            : "Track stock in buckets (available, reserved, QC, damaged), receive goods, print barcode labels, and pick with a scanner. Your current quantities are carried over exactly."
+            ? "Copying your current quantities across, location by location. This page refreshes itself when it is done."
+            : "Right now each product has one stock number. Turn this on and every location — including the ones synced from Shopify — keeps its own count, so you can see what is where, move stock between them, and print barcode labels. Your current quantities are carried over exactly, and nothing is lost if you turn it on."
         }
         action={
           seeding ? (
@@ -127,44 +153,71 @@ function EnableInventoryCta({ seeding }: { seeding: boolean }) {
 function StockScreen() {
   const { data: currentOrg } = useCurrentOrg();
   const currency = currentOrg?.currency;
-  const [search, setSearch] = useState("");
+  // Seeded from the URL so a link into this screen can arrive pre-filtered —
+  // the products list links a product's stock number straight here. Read once:
+  // after mount the box owns the value.
+  const [searchParams] = useSearchParams();
+  const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
   const debouncedSearch = useDebounced(search, 350);
-  const [warehouseId, setWarehouseId] = useState<string>("all");
+  const {
+    locations,
+    locationId,
+    location,
+    setLocationId,
+    isLoading: locationLoading,
+  } = useSelectedLocation();
   const [stockFilter, setStockFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
   const [adjusting, setAdjusting] = useState<StockLine | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [codesOpen, setCodesOpen] = useState(false);
+  // Edited-but-unsaved Available values, keyed by stock line. Cleared whenever
+  // the rows underneath change, so a draft can never be written against a row
+  // the merchant is no longer looking at.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const bulkAdjust = useBulkAdjustmentMutation();
 
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, warehouseId, stockFilter]);
+  }, [debouncedSearch, locationId, stockFilter]);
 
   // Selection is by variant id and survives re-filtering, so without this the
   // "Print labels (n)" count keeps counting rows the user can no longer see —
   // and printing a sheet of labels for them is not a recoverable mistake.
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [debouncedSearch, warehouseId, stockFilter, page]);
+  }, [debouncedSearch, locationId, stockFilter, page]);
+
+  // Same reasoning as the selection reset above, and more pointed: a draft
+  // carried across a location switch would write one location's number onto
+  // another's.
+  useEffect(() => {
+    setDrafts({});
+    setReviewOpen(false);
+    setSaveError(null);
+  }, [debouncedSearch, locationId, stockFilter, page]);
 
   const params: StockListParams = useMemo(
     () => ({
       page,
       limit: PAGE_SIZE,
       q: debouncedSearch || undefined,
-      warehouseId: warehouseId === "all" ? undefined : warehouseId,
+      warehouseId: locationId,
       stockFilter: stockFilter === "all" ? undefined : (stockFilter as StockListParams["stockFilter"]),
     }),
-    [page, debouncedSearch, warehouseId, stockFilter],
+    [page, debouncedSearch, locationId, stockFilter],
   );
 
-  const stock = useStock(params);
+  // Held until a location resolves. Querying without one returns a row per
+  // variant PER location, so the table would flash every product several times
+  // over before settling — the exact confusion this screen is fixing.
+  const stock = useStock(params, Boolean(locationId));
   // Deliberately warehouse-only: `q` and `stockFilter` narrow the table, not
   // the tiles. Feeding the stock filter in would make "Low stock lines" merely
   // restate the row count and pin "Oversold lines" to 0.
-  const stats = useStockStats({ warehouseId: params.warehouseId });
-  const warehouses = useWarehouses();
-  const generateSkus = useGenerateSkusMutation();
-  const generateBarcodes = useGenerateBarcodesMutation();
+  const stats = useStockStats({ warehouseId: params.warehouseId }, Boolean(locationId));
 
   const rows = stock.data?.data ?? [];
   const meta = stock.data?.meta;
@@ -231,29 +284,96 @@ function StockScreen() {
     },
   ];
 
-  // The tiles above are scoped to the selected warehouse but sit above the
-  // picker, so name that warehouse in the heading — otherwise a scoped figure
-  // read on its own just looks like a wrong org-wide one.
-  const selectedWarehouseName = params.warehouseId
-    ? ((warehouses.data ?? []).find((w) => w.id === params.warehouseId)?.name ??
-      null)
-    : null;
+  // The tiles are scoped to the selected location but sit above the picker,
+  // so name that location in the heading — otherwise a scoped figure read on
+  // its own just looks like a wrong org-wide one.
+  const selectedWarehouseName = location?.name ?? null;
 
   const labelHref =
     selectedIds.size > 0
       ? `/products/inventory/labels/print?variantIds=${[...selectedIds].join(",")}`
       : null;
 
-  // Code generation acts on the selection when there is one, and on the whole
-  // org otherwise. Counting the rows that actually LACK a code (rather than
-  // the rows selected) lets each button say up front what it will change —
-  // and lets it disable itself when the answer is "nothing", instead of
-  // firing a request that reports zero.
-  const selectedRows = rows.filter((r) => selectedIds.has(r.variantId));
-  const hasSelection = selectedIds.size > 0;
-  const missingSkuCount = selectedRows.filter((r) => !r.sku).length;
-  const missingBarcodeCount = selectedRows.filter((r) => !r.barcode).length;
-  const selectedVariantIds = [...selectedIds];
+  // Codes are a CATALOGUE concern, not a location one, so the count comes from
+  // the server rather than from these rows. The old toolbar counted the
+  // current page's selection while the buttons acted org-wide, so the number
+  // beside a button routinely described a different set from the one it
+  // changed. Zero means nothing needs fixing and the button drops its badge.
+  const codeStatus = useCodeStatus();
+  const pendingCodes = codeStatus.data
+    ? codeStatus.data.missingSku +
+      codeStatus.data.missingBarcode +
+      codeStatus.data.longBarcode
+    : 0;
+  const setDraft = (stockLineId: string, value: string | undefined) => {
+    setSaveError(null);
+    setDrafts((prev) => {
+      const next = { ...prev };
+      if (value === undefined) delete next[stockLineId];
+      else next[stockLineId] = value;
+      return next;
+    });
+  };
+
+  // Only rows whose typed value is a whole number AND differs from what is
+  // stored. Typing a value back to its original is not a change.
+  const pendingChanges: PendingChange[] = rows.flatMap((line) => {
+    const draft = drafts[line.id];
+    if (draft === undefined) return [];
+    const parsed = Number.parseInt(draft, 10);
+    if (!Number.isInteger(parsed) || parsed === line.available) return [];
+    return [
+      {
+        stockLineId: line.id,
+        variantId: line.variantId,
+        product: line.productTitle,
+        variant: line.variantTitle !== "Default Title" ? line.variantTitle : null,
+        from: line.available,
+        to: parsed,
+      },
+    ];
+  });
+
+  const hasInvalidDraft = rows.some((line) => {
+    const draft = drafts[line.id];
+    return draft !== undefined && draft.trim() !== "" && !Number.isInteger(Number.parseInt(draft, 10));
+  });
+
+  const saveDrafts = () => {
+    if (!locationId || pendingChanges.length === 0) return;
+    if (hasInvalidDraft) {
+      setSaveError("Some quantities are not whole numbers.");
+      return;
+    }
+    setSaveError(null);
+    bulkAdjust.mutate(
+      {
+        warehouseId: locationId,
+        reason: "correction",
+        note: "Edited from the inventory table",
+        items: pendingChanges.map((c) => ({
+          variantId: c.variantId,
+          bucket: "AVAILABLE" as StockBucket,
+          setTo: c.to,
+        })),
+      },
+      {
+        onSuccess: () => {
+          setDrafts({});
+          setReviewOpen(false);
+        },
+        // Nothing was written — the server applies the batch atomically — so
+        // the drafts stay on screen to be corrected rather than lost.
+        onError: (error) => {
+          setSaveError(
+            error instanceof AxiosError
+              ? (error.response?.data?.message ?? error.message)
+              : "Could not save these quantities.",
+          );
+        },
+      },
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -271,86 +391,10 @@ function StockScreen() {
           <Button
             variant="outline"
             size="action"
-            onClick={() =>
-              generateSkus.mutate(
-                hasSelection
-                  ? { variantIds: selectedVariantIds }
-                  : { filter: "missing-sku" },
-              )
-            }
-            disabled={generateSkus.isPending || (hasSelection && missingSkuCount === 0)}
-            title={
-              hasSelection && missingSkuCount === 0
-                ? "Every selected row already has a SKU"
-                : undefined
-            }
-          >
-            <SlidersHorizontal className="size-3.5" />
-            {generateSkus.isPending
-              ? "Generating…"
-              : hasSelection
-                ? `Generate SKUs (${missingSkuCount})`
-                : "Generate all missing SKUs"}
-          </Button>
-          <Button
-            variant="outline"
-            size="action"
-            onClick={() =>
-              generateBarcodes.mutate(
-                hasSelection
-                  ? { variantIds: selectedVariantIds }
-                  : { filter: "missing-barcode" },
-              )
-            }
-            disabled={
-              generateBarcodes.isPending || (hasSelection && missingBarcodeCount === 0)
-            }
-            title={
-              hasSelection && missingBarcodeCount === 0
-                ? "Every selected row already has a barcode"
-                : undefined
-            }
+            onClick={() => setCodesOpen(true)}
           >
             <Barcode className="size-3.5" />
-            {generateBarcodes.isPending
-              ? "Generating…"
-              : hasSelection
-                ? `Generate barcodes (${missingBarcodeCount})`
-                : "Generate all missing barcodes"}
-          </Button>
-          {/* Switching an existing catalogue over to short codes.
-              `missing-or-generated` targets gaps PLUS barcodes this CRM minted;
-              real GTINs synced from Shopify and hand-typed codes are never in
-              scope. Kept as a separate, explicit button because it REPLACES
-              working barcodes — any label already printed and stuck on stock
-              stops matching, which the confirm below spells out. */}
-          <Button
-            variant="outline"
-            size="action"
-            onClick={() => {
-              if (
-                !window.confirm(
-                  "Replace CRM-generated barcodes with short 6-digit codes?\n\n" +
-                    "Short codes fit small and jewellery label stock, which a full SKU cannot. " +
-                    "Barcodes from Shopify and ones you typed yourself are left alone.\n\n" +
-                    "Any labels already printed with the old codes will stop matching and need reprinting.",
-                )
-              )
-                return;
-              // NOT `overwrite: true` — that flag bypasses the filter entirely
-              // in loadTargets and would clobber real GTINs synced from
-              // Shopify. `missing-or-generated` is precisely the safe set.
-              generateBarcodes.mutate(
-                hasSelection
-                  ? { variantIds: selectedVariantIds, filter: "missing-or-generated", format: "short" }
-                  : { filter: "missing-or-generated", format: "short" },
-              );
-            }}
-            disabled={generateBarcodes.isPending}
-            title="Replace barcodes the CRM generated with short 6-digit codes that fit small and jewellery labels. Shopify and hand-entered barcodes are untouched."
-          >
-            <Barcode className="size-3.5" />
-            {hasSelection ? "Switch to short codes" : "Switch all to short codes"}
+            {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}
           </Button>
           {labelHref ? (
             <Button asChild variant="brand" size="action">
@@ -401,7 +445,26 @@ function StockScreen() {
       </div>
 
       {/* Filters */}
+      <InventoryTabs />
+
+      {location && (
+        <StockExplainer
+          locationName={location.name}
+          locationCount={locations.length}
+          stats={stats.data}
+          orgId={currentOrg?.id}
+        />
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
+        {/* Location leads the row: everything to its right narrows what is
+            already scoped to it. */}
+        <LocationPicker
+          locations={locations}
+          value={locationId}
+          onChange={setLocationId}
+        />
+        <Separator orientation="vertical" className="h-5" />
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-gray-400" />
           <Input
@@ -411,19 +474,6 @@ function StockScreen() {
             className="h-8 w-64 rounded-lg pl-8 text-xs"
           />
         </div>
-        <Select value={warehouseId} onValueChange={setWarehouseId}>
-          <SelectTrigger className="h-8 w-[170px] rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs shadow-sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All warehouses</SelectItem>
-            {(warehouses.data ?? []).map((w) => (
-              <SelectItem key={w.id} value={w.id}>
-                {w.name} ({w.code})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
         <Select value={stockFilter} onValueChange={setStockFilter}>
           <SelectTrigger className="h-8 w-[140px] rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs shadow-sm">
             <SelectValue />
@@ -435,30 +485,22 @@ function StockScreen() {
             <SelectItem value="oversold">Oversold</SelectItem>
           </SelectContent>
         </Select>
-        <div className="ml-auto flex items-center gap-1">
-          <Button asChild variant="ghost" size="sm" className="text-xs text-muted-foreground">
-            <Link to="/products/inventory/warehouses">
-              <WarehouseIcon className="size-3.5" /> Warehouses
-            </Link>
-          </Button>
-          <Button asChild variant="ghost" size="sm" className="text-xs text-muted-foreground">
-            <Link to="/products/inventory/ledger">
-              <History className="size-3.5" /> Movement ledger
-            </Link>
-          </Button>
-        </div>
       </div>
 
       {/* Table */}
-      {stock.isLoading ? (
+      {locationLoading || !locationId || stock.isLoading ? (
         <TableSkeleton rows={8} columns={8} />
       ) : stock.isError ? (
         <QueryErrorState resource="stock" onRetry={() => stock.refetch()} />
       ) : rows.length === 0 ? (
         <EmptyState
           icon={Boxes}
-          title="No stock lines found"
-          description="Stock lines appear per variant per warehouse. Adjust filters, or receive stock once receiving ships."
+          title="Nothing stocked here yet"
+          description={
+            location
+              ? `No product has stock recorded at ${location.name}. Clear the filters to check, or switch location — stock is held per location, so a product stocked elsewhere will not appear here.`
+              : "No stock lines match these filters."
+          }
         />
       ) : (
         <div className="overflow-x-auto rounded-xl bg-white dark:bg-gray-900 shadow-sm ring-1 ring-border">
@@ -475,13 +517,21 @@ function StockScreen() {
                 </th>
                 <th className="px-3 py-2.5 font-medium">Product</th>
                 <th className="px-3 py-2.5 font-medium">SKU / Barcode</th>
-                <th className="px-3 py-2.5 font-medium">Warehouse</th>
-                <th className="px-3 py-2.5 font-medium">Location</th>
-                <th className="px-3 py-2.5 text-right font-medium">Available</th>
-                <th className="px-3 py-2.5 text-right font-medium">Reserved</th>
-                <th className="px-3 py-2.5 text-right font-medium">QC</th>
-                <th className="px-3 py-2.5 text-right font-medium">Damaged</th>
-                <th className="px-3 py-2.5 text-right font-medium">On hand</th>
+                <th className="px-3 py-2.5 font-medium">
+                  <ColumnLabel term={STOCK_TERMS.bin} />
+                </th>
+                <th className="px-3 py-2.5 text-right font-medium">
+                  <ColumnLabel term={STOCK_TERMS.unavailable} align="right" />
+                </th>
+                <th className="px-3 py-2.5 text-right font-medium">
+                  <ColumnLabel term={STOCK_TERMS.committed} align="right" />
+                </th>
+                <th className="px-3 py-2.5 text-right font-medium text-foreground">
+                  <ColumnLabel term={STOCK_TERMS.available} align="right" />
+                </th>
+                <th className="px-3 py-2.5 text-right font-medium">
+                  <ColumnLabel term={STOCK_TERMS.onHand} align="right" />
+                </th>
                 <th className="px-3 py-2.5" />
               </tr>
             </thead>
@@ -524,16 +574,21 @@ function StockScreen() {
                       <p className="font-mono text-[10px] text-muted-foreground">{line.barcode}</p>
                     )}
                   </td>
-                  <td className="px-3 py-2.5">{line.warehouse.name}</td>
                   <td className="px-3 py-2.5 font-mono text-[10px]">
                     {line.defaultLocation ?? <span className="text-muted-foreground">—</span>}
                   </td>
-                  <td className={`px-3 py-2.5 text-right font-semibold tabular-nums ${line.available < 0 ? "text-red-600" : line.available === 0 ? "text-orange-500" : "text-gray-900 dark:text-gray-100"}`}>
-                    {line.available}
+                  <UnavailableCell line={line} />
+                  {/* Mirrored from Shopify's own committed figure — it is the
+                      one quantity the Admin API cannot write, so it is read,
+                      never computed here. */}
+                  <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
+                    {line.reserved}
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{line.reserved}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{line.qc}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{line.damaged}</td>
+                  <AvailableCell
+                    line={line}
+                    draft={drafts[line.id]}
+                    onChange={(value) => setDraft(line.id, value)}
+                  />
                   <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{line.onHand}</td>
                   <td className="px-3 py-2.5 text-right">
                     <Button variant="outline" size="sm" className="h-7 text-[11px]" onClick={() => setAdjusting(line)}>
@@ -548,6 +603,15 @@ function StockScreen() {
       )}
 
       {/* Pagination */}
+      {/* Says the quiet part out loud. The single most common misreading of
+          this screen was taking a figure here as the company-wide total. */}
+      {location && rows.length > 0 && (
+        <p className="text-caption text-muted-foreground">
+          Every quantity above is held at {location.name}. Editing one changes
+          that location only.
+        </p>
+      )}
+
       {meta && meta.totalPages > 1 && (
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
@@ -569,6 +633,24 @@ function StockScreen() {
         </div>
       )}
 
+      <StockSaveBar
+        changes={pendingChanges}
+        locationName={location?.name ?? "this location"}
+        reviewOpen={reviewOpen}
+        onToggleReview={() => setReviewOpen((v) => !v)}
+        onRevert={(id) => setDraft(id, undefined)}
+        onDiscard={() => {
+          setDrafts({});
+          setReviewOpen(false);
+          setSaveError(null);
+        }}
+        onSave={saveDrafts}
+        saving={bulkAdjust.isPending}
+        error={saveError}
+      />
+
+      <ProductCodesDialog open={codesOpen} onOpenChange={setCodesOpen} />
+
       {adjusting && <AdjustStockDialog line={adjusting} onClose={() => setAdjusting(null)} />}
     </div>
   );
@@ -576,17 +658,191 @@ function StockScreen() {
 
 // ─────────────────────────── Adjust dialog ───────────────────────────
 
+/**
+ * A column header that carries its own definition. The dotted underline is the
+ * affordance — without it nobody discovers the tooltip, and these words
+ * (Unavailable, On hand) are exactly the ones merchants were guessing at.
+ */
+function ColumnLabel({
+  term,
+  align = "left",
+}: {
+  term: StockTerm;
+  align?: "left" | "right";
+}) {
+  return (
+    <Tip text={term.definition} side="top">
+      <span
+        className={cn(
+          "inline-flex cursor-help underline decoration-dotted underline-offset-4",
+          align === "right" && "justify-end",
+        )}
+      >
+        {term.label}
+      </span>
+    </Tip>
+  );
+}
+
+/**
+ * QC and damaged as one figure, the way Shopify groups them under Unavailable,
+ * with the split behind a click so the row stays readable. A zero is inert —
+ * offering to break down two zeroes on every row of a healthy catalogue would
+ * be noise, so only a non-zero figure is interactive.
+ */
+function UnavailableCell({ line }: { line: StockLine }) {
+  const total = line.qc + line.damaged;
+
+  if (total === 0) {
+    return (
+      <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">0</td>
+    );
+  }
+
+  return (
+    <td className="px-3 py-2.5 text-right tabular-nums">
+      <Popover>
+        <PopoverTrigger className="underline decoration-dotted underline-offset-4 hover:text-foreground">
+          {total}
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-64 p-3">
+          <p className="mb-2 text-label font-medium text-foreground">
+            {STOCK_TERMS.unavailable.label}
+          </p>
+          <dl className="space-y-1.5">
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="text-caption text-muted-foreground">
+                {BUCKET_TERMS.QC.label}
+              </dt>
+              <dd className="text-caption font-medium tabular-nums text-foreground">
+                {line.qc}
+              </dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="text-caption text-muted-foreground">
+                {BUCKET_TERMS.DAMAGED.label}
+              </dt>
+              <dd className="text-caption font-medium tabular-nums text-foreground">
+                {line.damaged}
+              </dd>
+            </div>
+          </dl>
+          <p className="mt-2.5 border-t border-border pt-2 text-micro text-muted-foreground">
+            Not sellable, but still on hand. Use Adjust to move units back to{" "}
+            {STOCK_TERMS.available.label}.
+          </p>
+        </PopoverContent>
+      </Popover>
+    </td>
+  );
+}
+
+/**
+ * The one editable number on the row.
+ *
+ * Editing is inline and batched rather than one modal per row: a stocktake
+ * means correcting a screenful of quantities, and doing that through a dialog
+ * eight times over is the reason merchants gave up and asked where stock was
+ * updated. The save bar writes them all at one location in one transaction.
+ *
+ * While a row is dirty the saved value stays visible, struck through, so the
+ * merchant can always see what they are about to change it from.
+ */
+function AvailableCell({
+  line,
+  draft,
+  onChange,
+}: {
+  line: StockLine;
+  draft: string | undefined;
+  onChange: (value: string | undefined) => void;
+}) {
+  const value = draft ?? String(line.available);
+  const dirty = draft !== undefined && draft !== String(line.available);
+  const parsed = Number.parseInt(value, 10);
+  const invalid = value.trim() !== "" && !Number.isInteger(parsed);
+
+  const step = (by: number) => {
+    const base = Number.isInteger(parsed) ? parsed : line.available;
+    onChange(String(base + by));
+  };
+
+  return (
+    <td className="px-2 py-2">
+      <div className="flex items-center justify-end gap-2">
+        {/* Negative available is reachable by design: a counter sale is
+            allowed even when THIS location was short, because the merchant has
+            already handed the goods over. That is deliberate
+            (order.service.ts, allowNegativeAvailable) — but arriving at a red
+            minus number with no explanation is what made it feel like a bug. */}
+        {line.available < 0 && !dirty && (
+          <Tip text={`More units were sold from ${line.warehouse.name} than it held — usually a counter sale fulfilled from stock that was recorded elsewhere. Move stock here, or correct the count.`}>
+            <span className="cursor-help rounded-full bg-danger-subtle px-2 py-0.5 text-[10px] font-semibold text-danger">
+              Oversold
+            </span>
+          </Tip>
+        )}
+        {line.available === 0 && !dirty && (
+          <span className="rounded-full bg-warning-subtle px-2 py-0.5 text-[10px] font-semibold text-warning">
+            Out of stock
+          </span>
+        )}
+        {dirty && (
+          <span className="text-[11px] tabular-nums text-muted-foreground line-through">
+            {line.available}
+          </span>
+        )}
+        <div className="inline-flex h-8 items-stretch overflow-hidden rounded-lg border border-border bg-card">
+          <button
+            type="button"
+            onClick={() => step(-1)}
+            aria-label={`Decrease available for ${line.productTitle}`}
+            className="w-7 border-r border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            −
+          </button>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            aria-label={`Available for ${line.productTitle} at ${line.warehouse.name}`}
+            className={cn(
+              "w-14 bg-transparent text-center text-label font-semibold tabular-nums outline-none",
+              dirty && "text-brand-strong",
+              invalid && "text-danger",
+            )}
+          />
+          <button
+            type="button"
+            onClick={() => step(1)}
+            aria-label={`Increase available for ${line.productTitle}`}
+            className="w-7 border-l border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            +
+          </button>
+        </div>
+      </div>
+      {invalid && (
+        <p className="mt-1 text-right text-[10px] text-danger">Whole numbers only.</p>
+      )}
+    </td>
+  );
+}
+
 function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => void }) {
   const [bucket, setBucket] = useState<StockBucket>("AVAILABLE");
   const [mode, setMode] = useState<"add" | "remove" | "set">("add");
   const [qty, setQty] = useState<string>("");
-  const [reason, setReason] = useState<string>("adjustment");
+  const [reason, setReason] = useState<string>("correction");
   const [note, setNote] = useState("");
   const adjust = useCreateAdjustmentMutation();
 
   const current = { AVAILABLE: line.available, RESERVED: line.reserved, QC: line.qc, DAMAGED: line.damaged }[bucket];
   const parsed = parseInt(qty, 10);
   const valid = Number.isInteger(parsed) && parsed >= 0 && (mode === "set" || parsed > 0);
+  const result =
+    mode === "set" ? parsed : mode === "add" ? current + parsed : current - parsed;
 
   const submit = () => {
     if (!valid) return;
@@ -598,7 +854,7 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
         ...(mode === "set"
           ? { setTo: parsed }
           : { delta: mode === "add" ? parsed : -parsed }),
-        reason: reason as "adjustment",
+        reason: reason as "correction",
         note: note || undefined,
       },
       { onSuccess: () => onClose() },
@@ -612,6 +868,13 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
       onClose={onClose}
     >
       <div className="space-y-4 px-6 py-4 text-xs">
+        {/* Names the location before anything else. A merchant working several
+            locations needs to know where this lands before they type a
+            number, not after. */}
+        <p className="flex items-center gap-2 rounded-lg bg-brand/15 px-3 py-2 text-caption font-medium text-brand-strong">
+          <MapPin className="size-3.5 shrink-0" />
+          Writing to {line.warehouse.name}
+        </p>
         <div className="grid grid-cols-2 gap-3">
           <label className="space-y-1">
             <span className="font-medium text-gray-700 dark:text-gray-300">Bucket</span>
@@ -622,7 +885,7 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
               <SelectContent>
                 {BUCKETS.map((b) => (
                   <SelectItem key={b} value={b}>
-                    {b.charAt(0) + b.slice(1).toLowerCase()}
+                    {BUCKET_TERMS[b].label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -667,11 +930,11 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="adjustment">Adjustment</SelectItem>
-                <SelectItem value="count">Stock count</SelectItem>
-                <SelectItem value="damage">Damage</SelectItem>
-                <SelectItem value="found">Found stock</SelectItem>
-                <SelectItem value="correction">Correction</SelectItem>
+                {MANUAL_REASONS.map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {reasonLabel(r)}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </label>
@@ -685,14 +948,23 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
             />
           </label>
         </div>
+        {/* What the number becomes, before committing to it. */}
+        <div className="flex items-center justify-between gap-3 rounded-lg bg-muted px-3 py-2.5">
+          <span className="text-caption text-muted-foreground">
+            {BUCKET_TERMS[bucket].label} here after this
+          </span>
+          <span className="text-label font-semibold tabular-nums text-foreground">
+            {current} → {valid ? result : "…"}
+          </span>
+        </div>
         {mode === "remove" && parsed > current && bucket !== "AVAILABLE" && (
           <p className="rounded-md bg-red-50 px-3 py-2 text-[11px] text-red-700">
-            Removing more than the current {bucket.toLowerCase()} quantity will be rejected.
+            Removing more than the current {BUCKET_TERMS[bucket].label.toLowerCase()} quantity will be rejected.
           </p>
         )}
       </div>
       <DialogFooter
-        confirmLabel={mode === "set" ? `Set ${bucket.toLowerCase()} to ${valid ? parsed : "…"}` : mode === "add" ? "Add units" : "Remove units"}
+        confirmLabel={mode === "set" ? `Set ${BUCKET_TERMS[bucket].label} to ${valid ? parsed : "…"}` : mode === "add" ? "Add units" : "Remove units"}
         onConfirm={submit}
         onClose={onClose}
         pending={adjust.isPending}

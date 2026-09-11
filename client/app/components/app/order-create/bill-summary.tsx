@@ -99,10 +99,9 @@ export function BillSummary({
               onChange={(e) => onWarehouseChange(e.target.value)}
               className="mt-1 h-8 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#CEF17B]/60"
             >
-              <option value="">Default warehouse</option>
               {warehouses.map((w) => (
                 <option key={w.id} value={w.id}>
-                  {w.name} · {w.code}
+                  {w.name}
                 </option>
               ))}
             </select>

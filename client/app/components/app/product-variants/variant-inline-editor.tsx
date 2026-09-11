@@ -15,8 +15,12 @@ import {
 } from "~/components/ui/select";
 import { Switch } from "~/components/ui/switch";
 import { inventoryKeys } from "~/hooks/use-inventory-queries";
-import { useCreateAdjustmentMutation } from "~/hooks/use-inventory-mutations";
+import {
+  useCreateAdjustmentMutation,
+  useGenerateSkusMutation,
+} from "~/hooks/use-inventory-mutations";
 import { COMMON_UQC, GST_RATE_OPTIONS, GST_SUPPLY_TYPES } from "~/lib/gst-uqc";
+import { CODE_TERMS } from "~/lib/inventory-vocabulary";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { cn, formatMargin } from "~/lib/utils";
 import {
@@ -285,6 +289,7 @@ export function VariantInlineEditor({
 
   const queryClient = useQueryClient();
   const adjust = useCreateAdjustmentMutation({ silent: true });
+  const generateSkus = useGenerateSkusMutation();
 
   const changes = changedLabels(baseline, form);
   const dirty = changes.length > 0;
@@ -411,16 +416,47 @@ export function VariantInlineEditor({
             />
           </Field>
 
-          <Field label="SKU" htmlFor="vie-sku">
-            <Input
-              id="vie-sku"
-              value={form.sku}
-              placeholder="Add a SKU"
-              aria-invalid={!form.sku.trim() || undefined}
-              className="font-mono"
-              onChange={(e) => set("sku", e.target.value)}
-              disabled={saving}
-            />
+          {/* No aria-invalid on an empty SKU any more: the field flagged
+              itself as an error while offering no way to resolve one, which
+              is a large part of why this screen felt broken. The Create
+              button is the resolution. */}
+          <Field label="SKU" htmlFor="vie-sku" hint={CODE_TERMS.sku.definition}>
+            <div className="flex gap-2">
+              <Input
+                id="vie-sku"
+                value={form.sku}
+                placeholder="Add a SKU"
+                className="font-mono"
+                onChange={(e) => set("sku", e.target.value)}
+                disabled={saving}
+              />
+              {!form.sku.trim() && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-9 shrink-0"
+                  disabled={saving || generateSkus.isPending}
+                  onClick={() =>
+                    generateSkus.mutate(
+                      { variantIds: [variant.id] },
+                      {
+                        // The mutation writes straight to the row and already
+                        // invalidates the product queries, so close the panel
+                        // and let it reopen on fresh data rather than leaving
+                        // a stale empty field on screen.
+                        onSuccess: () => onCancel(),
+                      },
+                    )
+                  }
+                >
+                  {generateSkus.isPending && (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  )}
+                  Create
+                </Button>
+              )}
+            </div>
           </Field>
 
           {/* Reported, not edited — there is no variant status column. */}

@@ -1,7 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router";
 import {
-  ArrowLeft,
   Grid3x3,
   Pencil,
   Plus,
@@ -28,6 +26,7 @@ import {
   useWarehouseLocations,
   useWarehouses,
 } from "~/hooks/use-inventory-queries";
+import { InventoryTabs } from "~/components/app/inventory/inventory-tabs";
 import {
   useBulkCreateLocationsMutation,
   useCreateWarehouseMutation,
@@ -234,13 +233,9 @@ export default function WarehousesPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Button asChild variant="ghost" size="sm" className="text-xs text-muted-foreground">
-            <Link to="/products/inventory">
-              <ArrowLeft className="size-3.5" /> Inventory
-            </Link>
-          </Button>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Warehouses</h1>
+        <div className="flex flex-col gap-3">
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Locations</h1>
+          <InventoryTabs />
         </div>
         <Button
           variant="brand"
@@ -503,7 +498,7 @@ function EditWarehouseDialog({
   const isShopify = !!w.shopifyLocationId;
 
   return (
-    <ModalShell title="Edit warehouse" subtitle={`${w.name} · ${w.code}`} onClose={onClose}>
+    <ModalShell title="Edit location" subtitle={`${w.name} · ${w.code}`} onClose={onClose}>
       <div className="space-y-4 px-6 py-4 text-xs">
         <label className="block space-y-1">
           <span className="font-medium text-gray-700 dark:text-gray-300">Name</span>
@@ -513,11 +508,20 @@ function EditWarehouseDialog({
             className="h-8 text-xs"
             autoFocus
           />
+          {/* Said at the point of renaming, not only in a banner further down:
+              the sync re-adopts Shopify's name on every run, so a rename here
+              silently disappears and looks like the save failed. */}
+          {isShopify && (
+            <span className="block text-[11px] text-amber-700 dark:text-amber-500">
+              Renaming here will not stick — the next sync restores the Shopify
+              name. Rename the location in Shopify instead.
+            </span>
+          )}
         </label>
 
         {isShopify && (
           <p className="rounded-md bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-            This warehouse mirrors Shopify location {w.shopifyLocationId}. Its active
+            This location mirrors Shopify location {w.shopifyLocationId}. Its active
             state follows that location on every sync, so deactivate it in Shopify
             rather than here. The address below was seeded from Shopify once and is
             yours to edit — syncing never overwrites it.

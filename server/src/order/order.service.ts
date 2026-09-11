@@ -50,6 +50,7 @@ import { ShopifyOAuthService } from '../channel/shopify-oauth.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
+import { FxRateService } from '../common/fx/fx-rate.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { SHOPIFY_PUSH_QUEUE } from '../channel/shopify-push.queue';
@@ -181,6 +182,9 @@ export class OrderService {
     private readonly settings: OrganizationSettingsService,
     private readonly loyalty: LoyaltyService,
     private readonly ledger: InventoryLedgerService,
+    // A counter sale is priced in the org's currency, but a catalogue price is
+    // denominated in ITS channel's currency — see `catalogueUnitPrice`.
+    private readonly fx: FxRateService,
     @InjectQueue(SHOPIFY_PUSH_QUEUE)
     private readonly shopifyPushQueue: Queue,
   ) { }
@@ -970,6 +974,59 @@ export class OrderService {
     };
   }
 
+  /**
+   * Catalogue prices restated in the currency the counter sale is priced in.
+   *
+   * A variant's `price` is a bare decimal denominated in ITS OWN channel's
+   * currency — the same rule `ShopifyPushService.priceConverter` applies in the
+   * other direction. A counter sale is always priced in the org's currency, so
+   * taking that number unchanged does not mislabel it, it re-denominates it: a
+   * $749.95 snowboard synced from a USD Shopify store was rung up as ₹749.95
+   * and the customer was charged about a ninety-fourth of the price.
+   *
+   * Today's rate, not the order's stored one: this is a live price being set
+   * now, not an accounting fact being recorded about the past. (The order's own
+   * `exchangeRate` stays 1 — the sale really is booked in the org currency.)
+   *
+   * Throws rather than guessing when a rate is needed and cannot be reached.
+   * Charging a wrong price at the till is worse than refusing the line, and the
+   * cashier can always type the price to proceed.
+   */
+  private async catalogueUnitPrices(
+    orgId: string,
+    orderCurrency: string,
+    variants: Array<{
+      price: Prisma.Decimal | number;
+      product: { title: string; channel: { currency: string | null } | null };
+    }>,
+  ): Promise<number[]> {
+    // One lookup per distinct source currency, not per line.
+    const rates = new Map<string, number>([[orderCurrency, 1]]);
+    const needed = new Set(
+      variants
+        .map((v) => (v.product.channel?.currency ?? orderCurrency).toUpperCase())
+        .filter((c) => c && c !== orderCurrency),
+    );
+
+    for (const source of needed) {
+      const rate = await this.fx.getRate(source, orderCurrency, new Date());
+      if (rate == null) {
+        throw new BadRequestException(
+          `Cannot price this sale: no ${source}→${orderCurrency} exchange rate is available, ` +
+            `and charging a ${source} catalogue price as ${orderCurrency} would be wrong. ` +
+            `Enter the unit price manually to continue.`,
+        );
+      }
+      rates.set(source, rate);
+    }
+
+    return variants.map((v) => {
+      const source = (v.product.channel?.currency ?? orderCurrency).toUpperCase();
+      const rate = rates.get(source) ?? 1;
+      return this.calculator.round2(this.calculator.toNumber(v.price) * rate);
+    });
+  }
+
   // ─── OFFLINE / IN-STORE ORDER CREATION ───
   // Creates a manual order from a merchant's physical counter sale:
   // resolves/creates customer, validates and decrements stock, snapshots
@@ -990,6 +1047,11 @@ export class OrderService {
 
     const runSale = () => this.prisma.$transaction(
       async (tx) => {
+        // Variants whose stock this sale actually moved. Declared per attempt,
+        // not outside `runSale`, because a numbering collision re-runs the
+        // whole transaction and a shared array would accumulate duplicates.
+        const soldVariantIds: string[] = [];
+
         // 1. Resolve or lazy-create the org's MANUAL channel.
         const channel = await tx.channel.upsert({
           where: {
@@ -1018,7 +1080,10 @@ export class OrderService {
             id: { in: variantIds },
             product: { organizationId: orgId },
           },
-          include: { product: true },
+          // The channel comes along because a catalogue price is denominated in
+          // ITS channel's currency, and this order is priced in the org's —
+          // see `catalogueUnitPrice`.
+          include: { product: { include: { channel: { select: { currency: true } } } } },
         });
 
         const variantById = new Map(variants.map((v) => [v.id, v]));
@@ -1061,6 +1126,9 @@ export class OrderService {
         if (!org) {
           throw new NotFoundException('Organization not found');
         }
+        // The one place the counter sale's currency is decided. Every price on
+        // this order — line prices, totals, the invoice — is in it.
+        const orderCurrency = (org.currency || 'INR').toUpperCase();
 
         let sellerGstin: { stateCode: string } | null = null;
         let sellerRegistrations: SellerRegistrations = {
@@ -1202,10 +1270,21 @@ export class OrderService {
           )
           : dto.lineItems.map(() => 0);
 
+        // Catalogue prices restated in the order's currency, once per line.
+        // Resolved before the loop because it may hit the FX provider and the
+        // loop body runs inside the Serializable transaction that prices the
+        // order — see `catalogueUnitPrice`.
+        const catalogueUnitPrices = await this.catalogueUnitPrices(
+          orgId,
+          orderCurrency,
+          dto.lineItems.map((li) => variantById.get(li.productVariantId)!),
+        );
+
         for (const [lineIndex, li] of dto.lineItems.entries()) {
           const v = variantById.get(li.productVariantId)!;
-          const unitPrice =
-            li.unitPriceOverride ?? this.calculator.toNumber(v.price);
+          // The cashier's typed price is authoritative and is already in the
+          // order's currency; only the catalogue fallback needs converting.
+          const unitPrice = li.unitPriceOverride ?? catalogueUnitPrices[lineIndex];
           const discount = li.discount ?? 0;
 
           // Validated here, not in the DTO: the unit price may come from the
@@ -1320,14 +1399,14 @@ export class OrderService {
               dto.financialStatus ?? OrderFinancialStatus.PAID,
             fulfillmentStatus:
               dto.fulfillmentStatus ?? OrderFulfillmentStatus.FULFILLED,
-            currency: org.currency || 'INR',
+            currency: orderCurrency,
             // A counter sale is priced in the org's own currency by
             // construction (the line above), so it converts at exactly 1 — no
             // rate lookup, and no dependence on the FX provider being up.
             // Set explicitly rather than left NULL, because NULL means
             // "unknown rate" and would exclude the order from every total.
             exchangeRate: 1,
-            baseCurrency: org.currency || 'INR',
+            baseCurrency: orderCurrency,
             subtotalPrice: subtotal,
             totalPrice: grandTotal,
             totalTax,
@@ -1387,9 +1466,79 @@ export class OrderService {
         //    override is off (e.g. digital goods / made-to-order). Each
         //    decrement gets an InventoryEvent row with reason="sale" so the
         //    org has a complete audit history of stock movements.
-        for (const li of dto.lineItems) {
+        //
+        //    Warehousing orgs hold the truth in stock_levels; inventoryQuantity
+        //    is only a cache the ledger recomputes as SUM(available). Writing
+        //    that cache directly (as this did) took the units out of no
+        //    warehouse, so the next applyMovement — an adjustment, or the
+        //    Shopify per-location reconcile — recomputed the cache from
+        //    stock_levels and RESURRECTED every sold unit. Observed on DEV
+        //    2026-09-05: variant QA-2026-S-RED sold 2, cache 30→28, Kerala
+        //    stayed at 30, and the next sync put the cache back to 55.
+        //    This is the mirror image of the restock in `cancel`, which was
+        //    already fixed for exactly this reason.
+        const saleWarehousing = await this.ledger.isWarehousingEnabled(orgId);
+        // Goods leave the warehouse the order dispatches from; without an
+        // explicit pick that is the org default — the same rule the restock
+        // uses to send them back, so a sale and its cancellation land on the
+        // same shelf instead of drifting stock between warehouses.
+        const saleWarehouseId = saleWarehousing
+          ? (dispatchWarehouseId ??
+            (
+              await tx.warehouse.findFirst({
+                where: { organizationId: orgId, isDefault: true },
+                select: { id: true },
+              })
+            )?.id ??
+            null)
+          : null;
+        if (saleWarehousing && !saleWarehouseId) {
+          throw new BadRequestException(
+            'This organisation tracks stock per warehouse but has no default warehouse. ' +
+              'Set one under Products → Inventory → Warehouses, or choose a warehouse to dispatch from.',
+          );
+        }
+
+        // Sorted by variantId: `applyMovement` takes a row lock per variant,
+        // and every caller moving several variants in one transaction must take
+        // those locks in the same order or two concurrent sales deadlock.
+        const saleLines = [...dto.lineItems].sort((a, b) =>
+          a.productVariantId.localeCompare(b.productVariantId),
+        );
+
+        for (const li of saleLines) {
           const v = variantById.get(li.productVariantId)!;
           if (!trackGlobally && v.trackQuantity === false) continue;
+          soldVariantIds.push(v.id);
+
+          if (saleWarehousing) {
+            await this.ledger.applyMovement(
+              {
+                orgId,
+                variantId: v.id,
+                warehouseId: saleWarehouseId as string,
+                // Stock leaves the system: out of AVAILABLE, into nothing.
+                fromBucket: StockBucket.AVAILABLE,
+                toBucket: null,
+                quantity: li.quantity,
+                reason: 'sale',
+                referenceType: 'order',
+                referenceId: order.id,
+                actorId: userId,
+                // Step 3a already refused this sale if the variant is tracked,
+                // cannot oversell, and lacks the units ACROSS warehouses. Being
+                // short at this one specific warehouse must not then fail a
+                // counter sale the merchant is entitled to make — the shortfall
+                // is recorded as negative available and surfaced by the
+                // Inventory screen's "Oversold" filter.
+                allowNegativeAvailable: true,
+              },
+              tx,
+            );
+            continue;
+          }
+
+          // Legacy orgs: one number per variant, no stock_levels to move.
           const updatedVariant = await tx.productVariant.update({
             where: { id: v.id },
             data: { inventoryQuantity: { decrement: li.quantity } },
@@ -1495,7 +1644,7 @@ export class OrderService {
           });
         }
 
-        return { order, invoice, invoiceError };
+        return { order, invoice, invoiceError, soldVariantIds };
       },
       {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -1524,6 +1673,7 @@ export class OrderService {
     // via the channels-page Sync action.
     // OUTSIDE the transaction so a queue/Redis hiccup never rolls back the
     // local sale.
+    let orderPushedToShopify = false;
     try {
       const orderSettings = await this.settings.getOrderSettings(orgId);
       if (orderSettings.autoSyncToShopify) {
@@ -1531,6 +1681,7 @@ export class OrderService {
           orgId,
         );
         if (shopifyChannel?.status === 'CONNECTED') {
+          orderPushedToShopify = true;
           // Mark as PENDING immediately so the UI shows "Syncing to Shopify…"
           // even before the worker picks the job up.
           await this.markPendingSync(result.order.id, orgId);
@@ -1556,6 +1707,35 @@ export class OrderService {
       this.logger.warn(
         `Skipping Shopify push enqueue for order ${result.order.id}: ${err}`,
       );
+    }
+
+    // An offline sale moves real stock, and Shopify wins on the next pull — so
+    // without this push the decrement is silently reverted the next time the
+    // per-location reconcile runs, and the units reappear as if never sold.
+    //
+    // Deliberately skipped when the order itself went to Shopify: Shopify
+    // decrements its own inventory for an order it received, so setting
+    // availability on top of that would take the units off twice. In that case
+    // the pull reconciles us to Shopify's figure, which is already correct.
+    //
+    // Outside the transaction and non-fatal, exactly like the restock push in
+    // `cancel`: a queue outage must not roll back a completed sale.
+    if (result.soldVariantIds.length > 0 && !orderPushedToShopify) {
+      try {
+        await this.shopifyPushQueue.add(
+          'push-availability',
+          {
+            type: 'push-availability',
+            organizationId: orgId,
+            variantIds: [...new Set(result.soldVariantIds)],
+          },
+          { attempts: 5, backoff: { type: 'exponential', delay: 10_000 } },
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Failed to enqueue availability push after offline sale ${result.order.id}: ${err}`,
+        );
+      }
     }
 
     // The sale just moved ordersCount/totalSpent, and the loyalty tier is

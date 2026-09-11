@@ -11,8 +11,11 @@ import {
 } from 'class-validator';
 
 export class CreateWarehouseDto {
+  // Sized to hold any Shopify location name verbatim — the sync stores what
+  // Shopify sends without truncating, so this cap must never be the thing that
+  // chops a name (the column itself is TEXT).
   @IsString()
-  @MaxLength(100)
+  @MaxLength(255)
   name: string;
 
   // Location-code prefix ("WH1" → "WH1-A01-S02-B03"). Uppercase alnum only —
@@ -46,7 +49,7 @@ export class CreateWarehouseDto {
 export class UpdateWarehouseDto {
   @IsOptional()
   @IsString()
-  @MaxLength(100)
+  @MaxLength(255)
   name?: string;
 
   @IsOptional()

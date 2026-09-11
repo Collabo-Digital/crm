@@ -317,4 +317,41 @@ describe('DashboardService.getSalesAndProfit', () => {
       expect(profitTrend).toBeNull();
     });
   });
+
+  /**
+   * `exchange_rate` only means anything alongside `base_currency`: it was
+   * captured against whatever the org currency was AT THE TIME. Changing the
+   * org currency does not restate history, so every stored rate still targets
+   * the old one. Summing those products unchanged and labelling the result with
+   * the NEW currency is how switching INR→USD reported an unchanged
+   * ₹9,84,955.50 as "$984,955.50" (DEV, 2026-09-05).
+   */
+  describe('reporting currency changes', () => {
+    it('only sums orders whose stored rate targets the current reporting currency', async () => {
+      const { service, $queryRaw } = build({ currency: 'USD' });
+
+      await service.getSalesAndProfit(ORG, {});
+
+      const sql = sqlOf($queryRaw.mock.calls[0]);
+      expect(sql).toContain('base_currency');
+      expect(bindsOf($queryRaw.mock.calls[0])).toContain('USD');
+    });
+
+    it('counts the orders it had to leave out rather than dropping them silently', async () => {
+      const { service, prisma } = build({ currency: 'USD', unconvertedOrders: 3 });
+
+      const { totals } = await service.getSalesAndProfit(ORG, {});
+
+      expect(totals.unconvertedOrders).toBe(3);
+      // Both reasons an order cannot be converted: no rate, and a rate that
+      // targets a currency the org no longer reports in.
+      const where = prisma.order.count.mock.calls[0][0].where;
+      expect(where.OR).toEqual(
+        expect.arrayContaining([
+          { exchangeRate: null },
+          expect.objectContaining({ baseCurrency: expect.objectContaining({ not: 'USD' }) }),
+        ]),
+      );
+    });
+  });
 });

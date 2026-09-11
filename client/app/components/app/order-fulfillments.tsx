@@ -464,8 +464,10 @@ function FulfillmentOrderBlock({
   if (fo.lineItems.length === 0) return null;
   return (
     <div className="space-y-2">
+      {/* No `uppercase` on this line: it is Shopify's own location name and is
+          shown exactly as Shopify spells it. */}
       {fo.locationName && (
-        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <p className="text-micro tracking-wide text-muted-foreground">
           From {fo.locationName}
         </p>
       )}

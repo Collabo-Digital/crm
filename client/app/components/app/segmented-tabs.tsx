@@ -1,7 +1,18 @@
 import { cn } from "~/lib/utils";
 
 interface SegmentedTabsProps<T extends string> {
-  items: ReadonlyArray<{ value: T; label: string; count?: number }>;
+  /**
+   * `icon` is optional and purely decorative — it renders before the label and
+   * inherits the pill's colour. Added for the label-stock picker, where the
+   * shape of the media (a wide sticker, a thin jewellery flag, a portrait
+   * sheet) reads faster than its name.
+   */
+  items: ReadonlyArray<{
+    value: T;
+    label: string;
+    count?: number;
+    icon?: React.ReactNode;
+  }>;
   value: T;
   onChange: (value: T) => void;
   /** Required — the control is unlabelled otherwise. */
@@ -64,6 +75,7 @@ export function SegmentedTabs<T extends string>({
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
+            {item.icon}
             {item.label}
             {item.count !== undefined && (
               <span className={cn("tabular-nums", !isActive && "opacity-70")}>

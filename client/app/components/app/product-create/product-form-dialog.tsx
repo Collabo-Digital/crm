@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router";
 import { ChevronDown, ChevronRight, X, Loader2, Check, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
@@ -60,6 +61,7 @@ function optionsEqual(a: ProductOption[] | null | undefined, b: ProductOption[] 
 import { OptionsEditor } from "./options-editor";
 import { VariantEditor } from "./variant-editor";
 import { ImageGalleryUploader } from "./image-gallery-uploader";
+import { CODE_TERMS } from "~/lib/inventory-vocabulary";
 
 // Feature flag — media uploads are temporarily held while we finalize storage
 // strategy (local disk vs S3). The backend endpoints (POST /products/:id/images,
@@ -342,7 +344,7 @@ export function ProductFormDialog({
       if (fresh) applyFreshVariants(fresh);
       setErrors((prev) => ({ ...prev, options: "", variants: "" }));
       toast.success(
-        `Generated ${result.created} new variant${result.created === 1 ? "" : "s"}.`,
+        `Added ${result.created} new variant${result.created === 1 ? "" : "s"}.`,
       );
     } catch (e) {
       handleMutationError(e, "Failed to generate variants.");
@@ -473,7 +475,7 @@ export function ProductFormDialog({
       if (namelessOptionIdx >= 0) e.options = "Every option needs a name";
       const emptyValuesIdx = form.options.findIndex((o) => o.values.length === 0);
       if (emptyValuesIdx >= 0) e.options = "Every option needs at least one value";
-      if (form.variants.length === 0) e.variants = "Generate variants from your options";
+      if (form.variants.length === 0) e.variants = "Add variants from your options";
       const badPriceIdx = form.variants.findIndex((v) => v.price === undefined || v.price < 0);
       if (badPriceIdx >= 0) e.variants = `Variant ${badPriceIdx + 1} needs a non-negative price`;
     } else {
@@ -812,7 +814,7 @@ export function ProductFormDialog({
                           className="inline-flex items-center gap-1 rounded-md border border-input bg-white dark:bg-gray-900 px-2 py-1 text-[10px] text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40"
                         >
                           <Sparkles className="size-3" />
-                          Generate from options
+                          Add variants
                         </button>
                       ) : (
                         <button
@@ -827,7 +829,7 @@ export function ProductFormDialog({
                           ) : (
                             <Sparkles className="size-3" />
                           )}
-                          Generate missing variants
+                          Add missing variants
                         </button>
                       )}
                     </div>
@@ -840,7 +842,7 @@ export function ProductFormDialog({
                       />
                     ) : (
                       <p className="rounded-lg border border-dashed border-input bg-gray-50 dark:bg-gray-800/40 py-4 text-center text-[11px] text-muted-foreground">
-                        Define option types and click "Generate" to create variants.
+                        Define option types, then click "Add variants".
                       </p>
                     )}
                     {errors.variants && (
@@ -1068,8 +1070,16 @@ function SingleVariantFields({
             <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
               Stock on hand
             </span>
-            <p className="mt-1 h-9 flex items-center text-xs text-muted-foreground">
-              {variant.inventoryQuantity || "0"} — set per warehouse in Inventory
+            {/* A link, not prose. Naming the destination without going there is
+                how "where do I update stock?" became a support question. */}
+            <p className="mt-1 h-9 flex items-center gap-1 text-xs text-muted-foreground">
+              {variant.inventoryQuantity || "0"} —{" "}
+              <Link
+                to="/products/inventory"
+                className="text-brand-strong underline underline-offset-2 hover:no-underline"
+              >
+                set per location in Inventory
+              </Link>
             </p>
           </div>
         ) : variant.trackQuantity ? (
@@ -1191,10 +1201,15 @@ function SingleVariantFields({
 
           {/* Customs */}
           <FieldsSubsection title="Customs information">
+            {/* Was "Barcode (UPC, ISBN, etc.)", which told the merchant to
+                type a retail barcode here while the CRM quietly writes its own
+                6-digit code into the same field. The shared definition says
+                what actually happens. */}
             <Field
-              label="Barcode (UPC, ISBN, etc.)"
+              label={CODE_TERMS.barcode.label}
               value={variant.barcode}
               onChange={(v) => patch({ barcode: v })}
+              hint={CODE_TERMS.barcode.definition}
               mono
             />
             <div className="grid grid-cols-2 gap-3">
@@ -1301,6 +1316,7 @@ function Field({
   error,
   placeholder,
   disabled = false,
+  hint,
 }: {
   label: string;
   value: string;
@@ -1312,6 +1328,7 @@ function Field({
   error?: string;
   placeholder?: string;
   disabled?: boolean;
+  hint?: string;
 }) {
   return (
     <label className="block">
@@ -1333,6 +1350,11 @@ function Field({
         }`}
       />
       {error && <span className="mt-1 block text-[10px] text-red-600">{error}</span>}
+      {hint && !error && (
+        <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground">
+          {hint}
+        </span>
+      )}
     </label>
   );
 }

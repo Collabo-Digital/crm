@@ -1,7 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router";
 
 import { Input } from "~/components/ui/input";
+import { STOCK_TERMS } from "~/lib/inventory-vocabulary";
+import { useSelectedLocation } from "~/hooks/use-selected-location";
 import { useVariantStock } from "~/hooks/use-inventory-queries";
 import { cn } from "~/lib/utils";
 
@@ -33,8 +35,20 @@ export function VariantWarehouseStockEditor({
   disabled?: boolean;
 }) {
   const stock = useVariantStock(variantId);
-  const levels = stock.data?.levels;
+  const { locationId } = useSelectedLocation({ sync: false });
   const seeded = useRef(false);
+
+  // Every location stays listed — Shopify's variant page lists them all, and
+  // each box is labelled, so nothing is ambiguous. The one the merchant is
+  // currently working in is pinned to the top so the page respects their
+  // choice without hiding the others.
+  const levels = useMemo(() => {
+    const all = stock.data?.levels;
+    if (!all || !locationId) return all;
+    return [...all].sort((a, b) =>
+      a.warehouseId === locationId ? -1 : b.warehouseId === locationId ? 1 : 0,
+    );
+  }, [stock.data?.levels, locationId]);
 
   useEffect(() => {
     if (seeded.current || !levels) return;
@@ -55,24 +69,45 @@ export function VariantWarehouseStockEditor({
   if (!levels || levels.length === 0) {
     return (
       <div className={shell}>
-        No stock recorded for this variant yet. Receive or adjust it from{" "}
+        No stock recorded for this variant yet. Add some from{" "}
         <Link to="/products/inventory" className="underline">
           Inventory
         </Link>
-        .
+        — pick a location and set a quantity.
       </div>
     );
   }
 
   return (
     <div className="divide-y rounded-lg border border-border">
+      {/* Names the figure being edited. Without this the merchant is typing
+          into an unlabelled box and has to guess which bucket it is. */}
+      <div className="flex items-center gap-3 bg-muted/50 px-4 py-2">
+        <span className="min-w-0 flex-1 text-micro font-medium uppercase tracking-wide text-muted-foreground">
+          Location
+        </span>
+        <span className="w-24 text-right text-micro font-medium uppercase tracking-wide text-muted-foreground">
+          {STOCK_TERMS.available.label}
+        </span>
+      </div>
+      {/* The Inventory screen says this in its explainer; a merchant typing a
+          quantity here deserves the same warning without having to go there. */}
+      <p className="bg-warning-subtle px-4 py-2 text-micro text-muted-foreground">
+        Saved here and pushed to Shopify. If the same quantity changes in both
+        places, the next sync from Shopify wins.
+      </p>
       {levels.map((level) => {
         const held = level.reserved + level.qc + level.damaged;
         return (
           <div key={level.id} className="flex items-center gap-3 px-4 py-3">
             <div className="min-w-0 flex-1">
-              <p className="truncate text-label text-foreground">
+              <p className="text-label text-foreground" title={level.warehouse.name}>
                 {level.warehouse.name}
+                {level.warehouseId === locationId && (
+                  <span className="ml-2 rounded-full bg-brand/15 px-1.5 py-0.5 text-micro font-medium text-brand-strong">
+                    Selected
+                  </span>
+                )}
                 {level.defaultLocation?.fullCode && (
                   <span className="ml-1.5 font-mono text-micro text-muted-foreground">
                     {level.defaultLocation.fullCode}

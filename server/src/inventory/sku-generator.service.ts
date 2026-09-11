@@ -226,6 +226,61 @@ export class SkuGeneratorService {
     return { generated, skipped: variants.length - generated, conflicts };
   }
 
+  /**
+   * Org-wide counts behind the merchant-facing "Product codes" dialog.
+   *
+   * Deliberately computed here rather than on the client. The Inventory table
+   * is paginated AND scoped to one location, so a count taken from its rows
+   * described a different set from the one the generate call then changed —
+   * the button could claim "12" and rewrite 300.
+   *
+   * Each figure is the exact target set of one action, so a zero means the
+   * action has nothing to do and its row is not offered at all.
+   */
+  async codeStatus(orgId: string) {
+    const [row] = await this.prisma.$queryRaw<
+      Array<{
+        total: bigint;
+        missing_sku: bigint;
+        missing_barcode: bigint;
+        long_barcode: bigint;
+      }>
+    >(Prisma.sql`
+      SELECT COUNT(*) AS total,
+             COUNT(*) FILTER (WHERE v."sku" IS NULL OR v."sku" = '')
+               AS missing_sku,
+             COUNT(*) FILTER (WHERE v."barcode" IS NULL OR v."barcode" = '')
+               AS missing_barcode,
+             -- Exactly what filter 'missing-or-generated' + format 'short'
+             -- rewrites, minus the gaps counted above. GENERATED is the only
+             -- source we may replace: SHOPIFY is a real GTIN and MANUAL was
+             -- typed by a person. The 6-digit test excludes codes this
+             -- generator already shortened, so the count falls to zero once
+             -- the catalogue is clean and the action stops being offered.
+             COUNT(*) FILTER (WHERE v."barcode_source" = 'GENERATED'
+                                AND v."barcode" !~ '^[0-9]{6}$')
+               AS long_barcode
+      FROM "product_variants" v
+      JOIN "products" p ON p."id" = v."product_id"
+      WHERE v."organization_id" = ${orgId}
+        AND p."deleted_at" IS NULL
+    `);
+    // The RESOLVED prefix, not the configured one. Most orgs leave the setting
+    // empty and fall back to a mnemonic of their name, so returning the raw
+    // setting made the dialog preview a generated SKU as "———-SAR-001". The
+    // client must not re-derive this: the fallback rule lives in resolvePrefix
+    // and would drift.
+    const skuPrefix = await this.resolvePrefix(orgId);
+
+    return {
+      totalVariants: Number(row?.total ?? 0),
+      missingSku: Number(row?.missing_sku ?? 0),
+      missingBarcode: Number(row?.missing_barcode ?? 0),
+      longBarcode: Number(row?.long_barcode ?? 0),
+      skuPrefix,
+    };
+  }
+
   /** Duplicate SKU/barcode report — surfaces imported collisions for cleanup. */
   async findDuplicates(orgId: string) {
     const dupes = async (column: 'sku' | 'barcode') => {

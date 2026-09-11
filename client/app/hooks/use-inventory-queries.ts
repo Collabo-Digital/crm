@@ -12,6 +12,7 @@ export const inventoryKeys = {
   variantStock: (variantId: string) =>
     [...inventoryKeys.all, "variant-stock", variantId] as const,
   ledger: (params?: LedgerParams) => [...inventoryKeys.all, "ledger", params] as const,
+  codeStatus: () => [...inventoryKeys.all, "code-status"] as const,
   duplicates: () => [...inventoryKeys.all, "duplicates"] as const,
   warehouses: () => [...inventoryKeys.all, "warehouses"] as const,
   locations: (warehouseId: string) =>
@@ -30,11 +31,25 @@ export function useInventoryStatus() {
   });
 }
 
-export function useStock(params?: StockListParams) {
+/**
+ * Counts behind the Product codes dialog. Both generate mutations already
+ * invalidate `inventoryKeys.all`, so these refresh after every action with no
+ * extra wiring.
+ */
+export function useCodeStatus(enabled = true) {
+  return useQuery({
+    queryKey: inventoryKeys.codeStatus(),
+    queryFn: () => inventoryService.codeStatus(),
+    enabled,
+  });
+}
+
+export function useStock(params?: StockListParams, enabled = true) {
   return useQuery({
     queryKey: inventoryKeys.stock(params),
     queryFn: () => inventoryService.listStock(params),
     placeholderData: keepPreviousData,
+    enabled,
   });
 }
 
@@ -44,11 +59,12 @@ export function useStock(params?: StockListParams) {
  * caches separately; `keepPreviousData` holds the last figures on screen while
  * the next warehouse loads, instead of flashing the tiles back to skeletons.
  */
-export function useStockStats(params?: { warehouseId?: string }) {
+export function useStockStats(params?: { warehouseId?: string }, enabled = true) {
   return useQuery({
     queryKey: inventoryKeys.stockStats(params),
     queryFn: () => inventoryService.stockStats(params),
     placeholderData: keepPreviousData,
+    enabled,
   });
 }
 
@@ -60,11 +76,12 @@ export function useVariantStock(variantId?: string | null) {
   });
 }
 
-export function useInventoryLedger(params?: LedgerParams) {
+export function useInventoryLedger(params?: LedgerParams, enabled = true) {
   return useQuery({
     queryKey: inventoryKeys.ledger(params),
     queryFn: () => inventoryService.ledger(params),
     placeholderData: keepPreviousData,
+    enabled,
   });
 }
 

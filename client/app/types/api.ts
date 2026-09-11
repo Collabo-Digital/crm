@@ -752,6 +752,15 @@ export interface Product {
   totalStock: number;
   variantCount: number;
   priceRange: { min: number; max: number };
+  /**
+   * The currency `priceRange` and every `variants[].price` below are in.
+   *
+   * Normally the product's own channel currency. When the request asked for
+   * `priceIn` it is that currency instead — unless the rate could not be
+   * reached, in which case the prices are left alone and this still names the
+   * channel's currency. Never assume the org's currency from it.
+   */
+  priceCurrency?: string | null;
   image: ProductImage | null;
   channel: ChannelRef;
   createdAt: string;
@@ -952,6 +961,15 @@ export interface ProductListParams {
   sortBy?: string;
   sortOrder?: "asc" | "desc";
   stockStatus?: StockStatus;
+  /**
+   * Restate every variant price in this ISO currency (e.g. "INR").
+   *
+   * Catalogue prices are normally read in their own channel's currency, which
+   * is what the product screens show. The counter-sale builder asks for one
+   * currency instead, because it prices a single order in the org's currency
+   * and must display the number it will actually charge.
+   */
+  priceIn?: string;
 }
 
 // ─── Order Types ─────────────────────────────────────────────────────────────
@@ -2835,6 +2853,8 @@ export interface Warehouse {
   isActive: boolean;
   locationCount: number;
   stockLineCount: number;
+  /** Sellable units held here — shown beside the name in the location picker. */
+  unitsAvailable: number;
   createdAt: string;
 }
 
@@ -2921,14 +2941,52 @@ export interface LedgerParams {
   dateTo?: string;
 }
 
+/** Keep in step with ADJUSTMENT_REASONS on the server. */
+export type AdjustmentReason =
+  | "adjustment"
+  | "count"
+  | "damage"
+  | "found"
+  | "correction"
+  | "received"
+  | "restock"
+  | "shrinkage"
+  | "quality"
+  | "other";
+
 export interface CreateAdjustmentRequest {
   variantId: string;
-  warehouseId?: string;
+  /** Required for warehousing orgs — the location the write lands on. */
+  warehouseId: string;
   bucket: StockBucket;
   delta?: number;
   setTo?: number;
-  reason?: "adjustment" | "count" | "damage" | "found" | "correction";
+  reason?: AdjustmentReason;
   note?: string;
+}
+
+export interface BulkAdjustmentRequest {
+  warehouseId: string;
+  items: Array<{
+    variantId: string;
+    bucket: StockBucket;
+    delta?: number;
+    setTo?: number;
+  }>;
+  reason?: AdjustmentReason;
+  note?: string;
+}
+
+export interface BulkAdjustmentResponse {
+  ok: boolean;
+  applied: number;
+  results: Array<{
+    variantId: string;
+    bucket: StockBucket;
+    delta: number;
+    changed: boolean;
+    inventoryQuantity: number;
+  }>;
 }
 
 export interface GenerateCodesRequest {
@@ -2942,11 +3000,30 @@ export interface GenerateCodesRequest {
   filter?: "missing-sku" | "missing-barcode" | "missing-or-generated" | "all";
   overwrite?: boolean;
   /**
-   * Barcode value shape (generate-barcodes only). "sku" copies the SKU
-   * verbatim (default); "short" mints a 6-digit numeric code that fits small
-   * and jewellery label stock, which an 18-character SKU cannot.
+   * Barcode value shape (generate-barcodes only). "short" mints a 6-digit
+   * numeric code that fits small and jewellery label stock, which an
+   * 18-character SKU cannot — it is the default. "sku" copies the SKU
+   * verbatim, the original behaviour.
    */
   format?: "sku" | "short";
+}
+
+/**
+ * Org-wide code coverage, behind the "Product codes" dialog. Each figure is
+ * the exact target set of one action, so a zero means that action has nothing
+ * to do and is not offered.
+ */
+export interface CodeStatus {
+  totalVariants: number;
+  missingSku: number;
+  missingBarcode: number;
+  /** CRM-generated barcodes too long to print on small label stock. */
+  longBarcode: number;
+  /**
+   * The prefix a generated SKU will actually start with — already resolved
+   * through the org-name fallback, so do not re-derive it here.
+   */
+  skuPrefix: string;
 }
 
 export interface GenerateCodesResult {

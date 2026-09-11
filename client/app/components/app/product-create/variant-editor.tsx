@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router";
 import { GripVertical, MoreVertical, Trash2, X } from "lucide-react";
 import type { GstSupplyType, ProductOption, ProductVariantInput } from "~/types/api";
 import { COMMON_UQC, GST_RATE_OPTIONS, GST_SUPPLY_TYPES } from "~/lib/gst-uqc";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { formatMargin } from "~/lib/utils";
+import { CODE_TERMS } from "~/lib/inventory-vocabulary";
 
 /**
  * Repeating-row editor for product variants. Each row exposes the most-used
@@ -353,8 +355,16 @@ function VariantDetailPanel({
                     <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
                       Stock on hand
                     </span>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {variant.inventoryQuantity ?? 0} — set per warehouse in Inventory.
+                    {/* See product-form-dialog: the destination is a link so
+                        the merchant can actually reach it. */}
+                    <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                      {variant.inventoryQuantity ?? 0} —{" "}
+                      <Link
+                        to="/products/inventory"
+                        className="text-brand-strong underline underline-offset-2 hover:no-underline"
+                      >
+                        set per location in Inventory
+                      </Link>
                     </p>
                   </div>
                 ) : (
@@ -424,9 +434,10 @@ function VariantDetailPanel({
           {/* Customs */}
           <PanelSection title="Customs information">
             <PanelField
-              label="Barcode (UPC, ISBN, etc.)"
+              label={CODE_TERMS.barcode.label}
               value={variant.barcode ?? ""}
               onChange={(v) => onChange({ barcode: v || undefined })}
+              hint={CODE_TERMS.barcode.definition}
               mono
             />
             <PanelField
@@ -580,6 +591,7 @@ function PanelField({
   step,
   mono = false,
   placeholder,
+  hint,
 }: {
   label: string;
   value: string | number;
@@ -588,6 +600,7 @@ function PanelField({
   step?: string;
   mono?: boolean;
   placeholder?: string;
+  hint?: string;
 }) {
   return (
     <label className="block">
@@ -604,6 +617,11 @@ function PanelField({
           mono ? "font-mono" : ""
         }`}
       />
+      {hint && (
+        <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground">
+          {hint}
+        </span>
+      )}
     </label>
   );
 }

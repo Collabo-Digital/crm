@@ -36,10 +36,16 @@ export function ProductPicker({
 }) {
   const [query, setQuery] = useState("");
   const debounced = useDebounced(query);
+  // Prices restated in the currency THIS order is billed in. A variant synced
+  // from a foreign-currency store carries that store's number, so without this
+  // the picker showed a $749.95 snowboard as "₹749.95" and seeded the cart with
+  // 749.95 — about a ninety-fourth of the real price. The server re-converts at
+  // submit, so what is shown here is what gets charged.
   const { data, isLoading } = useProducts({
     search: debounced || undefined,
     limit: 8,
     status: "ACTIVE",
+    priceIn: currency,
   });
   const { data: orgSettings } = useOrganizationSettings();
   const oversellGlobally =
@@ -114,7 +120,14 @@ export function ProductPicker({
           rows.map(({ product, variant }) => {
             const oos = variant.inventoryQuantity <= 0;
             const canOversell = resolveCanOversell(variant);
-            const blockAdd = oos && !canOversell;
+            // The server restates prices into this order's currency, but it
+            // leaves them alone when the rate is unreachable. Adding such a
+            // line would put a foreign number into the cart and charge it as
+            // local money, so block it and say why — the cashier can still ring
+            // the item up by entering the price on an existing line.
+            const priceCurrency = product.priceCurrency ?? currency;
+            const foreignPrice = priceCurrency.toUpperCase() !== currency.toUpperCase();
+            const blockAdd = (oos && !canOversell) || foreignPrice;
             return (
               <div
                 key={variant.id}
@@ -131,7 +144,7 @@ export function ProductPicker({
                 </div>
                 <div className="text-right">
                   <p className="text-xs font-semibold tabular-nums text-gray-900 dark:text-gray-100">
-                    {formatCurrency(variant.price, currency)}
+                    {formatCurrency(variant.price, priceCurrency)}
                   </p>
                   <p
                     className={`text-[10px] tabular-nums ${oos
@@ -153,9 +166,11 @@ export function ProductPicker({
                   onClick={() => add(product, variant)}
                   disabled={blockAdd}
                   title={
-                    blockAdd
-                      ? "Out of stock. Enable 'Continue selling when out of stock' on this variant or globally to allow backorders."
-                      : undefined
+                    foreignPrice
+                      ? `Priced in ${priceCurrency} and today's ${priceCurrency}→${currency} rate is unavailable, so this cannot be billed in ${currency} yet.`
+                      : blockAdd
+                        ? "Out of stock. Enable 'Continue selling when out of stock' on this variant or globally to allow backorders."
+                        : undefined
                   }
                   className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#CEF17B] px-3 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] disabled:pointer-events-none disabled:opacity-40"
                 >
