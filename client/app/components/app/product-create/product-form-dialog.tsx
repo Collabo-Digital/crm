@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router";
 import { ChevronDown, ChevronRight, X, Loader2, Check, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
@@ -1068,8 +1069,16 @@ function SingleVariantFields({
             <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
               Stock on hand
             </span>
-            <p className="mt-1 h-9 flex items-center text-xs text-muted-foreground">
-              {variant.inventoryQuantity || "0"} — set per warehouse in Inventory
+            {/* A link, not prose. Naming the destination without going there is
+                how "where do I update stock?" became a support question. */}
+            <p className="mt-1 h-9 flex items-center gap-1 text-xs text-muted-foreground">
+              {variant.inventoryQuantity || "0"} —{" "}
+              <Link
+                to="/products/inventory"
+                className="text-brand-strong underline underline-offset-2 hover:no-underline"
+              >
+                set per location in Inventory
+              </Link>
             </p>
           </div>
         ) : variant.trackQuantity ? (

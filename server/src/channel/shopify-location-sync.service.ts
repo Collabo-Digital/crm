@@ -28,9 +28,6 @@ const VARIANT_PAGE_SIZE = 25;
 /** Inventory levels per variant. A variant is stocked at ≤ this many locations. */
 const LEVELS_PER_VARIANT = 50;
 
-/** CreateWarehouseDto caps name at 100; stay valid for a later API edit. */
-const WAREHOUSE_NAME_MAX = 100;
-
 /**
  * Mirrors Shopify locations as CRM warehouses, and reconciles per-location
  * stock into each mapped warehouse's AVAILABLE bucket.
@@ -267,7 +264,7 @@ export class ShopifyLocationSyncService {
             await this.prisma.warehouse.create({
               data: {
                 organizationId: orgId,
-                name: node.name,
+                name: node.name.trim(),
                 code,
                 shopifyLocationId: locationId,
                 isActive: node.isActive,
@@ -516,7 +513,11 @@ export class ShopifyLocationSyncService {
         // are indistinguishable by quantity alone, and conflating them is what
         // left zero-stock variants with no row and therefore invisible to
         // InventoryService.listStock, which reads stock_levels only.
-        const { available: currentAvailable, existing } = await this.loadAvailable(
+        const {
+          available: currentAvailable,
+          reserved: currentReserved,
+          existing,
+        } = await this.loadAvailable(
           [...variantByItemId.values()],
         );
         // (variant, warehouse) pairs Shopify stocks but we hold no row for.
@@ -554,6 +555,46 @@ export class ShopifyLocationSyncService {
             if (typeof available !== 'number') continue;
 
             const key = `${variantId}:${warehouseId}`;
+
+            // Shopify's COMMITTED — units promised to placed-but-unfulfilled
+            // orders. They are still physically on the shelf, so mirroring
+            // them into RESERVED is what makes our on-hand (a generated sum of
+            // the buckets) agree with Shopify's. Without it we understate on
+            // hand by exactly the committed quantity, and a merchant counting
+            // the shelf finds us wrong whenever an order is open.
+            //
+            // Shopify owns this number outright — the Admin API cannot even
+            // write it — so it is mirrored, never computed locally.
+            const committed = level.quantities.find(
+              (q) => q.name === 'committed',
+            )?.quantity;
+            if (typeof committed === 'number') {
+              const reservedDelta = committed - (currentReserved.get(key) ?? 0);
+              if (reservedDelta !== 0) {
+                try {
+                  await this.ledger.applyMovement({
+                    orgId,
+                    variantId,
+                    warehouseId,
+                    // In and out of the system rather than to/from AVAILABLE:
+                    // Shopify has already taken these units out of its own
+                    // available, and the available reconcile below writes that
+                    // figure verbatim. Moving them between our buckets as well
+                    // would deduct them twice.
+                    fromBucket: reservedDelta < 0 ? StockBucket.RESERVED : null,
+                    toBucket: reservedDelta > 0 ? StockBucket.RESERVED : null,
+                    quantity: Math.abs(reservedDelta),
+                    reason: 'sync',
+                    referenceType: 'shopify_location_sync',
+                    referenceId: locationId,
+                  });
+                } catch (error) {
+                  this.logger.warn(
+                    `Failed to mirror committed for variant ${variantId} at location ${locationId}: ${error instanceof Error ? error.message : error}`,
+                  );
+                }
+              }
+            }
             const current = currentAvailable.get(key) ?? 0;
             const delta = available - current;
             if (delta === 0) {
@@ -658,23 +699,31 @@ export class ShopifyLocationSyncService {
    */
   private async loadAvailable(variantIds: string[]): Promise<{
     available: Map<string, number>;
+    reserved: Map<string, number>;
     existing: Set<string>;
   }> {
     if (variantIds.length === 0) {
-      return { available: new Map(), existing: new Set() };
+      return { available: new Map(), reserved: new Map(), existing: new Set() };
     }
     const rows = await this.prisma.stockLevel.findMany({
       where: { variantId: { in: variantIds }, locationId: null },
-      select: { variantId: true, warehouseId: true, available: true },
+      select: {
+        variantId: true,
+        warehouseId: true,
+        available: true,
+        reserved: true,
+      },
     });
     const available = new Map<string, number>();
+    const reserved = new Map<string, number>();
     const existing = new Set<string>();
     for (const r of rows) {
       const key = `${r.variantId}:${r.warehouseId}`;
       available.set(key, r.available);
+      reserved.set(key, r.reserved);
       existing.add(key);
     }
-    return { available, existing };
+    return { available, reserved, existing };
   }
 
   // ─────────────────────────── helpers ───────────────────────────
@@ -704,9 +753,10 @@ export class ShopifyLocationSyncService {
   ): { name?: string } {
     const name = node.name?.trim();
     if (!name || name === current.name) return {};
-    // Guard only: Shopify allows longer names than CreateWarehouseDto accepts,
-    // and an over-long stored name would fail validation on a later API edit.
-    return { name: name.slice(0, WAREHOUSE_NAME_MAX) };
+    // Stored verbatim, at any length. Merchants must see the location name
+    // exactly as Shopify shows it, so nothing is truncated here — the column is
+    // TEXT and CreateWarehouseDto's cap is sized to match (warehouse.dto.ts).
+    return { name };
   }
 
   /** `gid://shopify/Location/123` → `"123"`. Stored as text on Warehouse. */

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router";
 import { GripVertical, MoreVertical, Trash2, X } from "lucide-react";
 import type { GstSupplyType, ProductOption, ProductVariantInput } from "~/types/api";
 import { COMMON_UQC, GST_RATE_OPTIONS, GST_SUPPLY_TYPES } from "~/lib/gst-uqc";
@@ -353,8 +354,16 @@ function VariantDetailPanel({
                     <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
                       Stock on hand
                     </span>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {variant.inventoryQuantity ?? 0} — set per warehouse in Inventory.
+                    {/* See product-form-dialog: the destination is a link so
+                        the merchant can actually reach it. */}
+                    <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                      {variant.inventoryQuantity ?? 0} —{" "}
+                      <Link
+                        to="/products/inventory"
+                        className="text-brand-strong underline underline-offset-2 hover:no-underline"
+                      >
+                        set per location in Inventory
+                      </Link>
                     </p>
                   </div>
                 ) : (

@@ -5,6 +5,7 @@ import { handleMutationError } from "~/lib/handle-mutation-error";
 import { inventoryKeys } from "./use-inventory-queries";
 import { productKeys } from "./use-product-queries";
 import type {
+  BulkAdjustmentRequest,
   BulkLocationsRequest,
   CreateAdjustmentRequest,
   CreateWarehouseRequest,
@@ -49,6 +50,30 @@ export function useCreateAdjustmentMutation(options: { silent?: boolean } = {}) 
     },
     onError: (error) => {
       if (!options.silent) handleMutationError(error, "Failed to adjust stock.");
+    },
+  });
+}
+
+/**
+ * Saves a screenful of edited quantities in one call.
+ *
+ * The server applies them atomically, so a rejection means nothing was written
+ * and the merchant's edits are all still on screen to correct or discard —
+ * which is why the error is handed back to the caller rather than toasted here.
+ */
+export function useBulkAdjustmentMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: BulkAdjustmentRequest) =>
+      inventoryService.createAdjustmentsBulk(data),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: inventoryKeys.all });
+      queryClient.invalidateQueries({ queryKey: productKeys.all });
+      toast.success(
+        res.applied === 1
+          ? "1 quantity updated."
+          : `${res.applied} quantities updated.`,
+      );
     },
   });
 }

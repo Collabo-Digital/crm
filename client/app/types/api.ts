@@ -2853,6 +2853,8 @@ export interface Warehouse {
   isActive: boolean;
   locationCount: number;
   stockLineCount: number;
+  /** Sellable units held here — shown beside the name in the location picker. */
+  unitsAvailable: number;
   createdAt: string;
 }
 
@@ -2939,14 +2941,52 @@ export interface LedgerParams {
   dateTo?: string;
 }
 
+/** Keep in step with ADJUSTMENT_REASONS on the server. */
+export type AdjustmentReason =
+  | "adjustment"
+  | "count"
+  | "damage"
+  | "found"
+  | "correction"
+  | "received"
+  | "restock"
+  | "shrinkage"
+  | "quality"
+  | "other";
+
 export interface CreateAdjustmentRequest {
   variantId: string;
-  warehouseId?: string;
+  /** Required for warehousing orgs — the location the write lands on. */
+  warehouseId: string;
   bucket: StockBucket;
   delta?: number;
   setTo?: number;
-  reason?: "adjustment" | "count" | "damage" | "found" | "correction";
+  reason?: AdjustmentReason;
   note?: string;
+}
+
+export interface BulkAdjustmentRequest {
+  warehouseId: string;
+  items: Array<{
+    variantId: string;
+    bucket: StockBucket;
+    delta?: number;
+    setTo?: number;
+  }>;
+  reason?: AdjustmentReason;
+  note?: string;
+}
+
+export interface BulkAdjustmentResponse {
+  ok: boolean;
+  applied: number;
+  results: Array<{
+    variantId: string;
+    bucket: StockBucket;
+    delta: number;
+    changed: boolean;
+    inventoryQuantity: number;
+  }>;
 }
 
 export interface GenerateCodesRequest {

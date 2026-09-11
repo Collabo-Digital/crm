@@ -33,6 +33,7 @@ import {
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { useOrganizationSettings } from "~/hooks/use-settings-queries";
 import { useInventoryStatus } from "~/hooks/use-inventory-queries";
+import { STOCK_TERMS } from "~/lib/inventory-vocabulary";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { calcMargin, cn, formatCurrency } from "~/lib/utils";
 import { formatDate, formatDateTime } from "~/lib/format-date";
@@ -1354,15 +1355,41 @@ export default function ProductDetailPage() {
                         />
                       </Field>
 
+                      {/* Committed and On hand used to sit here: Committed was
+                          hard-coded to a dash (nothing writes the reserved
+                          bucket yet) and On hand simply echoed whatever was
+                          typed into Available, so neither told the truth.
+                          They come back when reservations do. */}
                       <div className="flex flex-row gap-2 items-center justify-between">
                         <div className="flex flex-col flex-1 gap-1 bg-[#f5f5f5] p-2 rounded-lg dark:bg-gray-800/60">
                           <Label
                             htmlFor="product-inventory-available"
                             className="text-[12px] font-medium text-muted-foreground"
                           >
-                            Available inventory
+                            {STOCK_TERMS.available.label}
+                            {warehousingEnabled && " · all locations"}
                           </Label>
-                          {trackQuantity ? (
+                          {!trackQuantity ? (
+                            <span className="text-[12px] font-medium text-muted-foreground">
+                              Not tracked
+                            </span>
+                          ) : warehousingEnabled ? (
+                            // Read-only on purpose. Stock is held per location
+                            // here, and the save path drops a bare quantity —
+                            // an editable box was accepting input and silently
+                            // discarding it.
+                            <div className="flex items-baseline gap-2">
+                              <span className="text-[12px] font-semibold text-foreground tabular-nums">
+                                {inventoryQuantity || "0"}
+                              </span>
+                              <Link
+                                to={`/products/inventory?search=${encodeURIComponent(product?.title ?? "")}`}
+                                className="text-[12px] font-medium text-brand-strong underline underline-offset-2 hover:no-underline"
+                              >
+                                Edit per location
+                              </Link>
+                            </div>
+                          ) : (
                             <Input
                               id="product-inventory-available"
                               type="number"
@@ -1382,27 +1409,7 @@ export default function ProductDetailPage() {
                               }}
                               disabled={!defaultVariant}
                             />
-                          ) : (
-                            <span className="text-[12px] font-medium text-muted-foreground">
-                              Not tracked
-                            </span>
                           )}
-                        </div>
-                        <div className="flex flex-col flex-1 gap-1 bg-[#f5f5f5] p-2 rounded-lg dark:bg-gray-800/60">
-                          <Label className="text-[12px] font-medium text-muted-foreground">
-                            Committed
-                          </Label>
-                          <span className="text-[12px] font-medium text-muted-foreground">
-                            —
-                          </span>
-                        </div>
-                        <div className="flex flex-col flex-1 gap-1 bg-[#f5f5f5] p-2 rounded-lg dark:bg-gray-800/60">
-                          <Label className="text-[12px] font-medium text-muted-foreground">
-                            On hand
-                          </Label>
-                          <span className="text-[12px] font-medium text-muted-foreground">
-                            {trackQuantity ? inventoryQuantity || "0" : "—"}
-                          </span>
                         </div>
                       </div>
                     </div>

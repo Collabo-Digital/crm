@@ -8,7 +8,7 @@ import { ProductPicker, type CartLineSeed } from "./product-picker";
 import { OrderCart, type CartLine } from "./order-cart";
 import { BillSummary } from "./bill-summary";
 import { AddressFields, cleanAddress } from "./address-fields";
-import { useWarehouses } from "~/hooks/use-inventory-queries";
+import { useSelectedLocation } from "~/hooks/use-selected-location";
 import type {
   CreateOfflineOrderRequest,
   CreateDraftOrderRequest,
@@ -49,9 +49,15 @@ export function OfflineOrderForm({
   const [lines, setLines] = useState<CartLine[]>([]);
   const [paymentMethod, setPaymentMethod] =
     useState<OfflinePaymentMethod>("CASH");
+  // Seeded from the location the merchant is working in, so a counter sale
+  // deducts from the stock they were just looking at. An offline sale takes its
+  // units from `dispatchWarehouseId ?? the org default`, so leaving this blank
+  // used to ship from the default no matter which location was on screen.
+  const { locations: activeWarehouses, locationId } = useSelectedLocation({
+    sync: false,
+  });
   const [warehouseId, setWarehouseId] = useState("");
-  const warehouses = useWarehouses();
-  const activeWarehouses = (warehouses.data ?? []).filter((w) => w.isActive);
+  const dispatchWarehouseId = warehouseId || locationId || "";
   const [note, setNote] = useState("");
   const [shipTo, setShipTo] = useState<OrderAddressInput>({});
   const [billSame, setBillSame] = useState(true);
@@ -152,7 +158,7 @@ export function OfflineOrderForm({
         unitPriceOverride: l.unitPrice,
       })),
       paymentMethod,
-      warehouseId: warehouseId || undefined,
+      warehouseId: dispatchWarehouseId || undefined,
       note: note || undefined,
       ...buildAddresses(),
     };
@@ -267,7 +273,7 @@ export function OfflineOrderForm({
             paymentMethod={paymentMethod}
             onPaymentMethodChange={setPaymentMethod}
             warehouses={activeWarehouses}
-            warehouseId={warehouseId}
+            warehouseId={dispatchWarehouseId}
             onWarehouseChange={setWarehouseId}
             note={note}
             onNoteChange={setNote}

@@ -30,11 +30,12 @@ export function useInventoryStatus() {
   });
 }
 
-export function useStock(params?: StockListParams) {
+export function useStock(params?: StockListParams, enabled = true) {
   return useQuery({
     queryKey: inventoryKeys.stock(params),
     queryFn: () => inventoryService.listStock(params),
     placeholderData: keepPreviousData,
+    enabled,
   });
 }
 
@@ -44,11 +45,12 @@ export function useStock(params?: StockListParams) {
  * caches separately; `keepPreviousData` holds the last figures on screen while
  * the next warehouse loads, instead of flashing the tiles back to skeletons.
  */
-export function useStockStats(params?: { warehouseId?: string }) {
+export function useStockStats(params?: { warehouseId?: string }, enabled = true) {
   return useQuery({
     queryKey: inventoryKeys.stockStats(params),
     queryFn: () => inventoryService.stockStats(params),
     placeholderData: keepPreviousData,
+    enabled,
   });
 }
 
@@ -60,11 +62,12 @@ export function useVariantStock(variantId?: string | null) {
   });
 }
 
-export function useInventoryLedger(params?: LedgerParams) {
+export function useInventoryLedger(params?: LedgerParams, enabled = true) {
   return useQuery({
     queryKey: inventoryKeys.ledger(params),
     queryFn: () => inventoryService.ledger(params),
     placeholderData: keepPreviousData,
+    enabled,
   });
 }
 

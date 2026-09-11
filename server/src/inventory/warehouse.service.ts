@@ -21,11 +21,24 @@ export class WarehouseService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(orgId: string) {
-    const warehouses = await this.prisma.warehouse.findMany({
-      where: { organizationId: orgId },
-      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
-      include: { _count: { select: { locations: true, stockLevels: true } } },
-    });
+    const [warehouses, units] = await Promise.all([
+      this.prisma.warehouse.findMany({
+        where: { organizationId: orgId },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+        include: { _count: { select: { locations: true, stockLevels: true } } },
+      }),
+      // Sellable units per location, for the location picker — it shows a
+      // figure beside each name so the merchant can tell which one they mean
+      // before switching to it. One grouped read, not one call per location.
+      this.prisma.stockLevel.groupBy({
+        by: ['warehouseId'],
+        where: { organizationId: orgId },
+        _sum: { available: true },
+      }),
+    ]);
+    const availableByWarehouse = new Map(
+      units.map((u) => [u.warehouseId, u._sum.available ?? 0]),
+    );
     return warehouses.map((w) => ({
       id: w.id,
       name: w.name,
@@ -38,6 +51,7 @@ export class WarehouseService {
       isActive: w.isActive,
       locationCount: w._count.locations,
       stockLineCount: w._count.stockLevels,
+      unitsAvailable: availableByWarehouse.get(w.id) ?? 0,
       createdAt: w.createdAt,
     }));
   }

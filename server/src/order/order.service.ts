@@ -1047,6 +1047,11 @@ export class OrderService {
 
     const runSale = () => this.prisma.$transaction(
       async (tx) => {
+        // Variants whose stock this sale actually moved. Declared per attempt,
+        // not outside `runSale`, because a numbering collision re-runs the
+        // whole transaction and a shared array would accumulate duplicates.
+        const soldVariantIds: string[] = [];
+
         // 1. Resolve or lazy-create the org's MANUAL channel.
         const channel = await tx.channel.upsert({
           where: {
@@ -1504,6 +1509,7 @@ export class OrderService {
         for (const li of saleLines) {
           const v = variantById.get(li.productVariantId)!;
           if (!trackGlobally && v.trackQuantity === false) continue;
+          soldVariantIds.push(v.id);
 
           if (saleWarehousing) {
             await this.ledger.applyMovement(
@@ -1638,7 +1644,7 @@ export class OrderService {
           });
         }
 
-        return { order, invoice, invoiceError };
+        return { order, invoice, invoiceError, soldVariantIds };
       },
       {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -1667,6 +1673,7 @@ export class OrderService {
     // via the channels-page Sync action.
     // OUTSIDE the transaction so a queue/Redis hiccup never rolls back the
     // local sale.
+    let orderPushedToShopify = false;
     try {
       const orderSettings = await this.settings.getOrderSettings(orgId);
       if (orderSettings.autoSyncToShopify) {
@@ -1674,6 +1681,7 @@ export class OrderService {
           orgId,
         );
         if (shopifyChannel?.status === 'CONNECTED') {
+          orderPushedToShopify = true;
           // Mark as PENDING immediately so the UI shows "Syncing to Shopify…"
           // even before the worker picks the job up.
           await this.markPendingSync(result.order.id, orgId);
@@ -1699,6 +1707,35 @@ export class OrderService {
       this.logger.warn(
         `Skipping Shopify push enqueue for order ${result.order.id}: ${err}`,
       );
+    }
+
+    // An offline sale moves real stock, and Shopify wins on the next pull — so
+    // without this push the decrement is silently reverted the next time the
+    // per-location reconcile runs, and the units reappear as if never sold.
+    //
+    // Deliberately skipped when the order itself went to Shopify: Shopify
+    // decrements its own inventory for an order it received, so setting
+    // availability on top of that would take the units off twice. In that case
+    // the pull reconciles us to Shopify's figure, which is already correct.
+    //
+    // Outside the transaction and non-fatal, exactly like the restock push in
+    // `cancel`: a queue outage must not roll back a completed sale.
+    if (result.soldVariantIds.length > 0 && !orderPushedToShopify) {
+      try {
+        await this.shopifyPushQueue.add(
+          'push-availability',
+          {
+            type: 'push-availability',
+            organizationId: orgId,
+            variantIds: [...new Set(result.soldVariantIds)],
+          },
+          { attempts: 5, backoff: { type: 'exponential', delay: 10_000 } },
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Failed to enqueue availability push after offline sale ${result.order.id}: ${err}`,
+        );
+      }
     }
 
     // The sale just moved ordersCount/totalSpent, and the loyalty tier is

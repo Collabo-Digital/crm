@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import {
   Search, Plus, Filter, ChevronLeft, ChevronRight, Package, ListChecks,
   PackageX, AlertTriangle, Check, Loader2, Pencil, Trash2, UploadCloud,
@@ -21,6 +21,7 @@ import {
 } from "~/hooks/use-product-mutations";
 import { productService } from "~/services/product.service";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
+import { Tip } from "~/components/ui/tooltip";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import type { ProductStatus, ProductListParams, Product, ProductStatsResponse, StockStatus } from "~/types/api";
@@ -122,6 +123,9 @@ export default function ProductsPage() {
 
   const { data: org } = useCurrentOrg();
   const gstEnabled = org?.gstEnabled ?? false;
+  // The org's own threshold, not a hard-coded 100 — this column used to call
+  // "low" something different from every other screen.
+  const lowStockThreshold = org?.lowStockThreshold ?? 10;
   const orgCurrency = org?.currency ?? "USD";
 
   const params: ProductListParams = {
@@ -469,7 +473,17 @@ export default function ProductsPage() {
                     <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">Type</th>
                     <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">Vendor</th>
                     <th className="px-4 py-3 text-xs font-semibold text-muted-foreground text-right">Price</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-muted-foreground text-right">Stock</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-muted-foreground text-right">
+                  {/* Deliberately a cross-location total, the way Shopify's own
+                      product list works. The Inventory screen is the
+                      per-location view; saying so here stops the two figures
+                      reading as a contradiction. */}
+                  <Tip text="Total across every location. Open Inventory to see and edit stock at one location.">
+                    <span className="cursor-help underline decoration-dotted underline-offset-4">
+                      Stock · all locations
+                    </span>
+                  </Tip>
+                </th>
                     {gstEnabled && (
                       <>
                         <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">HSN</th>
@@ -535,9 +549,18 @@ export default function ProductsPage() {
                         })()}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <span className={`text-xs font-medium ${product.totalStock === 0 ? "text-red-600" : product.totalStock < 100 ? "text-orange-600" : "text-gray-900 dark:text-gray-100"}`}>
+                        {/* Links into the per-location view, filtered to this
+                            product. The number used to be a dead end, which is
+                            why nobody found where stock was edited. */}
+                        <Link
+                          to={`/products/inventory?search=${encodeURIComponent(product.title)}`}
+                          // The whole row navigates to the product; without this
+                          // the row handler wins and the stock link never fires.
+                          onClick={(e) => e.stopPropagation()}
+                          className={`text-xs font-medium hover:underline ${product.totalStock === 0 ? "text-red-600" : product.totalStock <= lowStockThreshold ? "text-orange-600" : "text-gray-900 dark:text-gray-100"}`}
+                        >
                           {product.totalStock.toLocaleString()}
-                        </span>
+                        </Link>
                       </td>
                       {gstEnabled && (
                         <>

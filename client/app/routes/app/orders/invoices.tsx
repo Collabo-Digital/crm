@@ -488,7 +488,7 @@ export default function InvoicesPage() {
               </SelectItem>
               {activeWarehouses.map((w) => (
                 <SelectItem key={w.id} value={w.id} className="text-caption">
-                  {w.name} · {w.code}
+                  {w.name}
                 </SelectItem>
               ))}
             </SelectContent>

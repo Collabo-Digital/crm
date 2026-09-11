@@ -14,7 +14,10 @@ import { Roles, ORG_OPERATORS } from '../auth/decorators/roles.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { InventoryService } from './inventory.service';
 import { SkuGeneratorService } from './sku-generator.service';
-import { CreateAdjustmentDto } from './dto/adjustment.dto';
+import {
+  BulkAdjustmentDto,
+  CreateAdjustmentDto,
+} from './dto/adjustment.dto';
 import { QueryLedgerDto, QueryStockDto } from './dto/query-stock.dto';
 import { GenerateCodesDto } from './dto/generate-skus.dto';
 
@@ -82,6 +85,20 @@ export class InventoryController {
     @Body() dto: CreateAdjustmentDto,
   ) {
     return this.inventory.createAdjustment(orgId, user.sub, dto);
+  }
+
+  // Saves every edited quantity on one screen at once. Atomic: see
+  // InventoryService.createAdjustmentsBulk for why a failed line rolls back
+  // the batch instead of leaving it half applied.
+  @Post('adjustments/bulk')
+  @Roles(...ORG_OPERATORS)
+  @RequirePermissions('inventory.adjust')
+  createAdjustmentsBulk(
+    @OrgId() orgId: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: BulkAdjustmentDto,
+  ) {
+    return this.inventory.createAdjustmentsBulk(orgId, user.sub, dto);
   }
 
   @Get('ledger')

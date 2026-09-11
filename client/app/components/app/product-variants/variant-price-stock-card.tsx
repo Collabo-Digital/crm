@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { SectionCard } from "~/components/app/section-card";
 import { Input } from "~/components/ui/input";
+import { Tip } from "~/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -180,7 +181,16 @@ export function VariantPriceStockCard({
             <TableRow>
               <TableHead className="px-6">Variant</TableHead>
               <TableHead className="px-4 text-right">Price</TableHead>
-              <TableHead className="px-4 text-right">Stock</TableHead>
+              <TableHead className="px-4 text-right">
+                {/* A cross-location total, like Shopify's own variant list. The
+                    per-location figures — and the only way to edit them — live
+                    in the editor panel below each row. */}
+                <Tip text="Total across every location. Open a variant to see and edit the quantity at each one.">
+                  <span className="cursor-help underline decoration-dotted underline-offset-4">
+                    Stock · all locations
+                  </span>
+                </Tip>
+              </TableHead>
               <TableHead className="px-4">SKU</TableHead>
               <TableHead className="w-10 px-4" />
             </TableRow>

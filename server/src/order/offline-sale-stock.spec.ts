@@ -26,6 +26,7 @@ function build({
   variantChannelCurrency = 'INR' as string | null,
   price = 100,
   rate = null as number | null,
+  autoSyncToShopify = false,
 }) {
   const created = {
     id: 'order_1',
@@ -89,6 +90,16 @@ function build({
       trackQuantityGlobally: true,
       allowOversellGlobally: false,
     }),
+    getOrderSettings: jest.fn().mockResolvedValue({
+      autoSyncToShopify: autoSyncToShopify,
+    }),
+  };
+  const shopifyPushQueue = { add: jest.fn().mockResolvedValue(undefined) };
+  const shopifyPushService = {
+    findShopifyChannel: jest.fn().mockResolvedValue(
+      autoSyncToShopify ? { status: 'CONNECTED' } : null,
+    ),
+    recordFailure: jest.fn().mockResolvedValue(undefined),
   };
   const fx = { getRate: jest.fn().mockResolvedValue(rate) };
 
@@ -98,16 +109,19 @@ function build({
     { resolveLineGstRates: jest.fn().mockResolvedValue([0]) } as any,
     { createForOrderTx: jest.fn() } as any,
     { enqueueOrderPush: jest.fn().mockResolvedValue(true) } as any,
-    {} as any,
+    shopifyPushService as any,
     {} as any,
     {} as any,
     settings as any,
     { recomputeForCustomer: jest.fn().mockResolvedValue(undefined) } as any,
     ledger as any,
     fx as any,
-    { add: jest.fn().mockResolvedValue(undefined) } as any,
+    shopifyPushQueue as any,
   );
-  return { service, tx, ledger, fx };
+  // `markPendingSync` writes through prisma.order.update, which this harness
+  // does not stub — the push path is what is under test, not that write.
+  jest.spyOn(service as any, 'markPendingSync').mockResolvedValue(undefined);
+  return { service, tx, ledger, fx, shopifyPushQueue, settings };
 }
 
 const dto = (over: Record<string, unknown> = {}) =>
@@ -231,5 +245,108 @@ describe('createOfflineOrder — catalogue prices are restated in the order curr
     );
 
     expect(tx.order.create.mock.calls[0][0].data.lineItems.create[0].price).toBe(500);
+  });
+});
+
+/**
+ * A local counter sale moves real stock, but Shopify wins on the next pull —
+ * so unless the new quantity is pushed, the per-location reconcile puts the
+ * sold units straight back and the sale silently un-sells itself.
+ *
+ * The guard matters as much as the push: when the ORDER goes to Shopify,
+ * Shopify decrements its own inventory for it, and setting availability on top
+ * of that would take the units off twice.
+ */
+describe('createOfflineOrder - the sold quantity reaches Shopify', () => {
+  it('pushes availability for a sale that stays local', async () => {
+    const { service, shopifyPushQueue } = build({
+      warehousing: true,
+      warehouseId: 'wh_default',
+      autoSyncToShopify: false,
+    });
+
+    await service.createOfflineOrder(ORG, USER, dto());
+
+    expect(shopifyPushQueue.add).toHaveBeenCalledWith(
+      'push-availability',
+      expect.objectContaining({
+        type: 'push-availability',
+        organizationId: ORG,
+        variantIds: [VARIANT],
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('does NOT push availability when the order itself went to Shopify', async () => {
+    const { service, shopifyPushQueue } = build({
+      warehousing: true,
+      warehouseId: 'wh_default',
+      autoSyncToShopify: true,
+    });
+
+    await service.createOfflineOrder(ORG, USER, dto());
+
+    const availabilityPushes = shopifyPushQueue.add.mock.calls.filter(
+      ([name]: [string]) => name === 'push-availability',
+    );
+    expect(availabilityPushes).toHaveLength(0);
+  });
+
+  it('pushes for a legacy org too - the cache is what Shopify is told', async () => {
+    const { service, shopifyPushQueue } = build({
+      warehousing: false,
+      autoSyncToShopify: false,
+    });
+
+    await service.createOfflineOrder(ORG, USER, dto());
+
+    expect(shopifyPushQueue.add).toHaveBeenCalledWith(
+      'push-availability',
+      expect.objectContaining({ variantIds: [VARIANT] }),
+      expect.anything(),
+    );
+  });
+
+  it('pushes nothing when the sale moved no stock', async () => {
+    const { service, shopifyPushQueue, settings, tx } = build({
+      warehousing: true,
+      warehouseId: 'wh_default',
+      autoSyncToShopify: false,
+    });
+    // Untracked on the variant AND no org-wide override: the loop skips the
+    // line entirely, so no stock moved and there is nothing to tell Shopify.
+    settings.getProductSettings.mockResolvedValue({
+      trackQuantityGlobally: false,
+      allowOversellGlobally: true,
+    });
+    const [variant] = await tx.productVariant.findMany();
+    tx.productVariant.findMany.mockResolvedValue([
+      { ...variant, trackQuantity: false },
+    ]);
+
+    await service.createOfflineOrder(
+      ORG,
+      USER,
+      dto({ lineItems: [{ productVariantId: VARIANT, quantity: 2 }] }),
+    );
+
+    const availabilityPushes = shopifyPushQueue.add.mock.calls.filter(
+      ([name]: [string]) => name === 'push-availability',
+    );
+    expect(availabilityPushes).toHaveLength(0);
+  });
+
+  it('survives a queue outage without failing the sale', async () => {
+    const { service, shopifyPushQueue } = build({
+      warehousing: true,
+      warehouseId: 'wh_default',
+      autoSyncToShopify: false,
+    });
+    shopifyPushQueue.add.mockRejectedValue(new Error('redis down'));
+
+    await expect(
+      service.createOfflineOrder(ORG, USER, dto()),
+    ).resolves.toBeDefined();
   });
 });

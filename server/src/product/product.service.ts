@@ -1243,6 +1243,16 @@ export class ProductService {
       warehouseId: dto.warehouseId,
     });
 
+    // Turning tracking ON is a creation event as far as stock is concerned:
+    // `ensureStockRows` skips untracked variants, so a variant that has always
+    // been untracked has no row anywhere. Without this it would stay invisible
+    // on the Inventory screen — no row to list, no Adjust control, no way to
+    // ever give it stock — which is the state that made products permanently
+    // unsellable before. Idempotent, so flipping the switch twice is harmless.
+    if (dto.trackQuantity === true && variant.trackQuantity === false) {
+      await this.inventoryLedger.ensureStockRows(this.prisma, orgId, [updated]);
+    }
+
     await this.markOutOfSyncIfNeeded(variant.product.id);
     // A stock change has to reach Shopify: the pull treats Shopify as
     // authoritative, so an un-pushed local edit is reverted by the next sync.
@@ -2285,6 +2295,14 @@ export class ProductService {
       'product_duplicate',
       created.id,
     );
+    // ...and give them a stock row, or a warehousing org gets a variant whose
+    // cached quantity says N while no location holds any of it — invisible on
+    // the Inventory screen, and unsellable until something else moves it.
+    await this.inventoryLedger.ensureStockRows(
+      this.prisma,
+      orgId,
+      created.variants,
+    );
 
     // Replace the generated barcodes deliberately dropped above with fresh
     // ones, so the copy is labellable immediately instead of inheriting the
@@ -2596,6 +2614,13 @@ export class ProductService {
       'initial',
       'csv_import',
       created.id,
+    );
+    // Same reason as `duplicate`: without a stock row the imported quantity
+    // exists only as a cache nothing backs.
+    await this.inventoryLedger.ensureStockRows(
+      this.prisma,
+      orgId,
+      created.variants,
     );
     return created;
   }

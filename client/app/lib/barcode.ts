@@ -245,9 +245,141 @@ export function chooseModuleWidth(args: {
 }
 
 /**
+ * Everything about a code that does NOT depend on the stock it lands on.
+ *
+ * This is the only half that touches JsBarcode, so it is the expensive half.
+ * Measure once per distinct value, then classify it against as many presets as
+ * you like with `classifyFit`, which is integer arithmetic and allocates
+ * nothing. The size picker needs a fit verdict for every variant against every
+ * preset on every render; encoding that matrix would be hundreds of JsBarcode
+ * calls per keystroke.
+ */
+export interface BarcodeMetrics {
+  value: string;
+  symbology: Symbology;
+  /** null when the value cannot be encoded at all (non-ASCII in Code 128). */
+  binary: string | null;
+  modules: number;
+  quietLeft: number;
+  quietRight: number;
+  /** modules + both quiet zones. 0 when unencodable. */
+  totalModules: number;
+  /** GS1 80% floor — laser and sheet stock. */
+  recommendedMm: number;
+  /** GS1 on-demand-thermal allowance — roll stock. */
+  thermalRecommendedMm: number;
+  /** Check-digit / encodability diagnostic. Stock-independent. */
+  notice?: string;
+}
+
+export function measureBarcode(raw: string): BarcodeMetrics {
+  const detected = detectSymbology(raw);
+  const symbology = detected.symbology;
+  const qz = QUIET_ZONE[symbology];
+  const binary = encodeBinary(raw.trim(), symbology);
+  const modules = binary?.length ?? 0;
+
+  return {
+    value: raw,
+    symbology,
+    binary,
+    modules,
+    quietLeft: qz.left,
+    quietRight: qz.right,
+    totalModules: binary ? modules + qz.left + qz.right : 0,
+    recommendedMm: RECOMMENDED_X_MM[symbology],
+    thermalRecommendedMm: THERMAL_X_MM[symbology],
+    // An encode failure replaces the check-digit diagnostic rather than joining
+    // it: there is no symbol, so "printed as Code 128" would be a lie.
+    notice: binary
+      ? detected.notice
+      : symbology === "CODE128"
+        ? "contains characters Code 128 cannot encode (non-ASCII)"
+        : "could not be encoded",
+  };
+}
+
+export interface FitVerdict {
+  quality: PlanQuality;
+  moduleMm: number;
+  dots: number;
+  /** EAN/UPC only — percentage of the 0.33 mm nominal X. */
+  magnificationPct?: number;
+  /** Coarse bucket, for a badge. */
+  fit: "fits" | "tight" | "unfit";
+  /**
+   * Prints, but should be scanned once first. NOT the same as `fit !== "fits"`:
+   * on thermal stock the recommended X is 0.249 mm, below the 0.264 mm that
+   * EAN/UPC needs for 80% magnification, so a symbol can be `quality: "ok"` and
+   * still be sub-80%. Both cases raise a notice in `planBarcode`; this keeps the
+   * badge and the notice agreeing.
+   */
+  needsTestScan: boolean;
+  /** The threshold actually applied, so callers can quote it. */
+  recommendedMm: number;
+}
+
+/**
+ * Where one code lands on one printable width. O(1) — no encoding.
+ *
+ * Delegates to `chooseModuleWidth`, deliberately: the size-card badges and the
+ * rendered symbol must never disagree, and the only way to guarantee that
+ * without a test runner is to have one implementation of the ladder.
+ */
+export function classifyFit(args: {
+  metrics: BarcodeMetrics;
+  availableMm: number;
+  dpi: number;
+  preferDots: number | "auto";
+  thermal: boolean;
+}): FitVerdict {
+  const { metrics, availableMm, dpi, preferDots, thermal } = args;
+  const recommendedMm = thermal ? metrics.thermalRecommendedMm : metrics.recommendedMm;
+
+  if (metrics.totalModules <= 0) {
+    return {
+      quality: "unfit",
+      moduleMm: 0,
+      dots: 0,
+      fit: "unfit",
+      needsTestScan: false,
+      recommendedMm,
+    };
+  }
+
+  const choice = chooseModuleWidth({
+    totalModules: metrics.totalModules,
+    availableMm,
+    dpi,
+    preferDots,
+    recommendedMm,
+  });
+
+  const magnificationPct =
+    metrics.symbology === "CODE128" || choice.quality === "unfit"
+      ? undefined
+      : Math.round((choice.moduleMm / NOMINAL_X_MM) * 100);
+
+  return {
+    quality: choice.quality,
+    moduleMm: choice.moduleMm,
+    dots: choice.dots,
+    magnificationPct,
+    fit:
+      choice.quality === "unfit" ? "unfit" : choice.quality === "tight" ? "tight" : "fits",
+    needsTestScan:
+      choice.quality === "tight" || (magnificationPct !== undefined && magnificationPct < 80),
+    recommendedMm,
+  };
+}
+
+/**
  * Full geometry for one code on one label. Pure — safe to call during render.
  * `availableMm` is the printable width the symbol may occupy (the label's
  * content box, or a jewellery preset's barcode window).
+ *
+ * Composed from `measureBarcode` + `classifyFit` so there is exactly one fit
+ * ladder in the codebase. Do not re-inline it.
  */
 export function planBarcode(args: {
   value: string;
@@ -268,79 +400,48 @@ export function planBarcode(args: {
     thermal = true,
   } = args;
 
-  const detected = detectSymbology(value);
-  const symbology = detected.symbology;
-  const qz = QUIET_ZONE[symbology];
+  const metrics = measureBarcode(value);
 
   const base: BarcodePlan = {
     value,
-    symbology,
-    modules: 0,
-    quietLeft: qz.left,
-    quietRight: qz.right,
-    totalModules: 0,
+    symbology: metrics.symbology,
+    modules: metrics.modules,
+    quietLeft: metrics.quietLeft,
+    quietRight: metrics.quietRight,
+    totalModules: metrics.totalModules,
     moduleMm: 0,
     dots: 0,
     widthMm: 0,
     barHeightMm: 0,
     bars: [],
     quality: "unfit",
-    notice: detected.notice,
+    notice: metrics.notice,
   };
 
-  const binary = encodeBinary(value.trim(), symbology);
-  if (!binary) {
+  if (!metrics.binary) return base;
+
+  const verdict = classifyFit({ metrics, availableMm, dpi, preferDots, thermal });
+
+  if (verdict.quality === "unfit") {
+    const neededMm = metrics.totalModules * verdict.recommendedMm;
     return {
       ...base,
-      notice:
-        symbology === "CODE128"
-          ? "contains characters Code 128 cannot encode (non-ASCII)"
-          : "could not be encoded",
+      notice: `needs ${neededMm.toFixed(1)} mm at ${verdict.recommendedMm} mm modules, only ${availableMm.toFixed(1)} mm available`,
     };
   }
-
-  const modules = binary.length;
-  const totalModules = modules + qz.left + qz.right;
-  const recommendedMm = (thermal ? THERMAL_X_MM : RECOMMENDED_X_MM)[symbology];
-
-  const choice = chooseModuleWidth({
-    totalModules,
-    availableMm,
-    dpi,
-    preferDots,
-    recommendedMm,
-  });
-
-  if (choice.quality === "unfit") {
-    const neededMm = totalModules * recommendedMm;
-    return {
-      ...base,
-      modules,
-      totalModules,
-      notice: `needs ${neededMm.toFixed(1)} mm at ${recommendedMm} mm modules, only ${availableMm.toFixed(1)} mm available`,
-    };
-  }
-
-  const barHeightMm = Math.max(minBarHeightMm, Math.min(maxBarHeightMm, 20));
-  const widthMm = totalModules * choice.moduleMm;
 
   const notices: string[] = [];
-  if (detected.notice) notices.push(detected.notice);
-
-  let magnificationPct: number | undefined;
-  if (symbology !== "CODE128") {
-    magnificationPct = Math.round((choice.moduleMm / NOMINAL_X_MM) * 100);
-    if (magnificationPct < 80) {
-      notices.push(
-        `${symbology} at ${magnificationPct}% magnification (below the GS1 80% minimum) — fine for in-store scanners, may be rejected by retail partners.`,
-      );
-    }
-  }
-  if (choice.quality === "tight") {
+  if (metrics.notice) notices.push(metrics.notice);
+  if (verdict.magnificationPct !== undefined && verdict.magnificationPct < 80) {
     notices.push(
-      `module width ${choice.moduleMm.toFixed(3)} mm is below the recommended ${recommendedMm} mm — test-scan before running the batch`,
+      `${metrics.symbology} at ${verdict.magnificationPct}% magnification (below the GS1 80% minimum) — fine for in-store scanners, may be rejected by retail partners.`,
     );
-  } else if (choice.quality === "unaligned") {
+  }
+  if (verdict.quality === "tight") {
+    notices.push(
+      `module width ${verdict.moduleMm.toFixed(3)} mm is below the recommended ${verdict.recommendedMm} mm — test-scan before running the batch`,
+    );
+  } else if (verdict.quality === "unaligned") {
     notices.push(`module width not dot-aligned at ${dpi} dpi — bar edges may vary by one dot`);
   }
   if (maxBarHeightMm < minBarHeightMm) {
@@ -350,19 +451,14 @@ export function planBarcode(args: {
   }
 
   return {
-    value,
-    symbology,
-    modules,
-    quietLeft: qz.left,
-    quietRight: qz.right,
-    totalModules,
-    moduleMm: choice.moduleMm,
-    dots: choice.dots,
-    widthMm,
-    barHeightMm,
-    bars: barRuns(binary, qz.left),
-    quality: choice.quality,
-    magnificationPct,
+    ...base,
+    moduleMm: verdict.moduleMm,
+    dots: verdict.dots,
+    widthMm: metrics.totalModules * verdict.moduleMm,
+    barHeightMm: Math.max(minBarHeightMm, Math.min(maxBarHeightMm, 20)),
+    bars: barRuns(metrics.binary, metrics.quietLeft),
+    quality: verdict.quality,
+    magnificationPct: verdict.magnificationPct,
     notice: notices.length > 0 ? notices.join(" ") : undefined,
   };
 }

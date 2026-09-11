@@ -1806,7 +1806,12 @@ export const VARIANT_INVENTORY_LEVELS_QUERY = /* GraphQL */ `
               location {
                 id
               }
-              quantities(names: ["available"]) {
+              # NO BACKTICKS IN HERE — this is a TS template literal and one
+              # would terminate the string.
+              # committed = units Shopify has allocated to placed-but-unfulfilled
+              # orders. Still physically in the building, so without it our
+              # on-hand under-counts by exactly that amount.
+              quantities(names: ["available", "committed"]) {
                 name
                 quantity
               }

@@ -31,6 +31,15 @@ Layout is the exception to rule 3: `flex`, `grid`, `gap-4`, `justify-between` an
 friends belong inline in the markup. They're per-composition, not design decisions.
 Just keep to Tailwind's spacing scale (`gap-4`, never `gap-[17px]`).
 
+**Paper is not a surface.** Rules 1 and 2 stop at anything that represents
+printed output — the label artwork in `components/app/labels/`, the package and
+order slips. Those keep literal `bg-white`, `text-black`, `fill="#000000"`, and
+their geometry stays in inline millimetres (rule 5 covers it: it is computed, and
+Tailwind cannot emit runtime `mm` values anyway). Migrating them to `bg-card` /
+`text-foreground` would render a black sticker in dark mode and, because
+`.label-cell` carries `print-color-adjust: exact`, risk printing one. The rules
+resume at the edge of the page: everything around the preview is tokens.
+
 ---
 
 ## Type roles

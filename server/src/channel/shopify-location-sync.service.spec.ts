@@ -22,7 +22,13 @@ const VARIANT = 'var_1';
 const ITEM_ID = '55512345';
 
 /** One page holding a single variant stocked at `available` in one location. */
-function onePage(available: number) {
+function onePage(available: number, committed?: number) {
+  const quantities: Array<{ name: string; quantity: number }> = [
+    { name: 'available', quantity: available },
+  ];
+  if (committed !== undefined) {
+    quantities.push({ name: 'committed', quantity: committed });
+  }
   return {
     productVariants: {
       nodes: [
@@ -33,7 +39,7 @@ function onePage(available: number) {
               nodes: [
                 {
                   location: { id: `gid://shopify/Location/${LOCATION}` },
-                  quantities: [{ name: 'available', quantity: available }],
+                  quantities,
                 },
               ],
               pageInfo: { hasNextPage: false },
@@ -46,7 +52,11 @@ function onePage(available: number) {
   };
 }
 
-function build(available: number, existingRows: unknown[]) {
+function build(
+  available: number,
+  existingRows: unknown[],
+  committed?: number,
+) {
   const prisma = {
     warehouse: {
       findMany: jest
@@ -69,7 +79,7 @@ function build(available: number, existingRows: unknown[]) {
     },
   };
   const graphql = {
-    request: jest.fn().mockResolvedValue(onePage(available)),
+    request: jest.fn().mockResolvedValue(onePage(available, committed)),
   };
   const ledger = { applyMovement: jest.fn().mockResolvedValue(undefined) };
 
@@ -189,11 +199,112 @@ describe('ShopifyLocationSyncService.adoptLocationName', () => {
     expect(svc.adoptLocationName({ name: undefined }, cur)).toEqual({});
   });
 
-  it('truncates only past the 100-char DTO limit', () => {
+  it('keeps a very long Shopify name verbatim', () => {
+    // Merchants must see the location name exactly as Shopify shows it. This
+    // used to truncate at 100, which chopped real names silently.
+    const long = 'x'.repeat(150);
     const out = svc.adoptLocationName(
-      { name: 'x'.repeat(150) },
+      { name: long },
       { name: 'Main Warehouse' },
     );
-    expect(out.name).toHaveLength(100);
+    expect(out.name).toBe(long);
+  });
+});
+
+/**
+ * Shopify's COMMITTED is the quantity promised to placed-but-unfulfilled
+ * orders. Those units are still physically on the shelf, and our `on_hand` is a
+ * generated sum of the buckets — so leaving RESERVED at zero understated on
+ * hand by exactly the committed amount, and a merchant counting the shelf found
+ * us wrong whenever an order was open.
+ *
+ * It is mirrored, never computed: the Admin API cannot write `committed` at
+ * all, so Shopify is the only possible source.
+ */
+describe('ShopifyLocationSyncService — committed mirrors into RESERVED', () => {
+  const RESERVED = 'RESERVED';
+
+  it('moves committed units into RESERVED when Shopify reports them', async () => {
+    const { service, ledger } = build(
+      10,
+      [{ variantId: VARIANT, warehouseId: WAREHOUSE, available: 10, reserved: 0 }],
+      3,
+    );
+
+    await service.pullLocationInventory(ORG, CHANNEL, getAuth);
+
+    const reservedMoves = ledger.applyMovement.mock.calls
+      .map(([a]: [any]) => a)
+      .filter((a: any) => a.toBucket === RESERVED || a.fromBucket === RESERVED);
+    expect(reservedMoves).toHaveLength(1);
+    expect(reservedMoves[0]).toMatchObject({
+      variantId: VARIANT,
+      warehouseId: WAREHOUSE,
+      fromBucket: null,
+      toBucket: RESERVED,
+      quantity: 3,
+      reason: 'sync',
+    });
+  });
+
+  it('does not touch AVAILABLE when only committed changed', async () => {
+    const { service, ledger } = build(
+      10,
+      [{ variantId: VARIANT, warehouseId: WAREHOUSE, available: 10, reserved: 0 }],
+      3,
+    );
+
+    await service.pullLocationInventory(ORG, CHANNEL, getAuth);
+
+    // Shopify's `available` already excludes its committed, and the available
+    // reconcile writes that figure verbatim — moving the units out of AVAILABLE
+    // here as well would deduct them twice.
+    const availableMoves = ledger.applyMovement.mock.calls
+      .map(([a]: [any]) => a)
+      .filter((a: any) => a.toBucket === 'AVAILABLE' || a.fromBucket === 'AVAILABLE');
+    expect(availableMoves).toHaveLength(0);
+  });
+
+  it('releases RESERVED when Shopify reports the order fulfilled', async () => {
+    const { service, ledger } = build(
+      10,
+      [{ variantId: VARIANT, warehouseId: WAREHOUSE, available: 10, reserved: 3 }],
+      0,
+    );
+
+    await service.pullLocationInventory(ORG, CHANNEL, getAuth);
+
+    const reservedMoves = ledger.applyMovement.mock.calls
+      .map(([a]: [any]) => a)
+      .filter((a: any) => a.toBucket === RESERVED || a.fromBucket === RESERVED);
+    expect(reservedMoves).toHaveLength(1);
+    expect(reservedMoves[0]).toMatchObject({
+      fromBucket: RESERVED,
+      toBucket: null,
+      quantity: 3,
+    });
+  });
+
+  it('writes nothing when committed is unchanged', async () => {
+    const { service, ledger } = build(
+      10,
+      [{ variantId: VARIANT, warehouseId: WAREHOUSE, available: 10, reserved: 3 }],
+      3,
+    );
+
+    await service.pullLocationInventory(ORG, CHANNEL, getAuth);
+
+    expect(ledger.applyMovement).not.toHaveBeenCalled();
+  });
+
+  it('leaves RESERVED alone when Shopify omits committed', async () => {
+    const { service, ledger } = build(
+      10,
+      [{ variantId: VARIANT, warehouseId: WAREHOUSE, available: 10, reserved: 3 }],
+    );
+
+    await service.pullLocationInventory(ORG, CHANNEL, getAuth);
+
+    expect(ledger.applyMovement).not.toHaveBeenCalled();
   });
 });

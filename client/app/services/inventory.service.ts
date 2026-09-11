@@ -1,6 +1,8 @@
 import { apiClient } from "~/lib/api-client";
 import type {
   BulkLocationsRequest,
+  BulkAdjustmentRequest,
+  BulkAdjustmentResponse,
   CreateAdjustmentRequest,
   CreateWarehouseRequest,
   DuplicateCodesReport,
@@ -59,6 +61,12 @@ export const inventoryService = {
         "/inventory/adjustments",
         data,
       )
+      .then((r) => r.data),
+
+  /** Every edited quantity on one screen, saved at one location atomically. */
+  createAdjustmentsBulk: (data: BulkAdjustmentRequest) =>
+    apiClient
+      .post<BulkAdjustmentResponse>("/inventory/adjustments/bulk", data)
       .then((r) => r.data),
 
   // ── Ledger / lookup ────────────────────────────────────────────────────

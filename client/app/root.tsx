@@ -10,6 +10,7 @@ import {
 
 import type { Route } from "./+types/root";
 import { QueryProvider } from "~/providers/query-provider";
+import { TooltipProvider } from "~/components/ui/tooltip";
 import { Toaster } from "~/components/ui/sonner";
 import { useThemeStore } from "~/stores/theme.store";
 import { useAuthStore } from "~/stores/auth.store";
@@ -119,10 +120,12 @@ function LogoutRedirect() {
 export default function App() {
   return (
     <QueryProvider>
-      <ThemeInit />
-      <LogoutRedirect />
-      <MetaSdkInit />
-      <Outlet />
+      <TooltipProvider>
+        <ThemeInit />
+        <LogoutRedirect />
+        <MetaSdkInit />
+        <Outlet />
+      </TooltipProvider>
     </QueryProvider>
   );
 }
