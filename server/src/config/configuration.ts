@@ -52,12 +52,20 @@ export default () => ({
             'read_products,write_products,read_orders,read_all_orders,write_orders,read_customers,write_customers,read_inventory,write_inventory,read_locations,read_reports,read_draft_orders,write_draft_orders,read_merchant_managed_fulfillment_orders,write_merchant_managed_fulfillment_orders,read_assigned_fulfillment_orders,write_assigned_fulfillment_orders,read_third_party_fulfillment_orders,write_third_party_fulfillment_orders,write_fulfillments,write_pixels,read_customer_events',
     },
     instagram: {
+        // The Meta app itself. Only still read to verify webhook signatures
+        // and to unsubscribe rows connected with the old Facebook Login flow.
         appId: process.env.META_APP_ID,
         appSecret: process.env.META_APP_SECRET,
+        // Instagram Login ("API setup with Instagram login"). Meta shows these
+        // as the "Instagram app ID / secret" — a different pair from META_APP_*
+        // even though they live on the same app.
+        loginAppId: process.env.INSTAGRAM_APP_ID,
+        loginAppSecret: process.env.INSTAGRAM_APP_SECRET,
         webhookVerifyToken: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN,
-        // Same Graph API version as WhatsApp — one Meta app, one version to
-        // bump. Was hardcoded to v21.0 in seven places in the OAuth service.
-        graphVersion: process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
+        // The same version the shared Graph client uses, so the two can no
+        // longer drift apart.
+        graphVersion:
+            process.env.META_GRAPH_VERSION ?? process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
     },
     whatsapp: {
         appId: process.env.META_APP_ID,

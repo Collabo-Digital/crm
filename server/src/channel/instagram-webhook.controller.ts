@@ -3,20 +3,75 @@ import type { RawBodyRequest } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { ConfigService } from '@nestjs/config';
+import { ChannelPlatform } from '@prisma/client';
 import { Public } from '../auth/decorators/public.decorator';
 import { PrismaService } from '../prisma/prisma.service';
+
+interface InstagramWebhookEntry {
+    id: string;
+    time: number;
+    messaging?: Array<{
+        sender?: { id?: string };
+        recipient?: { id?: string };
+        timestamp?: number;
+        message?: {
+            mid?: string;
+            is_echo?: boolean;
+            reply_to?: { story?: unknown };
+            attachments?: Array<{ type?: string }>;
+        };
+        postback?: unknown;
+        read?: unknown;
+        reaction?: unknown;
+        referral?: unknown;
+    }>;
+    changes?: Array<{ field: string; value: Record<string, unknown> }>;
+}
+
+/** Event kinds in one entry, for logging. Never includes message text. */
+function describeEntry(entry: InstagramWebhookEntry): string[] {
+    const kinds: string[] = [];
+    for (const event of entry.messaging ?? []) {
+        if (event.message) {
+            const attachment = event.message.attachments?.[0]?.type;
+            kinds.push(
+                event.message.is_echo
+                    ? 'message_echo'
+                    : event.message.reply_to?.story
+                      ? 'story_reply'
+                      : attachment
+                        ? `message:${attachment}`
+                        : 'message',
+            );
+        } else if (event.postback) kinds.push('postback');
+        else if (event.reaction) kinds.push('reaction');
+        else if (event.read) kinds.push('read');
+        else if (event.referral) kinds.push('referral');
+        else kinds.push('messaging:unknown');
+    }
+    for (const change of entry.changes ?? []) kinds.push(change.field);
+    return kinds;
+}
 
 @Controller('webhooks')
 export class InstagramWebhookController {
     private readonly logger = new Logger(InstagramWebhookController.name);
-    private readonly appSecret: string;
+    /**
+     * Candidate signing secrets. Instagram Login webhooks are expected to be
+     * signed with the Instagram app secret, but until a live delivery proves
+     * it, the Meta app secret is accepted too and the log says which matched.
+     */
+    private readonly secrets: Array<{ label: string; secret: string }>;
     private readonly verifyToken: string;
 
     constructor(
         private readonly config: ConfigService,
         private readonly prisma: PrismaService,
     ) {
-        this.appSecret = this.config.get<string>('instagram.appSecret')!;
+        this.secrets = [
+            { label: 'INSTAGRAM_APP_SECRET', secret: this.config.get<string>('instagram.loginAppSecret') },
+            { label: 'META_APP_SECRET', secret: this.config.get<string>('instagram.appSecret') },
+        ].filter((s): s is { label: string; secret: string } => !!s.secret);
         this.verifyToken = this.config.get<string>('instagram.webhookVerifyToken')!;
     }
 
@@ -37,7 +92,24 @@ export class InstagramWebhookController {
         return res.status(403).send('Forbidden');
     }
 
-    // POST /webhooks/instagram — Receive Instagram events
+    /** Which configured secret produced this signature, or null for none. */
+    private matchSignature(rawBody: Buffer, signature: string): string | null {
+        const received = Buffer.from(signature);
+        for (const { label, secret } of this.secrets) {
+            const expected = Buffer.from(
+                'sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex'),
+            );
+            if (received.length === expected.length && timingSafeEqual(received, expected)) {
+                return label;
+            }
+        }
+        return null;
+    }
+
+    // POST /webhooks/instagram — Receive Instagram events.
+    //
+    // Diagnostic only for now: proves signatures verify and that each entry
+    // routes to a connected channel. Payloads are not stored or acted on yet.
     @Public()
     @Post('instagram')
     @HttpCode(200)
@@ -51,56 +123,45 @@ export class InstagramWebhookController {
             return { received: false };
         }
 
-        // Verify signature: x-hub-signature-256: sha256=<hex_hash>
-        const expectedSignature = 'sha256=' + createHmac('sha256', this.appSecret)
-            .update(rawBody)
-            .digest('hex');
-
-        const sigBuffer = Buffer.from(signature);
-        const expectedBuffer = Buffer.from(expectedSignature);
-
-        if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
-            this.logger.warn('Instagram webhook invalid signature');
+        const signedWith = this.matchSignature(rawBody, signature);
+        if (!signedWith) {
+            this.logger.warn(
+                `Instagram webhook invalid signature (checked ${this.secrets.map((s) => s.label).join(', ') || 'no secrets configured'})`,
+            );
             return { received: false };
         }
 
-        // Parse the event
-        const body = JSON.parse(rawBody.toString()) as {
-            object: string;
-            entry: Array<{
-                id: string;
-                time: number;
-                messaging?: Array<{
-                    sender: { id: string };
-                    recipient: { id: string };
-                    timestamp: number;
-                    message?: { mid: string; text: string };
-                }>;
-                changes?: Array<{
-                    field: string;
-                    value: Record<string, unknown>;
-                }>;
-            }>;
-        };
+        let body: { object?: string; entry?: InstagramWebhookEntry[] };
+        try {
+            body = JSON.parse(rawBody.toString()) as typeof body;
+        } catch {
+            this.logger.warn('Instagram webhook body is not JSON');
+            return { received: false };
+        }
 
-        this.logger.log(`Instagram webhook: ${body.object}, entries: ${body.entry?.length}`);
+        const entries = body.entry ?? [];
+        this.logger.log(
+            `Instagram webhook object=${body.object} entries=${entries.length} signed with ${signedWith}`,
+        );
 
-        // Process each entry
-        for (const entry of body.entry || []) {
-            // Handle DMs
-            if (entry.messaging) {
-                for (const msg of entry.messaging) {
-                    this.logger.log(`Instagram DM from ${msg.sender.id}: ${msg.message?.text}`);
-                    // TODO: Create conversation/message in unified inbox when Conversations module is built
-                }
-            }
-
-            // Handle comments, mentions
-            if (entry.changes) {
-                for (const change of entry.changes) {
-                    this.logger.log(`Instagram ${change.field}: ${JSON.stringify(change.value)}`);
-                    // TODO: Process comments/mentions when Conversations module is built
-                }
+        for (const entry of entries) {
+            const kinds = describeEntry(entry).join(', ') || 'no events';
+            try {
+                // The routing that inbound processing will rely on: entry.id is
+                // the professional account id stored in external_store_id.
+                const channel = await this.prisma.channel.findFirst({
+                    where: { platform: ChannelPlatform.INSTAGRAM, externalStoreId: entry.id },
+                    select: { id: true, status: true },
+                });
+                this.logger.log(
+                    `Instagram webhook entry ${entry.id} → ` +
+                    (channel ? `channel ${channel.id} (${channel.status})` : 'NO matching channel') +
+                    `: ${kinds}`,
+                );
+            } catch (err) {
+                this.logger.warn(
+                    `Instagram webhook entry ${entry.id} (${kinds}): channel lookup failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
             }
         }
 

@@ -6,6 +6,7 @@ import { ShopifyOAuthService } from './shopify-oauth.service';
 import { ShopifyWebhookController } from './shopify-webhook.controller';
 import { InstagramOAuthService } from './instagram-oauth.service';
 import { InstagramWebhookController } from './instagram-webhook.controller';
+import { InstagramTokenScheduler } from './instagram-token.scheduler';
 import { WhatsAppOAuthService } from './whatsapp-oauth.service';
 import { WhatsAppMessagingService } from './whatsapp-messaging.service';
 import { WhatsAppMessagingProcessor } from './whatsapp.processor';
@@ -54,7 +55,7 @@ import { InvoiceModule } from '../invoice/invoice.module';
   ],
   controllers: [ChannelController, ShopifyWebhookController, InstagramWebhookController],
   providers: [
-    ChannelService, ShopifyOAuthService, InstagramOAuthService, WhatsAppOAuthService,
+    ChannelService, ShopifyOAuthService, InstagramOAuthService, InstagramTokenScheduler, WhatsAppOAuthService,
     WhatsAppMessagingService, WhatsAppMessagingProcessor, WhatsAppTriggerService,
     ShopifySyncService, ShopifyLocationSyncService, ShopifyAnalyticsService, SyncProcessor, EncryptionService,
     ShopifyPushService, ShopifyPushProcessor, ShopifyPushEnqueuer,

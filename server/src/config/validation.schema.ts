@@ -19,6 +19,8 @@ export const validationSchema = Joi.object({
     ENCRYPTION_KEY: Joi.string().length(32).optional(),
     META_APP_ID: Joi.string().optional(),
     META_APP_SECRET: Joi.string().optional(),
+    INSTAGRAM_APP_ID: Joi.string().optional(),
+    INSTAGRAM_APP_SECRET: Joi.string().optional(),
     INSTAGRAM_WEBHOOK_VERIFY_TOKEN: Joi.string().optional(),
     WHATSAPP_WEBHOOK_VERIFY_TOKEN: Joi.string().optional(),
     WHATSAPP_CONFIG_ID: Joi.string().optional(),

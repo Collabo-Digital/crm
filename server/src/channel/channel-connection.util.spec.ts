@@ -302,6 +302,26 @@ describe('describeAccount', () => {
         });
     });
 
+    it('summarises an Instagram Login account by handle, name and account type', () => {
+        expect(
+            describeAccount(ChannelPlatform.INSTAGRAM, {
+                authFlow: 'instagram_login',
+                accessToken: 'ENCRYPTED_TOKEN',
+                instagramUserId: 'ig_2',
+                instagramUsername: 'creator',
+                name: 'Creator Name',
+                profilePictureUrl: null,
+                accountType: 'MEDIA_CREATOR',
+            }),
+        ).toEqual({
+            externalId: 'ig_2',
+            handle: '@creator',
+            displayName: 'Creator Name',
+            avatarUrl: null,
+            detail: 'Creator account',
+        });
+    });
+
     it('never carries a token into the summary', () => {
         const summary = describeAccount(ChannelPlatform.INSTAGRAM, igCreds);
         const serialised = JSON.stringify(summary);
@@ -428,6 +448,21 @@ describe('classifyMetaCallbackError', () => {
         expect(
             classifyMetaCallbackError({}, new Error('No Instagram Business account found')),
         ).toBe('no_instagram_account');
+    });
+
+    it('maps the Instagram Login refusals', () => {
+        expect(
+            classifyMetaCallbackError(
+                {},
+                new Error('Only Instagram Business or Creator accounts can be connected. Switch the account to a professional account and try again.'),
+            ),
+        ).toBe('not_professional_account');
+        expect(
+            classifyMetaCallbackError(
+                {},
+                new Error('Instagram permissions were declined (instagram_business_manage_messages). Allow them to connect the account.'),
+            ),
+        ).toBe('scopes_declined');
     });
 
     it('falls back to a generic failure', () => {

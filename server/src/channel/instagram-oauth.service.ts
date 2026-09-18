@@ -14,67 +14,110 @@ import { RedisService } from '../redis/redis.service';
 import { REDIS_KEYS, REDIS_TTL } from '../redis/redis.constants';
 import { EncryptionService } from './encryption.service';
 import { MetaGraphClient } from './meta-graph.client';
-import { MetaGraphError, metaScope } from './meta-graph.types';
-import { Priority, isRateLimitedError } from '../rate-limit/rate-limit.types';
+import { MetaGraphError, MetaRequest, metaScope } from './meta-graph.types';
+import { Priority, RateLimitScope, isRateLimitedError } from '../rate-limit/rate-limit.types';
 import {
     assertCanConnect,
     resolveConnectTarget,
     describeAccount,
-    isActive,
     type ChannelAccountSummary,
 } from './channel-connection.util';
+import {
+    INSTAGRAM_LOGIN_FLOW,
+    INSTAGRAM_LONG_LIVED_FALLBACK_S,
+    INSTAGRAM_REFRESH_AHEAD_MS,
+    PROFESSIONAL_ACCOUNT_TYPES,
+    isInstagramTokenExpired,
+    isInstagramTokenRefreshDue,
+    normaliseGrantedScopes,
+    readTokenGrant,
+} from './instagram-login.util';
 
-/** OAuth state, keyed by the nonce we hand Meta. */
+/** OAuth state, keyed by the nonce we hand Instagram. */
 interface InstagramOAuthState {
     userId: string;
     orgId: string;
     reconnectChannelId?: string;
 }
 
-/** One Instagram business account reachable through the merchant's login. */
+/** The one Instagram professional account an Instagram Login grants. */
 interface InstagramCandidate {
+    /** The professional account id (`/me` → `user_id`). Webhooks carry it as `entry.id`. */
     igUserId: string;
+    /** The app-scoped id (`/me` → `id`). Kept for diagnosis only. */
+    scopedId: string | null;
     username: string | null;
     name: string | null;
     profilePictureUrl: string | null;
-    pageId: string;
-    pageName: string;
-    /** Encrypted — this blob sits in Redis between two requests. */
-    pageAccessToken: string;
+    accountType: string | null;
+    /** Encrypted — this may sit in Redis between two requests. */
+    accessToken: string;
+    tokenIssuedAt: string;
+    tokenExpiresAt: string;
+    scopes: string[];
 }
 
 /**
- * Parked mid-flow state: the merchant authorised a login that turned out to
- * grant several Instagram accounts, and has to say which one to connect.
+ * Parked mid-flow state. Instagram Login grants exactly one account, so the
+ * current flow never parks; the picker routes stay so a stale link fails with a
+ * clean "expired" instead of a 500.
  */
 interface InstagramPendingSelection {
     userId: string;
     orgId: string;
     reconnectChannelId?: string;
-    /** Encrypted. */
-    userAccessToken: string;
-    tokenExpiresAt: string;
     candidates: InstagramCandidate[];
 }
 
-/** What `listPending` returns — the same candidates minus every token. */
-export type InstagramCandidateView = Omit<InstagramCandidate, 'pageAccessToken'>;
+/** What `listPending` returns — display fields only, never a token. */
+export type InstagramCandidateView = Pick<
+    InstagramCandidate,
+    'igUserId' | 'username' | 'name' | 'profilePictureUrl' | 'accountType'
+>;
 
-interface MetaPage {
-    id: string;
-    name: string;
-    access_token: string;
-    instagram_business_account?: {
-        id: string;
-        username?: string;
-        name?: string;
-        profile_picture_url?: string;
-    };
+interface InstagramProfile {
+    id?: string;
+    user_id?: string | number;
+    username?: string;
+    name?: string;
+    profile_picture_url?: string;
+    account_type?: string;
 }
 
+/** What `metadata.webhookSubscription` records about the last subscribe attempt. */
+interface WebhookSubscriptionState {
+    ok: boolean;
+    fields: string[];
+    error: string | null;
+    at: string;
+}
+
+const AUTHORIZE_URL = 'https://www.instagram.com/oauth/authorize';
+const CODE_EXCHANGE_URL = 'https://api.instagram.com/oauth/access_token';
+const IG_GRAPH_HOST = 'https://graph.instagram.com';
+
+/** Refused without these: the account would connect and then be unable to message. */
+const REQUIRED_SCOPES = ['instagram_business_basic', 'instagram_business_manage_messages'];
+const SCOPES = [...REQUIRED_SCOPES, 'instagram_business_manage_comments'];
+
+const WEBHOOK_FIELDS = [
+    'messages',
+    'messaging_postbacks',
+    'messaging_seen',
+    'message_reactions',
+    'comments',
+];
+/** `comments` needs Advanced Access, so a Standard-Access app retries without it. */
+const WEBHOOK_FIELDS_WITHOUT_COMMENTS = WEBHOOK_FIELDS.filter((f) => f !== 'comments');
+
 const OAUTH_FETCH_TIMEOUT_MS = 30_000;
-/** Stop following `paging.next` eventually, however many Pages exist. */
-const MAX_PAGE_REQUESTS = 20;
+
+function describeError(err: unknown): string {
+    if (err instanceof MetaGraphError) {
+        return `${err.httpStatus ?? 'network'} ${err.code}: ${err.message}`;
+    }
+    return err instanceof Error ? err.message : String(err);
+}
 
 @Injectable()
 export class InstagramOAuthService {
@@ -83,7 +126,6 @@ export class InstagramOAuthService {
     private readonly appSecret: string;
     private readonly appUrl: string;
     private readonly graphVersion: string;
-    private readonly scopes: string;
 
     constructor(
         private readonly prisma: PrismaService,
@@ -92,21 +134,14 @@ export class InstagramOAuthService {
         private readonly redis: RedisService,
         private readonly metaGraph: MetaGraphClient,
     ) {
-        this.appId = this.config.get<string>('instagram.appId')!;
-        this.appSecret = this.config.get<string>('instagram.appSecret')!;
+        this.appId = this.config.get<string>('instagram.loginAppId') ?? '';
+        this.appSecret = this.config.get<string>('instagram.loginAppSecret') ?? '';
         this.appUrl = this.config.get<string>('appUrl')!;
         this.graphVersion = this.config.get<string>('instagram.graphVersion') ?? 'v21.0';
-        this.scopes = [
-            'instagram_basic',
-            'instagram_manage_messages',
-            'pages_show_list',
-            'pages_read_engagement',
-            'instagram_manage_comments',
-        ].join(',');
     }
 
-    private graphUrl(path: string): string {
-        return `https://graph.facebook.com/${this.graphVersion}${path}`;
+    private igUrl(path: string): string {
+        return `${IG_GRAPH_HOST}/${this.graphVersion}${path}`;
     }
 
     private get redirectUri(): string {
@@ -115,6 +150,13 @@ export class InstagramOAuthService {
 
     private get frontendUrl(): string {
         return this.config.get<string>('frontendUrl')!;
+    }
+
+    /** App wallet, then the Instagram account's own when it is known. */
+    private scopes(igUserId?: string | null): RateLimitScope[] {
+        return igUserId
+            ? [...this.metaGraph.baseScopes(), metaScope.igUser(igUserId)]
+            : this.metaGraph.baseScopes();
     }
 
     /**
@@ -126,8 +168,8 @@ export class InstagramOAuthService {
      * answer — "I have a usable token, or I do not" — because passing an empty
      * token on to Meta produces a connection that looks fine and does nothing.
      */
-    private safeDecrypt(cipherText: string | null | undefined): string | null {
-        if (!cipherText) return null;
+    private safeDecrypt(cipherText: unknown): string | null {
+        if (typeof cipherText !== 'string' || !cipherText) return null;
         try {
             return this.encryption.decrypt(cipherText) || null;
         } catch {
@@ -136,34 +178,24 @@ export class InstagramOAuthService {
     }
 
     /**
-     * GET through the shared, rate-limited Meta client. Accepts the absolute
-     * URLs this file builds (and Meta's `paging.next` links); an
-     * `access_token` query parameter is moved into the Authorization header
-     * so tokens stop appearing in URLs and logs.
+     * One OAuth-flow call through the shared, rate-limited Meta client.
      *
      * A rate limit propagates as `RateLimitedError` (the HTTP filter turns it
-     * into a 503 with Retry-After); anything else is the same 400 as before.
+     * into a 503 with Retry-After); anything else becomes one generic 400,
+     * with Meta's own words kept in the log.
      */
-    private async getJson<T>(url: string, init?: { method?: 'GET' | 'POST' | 'DELETE' }): Promise<T> {
-        const parsed = new URL(url);
-        const accessToken = parsed.searchParams.get('access_token') ?? undefined;
-        parsed.searchParams.delete('access_token');
+    private async oauthCall<T>(req: Omit<MetaRequest, 'scopes'>, what: string): Promise<T> {
         try {
             const res = await this.metaGraph.request<T>({
-                method: init?.method ?? 'GET',
-                url: parsed.toString(),
-                accessToken,
-                scopes: this.metaGraph.baseScopes(),
                 priority: Priority.INTERACTIVE,
                 timeoutMs: OAUTH_FETCH_TIMEOUT_MS,
+                ...req,
+                scopes: this.scopes(),
             });
             return res.data;
         } catch (err) {
             if (isRateLimitedError(err)) throw err;
-            const status = err instanceof MetaGraphError ? err.httpStatus : undefined;
-            this.logger.error(
-                `Meta request failed (${status ?? 'network'}): ${err instanceof Error ? err.message : String(err)}`,
-            );
+            this.logger.error(`Instagram ${what} failed: ${describeError(err)}`);
             throw new BadRequestException('Instagram could not be reached. Please try again.');
         }
     }
@@ -183,13 +215,13 @@ export class InstagramOAuthService {
         });
     }
 
-    // ─── STEP 1: build the Facebook Login URL ────────────────────────────────
+    // ─── STEP 1: build the Instagram Login URL ───────────────────────────────
 
     /**
      * An org may connect many Instagram accounts, so unlike Shopify there is no
      * limit to enforce here — only an explicit reconnect target to validate.
-     * Which account the merchant picks is decided inside Meta's UI, so
-     * duplicates can only be caught on the way back, in `connectCandidate`.
+     * Which account signs in is decided inside Instagram's UI, so duplicates can
+     * only be caught on the way back, in `connectCandidate`.
      */
     async getInstallUrl(
         orgId: string,
@@ -198,7 +230,7 @@ export class InstagramOAuthService {
     ): Promise<string> {
         if (!this.appId || !this.appSecret) {
             throw new BadRequestException(
-                'Instagram is not configured on the server. Missing META_APP_ID / META_APP_SECRET.',
+                'Instagram is not configured on the server. Missing INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET.',
             );
         }
 
@@ -215,23 +247,24 @@ export class InstagramOAuthService {
             REDIS_TTL.OAUTH_STATE,
         );
 
-        return (
-            `https://www.facebook.com/${this.graphVersion}/dialog/oauth` +
-            `?client_id=${this.appId}` +
-            `&redirect_uri=${encodeURIComponent(this.redirectUri)}` +
-            `&scope=${encodeURIComponent(this.scopes)}` +
-            `&state=${state}`
-        );
+        const url = new URL(AUTHORIZE_URL);
+        url.searchParams.set('client_id', this.appId);
+        url.searchParams.set('redirect_uri', this.redirectUri);
+        url.searchParams.set('response_type', 'code');
+        url.searchParams.set('scope', SCOPES.join(','));
+        url.searchParams.set('state', state);
+        // Otherwise Instagram silently reuses whichever account the browser is
+        // signed into, and connecting a second account becomes impossible.
+        url.searchParams.set('force_reauth', 'true');
+        return url.toString();
     }
 
     // ─── STEP 2: the callback ────────────────────────────────────────────────
 
     /**
-     * Handle Meta's redirect back.
+     * Handle Instagram's redirect back.
      *
-     * Every success shape returns a frontend URL to redirect the merchant's
-     * browser to — either the connected channel, or the account picker when the
-     * login granted more than one Instagram account we could connect.
+     * Returns the frontend URL to send the merchant's browser to.
      */
     async handleCallback(query: {
         code?: string;
@@ -256,135 +289,130 @@ export class InstagramOAuthService {
         }
         await this.redis.del(stateKey);
 
-        // 1. Code → short-lived token → long-lived (60 day) token.
-        const tokenData = await this.getJson<{ access_token: string; expires_in: number }>(
-            this.graphUrl('/oauth/access_token') +
-            `?client_id=${this.appId}` +
-            `&client_secret=${this.appSecret}` +
-            `&redirect_uri=${encodeURIComponent(this.redirectUri)}` +
-            `&code=${encodeURIComponent(query.code)}`,
-        );
+        // Instagram appends `#_` to the code; it is not part of it.
+        const code = query.code.replace(/#_$/, '');
 
-        const longLived = await this.getJson<{ access_token: string; expires_in: number }>(
-            this.graphUrl('/oauth/access_token') +
-            `?grant_type=fb_exchange_token` +
-            `&client_id=${this.appId}` +
-            `&client_secret=${this.appSecret}` +
-            `&fb_exchange_token=${tokenData.access_token}`,
+        // 1. Code → short-lived token. This endpoint only accepts a form body.
+        const grant = readTokenGrant(
+            await this.oauthCall<unknown>(
+                {
+                    method: 'POST',
+                    url: CODE_EXCHANGE_URL,
+                    form: {
+                        client_id: this.appId,
+                        client_secret: this.appSecret,
+                        grant_type: 'authorization_code',
+                        redirect_uri: this.redirectUri,
+                        code,
+                    },
+                },
+                'code exchange',
+            ),
         );
-        const userToken = longLived.access_token;
-        const tokenExpiresAt = new Date(
-            Date.now() + (longLived.expires_in || 60 * 24 * 60 * 60) * 1000,
-        );
+        if (!grant?.access_token) {
+            throw new BadRequestException('Instagram did not return an access token. Please try again.');
+        }
 
-        // 2. Every Page the merchant granted, with its Instagram account
-        //    expanded inline. This used to read `pagesData.data[0]` — one Page,
-        //    unpaginated — which is why a second account was unreachable.
-        const pages = await this.fetchPages(userToken);
-        if (pages.length === 0) {
+        // Instagram's consent screen lets the user untick permissions. Without
+        // messaging the account would "connect" and then never work.
+        const granted = normaliseGrantedScopes(grant.permissions);
+        const missing = REQUIRED_SCOPES.filter((s) => !granted.includes(s));
+        if (granted.length > 0 && missing.length > 0) {
             throw new BadRequestException(
-                'No Facebook Pages found. Instagram connects through a Facebook Page, so you need at least one.',
+                `Instagram permissions were declined (${missing.join(', ')}). Allow them to connect the account.`,
             );
         }
 
-        const candidates: InstagramCandidate[] = pages
-            .filter((page) => page.instagram_business_account)
-            .map((page) => ({
-                igUserId: page.instagram_business_account!.id,
-                username: page.instagram_business_account!.username ?? null,
-                name: page.instagram_business_account!.name ?? null,
-                profilePictureUrl: page.instagram_business_account!.profile_picture_url ?? null,
-                pageId: page.id,
-                pageName: page.name,
-                pageAccessToken: this.encryption.encrypt(page.access_token),
-            }));
-
-        if (candidates.length === 0) {
-            throw new BadRequestException(
-                'No Instagram Business account found on your Facebook Pages. ' +
-                'Make sure your Instagram account is a Business or Creator account linked to a Page.',
-            );
-        }
-
-        // 3. Drop what this org already holds live. A DISCONNECTED match stays
-        //    on the list — picking it revives that row rather than duplicating.
-        const rows = await this.instagramRows(stateData.orgId);
-        const liveIds = new Set(
-            rows
-                .filter((r) => isActive(r.status) && r.externalStoreId)
-                .map((r) => r.externalStoreId!),
-        );
-        const selectable = candidates.filter((c) => !liveIds.has(c.igUserId));
-
-        if (selectable.length === 0) {
-            throw new ConflictException(
-                candidates.length === 1
-                    ? 'That Instagram account is already connected to this organization.'
-                    : 'All of those Instagram accounts are already connected to this organization.',
-            );
-        }
-
-        // 4. One choice — connect it. Several — let the merchant choose.
-        if (selectable.length === 1) {
-            const result = await this.connectCandidate(
-                stateData.orgId,
-                selectable[0],
-                userToken,
-                tokenExpiresAt,
-                stateData.reconnectChannelId,
-                // Whoever started the flow owns what it connects — carried in
-                // the OAuth state because the callback has no session.
-                stateData.userId,
-            );
-            return {
-                channelId: result.channelId,
-                redirectUrl:
-                    `${this.frontendUrl}/settings/channels?connected=instagram` +
-                    `&channelId=${result.channelId}` +
-                    (result.sameAccount ? '&note=refreshed' : ''),
-            };
-        }
-
-        const pendingId = randomBytes(16).toString('hex');
-        await this.redis.set(
-            `${REDIS_KEYS.OAUTH_INSTAGRAM_PENDING}${pendingId}`,
+        // 2. Short-lived → long-lived (60 day) token. Both token endpoints take
+        //    the token as a query parameter and nothing else; the client logs
+        //    only the path, never the query.
+        const tokenIssuedAt = new Date();
+        const longLived = await this.oauthCall<{ access_token?: string; expires_in?: number }>(
             {
-                userId: stateData.userId,
-                orgId: stateData.orgId,
-                reconnectChannelId: stateData.reconnectChannelId,
-                userAccessToken: this.encryption.encrypt(userToken),
-                tokenExpiresAt: tokenExpiresAt.toISOString(),
-                candidates: selectable,
-            } satisfies InstagramPendingSelection,
-            REDIS_TTL.OAUTH_STATE,
+                method: 'GET',
+                url: `${IG_GRAPH_HOST}/access_token`,
+                query: {
+                    grant_type: 'ig_exchange_token',
+                    client_secret: this.appSecret,
+                    access_token: grant.access_token,
+                },
+            },
+            'long-lived token exchange',
+        );
+        if (!longLived.access_token) {
+            throw new BadRequestException('Instagram did not return an access token. Please try again.');
+        }
+        const tokenExpiresAt = new Date(
+            tokenIssuedAt.getTime() +
+                (longLived.expires_in || INSTAGRAM_LONG_LIVED_FALLBACK_S) * 1000,
         );
 
+        // 3. Who signed in.
+        const profile = await this.oauthCall<InstagramProfile>(
+            {
+                method: 'GET',
+                url: this.igUrl('/me'),
+                query: { fields: 'user_id,username,name,profile_picture_url,account_type' },
+                accessToken: longLived.access_token,
+            },
+            'profile lookup',
+        );
+
+        // Diagnostic for the switch from Facebook Login: `user_id` must be the
+        // same professional-account id the old flow stored, or existing rows
+        // will not be recognised on reconnect. The token-exchange `user_id` is
+        // a JSON number and can lose precision, so it is logged, never used.
+        this.logger.log(
+            `Instagram Login profile: user_id=${profile.user_id} app-scoped id=${profile.id} ` +
+            `token-exchange user_id=${grant.user_id} account_type=${profile.account_type} ` +
+            `granted=[${granted.join(',')}]`,
+        );
+
+        if (profile.user_id === undefined || profile.user_id === null || profile.user_id === '') {
+            throw new BadRequestException('Instagram did not return the account id. Please try again.');
+        }
+        if (typeof profile.user_id === 'number') {
+            this.logger.warn(
+                `Instagram returned user_id as a number (${profile.user_id}); ids past 2^53 lose precision.`,
+            );
+        }
+        if (profile.account_type && !PROFESSIONAL_ACCOUNT_TYPES.includes(profile.account_type)) {
+            throw new BadRequestException(
+                'Only Instagram Business or Creator accounts can be connected. Switch the account to a professional account and try again.',
+            );
+        }
+
+        const candidate: InstagramCandidate = {
+            igUserId: String(profile.user_id),
+            scopedId: profile.id ?? null,
+            username: profile.username ?? null,
+            name: profile.name ?? null,
+            profilePictureUrl: profile.profile_picture_url ?? null,
+            accountType: profile.account_type ?? null,
+            accessToken: this.encryption.encrypt(longLived.access_token),
+            tokenIssuedAt: tokenIssuedAt.toISOString(),
+            tokenExpiresAt: tokenExpiresAt.toISOString(),
+            scopes: granted.length > 0 ? granted : SCOPES,
+        };
+
+        const result = await this.connectCandidate(
+            stateData.orgId,
+            candidate,
+            stateData.reconnectChannelId,
+            // Whoever started the flow owns what it connects — carried in the
+            // OAuth state because the callback has no session.
+            stateData.userId,
+        );
         return {
-            redirectUrl: `${this.frontendUrl}/settings/channels?select=instagram&pending=${pendingId}`,
+            channelId: result.channelId,
+            redirectUrl:
+                `${this.frontendUrl}/settings/channels?connected=instagram` +
+                `&channelId=${result.channelId}` +
+                (result.sameAccount ? '&note=refreshed' : ''),
         };
     }
 
-    /** Every Page the token can see, following Meta's cursor pagination. */
-    private async fetchPages(userToken: string): Promise<MetaPage[]> {
-        const fields =
-            'id,name,access_token,instagram_business_account{id,username,name,profile_picture_url}';
-        let url =
-            this.graphUrl('/me/accounts') +
-            `?fields=${encodeURIComponent(fields)}&limit=100&access_token=${userToken}`;
-
-        const pages: MetaPage[] = [];
-        for (let request = 0; request < MAX_PAGE_REQUESTS && url; request++) {
-            const body = await this.getJson<{
-                data?: MetaPage[];
-                paging?: { next?: string };
-            }>(url);
-            pages.push(...(body.data ?? []));
-            url = body.paging?.next ?? '';
-        }
-        return pages;
-    }
-
-    // ─── STEP 3: the account picker ──────────────────────────────────────────
+    // ─── Legacy account picker ───────────────────────────────────────────────
 
     /** The parked candidates, with every token stripped out. */
     async listPending(
@@ -394,7 +422,13 @@ export class InstagramOAuthService {
         const pending = await this.readPending(pendingId, orgId);
         return {
             pendingId,
-            candidates: pending.candidates.map(({ pageAccessToken, ...view }) => view),
+            candidates: pending.candidates.map((c) => ({
+                igUserId: c.igUserId,
+                username: c.username,
+                name: c.name,
+                profilePictureUrl: c.profilePictureUrl,
+                accountType: c.accountType,
+            })),
         };
     }
 
@@ -411,21 +445,9 @@ export class InstagramOAuthService {
             throw new NotFoundException('That account was not part of this connection.');
         }
 
-        const userToken = this.safeDecrypt(pending.userAccessToken);
-        if (!userToken) {
-            this.logger.error(
-                `Instagram selection ${pendingId} holds a user token that cannot be decrypted`,
-            );
-            throw new BadRequestException(
-                'Could not complete the Instagram connection securely. Please start it again.',
-            );
-        }
-
         const result = await this.connectCandidate(
             orgId,
             candidate,
-            userToken,
-            new Date(pending.tokenExpiresAt),
             pending.reconnectChannelId,
             // Prefer the signed-in caller; fall back to whoever began the flow.
             connectingUserId ?? pending.userId,
@@ -443,7 +465,8 @@ export class InstagramOAuthService {
         );
         // An org mismatch reads as "not found" rather than 403: it is either an
         // expired key or someone else's, and neither is this org's business.
-        if (!pending || pending.orgId !== orgId) {
+        // A pre-Instagram-Login entry has no `accessToken`; treat it as expired.
+        if (!pending || pending.orgId !== orgId || !pending.candidates?.every((c) => c.accessToken)) {
             throw new NotFoundException(
                 'This Instagram selection has expired. Start the connection again.',
             );
@@ -458,14 +481,12 @@ export class InstagramOAuthService {
      *
      * Re-decides create-vs-reconnect here rather than trusting the decision made
      * before the redirect: the merchant spent the intervening seconds inside
-     * Meta, during which another tab — or another admin — may have connected the
-     * very account they picked.
+     * Instagram, during which another tab — or another admin — may have
+     * connected the very account they signed in with.
      */
     private async connectCandidate(
         orgId: string,
         candidate: InstagramCandidate,
-        userToken: string,
-        tokenExpiresAt: Date,
         reconnectChannelId?: string,
         /** The member connecting. Recorded as the channel's owner. */
         connectingUserId?: string,
@@ -495,59 +516,34 @@ export class InstagramOAuthService {
                     {}) as Record<string, unknown>)
                 : {};
 
-        // Recover the Page token BEFORE writing anything.
-        //
-        // Both failure modes here are silent by default and must not be: an
-        // absent value makes CryptoJS throw (an opaque 500 for the merchant),
-        // and a value that does not decrypt under the current ENCRYPTION_KEY
-        // comes back as the empty string — which would sail through and store a
-        // channel whose token cannot work, reported to the merchant as success.
-        const pageToken = candidate.pageAccessToken
-            ? this.safeDecrypt(candidate.pageAccessToken)
-            : null;
-        if (!pageToken) {
+        // Recover the token BEFORE writing anything. A value that does not
+        // decrypt under the current ENCRYPTION_KEY comes back as the empty
+        // string, which would store a channel whose token cannot work and
+        // report it to the merchant as success.
+        const token = this.safeDecrypt(candidate.accessToken);
+        if (!token) {
             this.logger.error(
-                `Instagram connect aborted: page token for ${candidate.pageId} is missing or undecryptable`,
+                `Instagram connect aborted: token for ${candidate.igUserId} is missing or undecryptable`,
             );
             throw new BadRequestException(
                 'Could not complete the Instagram connection securely. Please start it again.',
             );
         }
 
-        // Subscribe the Page to messaging webhooks. Non-fatal: a channel that is
-        // connected but not subscribed still works for everything except inbound
-        // DMs, and failing the whole connect over it would be the worse outcome.
-        try {
-            await this.metaGraph.request({
-                method: 'POST',
-                path: `/${candidate.pageId}/subscribed_apps`,
-                query: { subscribed_fields: 'messages,messaging_postbacks' },
-                accessToken: pageToken,
-                scopes: [...this.metaGraph.baseScopes(), metaScope.page(candidate.pageId)],
-                pageId: candidate.pageId,
-                priority: Priority.INTERACTIVE,
-                timeoutMs: OAUTH_FETCH_TIMEOUT_MS,
-            });
-        } catch (err) {
-            // A non-OK response is the common case (permissions). The channel
-            // is connected either way; only inbound DMs are affected.
-            const status = err instanceof MetaGraphError ? err.httpStatus : undefined;
-            this.logger.warn(
-                `Instagram connected but Page ${candidate.pageId} was not subscribed ` +
-                `(${status ?? 'network'}): inbound DMs will not arrive until it is.`,
-            );
-        }
+        const webhookSubscription = await this.subscribeWebhooks(candidate.igUserId, token);
 
         const credentials = {
-            userAccessToken: this.encryption.encrypt(userToken),
-            pageAccessToken: candidate.pageAccessToken,
-            pageId: candidate.pageId,
-            pageName: candidate.pageName,
+            authFlow: INSTAGRAM_LOGIN_FLOW,
+            accessToken: candidate.accessToken,
             instagramUserId: candidate.igUserId,
+            instagramScopedId: candidate.scopedId,
             instagramUsername: candidate.username,
+            name: candidate.name,
             profilePictureUrl: candidate.profilePictureUrl,
-            tokenExpiresAt: tokenExpiresAt.toISOString(),
-            scopes: this.scopes,
+            accountType: candidate.accountType,
+            tokenIssuedAt: candidate.tokenIssuedAt,
+            tokenExpiresAt: candidate.tokenExpiresAt,
+            scopes: candidate.scopes.join(','),
         };
         const account = describeAccount(ChannelPlatform.INSTAGRAM, credentials, null);
 
@@ -571,6 +567,9 @@ export class InstagramOAuthService {
                 ...existingMeta,
                 externalAccountId: candidate.igUserId,
                 lastAccount: account,
+                // Recorded instead of swallowed: "connected" must not be
+                // mistaken for "messages will arrive".
+                webhookSubscription,
                 // The row is live again; leaving a stale disconnect date would
                 // make the UI label a connected account "Disconnected <date>".
                 disconnectedAt: null,
@@ -594,7 +593,8 @@ export class InstagramOAuthService {
 
             this.logger.log(
                 `Instagram ${decision.kind === 'reconnect' ? 'reconnected' : 'connected'}: ` +
-                `@${candidate.username ?? candidate.igUserId} → org ${orgId}`,
+                `@${candidate.username ?? candidate.igUserId} → org ${orgId} (channel ${channel.id}); ` +
+                `webhooks ${webhookSubscription.ok ? `subscribed [${webhookSubscription.fields.join(',')}]` : 'NOT subscribed'}`,
             );
 
             return {
@@ -641,103 +641,147 @@ export class InstagramOAuthService {
         }
     }
 
+    /**
+     * Subscribe the account to webhook fields. Never fails the connect — a
+     * connected account that is not subscribed still authenticates — but the
+     * outcome is returned so it can be stored and seen.
+     */
+    private async subscribeWebhooks(igUserId: string, token: string): Promise<WebhookSubscriptionState> {
+        let firstError: string | null = null;
+        for (const fields of [WEBHOOK_FIELDS, WEBHOOK_FIELDS_WITHOUT_COMMENTS]) {
+            try {
+                await this.metaGraph.request({
+                    method: 'POST',
+                    url: this.igUrl('/me/subscribed_apps'),
+                    query: { subscribed_fields: fields.join(',') },
+                    accessToken: token,
+                    scopes: this.scopes(igUserId),
+                    priority: Priority.INTERACTIVE,
+                    timeoutMs: OAUTH_FETCH_TIMEOUT_MS,
+                });
+                return { ok: true, fields, error: firstError, at: new Date().toISOString() };
+            } catch (err) {
+                const message = describeError(err);
+                firstError ??= message;
+                this.logger.warn(
+                    `Instagram webhook subscription for ${igUserId} failed with [${fields.join(',')}]: ${message}`,
+                );
+            }
+        }
+        return { ok: false, fields: [], error: firstError, at: new Date().toISOString() };
+    }
+
     // ─── Token upkeep ────────────────────────────────────────────────────────
 
-    /** Decrypted tokens for API calls, refreshing the grant when it is nearly up. */
-    async getAccessToken(
-        channelId: string,
-    ): Promise<{ token: string; pageToken: string; igUserId: string }> {
-        const channel = await this.prisma.channel.findUnique({ where: { id: channelId } });
-        if (!channel || !channel.credentials) {
+    /** A decrypted token for API calls, refreshing the grant when it is nearly up. */
+    async getAccessToken(channelId: string): Promise<{ token: string; igUserId: string }> {
+        const channel = await this.prisma.channel.findUnique({
+            where: { id: channelId },
+            select: { credentials: true },
+        });
+        const creds = (channel?.credentials ?? null) as Record<string, unknown> | null;
+        if (!creds) {
             throw new BadRequestException('Channel not found or missing credentials');
         }
 
-        const creds = channel.credentials as unknown as {
-            userAccessToken: string;
-            pageAccessToken: string;
-            instagramUserId: string;
-            tokenExpiresAt: string;
-        };
+        if (creds.authFlow !== INSTAGRAM_LOGIN_FLOW) {
+            await this.markNeedsReconnect(
+                channelId,
+                'This Instagram account was connected with Facebook Login. Reconnect it to sign in with Instagram.',
+            );
+            throw new BadRequestException('Instagram channel must be reconnected');
+        }
 
-        // Check if token needs refresh (within 7 days of expiry)
-        const expiresAt = new Date(creds.tokenExpiresAt);
-        const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-        if (expiresAt < sevenDaysFromNow) {
-            await this.refreshToken(channelId, creds);
-            // Re-read after refresh
+        const now = new Date();
+        if (isInstagramTokenExpired(creds, now)) {
+            await this.markNeedsReconnect(
+                channelId,
+                'Instagram access expired. Reconnect the account.',
+            );
+            throw new BadRequestException('Instagram access expired');
+        }
+        if (isInstagramTokenRefreshDue(creds, now, INSTAGRAM_REFRESH_AHEAD_MS)) {
+            await this.refreshToken(channelId, Priority.INTERACTIVE);
             return this.getAccessToken(channelId);
         }
 
-        return {
-            token: this.encryption.decrypt(creds.userAccessToken),
-            pageToken: this.encryption.decrypt(creds.pageAccessToken),
-            igUserId: creds.instagramUserId,
-        };
+        const token = this.safeDecrypt(creds.accessToken);
+        if (!token) {
+            await this.markNeedsReconnect(
+                channelId,
+                'The stored Instagram access could not be read. Reconnect the account.',
+            );
+            throw new BadRequestException('Instagram channel must be reconnected');
+        }
+        return { token, igUserId: String(creds.instagramUserId) };
     }
 
-    private async refreshToken(
-        channelId: string,
-        creds: { userAccessToken: string; tokenExpiresAt: string },
-    ): Promise<void> {
-        const currentToken = this.encryption.decrypt(creds.userAccessToken);
+    /**
+     * Swap the long-lived token for a fresh 60-day one.
+     *
+     * Only a token Meta actually rejected marks the channel ERROR; a timeout or
+     * a 5xx leaves it alone for the next attempt, and a rate limit propagates
+     * as such rather than branding the channel as needing a reconnect.
+     */
+    async refreshToken(channelId: string, priority: Priority = Priority.NORMAL): Promise<void> {
+        const channel = await this.prisma.channel.findUnique({
+            where: { id: channelId },
+            select: { credentials: true },
+        });
+        const creds = (channel?.credentials ?? {}) as Record<string, unknown>;
+        const current = this.safeDecrypt(creds.accessToken);
+        if (!current) {
+            await this.markNeedsReconnect(
+                channelId,
+                'The stored Instagram access could not be read. Reconnect the account.',
+            );
+            throw new BadRequestException('Failed to refresh Instagram token');
+        }
 
-        let data: { access_token: string; expires_in: number };
+        let data: { access_token?: string; expires_in?: number };
         try {
-            const res = await this.metaGraph.request<{ access_token: string; expires_in: number }>({
+            const res = await this.metaGraph.request<{ access_token?: string; expires_in?: number }>({
                 method: 'GET',
-                path: '/oauth/access_token',
-                query: {
-                    grant_type: 'fb_exchange_token',
-                    client_id: this.appId,
-                    client_secret: this.appSecret,
-                    fb_exchange_token: currentToken,
-                },
-                scopes: this.metaGraph.baseScopes(),
-                priority: Priority.INTERACTIVE,
+                url: `${IG_GRAPH_HOST}/refresh_access_token`,
+                query: { grant_type: 'ig_refresh_token', access_token: current },
+                scopes: this.scopes(typeof creds.instagramUserId === 'string' ? creds.instagramUserId : null),
+                priority,
                 channelId,
                 timeoutMs: OAUTH_FETCH_TIMEOUT_MS,
             });
             data = res.data;
         } catch (err) {
-            // A rate limit is not a dead token: let it surface as such rather
-            // than branding the channel as needing a reconnect.
             if (isRateLimitedError(err)) throw err;
-            this.logger.error(`Instagram token refresh failed for channel ${channelId}`);
-            await this.prisma.channel.update({
-                where: { id: channelId },
-                data: {
-                    status: ChannelStatus.ERROR,
-                    // Shown verbatim on the channels page, so it has to say what
-                    // the merchant should actually do about it.
-                    lastError:
-                        'Instagram access expired and could not be renewed. Reconnect the account.',
-                },
-            });
+            this.logger.error(
+                `Instagram token refresh failed for channel ${channelId}: ${describeError(err)}`,
+            );
+            const rejected =
+                err instanceof MetaGraphError &&
+                (err.code === 'AUTH_FAILED' || err.code === 'API_ERROR' || err.code === 'HTTP_ERROR');
+            if (rejected) {
+                await this.markNeedsReconnect(
+                    channelId,
+                    'Instagram access expired and could not be renewed. Reconnect the account.',
+                );
+            }
             throw new BadRequestException('Failed to refresh Instagram token');
         }
-        const newExpiresAt = new Date(Date.now() + data.expires_in * 1000);
+        if (!data.access_token) {
+            throw new BadRequestException('Failed to refresh Instagram token');
+        }
 
-        // Re-fetch page access token with new user token
-        const pagesData = await this.getJson<{ data?: Array<{ id: string; access_token: string }> }>(
-            this.graphUrl('/me/accounts') + `?access_token=${data.access_token}`,
+        const issuedAt = new Date();
+        const expiresAt = new Date(
+            issuedAt.getTime() + (data.expires_in || INSTAGRAM_LONG_LIVED_FALLBACK_S) * 1000,
         );
-
-        const existingChannel = await this.prisma.channel.findUnique({ where: { id: channelId } });
-        const existingCreds = (existingChannel?.credentials ?? {}) as Record<string, unknown>;
-        const pageId = existingCreds.pageId as string;
-        const newPage = pagesData.data?.find((p) => p.id === pageId);
-
         await this.prisma.channel.update({
             where: { id: channelId },
             data: {
                 credentials: {
-                    ...existingCreds,
-                    userAccessToken: this.encryption.encrypt(data.access_token),
-                    pageAccessToken: newPage
-                        ? this.encryption.encrypt(newPage.access_token)
-                        : (existingCreds.pageAccessToken as string),
-                    tokenExpiresAt: newExpiresAt.toISOString(),
+                    ...creds,
+                    accessToken: this.encryption.encrypt(data.access_token),
+                    tokenIssuedAt: issuedAt.toISOString(),
+                    tokenExpiresAt: expiresAt.toISOString(),
                 } as unknown as Prisma.InputJsonValue,
                 status: ChannelStatus.CONNECTED,
                 lastError: null,
@@ -745,12 +789,20 @@ export class InstagramOAuthService {
         });
 
         this.logger.log(
-            `Instagram token refreshed for channel ${channelId}, expires ${newExpiresAt.toISOString()}`,
+            `Instagram token refreshed for channel ${channelId}, expires ${expiresAt.toISOString()}`,
         );
     }
 
+    private async markNeedsReconnect(channelId: string, lastError: string): Promise<void> {
+        await this.prisma.channel.update({
+            where: { id: channelId },
+            // Shown verbatim on the channels page, so it says what to do.
+            data: { status: ChannelStatus.ERROR, lastError },
+        });
+    }
+
     /**
-     * Stop the Page sending us webhooks.
+     * Stop the account sending us webhooks.
      *
      * Best-effort by contract: called during disconnect, where the token may
      * already be dead and the local state must be cleared regardless.
@@ -759,28 +811,44 @@ export class InstagramOAuthService {
         id: string;
         credentials: Prisma.JsonValue;
     }): Promise<void> {
-        const creds = (channel.credentials ?? null) as {
-            pageId?: string;
-            pageAccessToken?: string;
-        } | null;
-        if (!creds?.pageId || !creds.pageAccessToken) return;
+        const creds = (channel.credentials ?? null) as Record<string, unknown> | null;
+        if (!creds) return;
 
         try {
+            if (creds.authFlow === INSTAGRAM_LOGIN_FLOW) {
+                const token = this.safeDecrypt(creds.accessToken);
+                if (!token) return;
+                await this.metaGraph.request({
+                    method: 'DELETE',
+                    url: this.igUrl('/me/subscribed_apps'),
+                    accessToken: token,
+                    scopes: this.scopes(typeof creds.instagramUserId === 'string' ? creds.instagramUserId : null),
+                    priority: Priority.INTERACTIVE,
+                    channelId: channel.id,
+                    timeoutMs: OAUTH_FETCH_TIMEOUT_MS,
+                });
+                this.logger.log(`Instagram webhooks unsubscribed for channel ${channel.id}`);
+                return;
+            }
+
+            // A row still on the old Facebook Login flow: the subscription
+            // belongs to its Page.
+            const pageId = typeof creds.pageId === 'string' ? creds.pageId : null;
             const pageToken = this.safeDecrypt(creds.pageAccessToken);
-            if (!pageToken) return;
+            if (!pageId || !pageToken) return;
             await this.metaGraph.request({
                 method: 'DELETE',
-                path: `/${creds.pageId}/subscribed_apps`,
+                path: `/${pageId}/subscribed_apps`,
                 accessToken: pageToken,
-                scopes: [...this.metaGraph.baseScopes(), metaScope.page(creds.pageId)],
-                pageId: creds.pageId,
+                scopes: [...this.metaGraph.baseScopes(), metaScope.page(pageId)],
+                pageId,
                 priority: Priority.INTERACTIVE,
                 channelId: channel.id,
                 timeoutMs: OAUTH_FETCH_TIMEOUT_MS,
             });
-        } catch {
+        } catch (err) {
             this.logger.warn(
-                `Could not unsubscribe Page ${creds.pageId} for channel ${channel.id} — disconnecting anyway.`,
+                `Could not unsubscribe webhooks for channel ${channel.id} — disconnecting anyway: ${describeError(err)}`,
             );
         }
     }

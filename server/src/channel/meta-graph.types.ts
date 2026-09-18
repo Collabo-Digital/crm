@@ -40,6 +40,9 @@ export interface MetaRequest {
   accessToken?: string;
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
+  /// Sent as application/x-www-form-urlencoded instead of a JSON `body` —
+  /// Instagram Login's code exchange accepts nothing else.
+  form?: Record<string, string>;
   /// Wallets this call draws from, broad to specific: app, then business
   /// use case / ad account / page, then phone number.
   scopes: RateLimitScope[];
@@ -68,6 +71,9 @@ export interface MetaErrorBody {
     error_data?: { details?: string };
     fbtrace_id?: string;
   };
+  /// api.instagram.com reports errors flat rather than under `error`.
+  error_type?: string;
+  error_message?: string;
 }
 
 /** Scope builders so callers never spell a wallet by hand. */
@@ -77,5 +83,7 @@ export const metaScope = {
   buc: (id: string): RateLimitScope => ({ platform: 'meta', kind: 'buc', id }),
   phone: (phoneNumberId: string): RateLimitScope => ({ platform: 'meta', kind: 'phone', id: phoneNumberId }),
   page: (pageId: string): RateLimitScope => ({ platform: 'meta', kind: 'page', id: pageId }),
+  /// An Instagram professional account reached through Instagram Login.
+  igUser: (igUserId: string): RateLimitScope => ({ platform: 'meta', kind: 'iguser', id: igUserId }),
   adAccount: (actId: string): RateLimitScope => ({ platform: 'meta', kind: 'adacct', id: actId }),
 };

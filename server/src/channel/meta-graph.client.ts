@@ -99,9 +99,18 @@ export class MetaGraphClient {
             method: req.method,
             headers: {
               ...(req.accessToken ? { Authorization: `Bearer ${req.accessToken}` } : {}),
-              ...(req.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+              ...(req.form !== undefined
+                ? { 'Content-Type': 'application/x-www-form-urlencoded' }
+                : req.body !== undefined
+                  ? { 'Content-Type': 'application/json' }
+                  : {}),
             },
-            body: req.body !== undefined ? JSON.stringify(req.body) : undefined,
+            body:
+              req.form !== undefined
+                ? new URLSearchParams(req.form).toString()
+                : req.body !== undefined
+                  ? JSON.stringify(req.body)
+                  : undefined,
             signal: AbortSignal.timeout(req.timeoutMs ?? DEFAULT_TIMEOUT_MS),
           });
         } catch (err) {
@@ -140,7 +149,7 @@ export class MetaGraphClient {
 
         const code = error?.code ?? res.status;
         const subcode = error?.error_subcode;
-        const message = error?.message ?? `HTTP ${res.status}`;
+        const message = error?.message ?? body.error_message ?? `HTTP ${res.status}`;
 
         if (code === META_AUTH_CODE || res.status === 401) {
           throw new MetaGraphError(message, 'AUTH_FAILED', code, subcode, res.status, error);

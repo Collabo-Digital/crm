@@ -274,6 +274,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
 
+/** Instagram's `account_type` as the merchant would say it. */
+function instagramAccountTypeLabel(accountType: string | null): string | null {
+    if (accountType === 'BUSINESS') return 'Business account';
+    if (accountType === 'MEDIA_CREATOR') return 'Creator account';
+    return null;
+}
+
 /**
  * Describe a channel's account for display.
  *
@@ -305,13 +312,16 @@ export function describeAccount(
     switch (platform) {
         case ChannelPlatform.INSTAGRAM: {
             const username = str(creds, 'instagramUsername');
+            // Only rows connected through the old Facebook Login flow have a Page.
             const pageName = str(creds, 'pageName');
             return {
                 externalId: str(creds, 'instagramUserId'),
                 handle: username ? `@${username}` : null,
-                displayName: str(creds, 'pageName'),
+                displayName: str(creds, 'name') ?? pageName,
                 avatarUrl: str(creds, 'profilePictureUrl'),
-                detail: pageName ? `Facebook Page: ${pageName}` : null,
+                detail: pageName
+                    ? `Facebook Page: ${pageName}`
+                    : instagramAccountTypeLabel(str(creds, 'accountType')),
             };
         }
         case ChannelPlatform.WHATSAPP: {
@@ -364,6 +374,8 @@ export type MetaCallbackReason =
     | 'invalid_state'
     | 'no_pages'
     | 'no_instagram_account'
+    | 'not_professional_account'
+    | 'scopes_declined'
     | 'already_connected'
     | 'limit_reached'
     | 'account_taken'
@@ -397,5 +409,8 @@ export function classifyMetaCallbackError(
     if (/already connected/i.test(message)) return 'already_connected';
     if (/No Instagram Business/i.test(message)) return 'no_instagram_account';
     if (/No Facebook Pages/i.test(message)) return 'no_pages';
+    // After no_instagram_account: that older message also says "Business or Creator".
+    if (/Only Instagram Business or Creator/i.test(message)) return 'not_professional_account';
+    if (/permissions were declined/i.test(message)) return 'scopes_declined';
     return 'connect_failed';
 }

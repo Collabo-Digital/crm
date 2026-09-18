@@ -11,12 +11,12 @@ import { Button } from "~/components/ui/button";
 import { useInstallInstagramMutation } from "~/hooks/use-channel-mutations";
 
 /**
- * Prerequisites, then hand the merchant to Facebook Login.
+ * Prerequisites, then hand the merchant to Instagram Login.
  *
- * The two failures this screen exists to prevent are the ones Meta only reports
- * after a full round trip: a personal Instagram account (rather than Business or
- * Creator), and one not linked to a Facebook Page. Both come back as a generic
- * OAuth failure the merchant cannot act on.
+ * The failures this screen exists to prevent are the ones Instagram only
+ * reports after a full round trip: a personal account (rather than Business or
+ * Creator), and message access switched off, which connects fine but never
+ * delivers a DM.
  *
  * `reconnectChannelId` re-authorizes an existing account instead of adding
  * another — a meaningful distinction here, since an org may hold many.
@@ -40,8 +40,8 @@ export function InstagramConnectDialog({
             {reconnectChannelId ? "Reconnect Instagram" : "Connect Instagram"}
           </DialogTitle>
           <DialogDescription>
-            Instagram connects through the Facebook Page linked to your account.
-            You will sign in with Facebook and choose which account to connect.
+            You will sign in with Instagram and allow access to the account you
+            want to connect. No Facebook Page is needed.
           </DialogDescription>
         </DialogHeader>
 
@@ -52,30 +52,32 @@ export function InstagramConnectDialog({
           <ul className="mt-2 list-inside list-disc space-y-1.5 text-caption text-muted-foreground">
             <li>
               Your Instagram account is a <strong>Business</strong> or{" "}
-              <strong>Creator</strong> account, not a personal one.
-            </li>
-            <li>It is linked to a Facebook Page you administer.</li>
-            <li>
-              You are signing in with the Facebook account that manages that Page
-              (
+              <strong>Creator</strong> account, not a personal one (
               <a
-                href="https://business.facebook.com/"
+                href="https://help.instagram.com/502981923235522"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-0.5 text-brand-strong underline hover:text-brand-strong-hover"
               >
-                business.facebook.com
+                how to switch
                 <ExternalLink className="size-3" />
               </a>
               ).
+            </li>
+            <li>
+              To receive DMs, message access is on: in the Instagram app go to{" "}
+              <strong>
+                Settings → Messages and story replies → Message controls →
+                Connected tools
+              </strong>{" "}
+              and turn on <strong>Allow access to messages</strong>.
             </li>
           </ul>
         </div>
 
         <p className="text-caption text-muted-foreground">
-          If the login grants access to several Instagram accounts, you will be
-          asked which one to connect. You can come back and add the others
-          afterwards.
+          Each sign-in connects one account. To add another, connect again and
+          sign in with that account.
         </p>
 
         <DialogFooter>
@@ -92,7 +94,7 @@ export function InstagramConnectDialog({
             onClick={() => install.mutate({ reconnectChannelId })}
           >
             {install.isPending && <Loader2 className="animate-spin" />}
-            Continue with Facebook
+            Continue with Instagram
           </Button>
         </DialogFooter>
       </DialogContent>

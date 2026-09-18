@@ -59,6 +59,9 @@ export class RateLimitStateService implements OnModuleInit {
         const out: RateLimitScope[] = [];
         if (appId) out.push({ platform: 'meta', kind: 'app', id: appId });
         if (typeof creds.pageId === 'string') out.push({ platform: 'meta', kind: 'page', id: creds.pageId });
+        if (typeof creds.instagramUserId === 'string') {
+          out.push({ platform: 'meta', kind: 'iguser', id: creds.instagramUserId });
+        }
         return out;
       }
       default:
@@ -115,7 +118,15 @@ export class RateLimitStateService implements OnModuleInit {
     // App-level limits belong to every merchant; do not stamp anyone.
     if (scope.kind === 'app') return [];
     const field =
-      scope.kind === 'phone' ? 'phoneNumberId' : scope.kind === 'buc' ? 'wabaId' : scope.kind === 'page' ? 'pageId' : null;
+      scope.kind === 'phone'
+        ? 'phoneNumberId'
+        : scope.kind === 'buc'
+          ? 'wabaId'
+          : scope.kind === 'page'
+            ? 'pageId'
+            : scope.kind === 'iguser'
+              ? 'instagramUserId'
+              : null;
     if (!field) return [];
     const rows = await this.prisma.channel.findMany({
       where: { credentials: { path: [field], equals: scope.id } },

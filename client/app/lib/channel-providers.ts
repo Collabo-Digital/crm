@@ -127,6 +127,10 @@ export const CONNECT_ERROR_MESSAGES: Record<string, Record<string, string>> = {
       "No Facebook Page found. Instagram connects through a Page, so create one first.",
     no_instagram_account:
       "No Instagram Business account is linked to your Facebook Page. Switch the account to Business or Creator and link it to a Page.",
+    not_professional_account:
+      "Only Instagram Business or Creator accounts can be connected. Switch the account to a professional account in the Instagram app, then try again.",
+    scopes_declined:
+      "Instagram permissions were declined. Connect again and allow message and comment access.",
     already_connected: "That Instagram account is already connected here.",
     limit_reached: "This organization has reached its Instagram account limit.",
     account_taken:

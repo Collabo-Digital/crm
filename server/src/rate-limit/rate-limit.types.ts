@@ -26,7 +26,7 @@ export type RateLimitPlatform = 'shopify' | 'meta';
 /// bucket). Meta limits at the app level, per business use case (WhatsApp
 /// business account, Instagram messaging...), per phone number, per ad account
 /// and per page — and one request may draw from several at once.
-export type RateLimitScopeKind = 'bucket' | 'app' | 'buc' | 'phone' | 'adacct' | 'page';
+export type RateLimitScopeKind = 'bucket' | 'app' | 'buc' | 'phone' | 'adacct' | 'page' | 'iguser';
 
 /// The address of one wallet.
 export interface RateLimitScope {
