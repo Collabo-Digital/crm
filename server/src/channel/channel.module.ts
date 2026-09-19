@@ -5,7 +5,6 @@ import { ChannelController } from './channel.controller';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { ShopifyWebhookController } from './shopify-webhook.controller';
 import { InstagramOAuthService } from './instagram-oauth.service';
-import { InstagramWebhookController } from './instagram-webhook.controller';
 import { InstagramTokenScheduler } from './instagram-token.scheduler';
 import { WhatsAppOAuthService } from './whatsapp-oauth.service';
 import { WhatsAppMessagingService } from './whatsapp-messaging.service';
@@ -53,7 +52,7 @@ import { InvoiceModule } from '../invoice/invoice.module';
     // invoice module reaches back into channels.
     InvoiceModule,
   ],
-  controllers: [ChannelController, ShopifyWebhookController, InstagramWebhookController],
+  controllers: [ChannelController, ShopifyWebhookController],
   providers: [
     ChannelService, ShopifyOAuthService, InstagramOAuthService, InstagramTokenScheduler, WhatsAppOAuthService,
     WhatsAppMessagingService, WhatsAppMessagingProcessor, WhatsAppTriggerService,

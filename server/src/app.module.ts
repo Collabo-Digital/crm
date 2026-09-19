@@ -45,6 +45,7 @@ import { LoyaltyModule } from './loyalty/loyalty.module';
 import { AdminModule } from './admin/admin.module';
 import { BillingModule } from './billing/billing.module';
 import { InventoryModule } from './inventory/inventory.module';
+import { AutomationModule } from './automation/automation.module';
 
 @Module({
   imports: [
@@ -108,6 +109,7 @@ import { InventoryModule } from './inventory/inventory.module';
     AdminModule,
     BillingModule,
     InventoryModule,
+    AutomationModule,
   ],
   controllers: [AppController],
   providers: [
