@@ -6,13 +6,8 @@ import { ConfigService } from '@nestjs/config';
 import { ChannelPlatform } from '@prisma/client';
 import { Public } from '../../../auth/decorators/public.decorator';
 import { PrismaService } from '../../../prisma/prisma.service';
-// import { ContactService } from '../../messaging/contact.service';
-// import { MessageService } from '../../messaging/message.service';
-// import { AutomationEnqueuer } from '../../automation.enqueuer';
-import {
-    // InboundItem,
-    InstagramWebhookEntry, parseInstagramEntry
-} from './instagram-webhook.parser';
+import { InstagramIngestService } from './instagram-ingest.service';
+import { InstagramWebhookEntry, parseInstagramEntry } from './instagram-webhook.parser';
 
 @Controller('webhooks')
 export class InstagramWebhookController {
@@ -23,9 +18,7 @@ export class InstagramWebhookController {
     constructor(
         private readonly config: ConfigService,
         private readonly prisma: PrismaService,
-        // private readonly contacts: ContactService,
-        // private readonly messages: MessageService,
-        // private readonly enqueuer: AutomationEnqueuer,
+        private readonly ingest: InstagramIngestService,
     ) {
         this.secrets = [
             { label: 'INSTAGRAM_APP_SECRET', secret: this.config.get<string>('instagram.loginAppSecret') },
@@ -115,63 +108,17 @@ export class InstagramWebhookController {
         }
 
         const items = parseInstagramEntry(entry, channel);
+        const comments = items.filter((i) => i.kind === 'comment').length;
+        const dms = items.length - comments;
+        this.logger.log(
+            `Instagram webhook entry ${entry.id} → channel ${channel.id} (${channel.status}): ` +
+            `comment×${comments}, dm×${dms}`,
+        );
+
         for (const item of items) {
-            console.log(item);
-            // await this.ingestItem(channel, item);
+            await this.ingest.ingestItem(channel, item);
         }
     }
 
-    // private async ingestItem(
-    //     channel: { id: string; organizationId: string; externalStoreId: string | null },
-    //     item: InboundItem,
-    // ): Promise<void> {
-    //     const base = {
-    //         organizationId: channel.organizationId,
-    //         channelId: channel.id,
-    //         platform: ChannelPlatform.INSTAGRAM,
-    //     };
-
-    //     const contact = await this.contacts.upsertFromInbound(this.prisma, {
-    //         ...base,
-    //         actor: { externalId: item.actorExternalId, username: item.kind === 'comment' ? item.actorUsername : undefined },
-    //         kind: item.kind === 'comment' ? 'comment' : 'message',
-    //         at: item.occurredAt,
-    //     });
-
-    //     let messageId: string | undefined;
-    //     if (item.kind === 'dm') {
-    //         const stored = await this.messages.recordInbound({
-    //             ...base,
-    //             contactId: contact.id,
-    //             toAddress: channel.externalStoreId ?? '',
-    //             fromAddress: item.actorExternalId,
-    //             externalId: item.externalId,
-    //             text: item.text,
-    //             kind: item.attachments.length ? MessageKindFor(item.attachments[0].type) : undefined,
-    //             body: item.raw,
-    //             occurredAt: item.occurredAt,
-    //         });
-    //         if (!stored) return; // redelivery — the event job already exists too
-    //         messageId = stored.id;
-    //     }
-
-    //     await this.enqueuer.enqueueInboundEvent({
-    //         ...base,
-    //         eventType: item.kind === 'comment' ? 'instagram.comment' : 'instagram.message',
-    //         externalId: item.externalId,
-    //         occurredAt: item.occurredAt.toISOString(),
-    //         contactId: contact.id,
-    //         mediaExternalId: item.kind === 'comment' ? item.mediaExternalId : undefined,
-    //         messageId,
-    //         actorExternalId: item.actorExternalId,
-    //         actorUsername: item.kind === 'comment' ? item.actorUsername : undefined,
-    //         text: item.text,
-    //         payload: item.raw,
-    //     });
-    // }
 }
 
-/** Instagram attachment type → MessageKind. Keep it small; the schema only has IMAGE for media. */
-// function MessageKindFor(type?: string) {
-//     return type === 'image' ? ('IMAGE' as const) : ('TEXT' as const);
-// }
