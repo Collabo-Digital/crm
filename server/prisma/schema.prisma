@@ -14,9 +14,10 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  // App traffic goes through the Supabase pooler in transaction mode
-  // (port 6543, `?pgbouncer=true`). Prisma Migrate needs a session-mode
-  // connection (port 5432) for its advisory locks, hence directUrl.
+  // App traffic goes through the DigitalOcean connection pool (PgBouncer in
+  // transaction mode, port 25061, `?pgbouncer=true`). Prisma Migrate needs a
+  // real session for its advisory locks, so directUrl is the direct
+  // connection (port 25060). See server/.env.example for the exact shape.
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
