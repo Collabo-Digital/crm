@@ -4,10 +4,12 @@ import { InstagramIngestService } from './platforms/instagram/instagram-ingest.s
 import { ContactService } from './messaging/contact.service';
 import { MessageService } from './messaging/message.service';
 import { AutomationEventService } from './automation-event.service';
+import { AutomationController } from './automation.controller';
+import { AutomationService } from './automation.service';
 
 @Module({
-  controllers: [InstagramWebhookController],
-  providers: [ContactService, MessageService, AutomationEventService, InstagramIngestService],
-  exports: [ContactService, MessageService, AutomationEventService],
+  controllers: [InstagramWebhookController, AutomationController],
+  providers: [ContactService, MessageService, AutomationEventService, InstagramIngestService, AutomationService],
+  exports: [ContactService, MessageService, AutomationEventService, AutomationService],
 })
 export class AutomationModule { }
