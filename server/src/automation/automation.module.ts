@@ -6,10 +6,13 @@ import { MessageService } from './messaging/message.service';
 import { AutomationEventService } from './automation-event.service';
 import { AutomationController } from './automation.controller';
 import { AutomationService } from './automation.service';
+import { ChannelModule } from '../channel/channel.module';
+import { InstagramMediaService } from './platforms/instagram/instagram-media.service';
 
 @Module({
+  imports: [ChannelModule],
   controllers: [InstagramWebhookController, AutomationController],
-  providers: [ContactService, MessageService, AutomationEventService, InstagramIngestService, AutomationService],
-  exports: [ContactService, MessageService, AutomationEventService, AutomationService],
+  providers: [ContactService, MessageService, AutomationEventService, InstagramIngestService, AutomationService, InstagramMediaService],
+  exports: [ContactService, MessageService, AutomationEventService, AutomationService, InstagramMediaService],
 })
 export class AutomationModule { }

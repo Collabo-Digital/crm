@@ -9,11 +9,14 @@ import { OrgId } from '../auth/decorators/org-id.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { CHANNEL_MANAGERS, Roles } from '../auth/decorators/roles.decorator';
 import { AutomationService, type AutomationViewer } from './automation.service';
+import { InstagramMediaService } from './platforms/instagram/instagram-media.service';
 import { CreateAutomationDto } from './dto/create-automation.dto';
 import { DuplicateAutomationDto } from './dto/duplicate-automation.dto';
 import { QueryAutomationsDto } from './dto/query-automations.dto';
 import { SaveDefinitionDto } from './dto/save-definition.dto';
 import { UpdateAutomationDto } from './dto/update-automation.dto';
+import { QueryMediaDto } from './dto/query-media.dto';
+import { SyncMediaDto } from './dto/sync-media.dto';
 
 /**
  * Every route declares explicit @Roles (RolesGuard is allow-by-default),
@@ -31,7 +34,7 @@ function viewerOf(user: JwtPayload): AutomationViewer {
 
 @Controller('automations')
 export class AutomationController {
-    constructor(private readonly automations: AutomationService) { }
+    constructor(private readonly automations: AutomationService, private readonly media: InstagramMediaService,) { }
 
     // GET /automations — list page
     @Get()
@@ -51,8 +54,25 @@ export class AutomationController {
         return this.automations.create(orgId, viewerOf(user), dto);
     }
 
-    // NOTE: static segments must be declared before ':id' routes.
-    // GET /automations/media is added with the post-picker step.
+    // GET /automations/media?channelId= — the trigger step's post picker.
+    // Refreshes the cache inline when it is older than 30 minutes or ?refresh=1.
+    @Get('media')
+    @Roles(...READERS)
+    @AllowInfluencer()
+    @RequirePermissions('campaigns.view')
+    listMedia(@OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Query() query: QueryMediaDto) {
+        return this.media.list(query.channelId, orgId, viewerOf(user), query);
+    }
+
+    // POST /automations/media/sync — "Refresh posts" button.
+    @Post('media/sync')
+    @HttpCode(200)
+    @Roles(...EDITORS)
+    @AllowInfluencer()
+    @RequirePermissions('campaigns.manage')
+    syncMedia(@OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: SyncMediaDto) {
+        return this.media.refresh(dto.channelId, orgId, viewerOf(user));
+    }
 
     // GET /automations/:id — editor load
     @Get(':id')
