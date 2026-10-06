@@ -34,9 +34,13 @@ export const SALES_FINANCIAL_STATUSES: OrderFinancialStatus[] = [
  * carried an `externalCreatedAt || createdAt` fallback which could never fire.
  *
  * `to` is EXCLUSIVE so two adjacent buckets can't both claim a boundary row.
+ * Either bound may be omitted (an export with only a `dateTo`); the dashboard
+ * always passes `from`.
  */
-export function placedBetween(from: Date, to?: Date): Prisma.OrderWhereInput {
-  const range: Prisma.DateTimeFilter = { gte: from, ...(to && { lt: to }) };
+export function placedBetween(from?: Date, to?: Date): Prisma.OrderWhereInput {
+  // No bounds is no window, not an OR that happens to match every row.
+  if (!from && !to) return {};
+  const range: Prisma.DateTimeFilter = { ...(from && { gte: from }), ...(to && { lt: to }) };
   return {
     OR: [
       { externalCreatedAt: range },

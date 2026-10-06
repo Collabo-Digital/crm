@@ -249,7 +249,10 @@ export class DashboardService {
         lineItems: { select: { title: true, quantity: true, price: true } },
         channel: { select: { name: true } },
       },
-      orderBy: { externalCreatedAt: 'desc' },
+      // NULLs last: Postgres puts them first in DESC, and `placedBetween`
+      // admits undated orders, so they would otherwise head a "newest first"
+      // file and take cap slots from the orders that are newest.
+      orderBy: [{ externalCreatedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
       // Bounded: the file is built in memory. Same cap as the Orders export.
       take: REPORT_ROW_CAP,
     });

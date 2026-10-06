@@ -21,6 +21,10 @@ import type {
   ManualSyncResponse,
 } from "~/types/api";
 
+// A file download outlasts a page request; the 30 s default cut large
+// exports off. Same allowance as the dashboard exports.
+const EXPORT_TIMEOUT_MS = 120_000;
+
 /**
  * Service layer for order API endpoints.
  *
@@ -147,17 +151,24 @@ export const orderService = {
       .then((response) => response.data),
 
   /**
-   * Export the order list as CSV. Takes the SAME params as `list`, so whatever
-   * the page is currently filtered to is what gets exported.
+   * Export orders as a JSON report: `generatedAt`, `filters`, `totalOrders`,
+   * the rows, and a `truncated` note when the server's row cap was hit.
+   *
+   * Typed to the filters the export route actually applies. It takes the
+   * list DTO, but ignores `search`, `page` and `limit`, so accepting
+   * `OrderListParams` here let the page send a search it could not honour.
    */
-  exportCsv: (params?: OrderListParams) =>
+  exportJson: (params?: OrderExportParams) =>
     apiClient
-      // A file download outlasts a page request; the 30 s default cut large
-      // exports off. Same allowance as the dashboard exports.
-      .get<Blob>("/orders/export/csv", { params, responseType: "blob", timeout: 120_000 })
+      .get<Blob>("/orders/export/json", { params, responseType: "blob", timeout: EXPORT_TIMEOUT_MS })
       .then((response) => {
         // The server caps the file; say so when it held back older orders.
         warnIfExportCutOff(response.headers);
         return response.data;
       }),
 };
+
+export type OrderExportParams = Pick<
+  OrderListParams,
+  "financialStatus" | "fulfillmentStatus" | "channelId" | "dateFrom" | "dateTo"
+>;

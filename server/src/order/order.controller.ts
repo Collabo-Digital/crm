@@ -70,6 +70,8 @@ export class OrderController {
   }
 
   // GET /api/v1/orders/export/csv
+  // Not called by the app since the Orders page moved to the JSON export
+  // (2026-10-06). Kept for API consumers; the page's CSV is the dashboard's.
   @Get('export/csv')
   async exportCsv(
     @CurrentUser() user: JwtPayload,

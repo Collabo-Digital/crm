@@ -63,6 +63,7 @@ import {
   uniqueViolationTargets,
 } from '../common/utils/serialization-retry.util';
 import { mergeJsonMetadata } from '../common/utils/jsonb-merge.util';
+import { placedBetween } from '../common/utils/order-window.util';
 import { countryCodeOf, phoneLookupVariants } from '../common/phone.util';
 import { defaultCountryFor, toShopifyAddress } from '../channel/shopify-address.util';
 import { normalizeTrackingUrl } from './tracking-url.util';
@@ -952,11 +953,22 @@ export class OrderService {
       ...(query.financialStatus && { financialStatus: query.financialStatus }),
       ...(query.fulfillmentStatus && { fulfillmentStatus: query.fulfillmentStatus }),
       ...(query.channelId && { channelId: query.channelId }),
+      // The same "when the sale happened" test as the dashboard's report
+      // (`externalCreatedAt`, else `createdAt`). A bare `externalCreatedAt`
+      // filter here put a NULL-dated order in one of the Orders page's two
+      // files and not the other for the same range.
+      //
+      // Under AND, not spread: `placedBetween` is an OR, and `findAll` writes
+      // its search as `where.OR = [...]`. Copy that in here and a spread
+      // window would be overwritten without a type error — an all-time file
+      // that says it covers a range.
       ...((query.dateFrom || query.dateTo) && {
-        externalCreatedAt: {
-          ...(query.dateFrom && { gte: zonedDayStart(query.dateFrom, timeZone) }),
-          ...(query.dateTo && { lt: zonedDayEndExclusive(query.dateTo, timeZone) }),
-        },
+        AND: [
+          placedBetween(
+            query.dateFrom ? zonedDayStart(query.dateFrom, timeZone) : undefined,
+            query.dateTo ? zonedDayEndExclusive(query.dateTo, timeZone) : undefined,
+          ),
+        ],
       }),
     };
 
@@ -967,7 +979,10 @@ export class OrderService {
         lineItems: { select: { title: true, quantity: true, price: true } },
         channel: { select: { name: true } },
       },
-      orderBy: { externalCreatedAt: 'desc' },
+      // Postgres sorts NULL first in DESC, so without `nulls: 'last'` every
+      // undated (legacy CRM) order sat at the top and, on a capped file,
+      // took slots the "newest first" note promised to the newest orders.
+      orderBy: [{ externalCreatedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
       // Bounded: the export builds the whole CSV/JSON in memory, so an
       // unlimited query on a large tenant could OOM the process for everyone.
       take: ORDER_EXPORT_ROW_CAP,
@@ -981,26 +996,26 @@ export class OrderService {
         ? orders.length
         : await this.prisma.order.count({ where });
 
-    const rows = orders.map((o) => ({
-      orderNumber: o.orderNumber,
-      name: o.name,
-      date: (o.externalCreatedAt || o.createdAt).toISOString(),
-      customer: o.customer ? `${o.customer.firstName || ''} ${o.customer.lastName || ''}`.trim() : 'Guest',
-      email: o.customer?.email || '',
-      channel: o.channel?.name || '',
-      items: o.lineItems.map((li) => `${li.title} x${li.quantity}`).join('; '),
-      itemCount: o.lineItems.length,
-      subtotal: o.subtotalPrice.toString(),
-      tax: o.totalTax.toString(),
-      shipping: o.totalShippingPrice.toString(),
-      discounts: o.totalDiscounts.toString(),
-      total: o.totalPrice.toString(),
-      currency: o.currency,
-      financialStatus: o.financialStatus,
-      fulfillmentStatus: o.fulfillmentStatus,
+    const exportRows = orders.map((order) => ({
+      orderNumber: order.orderNumber,
+      name: order.name,
+      date: (order.externalCreatedAt || order.createdAt).toISOString(),
+      customer: order.customer ? `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() : 'Guest',
+      email: order.customer?.email || '',
+      channel: order.channel?.name || '',
+      items: order.lineItems.map((lineItem) => `${lineItem.title} x${lineItem.quantity}`).join('; '),
+      itemCount: order.lineItems.length,
+      subtotal: order.subtotalPrice.toString(),
+      tax: order.totalTax.toString(),
+      shipping: order.totalShippingPrice.toString(),
+      discounts: order.totalDiscounts.toString(),
+      total: order.totalPrice.toString(),
+      currency: order.currency,
+      financialStatus: order.financialStatus,
+      fulfillmentStatus: order.fulfillmentStatus,
     }));
 
-    return { orders: rows, total };
+    return { orders: exportRows, total };
   }
 
   generateCsv(data: any[]): string {

@@ -29,6 +29,7 @@ import { useExclusiveDownload } from "~/hooks/use-exclusive-download";
 import { calendarDaysAgo, reportingTimeZone } from "~/lib/reporting-date";
 import { useOrders, useOrderStats } from "~/hooks/use-order-queries";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import { orderService } from "~/services/order.service";
 import { dashboardService } from "~/services/dashboard.service";
 import type { OrderListParams, DashboardQueryParams, OrderStatsResponse } from "~/types/api";
@@ -98,7 +99,11 @@ export default function OrdersPage() {
   const { data, isLoading, isError, refetch } = useOrders(params);
   const { data: stats, isLoading: statsLoading } = useOrderStats(statsParams);
   // One download at a time across both header buttons.
-  const { running: downloading, run: download } = useExclusiveDownload<"report" | "csv">();
+  const { running: activeDownload, run: startDownload } = useExclusiveDownload<"report" | "json">();
+  // Neither export route is open to vendors: the export query has no vendor
+  // scope, so opening it would hand one vendor every other vendor's orders.
+  // The buttons go rather than fail with a "try again" that never would.
+  const { isVendor } = useCurrentRole();
   const orders = data?.data ?? [];
   const meta = data?.meta;
   const totalPages = meta?.totalPages ?? 1;
@@ -168,54 +173,55 @@ export default function OrdersPage() {
               <SelectItem value="90d">Last 90 Days</SelectItem>
             </SelectContent>
           </Select>
-          {/* Exports exactly what the page is showing: `params` carries the
-              active search and date range, and the server's export route takes
-              the same DTO as the list. This button had no onClick at all. */}
-
-          {/* The dashboard's summary report. This used to call
-              `invoiceService.exportCsv` and save `gst-invoices-*.csv` — a
-              copy-paste from the invoices page that also ignored the search box
-              and forced `dateTo` to today. */}
-          {/* Both lock while either runs; the clicked one shows progress until
-              its file arrives or fails — same as the dashboard's pair. */}
-          <Button
-            variant="brand"
-            size="action"
-            disabled={downloading !== null}
-            aria-busy={downloading === "report"}
-            onClick={() => download(
-              "report",
-              () => dashboardService.exportCsv(statsParams),
-              `orders-report-${dateRange}.csv`,
-              "Couldn't download the report. Please try again.",
-            )}
-          >
-            {downloading === "report" ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Download className="size-3.5" />
-            )}
-            {downloading === "report" ? "Preparing…" : "Download Report"}
-          </Button>
-          <Button
-            variant="outline"
-            size="action"
-            disabled={downloading !== null}
-            aria-busy={downloading === "csv"}
-            onClick={() => download(
-              "csv",
-              () => orderService.exportCsv(params),
-              `orders-${dateRange}.csv`,
-              "Couldn't export the orders. Please try again.",
-            )}
-          >
-            {downloading === "csv" ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Upload className="size-3.5" />
-            )}
-            {downloading === "csv" ? "Exporting…" : "Export CSV"}
-          </Button>
+          {/* "Download Report" is the dashboard's order CSV for the chosen
+              date range. "Export JSON" is the same orders as a JSON file via
+              the orders export route. Both take the date range only — the
+              search box is deliberately not applied, and only `dateFrom` is
+              sent so the request does not claim a filter the file lacks.
+              Both lock while either runs; the clicked one shows progress
+              until its file arrives or fails. */}
+          {!isVendor && (
+            <>
+              <Button
+                variant="brand"
+                size="action"
+                disabled={activeDownload !== null}
+                aria-busy={activeDownload === "report"}
+                onClick={() => startDownload(
+                  "report",
+                  () => dashboardService.exportCsv(statsParams),
+                  `orders-report-${dateRange}.csv`,
+                  "Couldn't download the report. Please try again.",
+                )}
+              >
+                {activeDownload === "report" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Download className="size-3.5" />
+                )}
+                {activeDownload === "report" ? "Preparing…" : "Download Report"}
+              </Button>
+              <Button
+                variant="outline"
+                size="action"
+                disabled={activeDownload !== null}
+                aria-busy={activeDownload === "json"}
+                onClick={() => startDownload(
+                  "json",
+                  () => orderService.exportJson({ dateFrom }),
+                  `orders-${dateRange}.json`,
+                  "Couldn't export the orders. Please try again.",
+                )}
+              >
+                {activeDownload === "json" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Upload className="size-3.5" />
+                )}
+                {activeDownload === "json" ? "Exporting…" : "Export JSON"}
+              </Button>
+            </>
+          )}
           <Button asChild variant="brand" size="action">
             <Link to="/orders/new">
               <Plus className="size-3.5" />

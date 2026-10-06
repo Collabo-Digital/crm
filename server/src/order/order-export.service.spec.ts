@@ -46,6 +46,39 @@ describe('OrderService.getExportData', () => {
     );
   });
 
+  it('dates an order by externalCreatedAt, else createdAt, like the dashboard report', async () => {
+    const { service, prisma } = build({ rows: 1 });
+
+    await service.getExportData(ORG, { dateFrom: '2026-09-01', dateTo: '2026-09-30' } as any);
+
+    // A bare `externalCreatedAt` filter dropped CRM-native orders (NULL there)
+    // that the dashboard's file for the same range included.
+    const where = prisma.order.findMany.mock.calls[0][0].where;
+    expect(where.externalCreatedAt).toBeUndefined();
+    // Under AND so a later `where.OR = search` cannot overwrite the window.
+    expect(where.OR).toBeUndefined();
+    const [dateWindow] = where.AND;
+    expect(dateWindow.OR).toEqual([
+      { externalCreatedAt: { gte: expect.any(Date), lt: expect.any(Date) } },
+      { externalCreatedAt: null, createdAt: { gte: expect.any(Date), lt: expect.any(Date) } },
+    ]);
+    // One window for both branches, so a row cannot be in-range by one date
+    // and out by the other.
+    expect(dateWindow.OR[1].createdAt).toEqual(dateWindow.OR[0].externalCreatedAt);
+    expect(dateWindow.OR[0].externalCreatedAt.gte < dateWindow.OR[0].externalCreatedAt.lt).toBe(true);
+  });
+
+  it('puts undated orders last so a capped file really holds the newest', async () => {
+    const { service, prisma } = build({ rows: 1 });
+
+    await service.getExportData(ORG, {} as any);
+
+    expect(prisma.order.findMany.mock.calls[0][0].orderBy).toEqual([
+      { externalCreatedAt: { sort: 'desc', nulls: 'last' } },
+      { createdAt: 'desc' },
+    ]);
+  });
+
   it('does not run the extra count for a file that fits under the cap', async () => {
     const { service, prisma } = build({ rows: 12 });
 
