@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import {
   Grid3x3,
   Pencil,
@@ -332,7 +333,28 @@ function WarehouseRow({
           <div className="flex size-7 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-800">
             <WarehouseIcon className="size-3.5 text-gray-400" />
           </div>
-          <span className="font-medium text-gray-900 dark:text-gray-100">{w.name}</span>
+          {/* The name opens the Stock tab at this location: `useSelectedLocation`
+              reads `?warehouseId` ahead of the saved choice. The Stock tab
+              lists active locations only, so an inactive one stays plain
+              text — its link would silently land on the default instead. */}
+          {w.isActive ? (
+            <Link
+              to={`/products/inventory?warehouseId=${encodeURIComponent(w.id)}`}
+              title={`View stock at ${w.name}`}
+              // Dotted at rest, like the "Stock · all locations" header on the
+              // products table, so the name reads as a link before hover.
+              className="font-medium text-gray-900 underline decoration-dotted underline-offset-4 hover:decoration-solid dark:text-gray-100"
+            >
+              {w.name}
+            </Link>
+          ) : (
+            <span
+              title="Inactive — the Stock tab shows active locations only"
+              className="font-medium text-gray-900 dark:text-gray-100"
+            >
+              {w.name}
+            </span>
+          )}
           {w.isDefault && (
             <span className="inline-flex items-center gap-1 rounded-full bg-[#CEF17B] px-2 py-0.5 text-[10px] font-semibold text-gray-900">
               <Star className="size-2.5" /> Default
