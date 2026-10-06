@@ -118,6 +118,10 @@ export function OrdersTable({ orders, currency, showCustomerName = false, onView
   // Mirrors ORG_OPERATORS — the tier the sync route admits. A Viewer or a
   // Vendor gets no button rather than a "Failed to sync" toast.
   const canOperate = canManage || role === "AGENT";
+  // The vendor projection of the list carries neither `channel` nor the push
+  // record, and a vendor cannot sync anyway, so the column would only ever
+  // read "Unknown" for them. It is not rendered at all.
+  const showShopifyColumn = role !== "VENDOR";
   const navigate = useNavigate();
 
   const selectable = Boolean(selectedIds && onToggleRow);
@@ -226,21 +230,27 @@ export function OrdersTable({ orders, currency, showCustomerName = false, onView
               Shopify one so a Collabo-created order can be pushed from the
               list without opening it. */}
           <TableHead>Fulfillment</TableHead>
-          <TableHead>
-            <span className="inline-flex items-center gap-1.5">
-              <ShopifyIcon width={14} height={14} />
-              Shopify
-            </span>
-          </TableHead>
+          {showShopifyColumn && (
+            <TableHead>
+              <span className="inline-flex items-center gap-1.5">
+                <ShopifyIcon width={14} height={14} />
+                Shopify
+              </span>
+            </TableHead>
+          )}
           <TableHead className="text-right">Action</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {orders.map((order) => {
           // Once per row: the Shopify cell and the row's button both read it,
-          // so they cannot disagree.
-          const syncSummary = describeOrderShopifySync(order);
-          const shopifyOrderName = orderShopifySyncOf(order)?.shopifyOrderName;
+          // so they cannot disagree. Not computed at all for a vendor, whose
+          // rows carry no channel and who gets neither the column nor the
+          // button.
+          const syncSummary = showShopifyColumn ? describeOrderShopifySync(order) : null;
+          const shopifyOrderName = showShopifyColumn
+            ? orderShopifySyncOf(order)?.shopifyOrderName
+            : undefined;
           return (
           <TableRow
             key={order.id}
@@ -300,15 +310,17 @@ export function OrdersTable({ orders, currency, showCustomerName = false, onView
                 {FULFILLMENT_LABELS[order.fulfillmentStatus]}
               </span>
             </TableCell>
-            <TableCell>
-              <ShopifySyncCell
-                summary={syncSummary}
-                title={shopifyOrderName ? `Shopify order ${shopifyOrderName}` : undefined}
-              />
-            </TableCell>
+            {syncSummary && (
+              <TableCell>
+                <ShopifySyncCell
+                  summary={syncSummary}
+                  title={shopifyOrderName ? `Shopify order ${shopifyOrderName}` : undefined}
+                />
+              </TableCell>
+            )}
             <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
               <div className="inline-flex items-center justify-end gap-1">
-              {canOperate && syncSummary.action !== null && (
+              {canOperate && syncSummary?.action != null && (
                 <OrderRowSyncButton order={order} action={syncSummary.action} />
               )}
               <DropdownMenu>

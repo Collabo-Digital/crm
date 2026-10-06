@@ -38,10 +38,11 @@ import {
 } from "~/hooks/use-order-mutations";
 import { formatCurrency } from "~/lib/utils";
 import { useCurrentRole } from "~/hooks/use-current-role";
-import type { OrderDetail, OrderCancelReason, OrderShopifySync } from "~/types/api";
+import type { OrderDetail, OrderCancelReason } from "~/types/api";
 import {
   canRetryShopifySync,
   describeOrderShopifySync,
+  orderShopifySyncOf,
   shopifySyncActionLabel,
 } from "~/lib/shopify-sync";
 import { hasOutstandingUnits } from "~/lib/order-status";
@@ -145,9 +146,8 @@ export function useOrderActionGates(order: OrderDetail | undefined) {
   // is old enough that the job has clearly been lost (see lib/shopify-sync).
   // POST /orders/:id/sync is ORG_OPERATORS; without the role gate a Viewer
   // was shown a button that could only 403.
-  const syncMeta = (order?.metadata as { shopifySync?: OrderShopifySync } | undefined)
-    ?.shopifySync;
-  const canSyncToShopify = canOperate && isManual && canRetryShopifySync(syncMeta);
+  const canSyncToShopify =
+    !!order && canOperate && isManual && canRetryShopifySync(orderShopifySyncOf(order));
 
   return {
     canManage,
@@ -203,9 +203,7 @@ export function OrderSyncButton({ order }: { order: OrderDetail }) {
         type="button"
         variant="brand"
         size="sm"
-        title={shopifySyncActionLabel(
-          (order.metadata as { shopifySync?: OrderShopifySync } | undefined)?.shopifySync,
-        )}
+        title={shopifySyncActionLabel(orderShopifySyncOf(order))}
         disabled={syncMutation.isPending}
         onClick={() => syncMutation.mutate()}
       >

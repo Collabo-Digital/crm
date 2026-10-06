@@ -329,7 +329,9 @@ export default function OrdersPage() {
           </div>
         ) : isLoading ? (
           <div className="p-4">
-            <TableSkeleton rows={PAGE_SIZE} columns={7} />
+            {/* Checkbox, Order, Items, Customer, Date, Amount, Fulfillment,
+                Shopify, Action — the Shopify column is not drawn for a vendor. */}
+            <TableSkeleton rows={PAGE_SIZE} columns={isVendor ? 8 : 9} />
           </div>
         ) : orders.length === 0 ? (
           <div className="p-8">

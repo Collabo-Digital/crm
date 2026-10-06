@@ -65,10 +65,10 @@ export interface ShopifySyncSummary<A extends string> {
 
 export type OrderSyncAction = "sync" | "retry";
 
-/** The part of the order's push record the table reads. */
-type OrderShopifySyncRecord = Pick<
+/** The part of the order's push record the pages read. */
+export type OrderShopifySyncRecord = Pick<
   OrderShopifySync,
-  "status" | "shopifyOrderName" | "error" | "syncedAt" | "queuedAt"
+  "status" | "shopifyOrderId" | "shopifyOrderName" | "error" | "syncedAt" | "queuedAt"
 >;
 
 type OrderSyncSource = {

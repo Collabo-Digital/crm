@@ -52,8 +52,8 @@ import type {
   CustomerDetail,
   OrderDetail,
   OrderFulfillment,
-  OrderShopifySync,
 } from "~/types/api";
+import { orderShopifySyncOf } from "~/lib/shopify-sync";
 
 export function meta() {
   return [{ title: "Order Detail | Collabo CRM" }];
@@ -136,7 +136,8 @@ function OwnerOrderDetail({ id }: { id: string }) {
   const metadata = (order.metadata ?? {}) as Record<string, unknown>;
   const paymentMethod = typeof metadata.paymentMethod === "string" ? metadata.paymentMethod : null;
   const source = typeof metadata.source === "string" ? metadata.source : null;
-  const shopifySync = (metadata.shopifySync ?? null) as OrderShopifySync | null;
+  // Through the one reader every page uses, not a cast on the blob.
+  const shopifySync = orderShopifySyncOf(order) ?? null;
 
   // `findOne` returns the raw row, so `createdAt` is the local insert time.
   // The list endpoint shows `externalCreatedAt` — match it or the two pages
