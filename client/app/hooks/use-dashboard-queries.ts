@@ -53,30 +53,35 @@ export function useSalesByCategory(params?: DashboardQueryParams) {
   });
 }
 
-export type DashboardExportKind = "csv" | "json";
+export type DashboardExportKind = "report" | "json";
 
 /**
- * Dashboard downloads (CSV / JSON), one at a time — `exporting` names the one
- * in flight. The lock itself lives in `useExclusiveDownload`.
+ * Dashboard downloads, one at a time — `exporting` names the one in flight.
+ * The lock itself lives in `useExclusiveDownload`.
+ *
+ * "Download Report" is the CSV, "Export JSON" the JSON — the same pairing as
+ * the Orders page, so the brand button means the same file on both.
  */
 export function useExportDashboard() {
   const { running: exporting, run } = useExclusiveDownload<DashboardExportKind>();
 
-  const exportCsv = (params?: DashboardQueryParams) =>
+  // The range is in the name, as on the Orders page: a 7-day file and a
+  // 12-month file used to both land as `dashboard-report.csv`.
+  const downloadReport = (params?: DashboardQueryParams) =>
     run(
-      "csv",
+      "report",
       () => dashboardService.exportCsv(params),
-      "orders-report.csv",
-      "Couldn't export the CSV. Please try again.",
+      `dashboard-report-${params?.range ?? "all"}.csv`,
+      "Couldn't download the report. Please try again.",
     );
 
   const exportJson = (params?: DashboardQueryParams) =>
     run(
       "json",
       () => dashboardService.exportJson(params),
-      "dashboard-report.json",
-      "Couldn't download the report. Please try again.",
+      `dashboard-export-${params?.range ?? "all"}.json`,
+      "Couldn't export the JSON. Please try again.",
     );
 
-  return { exportCsv, exportJson, exporting };
+  return { downloadReport, exportJson, exporting };
 }

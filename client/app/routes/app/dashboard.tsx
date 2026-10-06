@@ -90,7 +90,7 @@ export default function DashboardPage() {
     isLoading,
     isPlaceholderData: overviewStale,
   } = useDashboard(params);
-  const { exportCsv, exportJson, exporting } = useExportDashboard();
+  const { downloadReport, exportJson, exporting } = useExportDashboard();
   const { data: org } = useCurrentOrg();
   // Same params as the chart below, so React Query serves both from one
   // request and the cards cannot disagree with the bars.
@@ -135,20 +135,6 @@ export default function DashboardPage() {
             <Button
               size="action"
               variant="outline"
-              onClick={() => exportCsv(params)}
-              disabled={exporting !== null}
-              aria-busy={exporting === "csv"}
-            >
-              {exporting === "csv" ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Upload className="size-3.5" />
-              )}
-              {exporting === "csv" ? "Exporting…" : "Export CSV"}
-            </Button>
-            <Button
-              variant="brand"
-              size="action"
               onClick={() => exportJson(params)}
               disabled={exporting !== null}
               aria-busy={exporting === "json"}
@@ -156,9 +142,23 @@ export default function DashboardPage() {
               {exporting === "json" ? (
                 <Loader2 className="size-3.5 animate-spin" />
               ) : (
+                <Upload className="size-3.5" />
+              )}
+              {exporting === "json" ? "Exporting…" : "Export JSON"}
+            </Button>
+            <Button
+              variant="brand"
+              size="action"
+              onClick={() => downloadReport(params)}
+              disabled={exporting !== null}
+              aria-busy={exporting === "report"}
+            >
+              {exporting === "report" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
                 <Download className="size-3.5" />
               )}
-              {exporting === "json" ? "Preparing…" : "Download Report"}
+              {exporting === "report" ? "Preparing…" : "Download Report"}
             </Button>
           </PageHeaderActions>
         </PageHeader>

@@ -49,7 +49,8 @@ export class DashboardController {
 
     this.setExportCounts(res, orders.length, total);
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename=orders-report.csv');
+    // Same name the page saves under, for anyone calling the route directly.
+    res.setHeader('Content-Disposition', 'attachment; filename=dashboard-report.csv');
     res.send(csv);
   }
 
@@ -60,8 +61,11 @@ export class DashboardController {
     @Query() query: QueryDashboardDto,
     @Res() res: Response,
   ) {
-    const overview = await this.dashboardService.getOverview(user.orgId!, query);
-    const { orders, period, total } = await this.dashboardService.getReportData(user.orgId!, query);
+    // Independent reads, so the file takes as long as the slower one, not both.
+    const [overview, { orders, period, total }] = await Promise.all([
+      this.dashboardService.getOverview(user.orgId!, query),
+      this.dashboardService.getReportData(user.orgId!, query),
+    ]);
 
     const report = {
       generatedAt: new Date().toISOString(),
@@ -84,7 +88,7 @@ export class DashboardController {
 
     this.setExportCounts(res, orders.length, total);
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', 'attachment; filename=dashboard-report.json');
+    res.setHeader('Content-Disposition', 'attachment; filename=dashboard-export.json');
     res.send(JSON.stringify(report, null, 2));
   }
 
