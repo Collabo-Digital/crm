@@ -435,6 +435,27 @@ describe('DashboardService.getReportData', () => {
     totalPrice: 1, currency: 'INR', financialStatus: 'PAID', fulfillmentStatus: 'UNFULFILLED',
   });
 
+  it('builds the JSON export over one window, resolved once', async () => {
+    const { service, findMany } = buildReport();
+    const overviewSpy = jest
+      .spyOn(service, 'getOverview')
+      .mockResolvedValue({ totalSales: 0, totalOrders: 0, totalCustomers: 0, totalProducts: 0 } as any);
+    const organizationLookup = (service as any).prisma.organization.findUnique as jest.Mock;
+
+    const { period } = await service.getExportReport(ORG, { range: '7d' });
+
+    // Each method resolving its own window would end at its own `new Date()`
+    // and hit the organisation table once each.
+    expect(organizationLookup).toHaveBeenCalledTimes(1);
+    const windowGivenToOverview = overviewSpy.mock.calls[0][2];
+    expect(windowGivenToOverview).toBeDefined();
+    expect(period).toEqual({
+      from: windowGivenToOverview!.from.toISOString(),
+      to: windowGivenToOverview!.to.toISOString(),
+    });
+    expect(findMany).toHaveBeenCalledTimes(1);
+  });
+
   it('exports only the period the dashboard is showing', async () => {
     const { service, findMany } = buildReport();
     const { period } = await service.getReportData(ORG, { range: '7d' });

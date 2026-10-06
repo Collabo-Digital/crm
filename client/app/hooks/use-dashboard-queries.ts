@@ -65,13 +65,13 @@ export type DashboardExportKind = "report" | "json";
 export function useExportDashboard() {
   const { running: exporting, run } = useExclusiveDownload<DashboardExportKind>();
 
-  // The range is in the name, as on the Orders page: a 7-day file and a
+  // The window is in the name, as on the Orders page: a 7-day file and a
   // 12-month file used to both land as `dashboard-report.csv`.
   const downloadReport = (params?: DashboardQueryParams) =>
     run(
       "report",
       () => dashboardService.exportCsv(params),
-      `dashboard-report-${params?.range ?? "all"}.csv`,
+      `dashboard-report-${exportWindowLabel(params)}.csv`,
       "Couldn't download the report. Please try again.",
     );
 
@@ -79,9 +79,22 @@ export function useExportDashboard() {
     run(
       "json",
       () => dashboardService.exportJson(params),
-      `dashboard-export-${params?.range ?? "all"}.json`,
+      `dashboard-export-${exportWindowLabel(params)}.json`,
       "Couldn't export the JSON. Please try again.",
     );
 
   return { downloadReport, exportJson, exporting };
+}
+
+/**
+ * The part of the file name that says which period it covers. The page
+ * always sends a range; explicit dates are named by their dates so a bounded
+ * request can never save as `-all`.
+ */
+function exportWindowLabel(params?: DashboardQueryParams): string {
+  if (params?.range) return params.range;
+  if (params?.dateFrom || params?.dateTo) {
+    return `${params.dateFrom ?? "start"}-to-${params.dateTo ?? "today"}`;
+  }
+  return "all";
 }

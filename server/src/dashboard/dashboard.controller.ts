@@ -61,13 +61,12 @@ export class DashboardController {
     @Query() query: QueryDashboardDto,
     @Res() res: Response,
   ) {
-    // Independent reads, so the file takes as long as the slower one, not both.
-    const [overview, { orders, period, total }] = await Promise.all([
-      this.dashboardService.getOverview(user.orgId!, query),
-      this.dashboardService.getReportData(user.orgId!, query),
-    ]);
+    const { overview, orders, period, total } = await this.dashboardService.getExportReport(
+      user.orgId!,
+      query,
+    );
 
-    const report = {
+    const exportReport = {
       generatedAt: new Date().toISOString(),
       // The period the rows below actually cover — it used to print "all"
       // above a summary computed over the selected range.
@@ -75,7 +74,10 @@ export class DashboardController {
       summary: {
         totalSales: overview.totalSales,
         totalOrders: overview.totalOrders,
-        totalCustomers: overview.totalCustomers,
+        // Customers first seen inside the window — the "New Customers" card.
+        // As `totalCustomers` it read as a contradiction beside a row whose
+        // customer was not new.
+        newCustomers: overview.totalCustomers,
         totalProducts: overview.totalProducts,
       },
       // Said in the file too, so it still reads correctly once it has left
@@ -89,7 +91,7 @@ export class DashboardController {
     this.setExportCounts(res, orders.length, total);
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', 'attachment; filename=dashboard-export.json');
-    res.send(JSON.stringify(report, null, 2));
+    res.send(JSON.stringify(exportReport, null, 2));
   }
 
   /** Lets the page tell the user when the file holds fewer orders than matched. */

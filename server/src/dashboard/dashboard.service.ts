@@ -57,8 +57,14 @@ export interface SalesProfitPoint extends ProfitBucket {
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) { }
 
-  async getOverview(orgId: string, query: QueryDashboardDto) {
-    const window = await this.resolveWindow(orgId, query);
+  /**
+   * `sharedWindow` lets one caller (the JSON export) compute this and the
+   * row report over the SAME window. Resolved separately, each ends at its
+   * own `new Date()`, and an order placed between the two is in one and not
+   * the other.
+   */
+  async getOverview(orgId: string, query: QueryDashboardDto, sharedWindow?: Window) {
+    const window = sharedWindow ?? (await this.resolveWindow(orgId, query));
 
     const orderWhere: Prisma.OrderWhereInput = {
       organizationId: orgId,
@@ -231,9 +237,9 @@ export class DashboardService {
    * "Failed to export". A request with neither a range nor dates is the Orders
    * page's "All time" export and stays unbounded — but never uncapped.
    */
-  async getReportData(orgId: string, query: QueryDashboardDto) {
+  async getReportData(orgId: string, query: QueryDashboardDto, sharedWindow?: Window) {
     const bounded = Boolean(query.range || query.dateFrom || query.dateTo);
-    const window = bounded ? await this.resolveWindow(orgId, query) : null;
+    const window = bounded ? (sharedWindow ?? (await this.resolveWindow(orgId, query))) : null;
 
     const where: Prisma.OrderWhereInput = {
       organizationId: orgId,
@@ -272,6 +278,20 @@ export class DashboardService {
       orders: this.toReportRows(orders),
       total,
     };
+  }
+
+  /**
+   * The JSON export: the overview summary and the order rows over ONE window,
+   * resolved once. The two reads run in parallel; the file takes as long as
+   * the slower one, and neither can include an order the other missed.
+   */
+  async getExportReport(orgId: string, query: QueryDashboardDto) {
+    const sharedWindow = await this.resolveWindow(orgId, query);
+    const [overview, rowReport] = await Promise.all([
+      this.getOverview(orgId, query, sharedWindow),
+      this.getReportData(orgId, query, sharedWindow),
+    ]);
+    return { overview, ...rowReport };
   }
 
   private toReportRows(
