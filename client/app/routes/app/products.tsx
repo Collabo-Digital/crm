@@ -7,7 +7,7 @@ import { isString,
 import { Link, useNavigate } from "react-router";
 import {
   Search, Plus, Filter, ChevronLeft, ChevronRight, Package, ListChecks,
-  PackageX, AlertTriangle, Check, Loader2, Pencil, Trash2, UploadCloud,
+  PackageX, Loader2, Pencil, Trash2, UploadCloud,
   Download, Upload, X, ArrowUpDown, ChevronDown, Boxes, Barcode,
 } from "lucide-react";
 import { StatCard } from "~/components/app/stat-card";
@@ -32,11 +32,12 @@ import { Tip } from "~/components/ui/tooltip";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import {
-  canSyncProduct,
-  isProductPushInFlight,
-  isProductPushStuck,
+  describeProductShopifySync,
   productSyncActionTitle,
+  type ProductSyncAction,
 } from "~/lib/product-shopify-sync";
+import { ShopifySyncCell } from "~/components/app/products/shopify-sync-cell";
+import ShopifyIcon from "~/assests/icon/shopifyIcon";
 import type { ProductStatus, ProductListParams, Product, ProductStatsResponse, StockStatus } from "~/types/api";
 import { Separator } from "~/components/ui/separator";
 import { Button } from "~/components/ui/button";
@@ -159,7 +160,6 @@ export default function ProductsPage() {
   const deleteProduct = useDeleteProductMutation();
 
   const { data: org } = useCurrentOrg();
-  const gstEnabled = org?.gstEnabled ?? false;
   // The org's own threshold, not a hard-coded 100 — this column used to call
   // "low" something different from every other screen.
   const lowStockThreshold = org?.lowStockThreshold ?? 10;
@@ -505,7 +505,7 @@ export default function ProductsPage() {
         </div>
 
         {isLoading ? (
-          <TableSkeleton rows={6} columns={gstEnabled ? 10 : 8} />
+          <TableSkeleton rows={6} columns={9} />
         ) : products.length === 0 ? (
           <EmptyState
             title="No products found"
@@ -535,18 +535,25 @@ export default function ProductsPage() {
                     </span>
                   </Tip>
                 </th>
-                    {gstEnabled && (
-                      <>
-                        <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">HSN</th>
-                        <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">GST %</th>
-                      </>
-                    )}
                     <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">Status</th>
+                    {/* HSN and GST % used to sit here. They belong to the
+                        product's tax setup, not its listing, and are edited
+                        in the product codes dialog. */}
+                    <th className="px-4 py-3 text-xs font-semibold text-muted-foreground">
+                      <span className="inline-flex items-center gap-1.5">
+                        <ShopifyIcon width={14} height={14} />
+                        Shopify
+                      </span>
+                    </th>
                     <th className="px-4 py-3 text-xs font-semibold text-muted-foreground text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {products.map((product) => (
+                  {products.map((product) => {
+                    // Once per row: the Shopify cell and the row's button both
+                    // read it, so they cannot disagree or diverge in time.
+                    const syncSummary = describeProductShopifySync(product);
+                    return (
                     <tr
                       key={product.id}
                       className={`hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors cursor-pointer ${selected.has(product.id) ? "bg-[#CEF17B]/10" : ""
@@ -613,24 +620,21 @@ export default function ProductsPage() {
                           {product.totalStock.toLocaleString()}
                         </Link>
                       </td>
-                      {gstEnabled && (
-                        <>
-                          <td className="px-4 py-3 text-xs font-mono text-muted-foreground">
-                            {product.hsnCode || <span className="text-orange-500">—</span>}
-                          </td>
-                          <td className="px-4 py-3 text-xs text-muted-foreground">
-                            {product.gstRate != null ? `${product.gstRate}%` : <span className="text-orange-500">—</span>}
-                          </td>
-                        </>
-                      )}
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[product.status]}`}>
                           {product.totalStock === 0 && product.status === "ACTIVE" ? "Out of Stock" : STATUS_LABEL[product.status]}
                         </span>
                       </td>
+                      <td className="px-4 py-3">
+                        <ShopifySyncCell
+                          summary={syncSummary}
+                          shopifyProductId={product.shopifySync?.shopifyProductId}
+                        />
+                      </td>
                       <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                         <ProductRowActions
                           product={product}
+                          syncAction={syncSummary.action}
                           onEdit={() => setEditingFullProductId(product.id)}
                           onArchive={() => {
                             if (confirm(`Archive "${product.title}"? Existing orders will keep their record.`)) {
@@ -640,7 +644,8 @@ export default function ProductsPage() {
                         />
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -694,106 +699,52 @@ export default function ProductsPage() {
 // ── Product Row Actions ─────────────────────────────────────────────────────
 // Right-most cell of each product row. Edit / Archive are always available
 // (synced products are now editable too — local edits push back via the Sync
-// button). The badge in front reflects the product's current sync state.
+// button). The sync STATE is the Shopify column's job; this cell only holds
+// the matching action, labelled so the row reads "Out of sync → Push",
+// "Sync failed → Retry", "Not on Shopify → Publish".
+
+const SYNC_ACTION_LABEL: Record<NonNullable<ProductSyncAction>, string> = {
+  push: "Push",
+  retry: "Retry",
+  publish: "Publish",
+};
 
 function ProductRowActions({
   product,
+  syncAction,
   onEdit,
   onArchive,
 }: {
   product: Product;
+  /** From `describeProductShopifySync`: null while a push is in flight or
+      there is nothing to push, so the one rule decides both pill and button. */
+  syncAction: ProductSyncAction;
   onEdit: () => void;
   onArchive: () => void;
 }) {
-  const isSynced = product.channel?.platform === "SHOPIFY";
   const sync = product.shopifySync;
   const syncMutation = useSyncProductMutation();
-
-  // While a push is in flight, collapse the actions to a single spinner badge
-  // — clicking anything else would race the queued job. A PENDING claim that
-  // nobody is working any more is NOT in flight: it falls through to a "stuck"
-  // badge with the normal actions, instead of spinning for ever.
-  if (isProductPushInFlight(sync)) {
-    return (
-      <span
-        title="Syncing to Shopify in the background…"
-        className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300"
-      >
-        <Loader2 className="size-3 animate-spin" />
-        Syncing
-      </span>
-    );
-  }
-
-  // Pick a status badge for the leading slot (when applicable).
-  let badge: React.ReactNode = null;
-  if (sync?.status === "SYNCED" && isSynced) {
-    badge = (
-      <span
-        title={
-          sync.shopifyProductId
-            ? `Shopify product ID: ${sync.shopifyProductId}`
-            : "Synced to Shopify"
-        }
-        className="inline-flex items-center gap-1 rounded-full bg-green-50 dark:bg-green-900/30 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:text-green-300"
-      >
-        <Check className="size-3" />
-        Synced
-      </span>
-    );
-  } else if (sync?.status === "OUT_OF_SYNC") {
-    badge = (
-      <span
-        title="Local edits haven't been pushed to Shopify yet"
-        className="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-amber-900/30 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
-      >
-        <AlertTriangle className="size-3" />
-        Out of sync
-      </span>
-    );
-  } else if (sync?.status === "FAILED") {
-    badge = (
-      <span
-        title={`Shopify sync failed: ${sync.error ?? "unknown"}`}
-        className="inline-flex items-center gap-1 rounded-full bg-red-50 dark:bg-red-900/30 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-300"
-      >
-        <AlertTriangle className="size-3" />
-        Sync failed
-      </span>
-    );
-  } else if (isProductPushStuck(sync)) {
-    badge = (
-      <span
-        title="This sync never finished. Retry it."
-        className="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-amber-900/30 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
-      >
-        <AlertTriangle className="size-3" />
-        Sync stuck
-      </span>
-    );
-  }
-
-  // Sync button is hidden for fully-synced (no edits yet) products to reduce
-  // noise; it reappears as soon as something needs pushing or has failed.
-  const showSyncButton = canSyncProduct(product, sync);
+  const thisRowSyncing = syncMutation.isPending && syncMutation.variables === product.id;
 
   return (
     <div className="inline-flex items-center gap-1">
-      {badge}
-      {showSyncButton && (
-        <button
+      {syncAction !== null && (
+        <Button
           type="button"
+          variant="outline"
+          size="xs"
           title={productSyncActionTitle(sync)}
           disabled={syncMutation.isPending}
           onClick={() => syncMutation.mutate(product.id)}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-[#084734] disabled:opacity-50"
+          className="mr-1 text-[#084734] dark:text-[#CEF17B]"
         >
-          {syncMutation.isPending && syncMutation.variables === product.id ? (
-            <Loader2 className="size-3.5 animate-spin" />
+          {thisRowSyncing ? (
+            <Loader2 className="size-3 animate-spin" />
           ) : (
-            <UploadCloud className="size-3.5" />
+            <UploadCloud className="size-3" />
           )}
-        </button>
+          {SYNC_ACTION_LABEL[syncAction]}
+        </Button>
       )}
       <button
         type="button"

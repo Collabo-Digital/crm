@@ -1,4 +1,5 @@
 import { isStalePendingSync } from "~/lib/shopify-sync";
+import { formatRelativeTime } from "~/lib/format-date";
 import type { ProductShopifySync } from "~/types/api";
 
 /**
@@ -46,4 +47,107 @@ export function productSyncActionTitle(sync: PushClaim): string {
   if (isProductPushStuck(sync)) return "Sync stuck — retry";
   if (sync?.status === "OUT_OF_SYNC") return "Push local edits to Shopify";
   return "Sync to Shopify";
+}
+
+export type ProductShopifySyncState =
+  | "synced"
+  | "out_of_sync"
+  | "syncing"
+  | "failed"
+  | "stuck"
+  | "not_on_shopify"
+  /** On a Shopify channel but with no sync record: nothing is known either way. */
+  | "unstamped";
+
+/** What the row's sync button says. Null when there is nothing to push. */
+export type ProductSyncAction = "push" | "retry" | "publish" | null;
+
+export interface ProductShopifySyncSummary {
+  state: ProductShopifySyncState;
+  /** The pill text. */
+  label: string;
+  /** The one line under the pill: when, why, or what went wrong. */
+  reason: string;
+  action: ProductSyncAction;
+}
+
+type SyncSummarySource = SyncSource & {
+  shopifySync?: Pick<ProductShopifySync, "status" | "queuedAt" | "syncedAt" | "error"> | null;
+};
+
+/**
+ * One description of a product's Shopify state for the products table: the
+ * pill, the line under it, and which button (if any) the row gets. Kept here
+ * beside the push rules so the pill can never say "Synced" while the button
+ * says "Retry".
+ *
+ * `OUT_OF_SYNC` cannot name the edited fields — the server stamps the status
+ * without recording what changed — so the reason is generic.
+ */
+export function describeProductShopifySync(
+  product: SyncSummarySource,
+  now: number = Date.now(),
+): ProductShopifySyncSummary {
+  const sync = product.shopifySync;
+  const onShopifyChannel = product.channel?.platform === "SHOPIFY";
+
+  if (isProductPushInFlight(sync)) {
+    return { state: "syncing", label: "Syncing", reason: "Pushing to Shopify…", action: null };
+  }
+  if (sync?.status === "FAILED") {
+    return {
+      state: "failed",
+      label: "Sync failed",
+      reason: sync.error?.trim() || "Unknown error",
+      action: "retry",
+    };
+  }
+  if (isProductPushStuck(sync)) {
+    const queued = formatRelativeTime(sync?.queuedAt, now);
+    return {
+      state: "stuck",
+      label: "Sync stuck",
+      reason: queued ? `Queued ${queued}` : "Queued, never picked up",
+      action: "retry",
+    };
+  }
+  if (sync?.status === "OUT_OF_SYNC") {
+    return {
+      state: "out_of_sync",
+      label: "Out of sync",
+      reason: "Local edits not pushed",
+      action: "push",
+    };
+  }
+  if (sync?.status === "SYNCED") {
+    // `syncedAt` is the last time the two copies were confirmed in step —
+    // a push's success or a pull's refresh — not only the last push.
+    const syncedAgo = formatRelativeTime(sync.syncedAt, now);
+    return {
+      state: "synced",
+      label: "Synced",
+      reason: syncedAgo ? `Synced ${syncedAgo}` : "Synced to Shopify",
+      // `canSyncProduct` is the one rule for whether anything can be pushed,
+      // shared with the product page: a Shopify-channel product has nothing
+      // to push; a MANUAL one that was once pushed can be pushed again.
+      action: canSyncProduct(product, sync) ? "push" : null,
+    };
+  }
+  // No sync record at all. A Shopify pull now stamps one, so this is a row
+  // from before that, or one the backfill has not reached: nothing says
+  // whether it has local edits, so the wording claims nothing either way.
+  if (onShopifyChannel) {
+    return {
+      state: "unstamped",
+      label: "On Shopify",
+      reason: "Not pushed from Collabo yet",
+      action: "push",
+    };
+  }
+  return {
+    state: "not_on_shopify",
+    label: "Not on Shopify",
+    reason: "Created in Collabo",
+    action: "publish",
+  };
 }

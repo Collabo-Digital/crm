@@ -21,6 +21,7 @@ import {
 } from './shopify-tax-lines.util';
 import { extractRefundTax } from './refund-tax.util';
 import { planImageReconcile } from './product-image-identity.util';
+import { pulledProductSyncedStampSql } from './pulled-product-sync.util';
 import { planVariantPrune } from './shopify-variant-prune.util';
 import { normalizeShopifyOptions } from './product-options.util';
 import {
@@ -1532,6 +1533,16 @@ export class ShopifySyncService {
         await this.pruneRemovedVariants(externalId, planVariantPrune(priorVariants, sp));
 
         await this.reconcileProductImages(product.id, sp.images);
+
+        // Last, once the row, its variants and its images all hold Shopify's
+        // copy: record that they do. Without this an imported product had no
+        // sync record at all — the products table could not say "Synced", and
+        // a later local edit was never flagged OUT_OF_SYNC. Only an unstamped
+        // or SYNCED row is touched; a pending, failed or out-of-sync state is
+        // the push's or the merchant's to clear. Placed after the variant and
+        // image writes so a throw above leaves no "Synced" over a half-copied
+        // product (the sync loop logs the failure and moves on).
+        await this.prisma.$executeRaw(pulledProductSyncedStampSql(product.id, externalId));
     }
 
     /**
