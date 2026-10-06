@@ -18,6 +18,8 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { useGstins, useIndianStates } from "~/hooks/use-gst-queries";
+import { useChannels } from "~/hooks/use-channel-queries";
+import { Tip } from "~/components/ui/tooltip";
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { TableSkeleton } from "~/components/app/table-skeleton";
@@ -231,6 +233,19 @@ export default function WarehousesPage() {
   const rows = warehouses.data ?? [];
   const shopifyMapped = rows.filter((w) => w.shopifyLocationId).length;
 
+  // Creating a warehouse here is withheld while a Shopify store is connected.
+  // The CRM cannot create a Shopify location, and the stock push only sends
+  // warehouses that carry a Shopify location id, so a hand-made one would
+  // hold stock Shopify never hears about — a silent split, not an error.
+  // Locations are made in Shopify and arrive on the next sync. Treated as
+  // connected until the channels query answers, so the button never flashes
+  // enabled on load; a workspace with no Shopify store keeps it.
+  const channels = useChannels();
+  const shopifyConnected =
+    !channels.isSuccess ||
+    channels.data.some((c) => c.platform === "SHOPIFY" && c.status !== "DISCONNECTED");
+  const canCreateWarehouse = !shopifyConnected;
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -238,13 +253,12 @@ export default function WarehousesPage() {
           <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Locations</h1>
           <InventoryTabs />
         </div>
-        <Button
+        <NewWarehouseButton
+          enabled={canCreateWarehouse}
+          onClick={() => setCreating(true)}
           variant="brand"
           size="action"
-          onClick={() => setCreating(true)}
-        >
-          <Plus className="size-3.5" /> New warehouse
-        </Button>
+        />
       </div>
 
       {shopifyMapped > 0 && (
@@ -269,9 +283,11 @@ export default function WarehousesPage() {
               : "Enable warehousing from the Inventory page to start tracking stock per warehouse."
           }
           action={
-            <Button size="sm" onClick={() => setCreating(true)}>
-              <Plus className="size-3.5" /> New warehouse
-            </Button>
+            <NewWarehouseButton
+              enabled={canCreateWarehouse}
+              onClick={() => setCreating(true)}
+              size="sm"
+            />
           }
         />
       ) : (
@@ -309,6 +325,41 @@ export default function WarehousesPage() {
         <LocationGridDialog warehouse={griddingFor} onClose={() => setGriddingFor(null)} />
       )}
     </div>
+  );
+}
+
+const CREATE_WITHHELD_REASON =
+  "Locations are created in Shopify and appear here on the next sync. A warehouse made here could not be pushed to Shopify, so its stock would never reach the store.";
+
+/**
+ * The "New warehouse" button, in the header and in the empty state. Disabled
+ * with a reason while a Shopify store is connected (see `canCreateWarehouse`).
+ * A disabled <button> swallows pointer events, so the tooltip hangs off a
+ * focusable wrapper, the same way the product page's Sync button does it.
+ */
+function NewWarehouseButton({
+  enabled,
+  onClick,
+  variant,
+  size,
+}: {
+  enabled: boolean;
+  onClick: () => void;
+  variant?: "brand";
+  size: "action" | "sm";
+}) {
+  const button = (
+    <Button variant={variant} size={size} disabled={!enabled} onClick={onClick}>
+      <Plus className="size-3.5" /> New warehouse
+    </Button>
+  );
+  if (enabled) return button;
+  return (
+    <Tip text={CREATE_WITHHELD_REASON} side="bottom">
+      <span tabIndex={0} className="inline-flex">
+        {button}
+      </span>
+    </Tip>
   );
 }
 
