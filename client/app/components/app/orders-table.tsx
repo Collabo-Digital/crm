@@ -1,5 +1,8 @@
 import { useNavigate } from "react-router";
-import { MoreHorizontal, Package, Receipt, UploadCloud } from "lucide-react";
+import { Loader2, MoreHorizontal, Package, Receipt, UploadCloud } from "lucide-react";
+import { Button } from "~/components/ui/button";
+import { ShopifySyncCell } from "~/components/app/shopify-sync-cell";
+import ShopifyIcon from "~/assests/icon/shopifyIcon";
 import {
   Table,
   TableBody,
@@ -26,8 +29,13 @@ import {
 import { ChannelBadge } from "~/components/app/channel-badge";
 import { orderSourceLabel } from "~/lib/order-source";
 import { useCurrentRole } from "~/hooks/use-current-role";
-import type { Order, ChannelPlatform, OrderShopifySync } from "~/types/api";
-import { canRetryShopifySync, shopifySyncActionLabel } from "~/lib/shopify-sync";
+import type { Order, ChannelPlatform } from "~/types/api";
+import {
+  describeOrderShopifySync,
+  orderShopifySyncOf,
+  shopifySyncActionLabel,
+  type OrderSyncAction,
+} from "~/lib/shopify-sync";
 
 
 
@@ -107,6 +115,9 @@ export function OrdersTable({ orders, currency, showCustomerName = false, onView
   // Mirrors ORG_MANAGERS — the tier that may issue a GST invoice.
   const { role } = useCurrentRole();
   const canManage = role === "OWNER" || role === "ADMIN" || role === "MANAGER";
+  // Mirrors ORG_OPERATORS — the tier the sync route admits. A Viewer or a
+  // Vendor gets no button rather than a "Failed to sync" toast.
+  const canOperate = canManage || role === "AGENT";
   const navigate = useNavigate();
 
   const selectable = Boolean(selectedIds && onToggleRow);
@@ -184,9 +195,9 @@ export function OrdersTable({ orders, currency, showCustomerName = false, onView
   }
 
   return (
-    // NOTE: the row-level Sync-to-Shopify dropdown item is wired per-row
-    // below via `OrderRowSyncItem` (so each row can own its own mutation
-    // hook). Top-level hooks like `useSyncOrderMutation` are not called here.
+    // NOTE: the row-level Sync-to-Shopify button is wired per-row below via
+    // `OrderRowSyncButton` (so each row can own its own mutation hook).
+    // Top-level hooks like `useSyncOrderMutation` are not called here.
     <Table>
       <TableHeader>
         {/* The checkbox column renders only when the caller passes selection
@@ -210,13 +221,27 @@ export function OrdersTable({ orders, currency, showCustomerName = false, onView
           {showCustomerName && <TableHead>Customer</TableHead>}
           <TableHead>Date</TableHead>
           <TableHead>Amount</TableHead>
-          <TableHead>Payment</TableHead>
+          {/* The Payment column used to sit here. The paid tick beside the
+              order name is the payment signal now; the column became the
+              Shopify one so a Collabo-created order can be pushed from the
+              list without opening it. */}
           <TableHead>Fulfillment</TableHead>
-          <TableHead className="w-10">Action</TableHead>
+          <TableHead>
+            <span className="inline-flex items-center gap-1.5">
+              <ShopifyIcon width={14} height={14} />
+              Shopify
+            </span>
+          </TableHead>
+          <TableHead className="text-right">Action</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {orders.map((order) => (
+        {orders.map((order) => {
+          // Once per row: the Shopify cell and the row's button both read it,
+          // so they cannot disagree.
+          const syncSummary = describeOrderShopifySync(order);
+          const shopifyOrderName = orderShopifySyncOf(order)?.shopifyOrderName;
+          return (
           <TableRow
             key={order.id}
             className="cursor-pointer"
@@ -271,16 +296,21 @@ export function OrdersTable({ orders, currency, showCustomerName = false, onView
               {formatCurrency(order.totalPrice, order.currency || currency)}
             </TableCell>
             <TableCell>
-              <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium", FINANCIAL_CLASSES[order.financialStatus])}>
-                {FINANCIAL_LABELS[order.financialStatus]}
-              </span>
-            </TableCell>
-            <TableCell>
               <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium", FULFILLMENT_CLASSES[order.fulfillmentStatus])}>
                 {FULFILLMENT_LABELS[order.fulfillmentStatus]}
               </span>
             </TableCell>
-            <TableCell onClick={(e) => e.stopPropagation()}>
+            <TableCell>
+              <ShopifySyncCell
+                summary={syncSummary}
+                title={shopifyOrderName ? `Shopify order ${shopifyOrderName}` : undefined}
+              />
+            </TableCell>
+            <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+              <div className="inline-flex items-center justify-end gap-1">
+              {canOperate && syncSummary.action !== null && (
+                <OrderRowSyncButton order={order} action={syncSummary.action} />
+              )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button className="flex size-7 items-center justify-center rounded-md hover:bg-gray-100 dark:hover:bg-gray-800">
@@ -293,7 +323,6 @@ export function OrdersTable({ orders, currency, showCustomerName = false, onView
                   >
                     View details
                   </DropdownMenuItem>
-                  <OrderRowSyncItem order={order} />
                   {/* Issuing an invoice is ORG_MANAGERS-only server-side, so
                       this item only ever led somewhere useful for a manager.
                       It navigates to the order, where the gated Generate button
@@ -311,33 +340,46 @@ export function OrdersTable({ orders, currency, showCustomerName = false, onView
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
+              </div>
             </TableCell>
           </TableRow>
-        ))}
+          );
+        })}
       </TableBody>
     </Table>
   );
 }
 
+const SYNC_ACTION_LABEL: Record<OrderSyncAction, string> = {
+  sync: "Sync",
+  retry: "Retry",
+};
+
 /**
- * Per-row "Sync to Shopify" menu item. Only renders for MANUAL-channel
- * orders that haven't been synced yet (or where the previous sync failed).
- * Owns its own mutation hook so each row can show its own loading state.
+ * Per-row "Sync" / "Retry" button, labelled so the row reads "Not on Shopify
+ * → Sync" and "Sync failed → Retry". It used to be an item inside the row's
+ * dropdown, where nobody found it. Only a MANUAL order with something to push
+ * gets one — `describeOrderShopifySync` decides, so the pill and the button
+ * agree. Owns its own mutation hook so each row shows its own loading state.
  */
-function OrderRowSyncItem({ order }: { order: OrderRow }) {
+function OrderRowSyncButton({ order, action }: { order: OrderRow; action: OrderSyncAction }) {
   const mutation = useSyncOrderMutation(order.id);
-  const isManual = order.channel?.platform === "MANUAL";
-  const sync = (order.metadata as { shopifySync?: OrderShopifySync } | undefined)
-    ?.shopifySync;
-  const eligible = isManual && canRetryShopifySync(sync);
-  if (!eligible) return null;
   return (
-    <DropdownMenuItem
+    <Button
+      type="button"
+      variant="outline"
+      size="xs"
+      title={shopifySyncActionLabel(orderShopifySyncOf(order))}
       disabled={mutation.isPending}
       onClick={() => mutation.mutate()}
+      className="text-[#084734] dark:text-[#CEF17B]"
     >
-      <UploadCloud className="mr-1.5 size-3.5" />
-      {shopifySyncActionLabel(sync)}
-    </DropdownMenuItem>
+      {mutation.isPending ? (
+        <Loader2 className="size-3 animate-spin" />
+      ) : (
+        <UploadCloud className="size-3" />
+      )}
+      {SYNC_ACTION_LABEL[action]}
+    </Button>
   );
 }

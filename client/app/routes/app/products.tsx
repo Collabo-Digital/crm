@@ -36,7 +36,7 @@ import {
   productSyncActionTitle,
   type ProductSyncAction,
 } from "~/lib/product-shopify-sync";
-import { ShopifySyncCell } from "~/components/app/products/shopify-sync-cell";
+import { ShopifySyncCell } from "~/components/app/shopify-sync-cell";
 import ShopifyIcon from "~/assests/icon/shopifyIcon";
 import type { ProductStatus, ProductListParams, Product, ProductStatsResponse, StockStatus } from "~/types/api";
 import { Separator } from "~/components/ui/separator";
@@ -628,7 +628,11 @@ export default function ProductsPage() {
                       <td className="px-4 py-3">
                         <ShopifySyncCell
                           summary={syncSummary}
-                          shopifyProductId={product.shopifySync?.shopifyProductId}
+                          title={
+                            product.shopifySync?.shopifyProductId
+                              ? `Shopify product ID: ${product.shopifySync.shopifyProductId}`
+                              : undefined
+                          }
                         />
                       </td>
                       <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>

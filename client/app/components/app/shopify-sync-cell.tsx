@@ -1,17 +1,14 @@
 import { AlertTriangle, Check, Cloud, CloudOff, Loader2 } from "lucide-react";
-import type {
-  ProductShopifySyncState,
-  ProductShopifySyncSummary,
-} from "~/lib/product-shopify-sync";
+import type { ShopifySyncState, ShopifySyncSummary } from "~/lib/shopify-sync";
 
 /**
- * The products table's Shopify column: a status pill with a one-line reason
- * under it. The matching Push / Retry / Publish button lives with the row
- * actions, so this cell is display only. The row computes the summary once
- * and hands it to both.
+ * A table's Shopify column: a status pill with a one-line reason under it.
+ * Shared by the products and orders tables. The matching row button lives
+ * with the row actions, so this cell is display only; the row computes the
+ * summary once and hands it to both.
  */
 
-const PILL_CLASS: Record<ProductShopifySyncState, string> = {
+const PILL_CLASS: Record<ShopifySyncState, string> = {
   synced: "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300",
   out_of_sync: "bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300",
   syncing: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
@@ -22,7 +19,7 @@ const PILL_CLASS: Record<ProductShopifySyncState, string> = {
   unstamped: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
 };
 
-function PillIcon({ state }: { state: ProductShopifySyncState }) {
+function PillIcon({ state }: { state: ShopifySyncState }) {
   switch (state) {
     case "synced":
       return <Check className="size-3" />;
@@ -39,15 +36,16 @@ function PillIcon({ state }: { state: ProductShopifySyncState }) {
 
 export function ShopifySyncCell({
   summary,
-  shopifyProductId,
+  title,
 }: {
-  summary: ProductShopifySyncSummary;
-  shopifyProductId?: string;
+  summary: ShopifySyncSummary<string>;
+  /** Hover text for the pill, e.g. the remote Shopify id. */
+  title?: string;
 }) {
   return (
     <div className="flex flex-col items-start gap-1">
       <span
-        title={shopifyProductId ? `Shopify product ID: ${shopifyProductId}` : undefined}
+        title={title}
         className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold ${PILL_CLASS[summary.state]}`}
       >
         <PillIcon state={summary.state} />

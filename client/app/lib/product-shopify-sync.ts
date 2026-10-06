@@ -1,4 +1,4 @@
-import { isStalePendingSync } from "~/lib/shopify-sync";
+import { isStalePendingSync, type ShopifySyncSummary } from "~/lib/shopify-sync";
 import { formatRelativeTime } from "~/lib/format-date";
 import type { ProductShopifySync } from "~/types/api";
 
@@ -49,27 +49,10 @@ export function productSyncActionTitle(sync: PushClaim): string {
   return "Sync to Shopify";
 }
 
-export type ProductShopifySyncState =
-  | "synced"
-  | "out_of_sync"
-  | "syncing"
-  | "failed"
-  | "stuck"
-  | "not_on_shopify"
-  /** On a Shopify channel but with no sync record: nothing is known either way. */
-  | "unstamped";
-
 /** What the row's sync button says. Null when there is nothing to push. */
 export type ProductSyncAction = "push" | "retry" | "publish" | null;
 
-export interface ProductShopifySyncSummary {
-  state: ProductShopifySyncState;
-  /** The pill text. */
-  label: string;
-  /** The one line under the pill: when, why, or what went wrong. */
-  reason: string;
-  action: ProductSyncAction;
-}
+export type ProductShopifySyncSummary = ShopifySyncSummary<NonNullable<ProductSyncAction>>;
 
 type SyncSummarySource = SyncSource & {
   shopifySync?: Pick<ProductShopifySync, "status" | "queuedAt" | "syncedAt" | "error"> | null;
