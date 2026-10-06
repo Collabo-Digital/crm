@@ -1078,6 +1078,12 @@ export interface Order {
    */
   itemCount: number;
   /**
+   * The push record, on the LIST endpoint only (the detail endpoint carries
+   * the whole `metadata` blob instead). Null when the order was never pushed.
+   * Read it through `orderShopifySyncOf`, which handles both shapes.
+   */
+  shopifySync?: OrderShopifySync | null;
+  /**
    * Row insert time. On the DETAIL endpoint this is the local DB timestamp, not
    * when the order was placed — the list and vendor endpoints map
    * `externalCreatedAt ?? createdAt` but `findOne` does not. Prefer

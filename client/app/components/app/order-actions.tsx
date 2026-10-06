@@ -9,7 +9,10 @@ import {
   Pencil,
   Truck,
   UploadCloud,
+  Loader2,
 } from "lucide-react";
+import { Button } from "~/components/ui/button";
+import { ShopifySyncCell } from "~/components/app/shopify-sync-cell";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,7 +39,11 @@ import {
 import { formatCurrency } from "~/lib/utils";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import type { OrderDetail, OrderCancelReason, OrderShopifySync } from "~/types/api";
-import { canRetryShopifySync } from "~/lib/shopify-sync";
+import {
+  canRetryShopifySync,
+  describeOrderShopifySync,
+  shopifySyncActionLabel,
+} from "~/lib/shopify-sync";
 import { hasOutstandingUnits } from "~/lib/order-status";
 import {
   ModalShell,
@@ -136,9 +143,11 @@ export function useOrderActionGates(order: OrderDetail | undefined) {
   // Manual sync to Shopify: only meaningful for MANUAL orders that haven't
   // been pushed yet, where the previous push failed, or whose PENDING claim
   // is old enough that the job has clearly been lost (see lib/shopify-sync).
+  // POST /orders/:id/sync is ORG_OPERATORS; without the role gate a Viewer
+  // was shown a button that could only 403.
   const syncMeta = (order?.metadata as { shopifySync?: OrderShopifySync } | undefined)
     ?.shopifySync;
-  const canSyncToShopify = isManual && canRetryShopifySync(syncMeta);
+  const canSyncToShopify = canOperate && isManual && canRetryShopifySync(syncMeta);
 
   return {
     canManage,
@@ -165,6 +174,57 @@ export function useOrderActionGates(order: OrderDetail | undefined) {
  * already-cancelled order, etc.). Capture is Shopify-only because manual
  * orders don't have an authorize/capture cycle.
  */
+/**
+ * The order's Shopify state, beside the Actions menu: a "Sync to Shopify" /
+ * "Retry sync" button for a Collabo order with something to push, "Syncing…"
+ * while a push runs, and a Synced pill once it has landed. It used to be an
+ * item inside the Actions dropdown, where nobody found it; the same rule
+ * (`describeOrderShopifySync`) drives the orders table, so the two agree.
+ * Renders nothing for an order that came from Shopify — the channel badge
+ * already says so.
+ */
+export function OrderSyncButton({ order }: { order: OrderDetail }) {
+  const syncMutation = useSyncOrderMutation(order.id);
+  const { canSyncToShopify } = useOrderActionGates(order);
+  const summary = describeOrderShopifySync(order);
+
+  if (summary.state === "syncing") {
+    return (
+      <Button type="button" variant="outline" size="sm" disabled>
+        <Loader2 className="size-3.5 animate-spin" />
+        Syncing…
+      </Button>
+    );
+  }
+  if (summary.action !== null) {
+    if (!canSyncToShopify) return null;
+    return (
+      <Button
+        type="button"
+        variant="brand"
+        size="sm"
+        title={shopifySyncActionLabel(
+          (order.metadata as { shopifySync?: OrderShopifySync } | undefined)?.shopifySync,
+        )}
+        disabled={syncMutation.isPending}
+        onClick={() => syncMutation.mutate()}
+      >
+        {syncMutation.isPending ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <UploadCloud className="size-3.5" />
+        )}
+        {summary.action === "retry" ? "Retry sync" : "Sync to Shopify"}
+      </Button>
+    );
+  }
+  // A Collabo order that has been pushed: say so, with when and as what.
+  if (order.channel?.platform === "MANUAL" && summary.state === "synced") {
+    return <ShopifySyncCell summary={summary} />;
+  }
+  return null;
+}
+
 export function OrderActionsMenu({ order }: { order: OrderDetail }) {
   const [dialog, setDialog] = useState<DialogKind>(null);
 
@@ -176,7 +236,6 @@ export function OrderActionsMenu({ order }: { order: OrderDetail }) {
   const markPaidMutation = useMarkOrderPaidMutation(order.id);
   const closeMutation = useCloseOrderMutation(order.id);
   const openMutation = useOpenOrderMutation(order.id);
-  const syncMutation = useSyncOrderMutation(order.id);
 
   const {
     isShopify,
@@ -187,7 +246,6 @@ export function OrderActionsMenu({ order }: { order: OrderDetail }) {
     canFulfill,
     canCancel,
     canEdit,
-    canSyncToShopify,
   } = useOrderActionGates(order);
 
   return (
@@ -207,15 +265,8 @@ export function OrderActionsMenu({ order }: { order: OrderDetail }) {
             </DropdownMenuItem>
           )}
 
-          {canSyncToShopify && (
-            <DropdownMenuItem
-              disabled={syncMutation.isPending}
-              onSelect={() => syncMutation.mutate()}
-            >
-              <UploadCloud className="size-3.5" />
-              Sync to Shopify
-            </DropdownMenuItem>
-          )}
+          {/* Sync to Shopify moved out of this menu to `OrderSyncButton`,
+              rendered beside it in the header. */}
 
           {canFulfill && (
             <DropdownMenuItem onSelect={() => setDialog("fulfill")}>

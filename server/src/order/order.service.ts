@@ -64,6 +64,7 @@ import {
 } from '../common/utils/serialization-retry.util';
 import { mergeJsonMetadata } from '../common/utils/jsonb-merge.util';
 import { placedBetween } from '../common/utils/order-window.util';
+import { extractOrderShopifySync } from './order-shopify-sync.util';
 import { countryCodeOf, phoneLookupVariants } from '../common/phone.util';
 import { defaultCountryFor, toShopifyAddress } from '../channel/shopify-address.util';
 import { normalizeTrackingUrl } from './tracking-url.util';
@@ -363,6 +364,10 @@ export class OrderService {
         sourceName: order.sourceName,
         sourceLabel: order.sourceLabel,
         itemCount: order._count.lineItems,
+        // The push record only, not the whole metadata blob: the table's
+        // Shopify column needs it to tell a pushed Collabo order from one
+        // never pushed.
+        shopifySync: extractOrderShopifySync(order.metadata),
       })),
       meta,
     };

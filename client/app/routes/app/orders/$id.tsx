@@ -17,6 +17,7 @@ import { GenerateInvoiceDialog } from "~/components/app/generate-invoice-dialog"
 import { useUpdateOrderMutation } from "~/hooks/use-order-mutations";
 import {
   OrderActionsMenu,
+  OrderSyncButton,
   CancelOrderDialog,
   CapturePaymentDialog,
   useOrderActionGates,
@@ -266,6 +267,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
           <Button asChild={!!nextId} variant="outline" size="sm" disabled={!nextId}>
             {nextId ? <Link to={`/orders/${nextId}`}>Next order</Link> : <span>Next order</span>}
           </Button>
+          <OrderSyncButton order={order} />
           <OrderActionsMenu order={order} />
         </div>
       </div>

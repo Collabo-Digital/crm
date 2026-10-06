@@ -65,19 +65,26 @@ export interface ShopifySyncSummary<A extends string> {
 
 export type OrderSyncAction = "sync" | "retry";
 
-type OrderSyncSource = {
-  channel?: { platform: string; name?: string } | null;
-  metadata?: unknown;
-};
-
 /** The part of the order's push record the table reads. */
 type OrderShopifySyncRecord = Pick<
   OrderShopifySync,
   "status" | "shopifyOrderName" | "error" | "syncedAt" | "queuedAt"
 >;
 
-/** The order's push record, read off its metadata blob. */
+type OrderSyncSource = {
+  channel?: { platform: string; name?: string } | null;
+  /** The list endpoint's projection of the record. */
+  shopifySync?: OrderShopifySyncRecord | null;
+  /** The detail endpoint's whole blob, which holds the same record. */
+  metadata?: unknown;
+};
+
+/**
+ * The order's push record from whichever shape the caller holds: the list's
+ * `shopifySync` projection, else the detail's `metadata.shopifySync`.
+ */
 export function orderShopifySyncOf(order: OrderSyncSource): OrderShopifySyncRecord | undefined {
+  if (order.shopifySync !== undefined) return order.shopifySync ?? undefined;
   return (order.metadata as { shopifySync?: OrderShopifySyncRecord } | null | undefined)
     ?.shopifySync;
 }
