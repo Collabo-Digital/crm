@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ChannelPlatform, ChannelStatus, Prisma } from '@prisma/client';
+import { ChannelPlatform, ChannelStatus, OrderFulfillmentStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { mergeJsonMetadata } from '../common/utils/jsonb-merge.util';
 import { countryCodeOf, normalizePhone } from '../common/phone.util';
@@ -433,11 +433,13 @@ export class ShopifyPushService {
 
     await this.adoptShopifyLineItemIds(order.lineItems, remoteOrder);
 
-    // Mirror the local PAID + FULFILLED state by fulfilling the new order's
-    // fulfillment orders at the resolved location. Best-effort — if locations
-    // couldn't be read (missing read_locations) or fulfillment fails, the
-    // order still lands paid but unfulfilled.
-    if (locationId) {
+    // Mirror the local fulfilment state. Only an order whose header says
+    // FULFILLED is fulfilled on Shopify; one still unshipped in the CRM lands
+    // paid and unfulfilled, which is the truth. This used to fulfil every
+    // pushed order because counter sales were stamped FULFILLED at creation.
+    // Best-effort — if locations couldn't be read (missing read_locations) or
+    // fulfillment fails, the order still lands paid but unfulfilled.
+    if (locationId && order.fulfillmentStatus === OrderFulfillmentStatus.FULFILLED) {
       try {
         await this.fulfillEntireOrder(auth, remoteOrder.id);
       } catch (err) {

@@ -227,3 +227,42 @@ describe('OrderService.setVendorItemsStatus (released)', () => {
     expect(updated[0].data.fulfillmentStatus).toBeNull();
   });
 });
+
+describe('OrderService.computeFulfillmentStatus', () => {
+  // The one rule every header is derived from; it had no direct test.
+  const compute = (items: any[]) =>
+    (new OrderService(
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+    ) as any).computeFulfillmentStatus(items);
+
+  it('is UNFULFILLED when no unit has shipped', () => {
+    expect(compute([{ fulfillmentStatus: null, quantity: 2, fulfilledQuantity: 0 }])).toBe('UNFULFILLED');
+  });
+
+  it('is FULFILLED when every unit has shipped', () => {
+    expect(
+      compute([
+        { fulfillmentStatus: 'fulfilled', quantity: 2, fulfilledQuantity: 2 },
+        { fulfillmentStatus: 'delivered', quantity: 1, fulfilledQuantity: 1 },
+      ]),
+    ).toBe('FULFILLED');
+  });
+
+  it('is PARTIAL when some but not all units have shipped', () => {
+    expect(
+      compute([
+        { fulfillmentStatus: 'partial', quantity: 3, fulfilledQuantity: 1 },
+        { fulfillmentStatus: null, quantity: 1, fulfilledQuantity: 0 },
+      ]),
+    ).toBe('PARTIAL');
+  });
+
+  it('counts a zero-count line whose status says shipped as fully shipped (Shopify lines)', () => {
+    expect(compute([{ fulfillmentStatus: 'fulfilled', quantity: 4, fulfilledQuantity: 0 }])).toBe('FULFILLED');
+  });
+
+  it('never counts more than the line ordered', () => {
+    expect(compute([{ fulfillmentStatus: 'fulfilled', quantity: 2, fulfilledQuantity: 5 }])).toBe('FULFILLED');
+  });
+});

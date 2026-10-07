@@ -69,6 +69,14 @@ function build({
     order: {
       findFirst: jest.fn().mockResolvedValue({ orderNumber: 1000 }),
       create: jest.fn().mockResolvedValue(created),
+      update: jest.fn().mockResolvedValue(undefined),
+    },
+    // `refreshOrderFulfillmentStatus` re-reads the lines it just created.
+    // Nothing shipped: the quantity is there, the shipped count is 0.
+    orderLineItem: {
+      findMany: jest
+        .fn()
+        .mockResolvedValue([{ fulfillmentStatus: null, quantity: 2, fulfilledQuantity: 0 }]),
     },
     warehouse: {
       // Two different lookups hit this: resolving an explicitly picked dispatch
@@ -348,5 +356,41 @@ describe('createOfflineOrder - the sold quantity reaches Shopify', () => {
     await expect(
       service.createOfflineOrder(ORG, USER, dto()),
     ).resolves.toBeDefined();
+  });
+});
+
+describe('createOfflineOrder — fulfilment header follows the lines', () => {
+  // Every counter sale used to be stamped FULFILLED at creation with nothing
+  // shipped, so the table and the pill said Fulfilled while the lines said
+  // 0 shipped, and the Shopify push fulfilled the whole order on the store.
+  it('creates the order UNFULFILLED, then re-derives the header from its lines', async () => {
+    const { service, tx } = build({ warehousing: false });
+
+    await service.createOfflineOrder(ORG, USER, dto());
+
+    expect(tx.order.create.mock.calls[0][0].data.fulfillmentStatus).toBe('UNFULFILLED');
+    // The refresh ran inside the same transaction, read the lines back and
+    // wrote what they say — nothing shipped, so UNFULFILLED again.
+    expect(tx.orderLineItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { orderId: 'order_1' } }),
+    );
+    expect(tx.order.update).toHaveBeenCalledWith({
+      where: { id: 'order_1' },
+      data: { fulfillmentStatus: 'UNFULFILLED' },
+    });
+  });
+
+  it('still honours an explicit status from an API caller as the starting value', async () => {
+    const { service, tx } = build({ warehousing: false });
+
+    await service.createOfflineOrder(ORG, USER, dto({ fulfillmentStatus: 'FULFILLED' }));
+
+    expect(tx.order.create.mock.calls[0][0].data.fulfillmentStatus).toBe('FULFILLED');
+    // …but the lines have the last word: nothing shipped, so the refresh
+    // corrects a claim the lines do not back.
+    expect(tx.order.update).toHaveBeenCalledWith({
+      where: { id: 'order_1' },
+      data: { fulfillmentStatus: 'UNFULFILLED' },
+    });
   });
 });

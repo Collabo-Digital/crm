@@ -674,10 +674,10 @@ function StatusPill({ className, children }: { className?: string; children: Rea
  * Order lifecycle pill.
  *
  * There is no state column on `Order` — the whole vocabulary is
- * `financialStatus`, `fulfillmentStatus`, `cancelledAt`, `closedAt`. Note we do
- * NOT derive a "Completed" state from `fulfillmentStatus`: offline orders are
- * created with PAID/FULFILLED defaults, so every manual order would read as
- * finished the instant it was made.
+ * `financialStatus`, `fulfillmentStatus`, `cancelledAt`, `closedAt`. This pill
+ * deliberately does NOT derive a "Completed" state from `fulfillmentStatus`:
+ * fulfilment has its own pill in the rail, and an order that is fully shipped
+ * is still open to refunds, notes and archiving until someone closes it.
  */
 function deriveOrderState(order: OrderDetail): { label: string; className: string } {
   if (order.cancelledAt) return { label: "Cancelled", className: "bg-danger-subtle text-danger" };

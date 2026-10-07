@@ -287,6 +287,27 @@ describe('ShopifyPushService.pushOrder', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
+
+  // The push used to fulfil every order on Shopify because counter sales were
+  // stamped FULFILLED at creation. It now mirrors the header as it stands.
+  it('leaves an UNFULFILLED order unfulfilled on Shopify', async () => {
+    const { service } = build(offlineOrder({ fulfillmentStatus: 'UNFULFILLED' }));
+    const fulfil = jest.spyOn(service as any, 'fulfillEntireOrder').mockResolvedValue(undefined);
+
+    await service.pushOrder(ORDER_ID, ORG);
+
+    expect(fulfil).not.toHaveBeenCalled();
+  });
+
+  it('fulfils a FULFILLED order on Shopify at the resolved location', async () => {
+    const { service } = build(offlineOrder({ fulfillmentStatus: 'FULFILLED' }));
+    const fulfil = jest.spyOn(service as any, 'fulfillEntireOrder').mockResolvedValue(undefined);
+
+    await service.pushOrder(ORDER_ID, ORG);
+
+    expect(fulfil).toHaveBeenCalledTimes(1);
+    expect(fulfil).toHaveBeenCalledWith(expect.anything(), 'gid://shopify/Order/6418037801012');
+  });
 });
 
 describe('isStalePendingSync', () => {

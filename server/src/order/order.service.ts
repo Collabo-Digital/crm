@@ -1480,8 +1480,15 @@ export class OrderService {
             name: `#M${nextNumber}`,
             financialStatus:
               dto.financialStatus ?? OrderFinancialStatus.PAID,
+            // UNFULFILLED, not FULFILLED: nothing has shipped yet. The old
+            // FULFILLED default put a header on every counter sale that its
+            // own lines (0 shipped) contradicted, and the Shopify push read
+            // it and fulfilled the whole order on the store. The header is
+            // re-derived from the lines just below, the same way every
+            // fulfil / unfulfil path does; an explicit `dto.fulfillmentStatus`
+            // is still honoured for API callers.
             fulfillmentStatus:
-              dto.fulfillmentStatus ?? OrderFulfillmentStatus.FULFILLED,
+              dto.fulfillmentStatus ?? OrderFulfillmentStatus.UNFULFILLED,
             currency: orderCurrency,
             // A counter sale is priced in the org's own currency by
             // construction (the line above), so it converts at exactly 1 — no
@@ -1543,6 +1550,12 @@ export class OrderService {
           },
           include: { lineItems: true },
         });
+
+        // 7b. The header follows the lines from the first moment, so the
+        //     table, the pill and the per-line counts can never disagree.
+        //     With nothing shipped this is UNFULFILLED; a caller that passed
+        //     a status but no shipped lines gets the truth, not its claim.
+        await this.refreshOrderFulfillmentStatus(tx, order.id);
 
         // 8. Inventory decrement + audit trail. Skipped per-variant when
         //    trackQuantity=false AND the org-level trackQuantityGlobally
