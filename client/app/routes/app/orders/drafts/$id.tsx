@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
+import { useListReturnPath } from "~/hooks/use-list-url-state";
 import {
   ChevronRight,
   Loader2,
@@ -46,6 +47,8 @@ const PAYMENT_METHODS: ReadonlyArray<{ value: OfflinePaymentMethod; label: strin
 export default function DraftDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  // Back to the list as it was left: same page and search.
+  const draftsPath = useListReturnPath("drafts", "/orders/drafts");
   const { data: draft, isLoading, isError, refetch } = useDraftOrder(id);
   const { data: org } = useCurrentOrg();
   const currency = draft?.currency ?? org?.currency ?? "INR";
@@ -84,7 +87,7 @@ export default function DraftDetailPage() {
       {/* Breadcrumb + actions */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption">
-          <Link to="/orders/drafts" className="text-muted-foreground hover:text-foreground">
+          <Link to={draftsPath} className="text-muted-foreground hover:text-foreground">
             Drafts
           </Link>
           <ChevronRight className="size-3 text-muted-foreground" />
@@ -322,7 +325,7 @@ export default function DraftDetailPage() {
             confirmTone="destructive"
             onConfirm={() =>
               deleteDraft.mutate(draft.id, {
-                onSuccess: () => navigate("/orders/drafts"),
+                onSuccess: () => navigate(draftsPath),
               })
             }
             onClose={() => setShowDelete(false)}

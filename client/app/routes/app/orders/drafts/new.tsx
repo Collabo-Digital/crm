@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { useListReturnPath } from "~/hooks/use-list-url-state";
 import { ChevronRight } from "lucide-react";
 import {
   PageHeader,
@@ -24,10 +25,11 @@ export function meta() {
  * only path forward is to save the work as a draft.
  */
 export default function NewDraftPage() {
+  const draftsPath = useListReturnPath("drafts", "/orders/drafts");
   return (
     <div className="space-y-6">
       <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption">
-        <Link to="/orders/drafts" className="text-muted-foreground hover:text-foreground">
+        <Link to={draftsPath} className="text-muted-foreground hover:text-foreground">
           Drafts
         </Link>
         <ChevronRight className="size-3 text-muted-foreground" />

@@ -14,7 +14,10 @@ import { useAuthStore } from "~/stores/auth.store";
  * default windows are the cheap first load. Keys carry the org id, so one
  * organisation's filters are never applied to another's data.
  *
- * Not for search text or page numbers; those are meant to start fresh.
+ * Search text and page numbers do not live here: they are in the URL (see
+ * use-list-url-state), so the navbar's bare link still starts fresh. The one
+ * exception is a list's last query string, mirrored under `<list>.return` so a
+ * detail page can link back to the page it came from.
  */
 const STORAGE_PREFIX = "ui:";
 

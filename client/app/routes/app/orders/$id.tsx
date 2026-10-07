@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
+import { useListReturnPath } from "~/hooks/use-list-url-state";
 import {
   AlertTriangle,
   ChevronRight,
@@ -87,6 +88,9 @@ export default function OrderDetailPage() {
 
 function OwnerOrderDetail({ id }: { id: string }) {
   const { data: order, isLoading, isError, refetch } = useOrder(id);
+  // Back to the list as it was left: same page and search, even after walking
+  // Previous/Next through other orders.
+  const ordersPath = useListReturnPath("orders", "/orders");
   const { data: org } = useCurrentOrg();
 
   const { data: adjacent } = useAdjacentOrders(id);
@@ -250,7 +254,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
       {/* Breadcrumb + prev/next rail */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption">
-          <Link to="/orders" className="text-muted-foreground hover:text-foreground">
+          <Link to={ordersPath} className="text-muted-foreground hover:text-foreground">
             Orders
           </Link>
           <ChevronRight className="size-3 text-muted-foreground" />

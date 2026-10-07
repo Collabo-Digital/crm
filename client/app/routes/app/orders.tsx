@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { oneOf, useSessionState } from "~/hooks/use-session-state";
+import { useClampPage, useListUrlState } from "~/hooks/use-list-url-state";
 import { Link } from "react-router";
 import {
   Search, Download, Upload, ChevronLeft, ChevronRight, ShoppingBag, Package, Loader2,
@@ -61,8 +62,9 @@ const STAT_CARDS: ReadonlyArray<{
 ];
 
 export default function OrdersPage() {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [currentPage, setCurrentPage] = useState(1);
+  // Page and search live in the URL so Back from an order (and the order
+  // page's breadcrumb) return to the page the row was opened from.
+  const list = useListUrlState("orders");
   // Opens on 7 days rather than All Time: all-time stats scan every order. A
   // wider choice is remembered for the browser session.
   const [dateRange, setDateRange] = useSessionState(
@@ -85,10 +87,10 @@ export default function OrdersPage() {
   // The input stays bound to the raw value so typing feels instant; only the
   // debounced copy reaches the query key. Without this every keystroke was a
   // fresh cache key and therefore its own request — "shirt" was five.
-  const debouncedSearch = useDebounced(searchQuery, 350);
+  const debouncedSearch = useDebounced(list.search, 350);
 
   const params: OrderListParams = {
-    page: currentPage,
+    page: list.page,
     limit: PAGE_SIZE,
     search: debouncedSearch || undefined,
     dateFrom,
@@ -107,6 +109,7 @@ export default function OrdersPage() {
   const orders = data?.data ?? [];
   const meta = data?.meta;
   const totalPages = meta?.totalPages ?? 1;
+  useClampPage(list, meta?.totalPages);
 
   // Selection is cleared whenever the visible rows change. Printing slips for
   // orders that scrolled out of view is unrecoverable — you only find out at
@@ -114,7 +117,7 @@ export default function OrdersPage() {
   // Same reasoning as the inventory label picker.
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [currentPage, debouncedSearch, dateRange]);
+  }, [list.page, debouncedSearch, dateRange]);
 
   function toggleRow(orderId: string) {
     setSelectedIds((prev) => {
@@ -138,13 +141,12 @@ export default function OrdersPage() {
       : null;
 
   function handleSearchChange(event: React.ChangeEvent<HTMLInputElement>) {
-    setSearchQuery(event.target.value);
-    setCurrentPage(1);
+    list.setSearch(event.target.value);
   }
 
   function handleDateRangeChange(value: string) {
     setDateRange(value);
-    setCurrentPage(1);
+    list.resetPage();
   }
 
   function formatChange(direction: "up" | "down" | "same", percentage: number) {
@@ -307,7 +309,7 @@ export default function OrdersPage() {
               <input
                 type="search"
                 placeholder="Search here..."
-                value={searchQuery}
+                value={list.search}
                 onChange={handleSearchChange}
                 className="h-8 w-48 rounded-lg border border-input bg-transparent pl-8 pr-3 text-caption placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand/50"
               />
@@ -337,7 +339,7 @@ export default function OrdersPage() {
           <div className="p-8">
             <EmptyState
               title="No orders found"
-              description={searchQuery ? "Try adjusting your search." : "Orders will appear here once synced from your channels."}
+              description={list.search ? "Try adjusting your search." : "Orders will appear here once synced from your channels."}
             />
           </div>
         ) : (
@@ -360,8 +362,8 @@ export default function OrdersPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-              disabled={currentPage === 1}
+              onClick={() => list.setPage(list.page - 1)}
+              disabled={list.page === 1}
             >
               <ChevronLeft className="size-3.5" />
               Previous
@@ -372,8 +374,8 @@ export default function OrdersPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-              disabled={currentPage >= totalPages}
+              onClick={() => list.setPage(list.page + 1)}
+              disabled={list.page >= totalPages}
             >
               Next
               <ChevronRight className="size-3.5" />

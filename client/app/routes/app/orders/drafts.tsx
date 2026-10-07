@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { oneOf, useSessionState } from "~/hooks/use-session-state";
+import { useClampPage, useListUrlState } from "~/hooks/use-list-url-state";
 import { Link, useNavigate } from "react-router";
 import {
   FileText,
@@ -78,8 +78,9 @@ export default function DraftsPage() {
   const navigate = useNavigate();
   const { data: org } = useCurrentOrg();
 
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
+  // Page and search live in the URL so Back from a draft (and the draft
+  // page's breadcrumb) return to the page the row was opened from.
+  const list = useListUrlState("drafts");
   const [status, setStatus] = useSessionState<Chip>(
     "drafts.status",
     "all",
@@ -88,10 +89,10 @@ export default function DraftsPage() {
 
   // Debounced into the query key only — the input keeps the raw value, so
   // typing stays instant without a request per keystroke.
-  const debouncedSearch = useDebounced(search, 350);
+  const debouncedSearch = useDebounced(list.search, 350);
 
   const params: DraftOrderListParams = {
-    page,
+    page: list.page,
     limit: PAGE_SIZE,
     search: debouncedSearch || undefined,
     status: status === "all" ? undefined : status,
@@ -108,18 +109,18 @@ export default function DraftsPage() {
   const drafts = data?.data ?? [];
   const meta = data?.meta;
   const totalPages = meta?.totalPages ?? 1;
+  useClampPage(list, meta?.totalPages);
 
   function handleChip(next: Chip) {
     setStatus(next);
-    setPage(1);
+    list.resetPage();
   }
 
   function handleSearch(event: React.ChangeEvent<HTMLInputElement>) {
-    setSearch(event.target.value);
-    setPage(1);
+    list.setSearch(event.target.value);
   }
 
-  const isFiltered = Boolean(search) || status !== "all";
+  const isFiltered = Boolean(list.search) || status !== "all";
 
   return (
     <div className="space-y-6">
@@ -234,7 +235,7 @@ export default function DraftsPage() {
             <input
               type="search"
               placeholder="Customer name or email…"
-              value={search}
+              value={list.search}
               onChange={handleSearch}
               className="h-8 w-full rounded-lg border border-input bg-transparent pl-8 pr-3 text-caption placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand/50"
             />
@@ -311,8 +312,8 @@ export default function DraftsPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
+              onClick={() => list.setPage(list.page - 1)}
+              disabled={list.page === 1}
             >
               <ChevronLeft className="size-3.5" />
               Previous
@@ -323,8 +324,8 @@ export default function DraftsPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages}
+              onClick={() => list.setPage(list.page + 1)}
+              disabled={list.page >= totalPages}
             >
               Next
               <ChevronRight className="size-3.5" />

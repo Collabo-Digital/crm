@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { oneOf, useSessionState } from "~/hooks/use-session-state";
+import { useClampPage, useListUrlState } from "~/hooks/use-list-url-state";
 import { useNavigate } from "react-router";
 import { Search, ChevronLeft, ChevronRight } from "lucide-react";
 import {
@@ -91,13 +91,14 @@ const STAT_CARDS: ReadonlyArray<{
 const PAGE_SIZE = 12;
 
 export default function CustomersPage() {
-  const [searchQuery, setSearchQuery] = useState("");
+  // Page and search live in the URL so Back from a customer returns to the
+  // page the row was opened from.
+  const list = useListUrlState("customers");
   const [vipFilter, setVipFilter] = useSessionState<"All" | VipLevel>(
     "customers.vip",
     "All",
     oneOf(["All", "NONE", "BRONZE", "SILVER", "GOLD", "PLATINUM"]),
   );
-  const [currentPage, setCurrentPage] = useState(1);
   const navigate = useNavigate();
 
   const { data: org } = useCurrentOrg();
@@ -106,10 +107,10 @@ export default function CustomersPage() {
 
   // Debounced into the query key only — the input keeps the raw value, so
   // typing stays instant without a request per keystroke.
-  const debouncedSearch = useDebounced(searchQuery, 350);
+  const debouncedSearch = useDebounced(list.search, 350);
 
   const params: CustomerListParams = {
-    page: currentPage,
+    page: list.page,
     limit: PAGE_SIZE,
     search: debouncedSearch || undefined,
     vipLevel: vipFilter !== "All" ? vipFilter : undefined,
@@ -120,15 +121,15 @@ export default function CustomersPage() {
   const customers = data?.data ?? [];
   const meta = data?.meta;
   const totalPages = meta?.totalPages ?? 1;
+  useClampPage(list, meta?.totalPages);
 
   function handleSearchChange(event: React.ChangeEvent<HTMLInputElement>) {
-    setSearchQuery(event.target.value);
-    setCurrentPage(1);
+    list.setSearch(event.target.value);
   }
 
   function handleVipFilter(value: "All" | VipLevel) {
     setVipFilter(value);
-    setCurrentPage(1);
+    list.resetPage();
   }
 
   return (
@@ -215,7 +216,7 @@ export default function CustomersPage() {
             <input
               type="search"
               placeholder="Search by name, email, or phone…"
-              value={searchQuery}
+              value={list.search}
               onChange={handleSearchChange}
               className="h-8 w-full rounded-lg border border-input bg-transparent pl-8 pr-3 text-caption placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand/50"
             />
@@ -240,7 +241,7 @@ export default function CustomersPage() {
             <EmptyState
               title="No customers found"
               description={
-                searchQuery
+                list.search
                   ? "Try adjusting your search or filters."
                   : "Customers will appear here once synced from your channels."
               }
@@ -325,8 +326,8 @@ export default function CustomersPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-              disabled={currentPage === 1}
+              onClick={() => list.setPage(list.page - 1)}
+              disabled={list.page === 1}
             >
               <ChevronLeft className="size-3.5" />
               Previous
@@ -337,8 +338,8 @@ export default function CustomersPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-              disabled={currentPage >= totalPages}
+              onClick={() => list.setPage(list.page + 1)}
+              disabled={list.page >= totalPages}
             >
               Next
               <ChevronRight className="size-3.5" />

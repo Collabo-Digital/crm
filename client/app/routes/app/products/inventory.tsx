@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { oneOf, useSessionState } from "~/hooks/use-session-state";
+import { useClampPage, useListUrlState } from "~/hooks/use-list-url-state";
 import { AxiosError } from "axios";
-import { Link, useSearchParams } from "react-router";
+import { Link } from "react-router";
 import {
   Boxes,
   IndianRupee,
@@ -154,12 +155,11 @@ function EnableInventoryCta({ seeding }: { seeding: boolean }) {
 function StockScreen() {
   const { data: currentOrg } = useCurrentOrg();
   const currency = currentOrg?.currency;
-  // Seeded from the URL so a link into this screen can arrive pre-filtered —
-  // the products list links a product's stock number straight here. Read once:
-  // after mount the box owns the value.
-  const [searchParams] = useSearchParams();
-  const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
-  const debouncedSearch = useDebounced(search, 350);
+  // Page and search live in the URL (`?search=` rather than `?q=`: the products
+  // list and product page link a stock number straight here with it), so Back
+  // from a product returns to the page the row was opened from.
+  const list = useListUrlState("inventory", { searchKey: "search" });
+  const debouncedSearch = useDebounced(list.search, 350);
   const {
     locations,
     locationId,
@@ -172,7 +172,6 @@ function StockScreen() {
     "all",
     oneOf(["all", "low", "out", "oversold"]),
   );
-  const [page, setPage] = useState(1);
   const [adjusting, setAdjusting] = useState<StockLine | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [codesOpen, setCodesOpen] = useState(false);
@@ -184,16 +183,12 @@ function StockScreen() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const bulkAdjust = useBulkAdjustmentMutation();
 
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedSearch, locationId, stockFilter]);
-
   // Selection is by variant id and survives re-filtering, so without this the
   // "Print labels (n)" count keeps counting rows the user can no longer see —
   // and printing a sheet of labels for them is not a recoverable mistake.
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [debouncedSearch, locationId, stockFilter, page]);
+  }, [debouncedSearch, locationId, stockFilter, list.page]);
 
   // Same reasoning as the selection reset above, and more pointed: a draft
   // carried across a location switch would write one location's number onto
@@ -202,23 +197,26 @@ function StockScreen() {
     setDrafts({});
     setReviewOpen(false);
     setSaveError(null);
-  }, [debouncedSearch, locationId, stockFilter, page]);
+  }, [debouncedSearch, locationId, stockFilter, list.page]);
 
   const params: StockListParams = useMemo(
     () => ({
-      page,
+      page: list.page,
       limit: PAGE_SIZE,
       q: debouncedSearch || undefined,
       warehouseId: locationId,
       stockFilter: stockFilter === "all" ? undefined : (stockFilter as StockListParams["stockFilter"]),
     }),
-    [page, debouncedSearch, locationId, stockFilter],
+    [list.page, debouncedSearch, locationId, stockFilter],
   );
 
   // Held until a location resolves. Querying without one returns a row per
   // variant PER location, so the table would flash every product several times
   // over before settling — the exact confusion this screen is fixing.
   const stock = useStock(params, Boolean(locationId));
+  // While keepPreviousData shows another query's rows, its page count is not
+  // this query's — clamping against it would bounce the page for nothing.
+  useClampPage(list, stock.isPlaceholderData ? undefined : stock.data?.meta?.totalPages);
   // Deliberately warehouse-only: `q` and `stockFilter` narrow the table, not
   // the tiles. Feeding the stock filter in would make "Low stock lines" merely
   // restate the row count and pin "Oversold lines" to 0.
@@ -472,13 +470,19 @@ function StockScreen() {
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-gray-400" />
           <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={list.search}
+            onChange={(e) => list.setSearch(e.target.value)}
             placeholder="Search by SKU, barcode or title…"
             className="h-8 w-64 rounded-lg pl-8 text-xs"
           />
         </div>
-        <Select value={stockFilter} onValueChange={setStockFilter}>
+        <Select
+          value={stockFilter}
+          onValueChange={(value) => {
+            setStockFilter(value);
+            list.resetPage();
+          }}
+        >
           <SelectTrigger className="h-8 w-[140px] rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs shadow-sm">
             <SelectValue />
           </SelectTrigger>
@@ -622,14 +626,14 @@ function StockScreen() {
             Page {meta.page} of {meta.totalPages} · {meta.total} lines
           </span>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+            <Button variant="outline" size="sm" disabled={list.page <= 1} onClick={() => list.setPage(list.page - 1)}>
               Previous
             </Button>
             <Button
               variant="outline"
               size="sm"
-              disabled={page >= meta.totalPages}
-              onClick={() => setPage((p) => p + 1)}
+              disabled={list.page >= meta.totalPages}
+              onClick={() => list.setPage(list.page + 1)}
             >
               Next
             </Button>

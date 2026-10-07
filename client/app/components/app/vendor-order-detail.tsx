@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { ArrowLeft, Loader2, Printer } from "lucide-react";
 import { useOrder } from "~/hooks/use-order-queries";
+import { useListReturnPath } from "~/hooks/use-list-url-state";
 import { OrderItemsFulfillment } from "~/components/app/order-items-fulfillment";
 import { cn } from "~/lib/utils";
 import { fulfillmentStatusLabel, hasOutstandingUnits } from "~/lib/order-status";
@@ -18,6 +19,8 @@ const STATUS_CLASS: Record<string, string> = {
 /** A VENDOR's view of an order — only their items, ship-to, and fulfilment actions. */
 export function VendorOrderDetail({ orderId }: { orderId: string }) {
   const { data, isLoading, isError, refetch } = useOrder(orderId);
+  // Back to the list as it was left: same page and search.
+  const ordersPath = useListReturnPath("orders", "/orders");
   const order = data as unknown as VendorOrder | undefined;
 
   // Before the spinner: a failed request left isLoading false and order
@@ -44,7 +47,7 @@ export function VendorOrderDetail({ orderId }: { orderId: string }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link
-            to="/orders"
+            to={ordersPath}
             className="mb-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-gray-900 dark:hover:text-gray-100"
           >
             <ArrowLeft className="size-3.5" /> Back to orders

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { isString,
   isStringArray,
   isStringRecord,
   oneOf,
   useSessionState } from "~/hooks/use-session-state";
+import { useClampPage, useListUrlState } from "~/hooks/use-list-url-state";
 import { Link, useNavigate } from "react-router";
 import {
   Search, Plus, Filter, ChevronLeft, ChevronRight, Package, ListChecks,
@@ -110,10 +111,12 @@ const STOCK_VALUE_MAP: Record<string, StockStatus> = {
 export default function ProductsPage() {
   const navigate = useNavigate();
   const { isVendor } = useCurrentRole();
-  const [searchQuery, setSearchQuery] = useState("");
-  const debouncedSearch = useDebounced(searchQuery, 350);
+  // Page and search live in the URL so Back from a product (and the product
+  // page's breadcrumb) return to the page the row was opened from. See the
+  // note on filters below for what is remembered where.
+  const list = useListUrlState("products");
+  const debouncedSearch = useDebounced(list.search, 350);
   const [selectedType, setSelectedType] = useSessionState("products.type", "All", isString);
-  const [currentPage, setCurrentPage] = useState(1);
   // Full edit/create dialog state. `creatingProduct` toggles the create form;
   // `editingFullProductId` opens the edit form for a MANUAL-channel product
   // (also reachable from the detail page).
@@ -137,8 +140,10 @@ export default function ProductsPage() {
       codeStatus.data.missingBarcode +
       codeStatus.data.longBarcode
     : 0;
-  // Filters and sort are remembered for the browser session; search and the
-  // page number deliberately start fresh.
+  // Filters and sort are remembered for the browser session. Search and the
+  // page number live in the URL instead (useListUrlState): Back and the product
+  // page's breadcrumb return to the same page, while the navbar's bare link
+  // still opens page 1 with no search.
   const [activeFilters, setActiveFilters] = useSessionState<string[]>(
     "products.active-filters",
     [],
@@ -166,7 +171,7 @@ export default function ProductsPage() {
   const orgCurrency = org?.currency ?? "USD";
 
   const params: ProductListParams = {
-    page: currentPage,
+    page: list.page,
     limit: PAGE_SIZE,
     search: debouncedSearch || undefined,
     sortBy,
@@ -177,17 +182,19 @@ export default function ProductsPage() {
     vendor: filterValues.Vendor || undefined,
   };
 
-  const { data, isLoading } = useProducts(params);
+  const { data, isLoading, isPlaceholderData } = useProducts(params);
   const { data: productTypes } = useProductTypes();
   const { data: vendors } = useProductVendors();
   const { data: stats, isLoading: statsLoading } = useProductStats();
-  console.log(stats, "stats");
 
   const statsArray = stats ? Object.entries(stats) : [];
 
   const products = data?.data ?? [];
   const meta = data?.meta;
   const totalPages = meta?.totalPages ?? 1;
+  // While keepPreviousData shows another query's rows, its page count is not
+  // this query's — clamping against it would bounce the page for nothing.
+  useClampPage(list, isPlaceholderData ? undefined : meta?.totalPages);
   const categoryFilters = ["All", ...(productTypes ?? [])];
 
   // Every selected product across pages; rows visible on the current page are
@@ -203,22 +210,19 @@ export default function ProductsPage() {
   const allFiltersSelected = activeFilters.length === FILTER_OPTIONS.length;
   // The catalog is genuinely empty (not just filtered/searched to zero results).
   // When true, the search/sort/filter controls are pointless, so we disable them.
-  const hasActiveQuery = searchQuery.trim() !== "" || activeFilters.length > 0;
+  const hasActiveQuery = list.search.trim() !== "" || activeFilters.length > 0;
   const noProducts = !isLoading && products.length === 0 && !hasActiveQuery;
 
-  // Reset to the first page once the debounced search term settles, so we don't
-  // land on an out-of-range page after the result set changes.
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [debouncedSearch, filterValues]);
-
+  // Search and every filter change land on page 1 through the URL patch itself
+  // (see useListUrlState) — there is deliberately no reset effect here: one that
+  // ran on mount would wipe the page Back just restored.
   function handleSearchChange(event: React.ChangeEvent<HTMLInputElement>) {
-    setSearchQuery(event.target.value);
+    list.setSearch(event.target.value);
   }
 
   function handleTypeFilter(type: string) {
     setSelectedType(type);
-    setCurrentPage(1);
+    list.resetPage();
   }
 
   function toggleSelect(product: Product, checked: boolean) {
@@ -380,7 +384,7 @@ export default function ProductsPage() {
               <input
                 type="text"
                 placeholder="Search by name or SKU…"
-                value={searchQuery}
+                value={list.search}
                 onChange={handleSearchChange}
                 disabled={noProducts}
                 className="h-8 w-full rounded-lg border border-input bg-white dark:bg-gray-900 pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -403,7 +407,7 @@ export default function ProductsPage() {
                       onCheckedChange={() => {
                         setSortBy(opt.sortBy);
                         setSortOrder(opt.sortOrder);
-                        setCurrentPage(1);
+                        list.resetPage();
                       }}
                     >
                       {opt.label}
@@ -453,9 +457,10 @@ export default function ProductsPage() {
                           <DropdownMenuCheckboxItem
                             key={opt}
                             checked={selected === opt}
-                            onCheckedChange={(c) =>
-                              setFilterValues((prev) => ({ ...prev, [name]: c ? opt : "" }))
-                            }
+                            onCheckedChange={(c) => {
+                              setFilterValues((prev) => ({ ...prev, [name]: c ? opt : "" }));
+                              list.resetPage();
+                            }}
                           >
                             {opt}
                           </DropdownMenuCheckboxItem>
@@ -472,6 +477,7 @@ export default function ProductsPage() {
                         delete next[name];
                         return next;
                       });
+                      list.resetPage();
                     }}
                     title={`Remove ${name}`}
                     className="px-1.5 py-1 hover:text-red-600"
@@ -509,7 +515,7 @@ export default function ProductsPage() {
         ) : products.length === 0 ? (
           <EmptyState
             title="No products found"
-            description={searchQuery ? "Try adjusting your search or filters." : "Connect a channel to sync your products."}
+            description={list.search ? "Try adjusting your search or filters." : "Connect a channel to sync your products."}
           />
         ) : (
           <>
@@ -661,15 +667,15 @@ export default function ProductsPage() {
               </p>
               <div className="flex items-center gap-1">
                 <button
-                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
+                  onClick={() => list.setPage(list.page - 1)}
+                  disabled={list.page === 1}
                   className="inline-flex items-center gap-1 h-7 rounded-md border border-input bg-white dark:bg-gray-900 px-3 text-xs text-muted-foreground hover:text-gray-900 dark:hover:text-gray-100 disabled:opacity-40 disabled:pointer-events-none"
                 >
                   <ChevronLeft className="size-3" />Previous
                 </button>
                 <button
-                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage >= totalPages}
+                  onClick={() => list.setPage(list.page + 1)}
+                  disabled={list.page >= totalPages}
                   className="inline-flex items-center gap-1 h-7 rounded-md border border-input bg-white dark:bg-gray-900 px-3 text-xs text-muted-foreground hover:text-gray-900 dark:hover:text-gray-100 disabled:opacity-40 disabled:pointer-events-none"
                 >
                   Next<ChevronRight className="size-3" />

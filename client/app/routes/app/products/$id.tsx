@@ -8,6 +8,7 @@ import {
 } from "react";
 import { oneOf, useSessionState } from "~/hooks/use-session-state";
 import { Link, useBlocker, useParams } from "react-router";
+import { useListReturnPath } from "~/hooks/use-list-url-state";
 import {
   Loader2,
   Check,
@@ -230,6 +231,8 @@ function captureBaseline(p: ProductDetail): FormBaseline {
 
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
+  // Back to the list as it was left: same page, search and filters.
+  const productsPath = useListReturnPath("products", "/products");
   const { isVendor } = useCurrentRole();
   const { data: product, isLoading, isError, refetch } = useProduct(id);
   const { data: org } = useCurrentOrg();
@@ -966,7 +969,7 @@ export default function ProductDetailPage() {
             <BreadcrumbList>
               <BreadcrumbItem>
                 <BreadcrumbLink asChild>
-                  <Link to="/products">Products</Link>
+                  <Link to={productsPath}>Products</Link>
                 </BreadcrumbLink>
               </BreadcrumbItem>
               <BreadcrumbSeparator />
