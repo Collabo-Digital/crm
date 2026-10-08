@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { GenerateCodesDto } from './dto/generate-skus.dto';
+import { productsOutOfSyncStampSql } from '../channel/product-sync-stamp.util';
 
 /**
  * SKU / barcode generation.
@@ -54,6 +55,7 @@ export class SkuGeneratorService {
     let seq = startSeq;
     let generated = 0;
     const conflicts: Array<{ variantId: string; reason: string }> = [];
+    const touched = new Set<string>();
 
     for (const v of variants) {
       const productCode = this.mnemonic(v.product.title);
@@ -80,12 +82,17 @@ export class SkuGeneratorService {
         data: { sku: candidate },
       });
       generated++;
+      touched.add(v.productId);
     }
 
     // Sequence may have run past the claim (collision skips) — re-claim the
     // overrun so the next batch starts clean.
     const overrun = seq - startSeq - variants.length;
     if (overrun > 0) await this.claimSequence(orgId, overrun);
+
+    // A SKU is always part of the push payload, so a synced product now
+    // differs from its Shopify copy.
+    await this.flagForPush(touched);
 
     return { generated, skipped: variants.length - generated, conflicts };
   }
@@ -107,6 +114,7 @@ export class SkuGeneratorService {
     const variants = await this.loadTargets(orgId, dto, 'barcode');
     let generated = 0;
     const conflicts: Array<{ variantId: string; reason: string }> = [];
+    const touched = new Set<string>();
 
     for (const v of variants) {
       if (!v.sku) {
@@ -118,7 +126,9 @@ export class SkuGeneratorService {
         data: { barcode: v.sku, barcodeSource: 'GENERATED' },
       });
       generated++;
+      touched.add(v.productId);
     }
+    await this.flagGeneratedBarcodesForPush(orgId, touched);
     return { generated, skipped: conflicts.length, conflicts };
   }
 
@@ -167,6 +177,7 @@ export class SkuGeneratorService {
     let seq = startSeq;
     let generated = 0;
     const conflicts: Array<{ variantId: string; reason: string }> = [];
+    const touched = new Set<string>();
 
     for (const v of variants) {
       // Skip-and-increment, same as generateSkus.
@@ -218,12 +229,50 @@ export class SkuGeneratorService {
         data: { barcode: candidate, barcodeSource: 'GENERATED' },
       });
       generated++;
+      touched.add(v.productId);
     }
 
     const overrun = seq - startSeq - variants.length;
     if (overrun > 0) await this.claimSequence(orgId, overrun);
 
+    await this.flagGeneratedBarcodesForPush(orgId, touched);
+
     return { generated, skipped: variants.length - generated, conflicts };
+  }
+
+  /**
+   * Tell the sync layer the products changed.
+   *
+   * These generators write straight to the variant row, bypassing the
+   * product service and its `markOutOfSyncIfNeeded`. Nothing else ever
+   * re-flags a SYNCED product, and the pull that "Sync Now" runs first
+   * re-stamps it SYNCED, so a code minted here stayed local for ever: on
+   * 2026-10-08 Shrishti had 4,308 generated barcodes and two Sync Now runs
+   * that each found "no products pending". The stamp is a no-op for products
+   * that were never pushed (no sync record), which is what every freshly
+   * created product is when `ProductService.create` mints its codes.
+   */
+  private async flagForPush(productIds: Set<string>): Promise<void> {
+    if (productIds.size === 0) return;
+    await this.prisma.$executeRaw(productsOutOfSyncStampSql([...productIds]));
+  }
+
+  /**
+   * Same, gated the way the push itself is gated: a GENERATED barcode only
+   * leaves the CRM when `inventorySettings.pushGeneratedBarcodes` is on
+   * (`ShopifyPushService.barcodeForPush`). With the flag off the push would
+   * send nothing for it, so an amber "out of sync" pill would be a lie — and
+   * when the flag is later switched on, `updateInventorySettings` flags the
+   * backlog in one sweep.
+   */
+  private async flagGeneratedBarcodesForPush(
+    orgId: string,
+    productIds: Set<string>,
+  ): Promise<void> {
+    if (productIds.size === 0) return;
+    const settings = await this.settings.getInventorySettings(orgId);
+    if (!settings.pushGeneratedBarcodes) return;
+    await this.flagForPush(productIds);
   }
 
   /**
@@ -361,6 +410,7 @@ export class SkuGeneratorService {
       orderBy: { id: 'asc' },
       select: {
         id: true,
+        productId: true,
         sku: true,
         barcode: true,
         option1: true,

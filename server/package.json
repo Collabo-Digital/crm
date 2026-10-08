@@ -25,6 +25,7 @@
     "db:fix:seed-missing-stock-rows": "node prisma/scripts/print-target.js && node prisma/scripts/seed-missing-stock-rows.js",
     "db:fix:dedupe-mirrored-drafts": "node prisma/scripts/print-target.js && node prisma/scripts/dedupe-mirrored-drafts.js",
     "db:fix:prune-stale-shopify-variants": "node prisma/scripts/print-target.js && node prisma/scripts/prune-stale-shopify-variants.js",
+    "db:push:barcodes": "node prisma/scripts/print-target.js && node prisma/scripts/push-barcodes-only.js",
     "db:fix:dedupe-invoices": "node prisma/scripts/print-target.js && prisma db execute --schema prisma/schema.prisma --file prisma/scripts/dedupe-active-invoices.sql",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",

@@ -31,6 +31,7 @@ import {
   parseStoreProfileSettings,
   StoreProfileSettingsSchema,
 } from './schemas/store-profile-settings.schema';
+import { generatedBarcodeProductsOutOfSyncStampSql } from '../channel/product-sync-stamp.util';
 
 /**
  * Resolves and persists per-org settings. Each domain (product, order, …)
@@ -142,6 +143,23 @@ export class OrganizationSettingsService {
     const current = await this.getInventorySettings(orgId);
     const next = InventorySettingsSchema.parse({ ...current, ...patch });
     await this.upsert(orgId, { inventorySettings: next as Prisma.InputJsonValue });
+
+    // Switching "send generated barcodes" on changes what a future push
+    // sends, but nothing re-flags the products whose codes were minted while
+    // it was off — and Sync Now's pull step re-stamps them SYNCED anyway. So
+    // the toggle itself marks every synced product with a generated barcode
+    // out of sync; the next Sync Now then carries the codes across. Off→on
+    // only: switching off has nothing to send, and the push gate already
+    // withholds the codes.
+    if (!current.pushGeneratedBarcodes && next.pushGeneratedBarcodes) {
+      const flagged = await this.prisma.$executeRaw(
+        generatedBarcodeProductsOutOfSyncStampSql(orgId),
+      );
+      this.logger.log(
+        `pushGeneratedBarcodes switched on for org ${orgId}: ${flagged} synced product(s) ` +
+          'with generated barcodes marked OUT_OF_SYNC for the next push.',
+      );
+    }
     return next;
   }
 

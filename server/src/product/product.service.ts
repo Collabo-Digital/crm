@@ -41,6 +41,7 @@ import {
   QUEUE_UNAVAILABLE_ERROR,
 } from '../channel/shopify-push.service';
 import { mergeJsonMetadata } from '../common/utils/jsonb-merge.util';
+import { productsOutOfSyncStampSql } from '../channel/product-sync-stamp.util';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { SkuGeneratorService } from '../inventory/sku-generator.service';
@@ -2087,30 +2088,13 @@ export class ProductService {
     return tx ? run(tx) : this.prisma.$transaction(run);
   }
 
-  /** Bulk restamp SYNCED → OUT_OF_SYNC. One read + one batched transaction. */
+  /**
+   * Bulk restamp SYNCED → OUT_OF_SYNC. One guarded UPDATE, shared with the
+   * code generators so every bulk local write flags products the same way.
+   */
   private async markManyOutOfSync(ids: string[]) {
     if (ids.length === 0) return;
-    const rows = await this.prisma.product.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, metadata: true },
-    });
-    const updates = rows.flatMap((r) => {
-      const sync = (r.metadata as Prisma.JsonObject)?.shopifySync as
-        | { status?: ShopifySyncStatus }
-        | undefined;
-      if (sync?.status !== 'SYNCED') return [];
-      return [
-        this.prisma.product.update({
-          where: { id: r.id },
-          data: {
-            metadata: this.mergeShopifySync(r.metadata, {
-              status: 'OUT_OF_SYNC',
-            }),
-          },
-        }),
-      ];
-    });
-    if (updates.length > 0) await this.prisma.$transaction(updates);
+    await this.prisma.$executeRaw(productsOutOfSyncStampSql(ids));
   }
 
   // ═══════════════════════════════════════════════════════════════════════
