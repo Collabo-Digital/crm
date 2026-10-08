@@ -72,7 +72,10 @@ describe('SkuGeneratorService — flagging products for push', () => {
             },
           },
         },
-        { provide: OrganizationSettingsService, useValue: { getInventorySettings } },
+        {
+          provide: OrganizationSettingsService,
+          useValue: { getInventorySettings },
+        },
       ],
     }).compile();
 
@@ -83,19 +86,47 @@ describe('SkuGeneratorService — flagging products for push', () => {
     it('flags each written variant’s product once, SKUs being always pushed', async () => {
       // loadTargets, then the collision probe set.
       findMany
-        .mockResolvedValueOnce([
-          variant('v1', 'p1'),
-          variant('v2', 'p1'),
-          variant('v3', 'p2'),
-        ])
+        .mockResolvedValueOnce([variant('v1', 'p1'), variant('v2', 'p1'), variant('v3', 'p2')])
         .mockResolvedValueOnce([]);
 
-      const res = await service.generateSkus(ORG, { filter: 'missing-sku' });
+      const res = await service.generateSkus(ORG, {
+        filter: 'missing-sku',
+      });
 
       expect(res.generated).toBe(3);
       expect(stampedIds()).toEqual([['p1', 'p2']]);
-      // Never consults the barcode flag: a SKU goes out regardless.
-      expect(getInventorySettings).toHaveBeenCalledTimes(1); // resolvePrefix only
+    });
+
+    it('still flags whatever was written when a later variant throws', async () => {
+      // Three targets, the second write fails. v1's SKU is already on disk,
+      // so p1 must be flagged or the row diverges silently — the exact class
+      // of bug this stamping exists to close.
+      findMany
+        .mockResolvedValueOnce([variant('v1', 'p1'), variant('v2', 'p2'), variant('v3', 'p3')])
+        .mockResolvedValueOnce([]);
+      const prisma = (
+        service as unknown as {
+          prisma: { productVariant: { update: jest.Mock } };
+        }
+      ).prisma;
+      prisma.productVariant.update
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(new Error('connection reset'));
+
+      await expect(service.generateSkus(ORG, { filter: 'missing-sku' })).rejects.toThrow(
+        'connection reset',
+      );
+      expect(stampedIds()).toEqual([['p1']]);
+    });
+
+    it('flags SKUs regardless of the generated-barcode setting', async () => {
+      getInventorySettings.mockResolvedValue({
+        skuPrefix: 'SJ',
+        pushGeneratedBarcodes: false,
+      });
+      findMany.mockResolvedValueOnce([variant('v1', 'p1')]).mockResolvedValueOnce([]);
+      await service.generateSkus(ORG, { filter: 'missing-sku' });
+      expect(stampedIds()).toEqual([['p1']]);
     });
 
     it('does not stamp when nothing was written', async () => {
@@ -107,12 +138,17 @@ describe('SkuGeneratorService — flagging products for push', () => {
 
   describe('generateBarcodes (short codes)', () => {
     it('flags the products when the org sends generated barcodes to Shopify', async () => {
-      getInventorySettings.mockResolvedValue({ skuPrefix: 'SJ', pushGeneratedBarcodes: true });
+      getInventorySettings.mockResolvedValue({
+        skuPrefix: 'SJ',
+        pushGeneratedBarcodes: true,
+      });
       findMany
         .mockResolvedValueOnce([variant('v1', 'p1'), variant('v2', 'p2')])
         .mockResolvedValueOnce([]); // existing-code probe set
 
-      const res = await service.generateBarcodes(ORG, { filter: 'missing-barcode' });
+      const res = await service.generateBarcodes(ORG, {
+        filter: 'missing-barcode',
+      });
 
       expect(res.generated).toBe(2);
       expect(stampedIds()).toEqual([['p1', 'p2']]);
@@ -122,30 +158,41 @@ describe('SkuGeneratorService — flagging products for push', () => {
       // pushGeneratedBarcodes is off: the push gate drops GENERATED codes, so
       // an amber pill would promise a push that changes nothing. The backlog
       // is flagged later, when the setting is switched on.
-      getInventorySettings.mockResolvedValue({ skuPrefix: 'SJ', pushGeneratedBarcodes: false });
-      findMany
-        .mockResolvedValueOnce([variant('v1', 'p1')])
-        .mockResolvedValueOnce([]);
+      getInventorySettings.mockResolvedValue({
+        skuPrefix: 'SJ',
+        pushGeneratedBarcodes: false,
+      });
+      findMany.mockResolvedValueOnce([variant('v1', 'p1')]).mockResolvedValueOnce([]);
 
-      const res = await service.generateBarcodes(ORG, { filter: 'missing-barcode' });
+      const res = await service.generateBarcodes(ORG, {
+        filter: 'missing-barcode',
+      });
 
       expect(res.generated).toBe(1);
       expect(stampedIds()).toEqual([]);
     });
 
     it('flags only products that actually received a code', async () => {
-      getInventorySettings.mockResolvedValue({ skuPrefix: 'SJ', pushGeneratedBarcodes: true });
+      getInventorySettings.mockResolvedValue({
+        skuPrefix: 'SJ',
+        pushGeneratedBarcodes: true,
+      });
       findMany
         .mockResolvedValueOnce([variant('v1', 'p1'), variant('v2', 'p2')])
         .mockResolvedValueOnce([]);
       // v2's candidate is claimed concurrently → conflict, not written.
-      const prisma = (service as unknown as { prisma: { productVariant: { findFirst: jest.Mock } } })
-        .prisma;
+      const prisma = (
+        service as unknown as {
+          prisma: { productVariant: { findFirst: jest.Mock } };
+        }
+      ).prisma;
       prisma.productVariant.findFirst
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce({ id: 'someone-else' });
 
-      const res = await service.generateBarcodes(ORG, { filter: 'missing-barcode' });
+      const res = await service.generateBarcodes(ORG, {
+        filter: 'missing-barcode',
+      });
 
       expect(res.generated).toBe(1);
       expect(res.conflicts).toHaveLength(1);
@@ -155,13 +202,19 @@ describe('SkuGeneratorService — flagging products for push', () => {
 
   describe('generateBarcodes (format: sku)', () => {
     it('applies the same gate as the short-code path', async () => {
-      getInventorySettings.mockResolvedValue({ skuPrefix: 'SJ', pushGeneratedBarcodes: true });
+      getInventorySettings.mockResolvedValue({
+        skuPrefix: 'SJ',
+        pushGeneratedBarcodes: true,
+      });
       findMany.mockResolvedValueOnce([
         variant('v1', 'p1', { sku: 'SJ-SAR-001' }),
         variant('v2', 'p2'), // no SKU → skipped, so p2 must not be flagged
       ]);
 
-      const res = await service.generateBarcodes(ORG, { filter: 'missing-barcode', format: 'sku' });
+      const res = await service.generateBarcodes(ORG, {
+        filter: 'missing-barcode',
+        format: 'sku',
+      });
 
       expect(res.generated).toBe(1);
       expect(stampedIds()).toEqual([['p1']]);

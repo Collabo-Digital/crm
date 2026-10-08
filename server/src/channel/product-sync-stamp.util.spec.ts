@@ -23,6 +23,10 @@ describe('productsOutOfSyncStampSql', () => {
     expect(text).toContain(`coalesce("metadata" -> 'shopifySync', '{}'::jsonb)`);
   });
 
+  it('bumps updated_at, as the Prisma update it replaced did', () => {
+    expect(text).toContain(`"updated_at" = NOW()`);
+  });
+
   it('touches only a SYNCED row, never an unstamped, PENDING, FAILED or OUT_OF_SYNC one', () => {
     // An unstamped row is a never-pushed MANUAL product: the push sweep finds
     // it by the missing record, and stamping it would disguise it as a

@@ -67,9 +67,7 @@ export class OrganizationSettingsService {
       orderSettings: parseOrderSettings(row?.orderSettings ?? null),
       inventorySettings: parseInventorySettings(row?.inventorySettings ?? null),
       taxSettings: parseTaxSettings(row?.taxSettings ?? null),
-      storeProfileSettings: parseStoreProfileSettings(
-        row?.storeProfileSettings ?? null,
-      ),
+      storeProfileSettings: parseStoreProfileSettings(row?.storeProfileSettings ?? null),
     };
   }
 
@@ -142,7 +140,7 @@ export class OrganizationSettingsService {
     this.assertOrgId(orgId);
     const current = await this.getInventorySettings(orgId);
     const next = InventorySettingsSchema.parse({ ...current, ...patch });
-    await this.upsert(orgId, { inventorySettings: next as Prisma.InputJsonValue });
+    const data = { inventorySettings: next as Prisma.InputJsonValue };
 
     // Switching "send generated barcodes" on changes what a future push
     // sends, but nothing re-flags the products whose codes were minted while
@@ -151,14 +149,21 @@ export class OrganizationSettingsService {
     // out of sync; the next Sync Now then carries the codes across. Off→on
     // only: switching off has nothing to send, and the push gate already
     // withholds the codes.
+    //
+    // Same transaction as the settings write: if the sweep failed after the
+    // flag had committed, nothing would ever re-run it (the next PATCH sees
+    // on→on) and the caller would get a 500 for a change that stuck.
     if (!current.pushGeneratedBarcodes && next.pushGeneratedBarcodes) {
-      const flagged = await this.prisma.$executeRaw(
-        generatedBarcodeProductsOutOfSyncStampSql(orgId),
-      );
+      const flagged = await this.prisma.$transaction(async (tx) => {
+        await this.upsert(orgId, data, tx);
+        return tx.$executeRaw(generatedBarcodeProductsOutOfSyncStampSql(orgId));
+      });
       this.logger.log(
         `pushGeneratedBarcodes switched on for org ${orgId}: ${flagged} synced product(s) ` +
           'with generated barcodes marked OUT_OF_SYNC for the next push.',
       );
+    } else {
+      await this.upsert(orgId, data);
     }
     return next;
   }
@@ -171,8 +176,13 @@ export class OrganizationSettingsService {
   async setWarehousingEnabled(orgId: string, enabled: boolean): Promise<InventorySettings> {
     this.assertOrgId(orgId);
     const current = await this.getInventorySettings(orgId);
-    const next = InventorySettingsSchema.parse({ ...current, warehousingEnabled: enabled });
-    await this.upsert(orgId, { inventorySettings: next as Prisma.InputJsonValue });
+    const next = InventorySettingsSchema.parse({
+      ...current,
+      warehousingEnabled: enabled,
+    });
+    await this.upsert(orgId, {
+      inventorySettings: next as Prisma.InputJsonValue,
+    });
     return next;
   }
 
@@ -195,14 +205,13 @@ export class OrganizationSettingsService {
    * Shallow spread, like its siblings — TaxSettings is deliberately flat so a
    * partial patch cannot drop sibling keys.
    */
-  async updateTaxSettings(
-    orgId: string,
-    patch: UpdateTaxSettingsInput,
-  ): Promise<TaxSettings> {
+  async updateTaxSettings(orgId: string, patch: UpdateTaxSettingsInput): Promise<TaxSettings> {
     this.assertOrgId(orgId);
     const current = await this.getTaxSettings(orgId);
     const next = TaxSettingsSchema.parse({ ...current, ...patch });
-    await this.upsert(orgId, { taxSettings: next as Prisma.InputJsonValue });
+    await this.upsert(orgId, {
+      taxSettings: next as Prisma.InputJsonValue,
+    });
     return next;
   }
 
@@ -214,7 +223,9 @@ export class OrganizationSettingsService {
     this.assertOrgId(orgId);
     const current = await this.getProductSettings(orgId);
     const next = ProductSettingsSchema.parse({ ...current, ...patch });
-    await this.upsert(orgId, { productSettings: next as Prisma.InputJsonValue });
+    await this.upsert(orgId, {
+      productSettings: next as Prisma.InputJsonValue,
+    });
     return next;
   }
 
@@ -226,7 +237,9 @@ export class OrganizationSettingsService {
     this.assertOrgId(orgId);
     const current = await this.getOrderSettings(orgId);
     const next = OrderSettingsSchema.parse({ ...current, ...patch });
-    await this.upsert(orgId, { orderSettings: next as Prisma.InputJsonValue });
+    await this.upsert(orgId, {
+      orderSettings: next as Prisma.InputJsonValue,
+    });
     return next;
   }
 
@@ -241,17 +254,16 @@ export class OrganizationSettingsService {
    */
   private assertOrgId(orgId: string | undefined | null): asserts orgId is string {
     if (!orgId) {
-      throw new BadRequestException(
-        'Organization context required to read or write settings.',
-      );
+      throw new BadRequestException('Organization context required to read or write settings.');
     }
   }
 
   private async upsert(
     orgId: string,
     data: Prisma.OrganizationSettingsUncheckedUpdateInput,
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<void> {
-    await this.prisma.organizationSettings.upsert({
+    await client.organizationSettings.upsert({
       where: { organizationId: orgId },
       create: {
         ...(data as Prisma.OrganizationSettingsUncheckedCreateInput),

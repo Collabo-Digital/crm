@@ -90,6 +90,7 @@ import {
     OrderFulfillmentLocationsResponse,
 } from './shopify-graphql.types';
 import { singleDistinct } from './single-distinct.util';
+import { pulledBarcodePatch } from './pulled-barcode.util';
 import { parseProductSettings } from '../organization-settings/schemas/product-settings.schema';
 
 const GRAPHQL_PAGE_SIZE = 50;
@@ -1444,8 +1445,10 @@ export class ShopifySyncService {
             // `undefined` means "leave the column alone" in Prisma, the same
             // idiom inventoryItemId uses two lines down.
             const incomingBarcode = sv.barcode || null;
-            const keepLocalBarcode =
-                incomingBarcode === null && prior?.barcodeSource === 'GENERATED';
+            // Decision (keep / take / clear, and whether the SOURCE moves)
+            // lives in pulled-barcode.util.ts so the round-trip case is
+            // testable: a code the push sent must not come back as SHOPIFY.
+            const barcodePatch = pulledBarcodePatch(sv.barcode, prior);
 
             // Inventory toggles. Both doors carry these — REST as
             // `inventory_policy` ('continue' | 'deny') and
@@ -1491,12 +1494,7 @@ export class ShopifySyncService {
                 },
                 update: {
                     title: sv.title || 'Default', sku: sv.sku,
-                    ...(keepLocalBarcode
-                        ? {}
-                        : {
-                              barcode: incomingBarcode,
-                              barcodeSource: incomingBarcode ? 'SHOPIFY' : null,
-                          }),
+                    ...barcodePatch,
                     price: sv.price, compareAtPrice: sv.compare_at_price,
                     ...(warehousing ? {} : { inventoryQuantity: incomingQty }),
                     inventoryItemId: sv.inventory_item_id ? String(sv.inventory_item_id) : undefined,

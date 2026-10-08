@@ -31,7 +31,8 @@ export function productsOutOfSyncStampSql(productIds: string[]): Prisma.Sql {
       coalesce("metadata", '{}'::jsonb),
       '{shopifySync}',
       coalesce("metadata" -> 'shopifySync', '{}'::jsonb) || '{"status": "OUT_OF_SYNC"}'::jsonb
-    )
+    ),
+    "updated_at" = NOW()
     WHERE "id" = ANY(${productIds}::text[])
       AND "metadata" -> 'shopifySync' ->> 'status' = 'SYNCED'
   `;
@@ -59,7 +60,8 @@ export function generatedBarcodeProductsOutOfSyncStampSql(orgId: string): Prisma
       coalesce(p."metadata", '{}'::jsonb),
       '{shopifySync}',
       coalesce(p."metadata" -> 'shopifySync', '{}'::jsonb) || '{"status": "OUT_OF_SYNC"}'::jsonb
-    )
+    ),
+    "updated_at" = NOW()
     WHERE p."organization_id" = ${orgId}
       AND p."deleted_at" IS NULL
       AND p."metadata" -> 'shopifySync' ->> 'status' = 'SYNCED'
