@@ -53,12 +53,13 @@ const TriggerConfig = z.object({
      * store order was placed, paid, shipped, delivered or cancelled ·
      * checkout_abandoned — a store checkout was left unfinished · cart — a
      * WhatsApp cart sent from the catalog · invoice_issued — a GST invoice was
-     * issued for an order · payment_received — a payment link was paid.
+     * issued for an order · payment_received — a payment link was paid ·
+     * website_signup — someone left their number in the website pop-up.
      */
     event: z.enum([
         'comment', 'message', 'mention', 'postback', 'tag_added', 'webhook',
         'order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled', 'checkout_abandoned', 'cart',
-        'invoice_issued', 'payment_received',
+        'invoice_issued', 'payment_received', 'website_signup',
     ]),
     /** Comment: the post or reel id; empty for every post. */
     post: z.string().max(64).default(''),
@@ -314,8 +315,8 @@ export function parseDefinition(input: unknown): StepDef[] {
 const ORDER_EVENTS = ['order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled'];
 /** Events about one order: its actions and its invoice are available. A paid link is about its order, when it had one. */
 const ORDER_CONTEXT = [...ORDER_EVENTS, 'invoice_issued', 'payment_received'];
-/** Store events reach people who may not have written in 24 hours: WhatsApp templates only. */
-const STORE_EVENTS = [...ORDER_CONTEXT, 'checkout_abandoned'];
+/** Store events and website sign-ups reach people who may not have written in 24 hours: WhatsApp templates only. */
+const STORE_EVENTS = [...ORDER_CONTEXT, 'checkout_abandoned', 'website_signup'];
 const EVENTS_BY_CHANNEL: Record<z.infer<typeof Channel>, string[]> = {
     instagram: ['comment', 'message', 'mention', 'postback', 'tag_added', 'webhook'],
     facebook: ['comment', 'message', 'postback', 'tag_added', 'webhook'],
@@ -360,6 +361,7 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
     if (ORDER_CONTEXT.includes(t.event)) saved.add('invoice');
     if (t.event === 'checkout_abandoned') saved.add('checkout');
     if (t.event === 'payment_received') saved.add('payment');
+    if (t.event === 'website_signup') saved.add('signup');
     let privateReplies = 0;
     for (const { step, path } of actions) {
         const c = step.config;
@@ -580,6 +582,7 @@ export function triggerTypeFor(trigger: StepDef): string {
     if (c.event === 'checkout_abandoned') return 'crm.checkout.abandoned';
     if (c.event === 'invoice_issued') return 'crm.invoice.issued';
     if (c.event === 'payment_received') return 'crm.payment.received';
+    if (c.event === 'website_signup') return 'crm.website.signup';
     if (c.event === 'cart') return 'whatsapp.cart';
     if (c.event === 'mention') return 'instagram.mention';
     return `${c.channel}.${c.event}`;

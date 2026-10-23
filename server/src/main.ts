@@ -56,11 +56,14 @@ async function bootstrap() {
   app.useBodyParser('json', { limit: REQUEST_BODY_LIMIT });
   app.useBodyParser('urlencoded', { limit: REQUEST_BODY_LIMIT, extended: true });
 
-  // CORS — pixel ingest must accept any storefront origin; everything else
-  // stays locked to the CRM frontend.
+  // CORS — pixel ingest and the website widget must accept any storefront
+  // origin; everything else stays locked to the CRM frontend.
   app.enableCors((req, cb) => {
     if (req.url?.startsWith('/api/v1/analytics/pixel')) {
       cb(null, { origin: true, credentials: false, methods: ['POST', 'OPTIONS'], maxAge: 86400 });
+    } else if (req.url?.startsWith('/api/v1/widget/')) {
+      // The website widget runs on merchants' own sites; sign-ups check each widget's allowed domains.
+      cb(null, { origin: true, credentials: false, methods: ['GET', 'POST', 'OPTIONS'], maxAge: 86400 });
     } else {
       cb(null, {
         origin: config.get<string>('frontendUrl'),

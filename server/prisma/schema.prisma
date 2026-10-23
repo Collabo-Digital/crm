@@ -357,6 +357,8 @@ model Organization {
   catalogItems           CatalogItem[]
   paymentAccounts        PaymentAccount[]
   paymentLinks           PaymentLink[]
+  growthLinks            GrowthLink[]
+  siteWidgets            SiteWidget[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -610,6 +612,9 @@ model Channel {
   /// There is deliberately NO @@unique([organizationId, platform]) — it is what
   /// made multiple Instagram accounts impossible.
   paymentLinks PaymentLink[]
+
+  growthLinks GrowthLink[]
+  siteWidgets SiteWidget[]
 
   @@index([organizationId, platform])
   @@index([organizationId])
@@ -3250,4 +3255,61 @@ model PaymentLink {
   /// The status sweep for links whose webhook never came.
   @@index([status, expiresAt])
   @@map("payment_links")
+}
+
+// ─── Growth tools: chat links, QR codes, the website button and pop-up ─────
+
+/// A short link (and its QR code) that opens a chat with the business:
+/// wa.me with a pre-filled message, m.me or ig.me. Collabo redirects
+/// /l/:code to it and counts the clicks.
+model GrowthLink {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  channelId      String    @map("channel_id")
+  name           String
+  /// The public part of the short link; also the reference in WhatsApp's pre-filled message.
+  code           String    @unique
+  prefilledText  String?   @map("prefilled_text")
+  /// Added to a WhatsApp contact whose first message carries this link's reference.
+  tag            String?
+  clicks         Int       @default(0)
+  lastClickAt    DateTime? @map("last_click_at")
+  chats          Int       @default(0)
+  createdById    String?   @map("created_by_id")
+  archivedAt     DateTime? @map("archived_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, archivedAt])
+  @@map("growth_links")
+}
+
+/// The chat button and number-capture pop-up for the merchant's website,
+/// loaded from /widget/:key.js. One per organization.
+model SiteWidget {
+  id             String   @id @default(cuid())
+  organizationId String   @unique @map("organization_id")
+  /// The WhatsApp number the button opens and pop-up sign-ups join.
+  channelId      String   @map("channel_id")
+  /// Public: in the script URL on the merchant's site.
+  key            String   @unique
+  enabled        Boolean  @default(false)
+  /// { button: {...}, popup: {...} }, validated by the widget schema.
+  settings       Json     @db.JsonB
+  /// Sites allowed to send pop-up sign-ups (host names). Empty: none.
+  allowedDomains String[] @default([]) @map("allowed_domains")
+  /// The chat link behind the button: its clicks and the chats it starts are counted there.
+  buttonLinkId   String?  @unique @map("button_link_id")
+  popupViews     Int      @default(0) @map("popup_views")
+  signups        Int      @default(0)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@map("site_widgets")
 }

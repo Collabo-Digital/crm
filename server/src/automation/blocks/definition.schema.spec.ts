@@ -257,3 +257,16 @@ describe('asking for WhatsApp Pay', () => {
         expect(check(steps('cart'), false)).toEqual(['whatsapp_pay_not_ready']);
     });
 });
+
+describe('a website sign-up', () => {
+    it('starts an automation with {{signup.*}}, and needs a template since they have not written', () => {
+        const steps = (message: Record<string, unknown>) => [
+            { id: 't', type: 'trigger', config: { channel: 'whatsapp', event: 'website_signup' } },
+            { id: 'm', type: 'send_message', config: message },
+        ];
+        const check = (s: unknown[]) => collectIssues(parseDefinition({ steps: s }), { platform: 'WHATSAPP', knownMediaIds: null }).map((i) => i.code);
+        expect(triggerTypeFor(parseDefinition({ steps: steps({ kind: 'text', message: 'x' }) })[0])).toBe('crm.website.signup');
+        expect(check(steps({ kind: 'text', message: 'Welcome {{signup.name}}' }))).toEqual(['template_needed']);
+        expect(check(steps({ kind: 'template', templateId: 't1', templateValues: { 'body.1': '{{signup.name}}' } }))).toEqual([]);
+    });
+});

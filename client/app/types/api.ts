@@ -4503,6 +4503,44 @@ export interface CreatePaymentLinkRequest {
   expiresInHours?: number;
 }
 
+// ─── Growth tools ───────────────────────────────────────────────────────────
+
+export interface GrowthLink {
+  id: string;
+  name: string;
+  code: string;
+  /** Collabo's short link: counts the click, then opens the chat. */
+  shortUrl: string;
+  /** Where it opens: wa.me, m.me or ig.me. */
+  target: string | null;
+  prefilledText: string | null;
+  tag: string | null;
+  clicks: number;
+  /** WhatsApp chats whose first message carried this link's reference. */
+  chats: number;
+  lastClickAt: string | null;
+  createdAt: string;
+  channel: { id: string; name: string; platform: ChannelPlatform };
+  /** The website chat button's own link. */
+  isWidgetButton: boolean;
+}
+
+export interface WidgetSettings {
+  button: { label: string; color: string; position: "right" | "left"; greeting: string; greetingDelaySeconds: number; prefilledText: string; hideOnMobile: boolean };
+  popup: { enabled: boolean; title: string; text: string; buttonLabel: string; consentText: string; successText: string; delaySeconds: number; tag: string; defaultCountryCode: string };
+}
+
+export interface SiteWidgetView {
+  configured: boolean;
+  enabled: boolean;
+  channelId: string | null;
+  settings: WidgetSettings;
+  allowedDomains: string[];
+  /** The script tag's src, once saved. */
+  scriptUrl: string | null;
+  stats: { clicks: number; chats: number; popupViews: number; signups: number };
+}
+
 export interface CatalogView {
   channelId: string;
   onBusinessApp: boolean;

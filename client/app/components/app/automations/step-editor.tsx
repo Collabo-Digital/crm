@@ -63,6 +63,7 @@ function variablesFor(ctx: EditorContext): string[] {
   if (event === "checkout_abandoned") ["checkout.url", "checkout.url_path", "checkout.total", "checkout.items"].forEach((v) => saved.add(v));
   // A paid link carries {{payment.*}}; "Send a payment link" fills it for its own message and later steps.
   if (event === "payment_received") ["payment.amount", "payment.method", "payment.description"].forEach((v) => saved.add(v));
+  if (event === "website_signup") ["signup.name", "signup.page"].forEach((v) => saved.add(v));
   if (allSteps(ctx.steps).some((s) => s.type === "send_payment_link")) ["payment.link", "payment.link_path", "payment.amount", "payment.expires"].forEach((v) => saved.add(v));
   return [
     "first_name",

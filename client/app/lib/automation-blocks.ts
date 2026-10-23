@@ -64,7 +64,7 @@ export const BLOCK_GROUPS: Array<BlockSpec["group"]> = ["Messages", "Flow", "Con
 
 /** Store triggers: the order or checkout they are about gives {{order.*}} or {{checkout.*}}. */
 export const ORDER_EVENTS = ["order_created", "order_paid", "order_fulfilled", "order_delivered", "order_cancelled", "invoice_issued", "payment_received"];
-export const STORE_EVENTS = [...ORDER_EVENTS, "checkout_abandoned"];
+export const STORE_EVENTS = [...ORDER_EVENTS, "checkout_abandoned", "website_signup"];
 
 export const BRANCH_LABEL: Partial<Record<AutomationBlockType, Record<string, string>>> = {
   condition: { yes: "Yes", no: "No" },
@@ -107,7 +107,8 @@ export const EVENTS: Record<AutomationChannelKey, Array<{ value: string; label: 
     { value: "order_delivered", label: "An order is delivered", hint: "When the carrier or your team marks it delivered." },
     { value: "order_cancelled", label: "An order is cancelled", hint: "" },
     { value: "checkout_abandoned", label: "A checkout is left unfinished", hint: "An hour after a Shopify checkout with a phone number goes quiet." },
-    { value: "tag_added", label: "A contact gets a tag", hint: "" },
+    { value: "website_signup", label: "Someone signs up on your website", hint: "From the pop-up in Campaigns → Growth, with their consent. {{signup.name}} and {{signup.page}} are filled in." },
+    { value: "tag_added", label: "A contact gets a tag", hint: "A chat link’s tag too, when a chat starts from it." },
     { value: "webhook", label: "Another app calls a URL", hint: "For example your order tool, with the customer’s phone number." },
   ],
 };
@@ -268,6 +269,8 @@ export function triggerSummary(config: AutomationStep["config"]): string {
       return "A GST invoice is issued";
     case "payment_received":
       return "A payment link is paid";
+    case "website_signup":
+      return "Someone signs up on your website";
     case "order_fulfilled":
       return "An order ships";
     case "order_delivered":
@@ -591,6 +594,17 @@ export const PLAYBOOKS: Playbook[] = [
       t(channel, { event: "payment_received" }),
       s("add_note", { text: "{{first_name}} paid {{payment.amount}} by {{payment.method}} for {{payment.description}}" }),
       s("send_message", { kind: "template", templateValues: prefill({ first_name: "{{first_name}}", order_number: "{{order.name}}" }), options: [] }),
+    ],
+  },
+  {
+    key: "website_welcome",
+    name: "Welcome website sign-ups",
+    description: "When someone leaves their number in your website pop-up, send the welcome offer on WhatsApp and tag them.",
+    channels: ["whatsapp"],
+    steps: (channel) => [
+      t(channel, { event: "website_signup" }),
+      s("send_message", { kind: "template", templateValues: prefill({ first_name: "{{first_name}}" }), options: [] }),
+      s("add_tag", { tags: ["welcome-sent"] }),
     ],
   },
   {

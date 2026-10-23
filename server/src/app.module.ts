@@ -51,6 +51,7 @@ import { InboxModule } from './inbox/inbox.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
 import { CommerceModule } from './commerce/commerce.module';
 import { PaymentsModule } from './payments/payments.module';
+import { GrowthModule } from './growth/growth.module';
 
 @Module({
   imports: [
@@ -119,6 +120,7 @@ import { PaymentsModule } from './payments/payments.module';
     CampaignsModule,
     CommerceModule,
     PaymentsModule,
+    GrowthModule,
   ],
   controllers: [AppController],
   providers: [

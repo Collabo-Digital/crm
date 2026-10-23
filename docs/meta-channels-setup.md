@@ -549,6 +549,35 @@ or admin. That is a different account from Collabo's own subscription billing
   Razorpay's partner OAuth ("Connect with Razorpay" without copying keys)
   needs Collabo registered as a Razorpay technology partner.
 
+### Growth tools (Campaigns → Growth)
+
+- **Chat links and QR codes.** A link per campaign, poster or bio, on
+  WhatsApp (`wa.me/<number>?text=…`), Messenger (`m.me/<page>?ref=<code>`) or
+  Instagram (`ig.me/m/<username>`). Collabo's short link
+  `/api/v1/l/<code>` counts the click and redirects (no login, not rate
+  limited, `noindex`). A WhatsApp link's pre-filled message ends with
+  `Ref: <code>`; when a customer's message carries it, the contact gets the
+  link's tag (which "A contact gets a tag" automations can follow up) and the
+  link is credited with the chat, once per person. Customers may edit the text,
+  and then the chat is simply not attributed. QR codes download as PNG (for
+  print) or SVG and encode the short link, so scans are counted too.
+- **Website chat button and pop-up.** One per organization, loaded with
+  `<script src="<APP_URL>/api/v1/widget/<key>.js" async></script>` before
+  `</body>` (in Shopify: theme.liquid). The script is plain JavaScript in a
+  shadow root, so the site's CSS cannot reach it; it writes merchant text as
+  text, never HTML, and does nothing while the widget is off. The button opens
+  WhatsApp through its own chat link (tag `website-chat`), so its clicks and
+  chats are counted like any link. The pop-up shows once a week per visitor
+  and asks for a number and an explicit consent tick; a sign-up is accepted
+  only from the sites listed in the settings (checked against Origin/Referer),
+  a filled honeypot field is answered as if it worked, and the same number
+  within a day changes nothing. A sign-up becomes a WhatsApp contact, opted in
+  with `source: widget` and the consent text and page as evidence, gets the
+  pop-up's tag, and starts "Someone signs up on your website" automations,
+  which must send a template since the person has not written. CORS for
+  `/api/v1/widget/*` accepts any origin without credentials (like the
+  storefront pixel); the rest of the API stays locked to the CRM.
+
 ### Messaging analytics (Analytics → Messaging)
 
 For owners, admins and managers; days are counted in the organization's time

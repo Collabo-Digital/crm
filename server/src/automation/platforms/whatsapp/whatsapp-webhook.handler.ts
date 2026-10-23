@@ -9,6 +9,7 @@ import { whatsAppContent } from '../../../messaging/message-content';
 import { accountUpdateEffect } from './whatsapp-account-update.util';
 import type { WaContactRef, WaEvent, WaMessage } from './whatsapp-webhook.parser';
 import { WhatsAppPayService } from '../../../payments/whatsapp-pay.service';
+import { GrowthService } from '../../../growth/growth.service';
 
 export interface WhatsAppChannelRef {
     id: string;
@@ -58,6 +59,7 @@ export class WhatsAppWebhookHandler {
         private readonly ingest: MessageIngestService,
         private readonly templates: TemplatesService,
         private readonly whatsAppPay: WhatsAppPayService,
+        private readonly growth: GrowthService,
     ) { }
 
     async handle(events: WaEvent[]): Promise<void> {
@@ -183,7 +185,7 @@ export class WhatsAppWebhookHandler {
         }
         if (!from || (!from.userId && !from.waId)) return;
         const button = raw.button as { payload?: string } | undefined;
-        await this.ingest.recordInbound({
+        const recorded = await this.ingest.recordInbound({
             channel,
             contact: toRef(from),
             externalId: m.id,
@@ -197,6 +199,8 @@ export class WhatsAppWebhookHandler {
             // A cart from the catalog starts cart automations, not message ones.
             event: imported ? undefined : { type: m.type === 'order' ? 'whatsapp.cart' : 'whatsapp.message', extraPayload: { referral: m.referral } },
         });
+        // A chat opened from a chat link carries its reference.
+        if (recorded && !imported && m.type === 'text') await this.growth.attribute(channel.id, recorded.conversationId, m.text);
     }
 
     /** Sent from the WhatsApp Business app (coexistence), live or from history. */
