@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { channelService } from "~/services/channel.service";
 import { channelKeys } from "~/hooks/use-channel-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
-import type { WhatsAppCallbackRequest } from "~/types/api";
+import type { WhatsAppCallbackRequest, WhatsAppInstallRequest } from "~/types/api";
 
 /**
  * Step 1 of WhatsApp Embedded Signup: ask the backend for the `configId` and
@@ -11,7 +11,7 @@ import type { WhatsAppCallbackRequest } from "~/types/api";
  */
 export function useWhatsAppInstallMutation() {
   return useMutation({
-    mutationFn: () => channelService.installWhatsApp(),
+    mutationFn: (data: WhatsAppInstallRequest = {}) => channelService.installWhatsApp(data),
     onError: (error) => handleMutationError(error, "Failed to start WhatsApp connection."),
   });
 }

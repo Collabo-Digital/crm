@@ -53,15 +53,18 @@ export class WhatsAppTriggerService {
         order: ShopifyOrderPayload,
     ): Promise<void> {
         // 1. Does this org have a connected WhatsApp channel?
-        const waChannel = await this.prisma.channel.findUnique({
+        // An org can now hold a DISCONNECTED WhatsApp row as history with no
+        // active one beside it, so status is part of the query rather than a
+        // test applied to "the" row afterwards.
+        const waChannel = await this.prisma.channel.findFirst({
             where: {
-                organizationId_platform: {
-                    organizationId,
-                    platform: ChannelPlatform.WHATSAPP,
-                },
+                organizationId,
+                platform: ChannelPlatform.WHATSAPP,
+                status: ChannelStatus.CONNECTED,
             },
+            orderBy: { createdAt: 'desc' },
         });
-        if (!waChannel || waChannel.status !== ChannelStatus.CONNECTED) {
+        if (!waChannel) {
             return;
         }
 

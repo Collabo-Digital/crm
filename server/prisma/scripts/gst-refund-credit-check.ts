@@ -26,7 +26,7 @@ import { InvoiceService } from '../../src/invoice/invoice.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
 
 // Deliberately NOT a second `new PrismaClient()`. The Nest context already
-// holds a pool, and the Supabase pooler caps a session at 15 clients — a second
+// holds a pool, and the DO connection pool is only 15 backends wide — a second
 // client races the service's own `Promise.all` fan-out in getStats and the run
 // dies with EMAXCONNSESSION. Borrow the app's.
 let prisma: PrismaService;

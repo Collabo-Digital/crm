@@ -15,6 +15,7 @@ export const channelKeys = {
   list: () => [...channelKeys.all, "list"] as const,
   detail: (id: string) => [...channelKeys.all, "detail", id] as const,
   syncSettings: (id: string) => [...channelKeys.all, "sync-settings", id] as const,
+  instagramPending: (id: string) => [...channelKeys.all, "instagram-pending", id] as const,
 };
 
 // Poll only while something is actually syncing, and stop by itself once it
@@ -83,6 +84,25 @@ export function useSyncSettings(id?: string | null) {
     queryKey: channelKeys.syncSettings(id!),
     queryFn: () => channelService.getSyncSettings(id!),
     enabled: !!id,
+  });
+}
+
+/**
+ * The Instagram accounts one Facebook login granted, for the picker.
+ *
+ * Never retried: the only failure that matters is a 404 from an expired or
+ * already-used selection, and retrying that just delays telling the merchant to
+ * start again. Held in cache indefinitely because the underlying Redis entry is
+ * single-use — a refetch after the pick would 404 against a dialog that already
+ * succeeded.
+ */
+export function useInstagramPending(pendingId?: string | null) {
+  return useQuery({
+    queryKey: channelKeys.instagramPending(pendingId!),
+    queryFn: () => channelService.getInstagramPending(pendingId!),
+    enabled: !!pendingId,
+    retry: false,
+    staleTime: Infinity,
   });
 }
 

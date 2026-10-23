@@ -12,11 +12,13 @@ export const ROLES_KEY = 'roles';
  * group below.
  *
  * ORDERING TRAP: the global guard chain is
- *   Throttler → Jwt → **Roles** → OrgRequired → **VendorAccess** → SuperAdmin
- * so `RolesGuard` runs BEFORE `VendorAccessGuard`. Any route marked
+ *   Throttler → Jwt → **Roles** → OrgRequired → **VendorAccess** →
+ *   **InfluencerAccess** → Permissions → SuperAdmin
+ * so `RolesGuard` runs BEFORE both outside-role guards. Any route marked
  * `@AllowVendor()` must therefore use a group that INCLUDES `VENDOR`
- * (`ORG_OPERATORS_AND_VENDORS`), or vendors are rejected before the vendor
- * guard ever runs.
+ * (`ORG_OPERATORS_AND_VENDORS`), and any route marked `@AllowInfluencer()` must
+ * use a group that includes `INFLUENCER` (or declare no `@Roles` at all), or
+ * they are rejected before their own guard ever runs.
  */
 export const Roles = (...roles: UserRole[]) => SetMetadata(ROLES_KEY, roles);
 
@@ -45,4 +47,19 @@ export const ORG_OPERATORS: UserRole[] = [...ORG_MANAGERS, UserRole.AGENT];
 export const ORG_OPERATORS_AND_VENDORS: UserRole[] = [
   ...ORG_OPERATORS,
   UserRole.VENDOR,
+];
+
+/**
+ * Who may connect and manage a channel.
+ *
+ * OWNER/ADMIN act for the organization; INFLUENCER is here only so that
+ * `RolesGuard` lets them past to routes marked `@AllowInfluencer()` — WHICH
+ * channel rows they may touch is a separate question, answered by
+ * `Channel.ownerUserId` inside ChannelService. Passing this group is permission
+ * to call the endpoint, never permission over someone else's account.
+ */
+export const CHANNEL_MANAGERS: UserRole[] = [
+  UserRole.OWNER,
+  UserRole.ADMIN,
+  UserRole.INFLUENCER,
 ];

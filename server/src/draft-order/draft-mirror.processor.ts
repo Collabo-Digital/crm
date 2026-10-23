@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { DRAFT_MIRROR_QUEUE, DraftMirrorJobData } from './draft-mirror.queue';
 import { DraftOrderService } from './draft-order.service';
+import { parkIfRateLimited } from '../rate-limit/bullmq-park.util';
 
 /**
  * BullMQ worker for draft → Shopify mirroring. Reads the current state
@@ -11,7 +12,8 @@ import { DraftOrderService } from './draft-order.service';
  *
  * Failures bubble back to BullMQ for its retry policy; the service-level
  * methods themselves don't catch their own errors (caller decides whether
- * to swallow or retry).
+ * to swallow or retry). A rate limit from the outbound limiter is not a
+ * failure: the job is parked until the limiter's retry time instead.
  */
 @Processor(DRAFT_MIRROR_QUEUE)
 export class DraftMirrorProcessor extends WorkerHost {
@@ -21,7 +23,7 @@ export class DraftMirrorProcessor extends WorkerHost {
     super();
   }
 
-  async process(job: Job<DraftMirrorJobData>): Promise<void> {
+  async process(job: Job<DraftMirrorJobData>, token?: string): Promise<void> {
     const data = job.data;
     this.logger.log(
       `Draft mirror job ${job.id} (${data.type}) attempt ${
@@ -29,35 +31,39 @@ export class DraftMirrorProcessor extends WorkerHost {
       }`,
     );
 
-    switch (data.type) {
-      case 'draft-create':
-        await this.draftOrderService.mirrorCreateToShopify(
-          data.draftId,
-          data.organizationId,
-        );
-        break;
-      case 'draft-update':
-        await this.draftOrderService.mirrorUpdateToShopify(
-          data.draftId,
-          data.organizationId,
-        );
-        break;
-      case 'draft-delete':
-        await this.draftOrderService.mirrorDeleteToShopify(
-          data.externalId,
-          data.organizationId,
-        );
-        break;
-      case 'bulk-mirror':
-        await this.draftOrderService.bulkMirrorUnsyncedDrafts(
-          data.organizationId,
-        );
-        break;
-      default: {
-        // Exhaustiveness check — TS flags new job types not handled here.
-        const _exhaustive: never = data;
-        throw new Error(`Unknown draft mirror job type: ${JSON.stringify(_exhaustive)}`);
+    try {
+      switch (data.type) {
+        case 'draft-create':
+          await this.draftOrderService.mirrorCreateToShopify(
+            data.draftId,
+            data.organizationId,
+          );
+          break;
+        case 'draft-update':
+          await this.draftOrderService.mirrorUpdateToShopify(
+            data.draftId,
+            data.organizationId,
+          );
+          break;
+        case 'draft-delete':
+          await this.draftOrderService.mirrorDeleteToShopify(
+            data.externalId,
+            data.organizationId,
+          );
+          break;
+        case 'bulk-mirror':
+          await this.draftOrderService.bulkMirrorUnsyncedDrafts(
+            data.organizationId,
+          );
+          break;
+        default: {
+          // Exhaustiveness check — TS flags new job types not handled here.
+          const _exhaustive: never = data;
+          throw new Error(`Unknown draft mirror job type: ${JSON.stringify(_exhaustive)}`);
+        }
       }
+    } catch (err) {
+      await parkIfRateLimited(err, job, token, this.logger);
     }
   }
 }

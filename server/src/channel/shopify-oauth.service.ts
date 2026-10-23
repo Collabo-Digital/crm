@@ -141,8 +141,8 @@ export class ShopifyOAuthService {
         // A DISCONNECTED channel (app uninstalled / dead token) may
         // reconnect — the callback then updates the row instead of creating
         // a duplicate (which would trip the org+platform unique constraint).
-        const existing = await this.prisma.channel.findUnique({
-            where: { organizationId_platform: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY } },
+        const existing = await this.prisma.channel.findFirst({
+            where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
         });
         if (existing && existing.status === ChannelStatus.CONNECTED && existing.credentials) {
             // Same shop re-authing (e.g. to grant newly added scopes) is fine —
@@ -407,8 +407,8 @@ export class ShopifyOAuthService {
         // "Disconnect it first" as the only way out. Reconnecting the same
         // domain, or replacing a DISCONNECTED channel, updates the row in
         // place (which is also what the public-app Reconnect button does).
-        const existing = await this.prisma.channel.findUnique({
-            where: { organizationId_platform: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY } },
+        const existing = await this.prisma.channel.findFirst({
+            where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
         });
         const sameStore =
             existing?.externalStoreUrl === `https://${shopDomain}`;
@@ -557,7 +557,7 @@ export class ShopifyOAuthService {
     // enqueued a Shopify sync job for the wrong channel id); fail fast with a
     // clear message so the caller can be fixed, instead of silently flipping
     // unrelated channels to DISCONNECTED.
-    async getAccessToken(channelId: string): Promise<{ token: string; shopDomain: string }> {
+    async getAccessToken(channelId: string): Promise<{ token: string; shopDomain: string; channelId: string }> {
         const channel = await this.prisma.channel.findUnique({ where: { id: channelId } });
         if (!channel) {
             throw new BadRequestException(`Channel ${channelId} not found`);
@@ -593,14 +593,14 @@ export class ShopifyOAuthService {
 
         // Legacy custom-app channels carry a non-expiring token — no refresh.
         if (!creds.refreshToken || !creds.accessTokenExpiresAt) {
-            return { token: this.encryption.decrypt(creds.accessToken), shopDomain: creds.shopDomain };
+            return { token: this.encryption.decrypt(creds.accessToken), shopDomain: creds.shopDomain, channelId };
         }
 
         // Expiring offline token (public app, 1h TTL): return while it still
         // has >2 minutes of life, otherwise refresh before use.
         const expiresAt = new Date(creds.accessTokenExpiresAt).getTime();
         if (expiresAt - Date.now() > 2 * 60 * 1000) {
-            return { token: this.encryption.decrypt(creds.accessToken), shopDomain: creds.shopDomain };
+            return { token: this.encryption.decrypt(creds.accessToken), shopDomain: creds.shopDomain, channelId };
         }
 
         return this.refreshAccessToken(channelId);
@@ -612,7 +612,7 @@ export class ShopifyOAuthService {
      * one and consumes the old — so concurrent workers are serialised through
      * a short Redis lock; losers wait and re-read what the winner persisted.
      */
-    private async refreshAccessToken(channelId: string): Promise<{ token: string; shopDomain: string }> {
+    private async refreshAccessToken(channelId: string): Promise<{ token: string; shopDomain: string; channelId: string }> {
         const lockKey = `oauth:shopify:refresh:${channelId}`;
         const gotLock = await this.redis.acquireLock(lockKey, 15);
         if (!gotLock) {
@@ -639,7 +639,7 @@ export class ShopifyOAuthService {
                 ? new Date(current.accessTokenExpiresAt).getTime()
                 : 0;
             if (expiresAt - Date.now() > 2 * 60 * 1000) {
-                return { token: this.encryption.decrypt(current.accessToken), shopDomain: current.shopDomain };
+                return { token: this.encryption.decrypt(current.accessToken), shopDomain: current.shopDomain, channelId };
             }
 
             // Channels connected with a merchant-supplied custom app carry
@@ -709,7 +709,7 @@ export class ShopifyOAuthService {
             });
 
             this.logger.log(`Refreshed Shopify access token for channel ${channelId}`);
-            return { token: data.access_token, shopDomain: current.shopDomain };
+            return { token: data.access_token, shopDomain: current.shopDomain, channelId };
         } finally {
             await this.redis.del(lockKey);
         }

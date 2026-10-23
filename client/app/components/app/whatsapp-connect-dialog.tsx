@@ -4,10 +4,12 @@ import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription,
 } from "~/components/ui/dialog";
+import { Button } from "~/components/ui/button";
 import {
   useWhatsAppInstallMutation,
   useCompleteWhatsAppInstallMutation,
@@ -16,6 +18,12 @@ import {
 interface WhatsAppConnectDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Re-authorize an existing WhatsApp channel rather than connect a new one.
+   * An org may hold only one active WhatsApp account, so without this the
+   * server would refuse the second connect that a Reconnect really is.
+   */
+  reconnectChannelId?: string;
 }
 
 /**
@@ -30,7 +38,11 @@ interface WhatsAppConnectDialogProps {
  *      a long-lived token, reads the WABA + phone number IDs, and creates
  *      the Channel row.
  */
-export function WhatsAppConnectDialog({ open, onOpenChange }: WhatsAppConnectDialogProps) {
+export function WhatsAppConnectDialog({
+  open,
+  onOpenChange,
+  reconnectChannelId,
+}: WhatsAppConnectDialogProps) {
   const [launching, setLaunching] = useState(false);
 
   const startInstall = useWhatsAppInstallMutation();
@@ -90,7 +102,7 @@ export function WhatsAppConnectDialog({ open, onOpenChange }: WhatsAppConnectDia
     }
 
     try {
-      const { configId, state } = await startInstall.mutateAsync();
+      const { configId, state } = await startInstall.mutateAsync({ reconnectChannelId });
 
       window.FB.login(
         (response) => {
@@ -133,8 +145,8 @@ export function WhatsAppConnectDialog({ open, onOpenChange }: WhatsAppConnectDia
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-[#25D366]/15">
-              <MessageCircle className="size-4 text-[#128C7E]" />
+            <div className="flex size-8 items-center justify-center rounded-lg bg-success-subtle">
+              <MessageCircle className="size-4 text-success" />
             </div>
             Connect WhatsApp Business
           </DialogTitle>
@@ -145,11 +157,11 @@ export function WhatsAppConnectDialog({ open, onOpenChange }: WhatsAppConnectDia
         </DialogHeader>
 
         {/* Prerequisites */}
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 dark:bg-emerald-900/10 dark:border-emerald-800 p-4">
-          <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-300 mb-2">
+        <div className="rounded-lg border border-border bg-success-subtle p-4">
+          <p className="mb-2 text-caption font-semibold text-success">
             Before you continue, make sure you have:
           </p>
-          <ul className="space-y-1.5 text-[11px] text-emerald-700 dark:text-emerald-400 list-disc list-inside">
+          <ul className="list-inside list-disc space-y-1.5 text-caption text-success">
             <li>
               A <strong>Meta Business Manager</strong> account (
               <a
@@ -159,7 +171,7 @@ export function WhatsAppConnectDialog({ open, onOpenChange }: WhatsAppConnectDia
                 className="inline-flex items-center gap-0.5 underline"
               >
                 business.facebook.com
-                <ExternalLink className="size-2.5" />
+                <ExternalLink className="size-3" />
               </a>
               )
             </li>
@@ -175,11 +187,11 @@ export function WhatsAppConnectDialog({ open, onOpenChange }: WhatsAppConnectDia
         </div>
 
         {/* What happens next */}
-        <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3">
-          <p className="text-[10px] font-medium text-gray-600 dark:text-gray-400 mb-1">
+        <div className="rounded-lg border border-border bg-muted p-3">
+          <p className="mb-1 text-caption font-medium text-foreground">
             After clicking Continue:
           </p>
-          <ol className="space-y-0.5 text-[10px] text-muted-foreground list-decimal list-inside">
+          <ol className="list-inside list-decimal space-y-0.5 text-caption text-muted-foreground">
             <li>A Meta popup will open asking you to log in to Facebook</li>
             <li>
               Create or select a WhatsApp Business Account and phone number
@@ -194,29 +206,19 @@ export function WhatsAppConnectDialog({ open, onOpenChange }: WhatsAppConnectDia
         </div>
 
         {/* Actions */}
-        <div className="flex items-center gap-2 pt-2">
-          <button
-            onClick={handleConnect}
-            disabled={isPending}
-            className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#25D366] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#20BD5A] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {isPending ? (
-              <>
-                <Loader2 className="size-4 animate-spin" />
-                Connecting...
-              </>
-            ) : (
-              "Continue with Meta"
-            )}
-          </button>
-          <button
+        <DialogFooter>
+          <Button
+            variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={isPending}
-            className="rounded-lg px-4 py-2.5 text-sm text-muted-foreground hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
           >
             Cancel
-          </button>
-        </div>
+          </Button>
+          <Button variant="accent" onClick={handleConnect} disabled={isPending}>
+            {isPending && <Loader2 className="animate-spin" />}
+            {isPending ? "Connecting…" : "Continue with Meta"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

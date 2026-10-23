@@ -8,6 +8,11 @@ export interface SyncPullJobData {
     channelId: string;
     organizationId: string;
     entityTypes: string[];   // see PULL_ENTITY_TYPES in shopify-sync.service
+    /// Outbound rate-limit priority for every Shopify call this run makes
+    /// (Priority enum: 1 interactive, 5 normal, 10 bulk). A user-clicked sync
+    /// is interactive; the post-connect backfill and cron pulls are bulk.
+    /// Also passed to BullMQ as the job priority. Absent on old jobs = normal.
+    priority?: number;
 }
 
 /// Post-connect store setup: register webhooks, activate the web pixel.

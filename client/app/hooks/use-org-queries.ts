@@ -9,6 +9,7 @@ export const orgKeys = {
   detail: (orgId: string) => [...orgKeys.all, "detail", orgId] as const,
   members: (orgId: string) => [...orgKeys.all, "members", orgId] as const,
   invites: (orgId: string) => [...orgKeys.all, "invites", orgId] as const,
+  influencers: (orgId: string) => [...orgKeys.all, "influencers", orgId] as const,
 };
 
 /** Fetch all organizations for the current user */
@@ -48,6 +49,15 @@ export function useOrgInvites(orgId?: string | null) {
   return useQuery({
     queryKey: orgKeys.invites(orgId!),
     queryFn: () => orgService.listInvites(orgId!),
+    enabled: !!orgId,
+  });
+}
+
+/** Everyone invited as an influencer: joined and outstanding, in one list. */
+export function useInfluencers(orgId?: string | null) {
+  return useQuery({
+    queryKey: orgKeys.influencers(orgId!),
+    queryFn: () => orgService.listInfluencers(orgId!),
     enabled: !!orgId,
   });
 }

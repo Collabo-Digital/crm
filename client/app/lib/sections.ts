@@ -93,6 +93,25 @@ const VENDOR_DENIED_PREFIXES = [
   "/products/inventory",
 ];
 
+// Influencers are an outside party, like vendors, so the same shape applies:
+// an allow list rather than a deny list, because a section added tomorrow must
+// be closed to them until someone decides otherwise. /settings is here on
+// purpose: connecting their own Instagram is why an influencer has an account.
+const INFLUENCER_ALLOWED_PREFIXES = ["/settings", "/profile"];
+
+// Settings pages an influencer must not reach. Checked first, because the allow
+// list is a prefix match that would otherwise sweep every settings tab in —
+// including the team page, where they could see and manage other members.
+const INFLUENCER_DENIED_PREFIXES = [
+  "/settings/members",
+  "/settings/general",
+  "/settings/store-profile",
+  "/settings/products",
+  "/settings/orders",
+  "/settings/tax-gst",
+  "/settings/loyalty",
+];
+
 export interface SectionAccess {
   role: UserRole | undefined;
   /** `"all"`, or exactly the sections granted. */
@@ -124,6 +143,18 @@ export function canAccessPath(access: SectionAccess, pathname: string): boolean 
       VENDOR_ALLOWED_PREFIXES.some((p) => isUnder(pathname, p))
     );
   }
+  if (access.role === "INFLUENCER") {
+    // Campaigns opens only while they hold `campaigns.view`, so revoking that
+    // grant closes the section with no code change.
+    const allowed = [
+      ...INFLUENCER_ALLOWED_PREFIXES,
+      ...(access.grants.includes("campaigns.view") ? ["/campaigns"] : []),
+    ];
+    return (
+      !INFLUENCER_DENIED_PREFIXES.some((p) => isUnder(pathname, p)) &&
+      allowed.some((p) => isUnder(pathname, p))
+    );
+  }
 
   const section = sectionForPath(pathname);
   if (!section) return true;
@@ -143,6 +174,8 @@ export function canAccessPath(access: SectionAccess, pathname: string): boolean 
 
 /** Where a member lands: their first open section, in nav order. */
 export function firstAllowedPath(access: SectionAccess): string {
+  // An influencer has no dashboard; their work starts at their own channels.
+  if (access.role === "INFLUENCER") return "/settings/channels";
   return (
     AVAILABLE_SECTIONS.find((s) => canAccessPath(access, s.prefix))?.prefix ??
     "/profile"

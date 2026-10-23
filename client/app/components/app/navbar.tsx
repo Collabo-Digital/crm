@@ -35,6 +35,7 @@ import { apiClient } from "~/lib/api-client";
 import { authService } from "~/services/auth.service";
 import { useStopImpersonating } from "~/hooks/use-admin-queries";
 import { useSectionAccess } from "~/hooks/use-section-access";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import { toast } from "sonner";
 
 type NavChild = { label: string; href: string; icon: typeof LayoutDashboard };
@@ -94,15 +95,7 @@ export function Navbar() {
   const stopImpersonating = useStopImpersonating();
 
   const { canAccess, landingPath, lockReason } = useSectionAccess();
-
-  // Every member sees every pill; the ones they cannot open render locked
-  // rather than hidden (see lib/sections.ts for who can open what). An extra
-  // Super Admin link is visible to real Collabo-team super admins (never while
-  // impersonating — the impersonation token has isSuperAdmin=false).
-  const navLinks: NavItem[] =
-    user?.isSuperAdmin && !impersonatedBy
-      ? [...NAV_LINKS, { label: "Super Admin", href: "/admin/users", icon: ShieldCheck }]
-      : NAV_LINKS;
+  const { isInfluencer } = useCurrentRole();
 
   // A pill opens its own page, or — when only a sub-page is granted (Customers
   // without Orders) — the first sub-page the member can open. It is locked only
@@ -111,6 +104,19 @@ export function Navbar() {
     canAccess(item.href)
       ? item.href
       : item.children?.find((child) => canAccess(child.href))?.href ?? null;
+
+  // Every member sees every pill; the ones they cannot open render locked
+  // rather than hidden (see lib/sections.ts for who can open what). An extra
+  // Super Admin link is visible to real Collabo-team super admins (never while
+  // impersonating — the impersonation token has isSuperAdmin=false).
+  //
+  // Influencers are the exception: they are an outside party, so they see only
+  // the sections their permissions open rather than a bar of locked staff tabs.
+  const allLinks: NavItem[] =
+    user?.isSuperAdmin && !impersonatedBy
+      ? [...NAV_LINKS, { label: "Super Admin", href: "/admin/users", icon: ShieldCheck }]
+      : NAV_LINKS;
+  const navLinks = isInfluencer ? allLinks.filter((item) => pillTarget(item) !== null) : allLinks;
 
   // Longest-prefix match, so a child route keeps its parent pill lit.
   const activeTop = matchNav(navLinks, location.pathname);

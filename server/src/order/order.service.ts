@@ -18,6 +18,7 @@ import {
   StockBucket,
 } from '@prisma/client';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
+import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { singleDistinct } from '../channel/single-distinct.util';
 import {
   sellerStateForSupply,
@@ -51,7 +52,8 @@ import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { FxRateService } from '../common/fx/fx-rate.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { SHOPIFY_PUSH_QUEUE } from '../channel/shopify-push.queue';
+import { PUSH_JOB_OPTS, SHOPIFY_PUSH_QUEUE, pushJobId } from '../channel/shopify-push.queue';
+import { Priority } from '../rate-limit/rate-limit.types';
 import { displayVariantTitle } from '../product/variant-title.util';
 import {
   resolveReportingTimeZone,
@@ -1139,22 +1141,7 @@ export class OrderService {
         const soldVariantIds: string[] = [];
 
         // 1. Resolve or lazy-create the org's MANUAL channel.
-        const channel = await tx.channel.upsert({
-          where: {
-            organizationId_platform: {
-              organizationId: orgId,
-              platform: ChannelPlatform.MANUAL,
-            },
-          },
-          create: {
-            organizationId: orgId,
-            platform: ChannelPlatform.MANUAL,
-            name: 'In-Store / Manual',
-            status: ChannelStatus.CONNECTED,
-            isEnabled: true,
-          },
-          update: {},
-        });
+        const channel = await ensureManualChannel(tx, orgId);
 
         // 2. Resolve customer (existing by id/email/phone, else create).
         const customer = await this.resolveCustomer(tx, orgId, channel.id, dto);
@@ -2441,14 +2428,20 @@ export class OrderService {
     // per-warehouse, so it lands at the location the goods returned to.
     if (restockedVariantIds.length > 0) {
       try {
+        const variantIds = [...new Set(restockedVariantIds)];
         await this.shopifyPushQueue.add(
           'push-availability',
           {
             type: 'push-availability',
             organizationId: orgId,
-            variantIds: [...new Set(restockedVariantIds)],
+            variantIds,
+            priority: Priority.INTERACTIVE,
           },
-          { attempts: 5, backoff: { type: 'exponential', delay: 10_000 } },
+          {
+            ...PUSH_JOB_OPTS,
+            jobId: pushJobId.availability(orgId, variantIds),
+            priority: Priority.INTERACTIVE,
+          },
         );
       } catch (err) {
         this.logger.warn(

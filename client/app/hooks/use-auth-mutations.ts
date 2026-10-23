@@ -7,6 +7,7 @@ import { useAuthStore } from "~/stores/auth.store";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { readTokenOrgId } from "~/lib/jwt";
 import { getLandingPath } from "~/lib/sections";
+import { defaultGrantsForRole } from "~/lib/permissions";
 import type {
   SignupRequest,
   LoginRequest,
@@ -62,7 +63,19 @@ export function useSignupMutation() {
 // ─── Login ───────────────────────────────────────────────────────────────────
 
 /** Mutation hook for user login. Sets auth state and navigates to the appropriate post-auth route. */
-export function useLoginMutation() {
+/**
+ * Where to go after signing in, honouring a `next` the caller asked for.
+ *
+ * Only same-site paths are accepted: an absolute URL or a protocol-relative
+ * `//evil.example` would turn our own login into an open redirect.
+ */
+function safeNext(next: string | null | undefined): string | null {
+  if (!next) return null;
+  if (!next.startsWith("/") || next.startsWith("//")) return null;
+  return next;
+}
+
+export function useLoginMutation(next?: string | null) {
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
 
@@ -74,7 +87,10 @@ export function useLoginMutation() {
       // setAuth normalizes them — use the org id directly
       const orgId = initialOrgId(data.accessToken, data.organizations);
       if (orgId) useAuthStore.getState().setCurrentOrg(orgId);
-      navigate(resolvePostAuthRoute(data.nextStep));
+      // An invitation sends people here to prove who they are, then expects
+      // them back. Without this the token is lost at the login screen and the
+      // invitation looks broken.
+      navigate(safeNext(next) ?? resolvePostAuthRoute(data.nextStep));
     },
     onError: (error) => {
       if (isAxiosError(error)) {
@@ -187,13 +203,18 @@ export function useAcceptInviteMutation() {
             updatedAt: new Date().toISOString(),
           };
 
-      // Build org membership from the invite response
+      // Build org membership from the invite response.
+      //
+      // The role comes from the response, not a guess. It was hardcoded to
+      // AGENT, so an accepted invitation to any other role put the wrong one in
+      // the store and every role check downstream — the navigation, the
+      // channels page, the route guards — read it until the next full reload.
       const invitedOrgMembership = {
         id: crypto.randomUUID(),
         organizationId: data.organization.id,
-        role: data.organization.role ?? ("AGENT" as const),
+        role: data.role,
         vendorScope: data.organization.vendorScope ?? null,
-        permissions: data.organization.permissions ?? [],
+        permissions: data.organization.permissions ?? defaultGrantsForRole(data.role),
         isActive: true,
         organization: {
           id: data.organization.id,
@@ -224,7 +245,10 @@ export function useAcceptInviteMutation() {
       setAuth(user, data.accessToken, data.refreshToken, mergedOrgs);
       useAuthStore.getState().setCurrentOrg(data.organization.id);
       toast.success(`Joined ${data.organization.name} successfully!`);
-      navigate(getLandingPath());
+      // An influencer has no dashboard: it is one of the sections their role
+      // cannot reach, so landing there would bounce them straight out again.
+      // Send them where their work actually starts.
+      navigate(data.role === "INFLUENCER" ? "/settings/channels" : getLandingPath());
     },
     onError: (error) => handleMutationError(error),
   });

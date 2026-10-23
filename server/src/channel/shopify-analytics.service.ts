@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ChannelPlatform, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
+import { Priority } from '../rate-limit/rate-limit.types';
 import {
   ShopifyAuthContext,
   ShopifyGraphqlClient,
@@ -129,7 +130,14 @@ export class ShopifyAnalyticsService {
 
     try {
       const creds = await this.shopifyOAuth.getAccessToken(channelId);
-      auth = { shopDomain: creds.shopDomain, accessToken: creds.token };
+      // Cron work: bulk priority, so a merchant's own sync or an order push
+      // is never stuck behind the nightly analytics refresh.
+      auth = {
+        shopDomain: creds.shopDomain,
+        accessToken: creds.token,
+        channelId,
+        priority: Priority.BULK,
+      };
       this.logger.log(
         `[analytics] Resolved access token for shop=${creds.shopDomain}`,
       );
