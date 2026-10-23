@@ -1,19 +1,31 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
-export type InboundEventType = 'instagram.comment' | 'instagram.message';
+/**
+ * Events that can start an automation. Namespaced strings, validated here
+ * rather than in the database, as the automation schema intends.
+ */
+export type InboundEventType =
+    | 'whatsapp.message'
+    | 'instagram.message'
+    | 'facebook.message'
+    | 'instagram.comment'
+    | 'facebook.comment'
+    | 'instagram.mention'
+    | 'instagram.postback'
+    | 'facebook.postback';
 
 export interface RecordEventInput {
     organizationId: string;
     channelId: string;
     eventType: InboundEventType;
-    /** Comment id or message id. Dedupe key with organizationId + eventType. */
+    /** Comment id, message id or wamid. Dedupe key with organizationId + eventType. */
     externalId: string;
     occurredAt: Date;
     contactId: string;
-    /** The INBOUND Message row for DMs. */
+    /** The INBOUND Message row the event was raised from. */
     messageId?: string;
-    /** Instagram media id for comments; resolved to channel_media when cached. */
+    /** Instagram media id for comments and mentions; resolved to channel_media when cached. */
     mediaExternalId?: string;
     actorExternalId: string;
     actorUsername?: string;
@@ -22,8 +34,9 @@ export interface RecordEventInput {
 }
 
 /**
- * The visitor log: one row per thing that could start an automation. The
- * engine step adds a queue job here; for now the row is the whole story.
+ * The visitor log: one row per thing that could start an automation. Written
+ * in the same transaction as the message it came from; the engine picks
+ * unprocessed rows up from here.
  */
 @Injectable()
 export class AutomationEventService {

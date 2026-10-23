@@ -1,9 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ChannelPlatform, Prisma } from '@prisma/client';
+import { ChannelPlatform, MessageSource, MessageStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { patchChannelMetadataSql, recordHistoryChunkSql } from '../../../channel/channel-metadata.util';
+import { IngestChannel, MessageIngestService } from '../../../messaging/message-ingest.service';
+import { ContactRef } from '../../../messaging/contact-identity.service';
+import { whatsAppContent } from '../../../messaging/message-content';
 import { accountUpdateEffect } from './whatsapp-account-update.util';
-import type { WaEvent } from './whatsapp-webhook.parser';
+import type { WaContactRef, WaEvent, WaMessage } from './whatsapp-webhook.parser';
 
 export interface WhatsAppChannelRef {
     id: string;
@@ -12,25 +15,46 @@ export interface WhatsAppChannelRef {
     credentials: Prisma.JsonValue;
 }
 
-const MESSAGE_KINDS = new Set<WaEvent['kind']>([
-    'message',
-    'echo',
-    'status',
-    'history_chunk',
-    'history_media',
-    'contact_sync',
-    'user_preference',
-]);
+const STATUS_MAP: Record<string, MessageStatus> = {
+    sent: MessageStatus.SENT,
+    delivered: MessageStatus.DELIVERED,
+    read: MessageStatus.READ,
+    // A voice note played counts as read.
+    played: MessageStatus.READ,
+    failed: MessageStatus.FAILED,
+};
+
+/** A history item's state on the device, as a message status. */
+const HISTORY_STATUS: Record<string, MessageStatus> = {
+    SENT: MessageStatus.SENT,
+    DELIVERED: MessageStatus.DELIVERED,
+    READ: MessageStatus.READ,
+    PLAYED: MessageStatus.READ,
+    ERROR: MessageStatus.FAILED,
+    PENDING: MessageStatus.QUEUED,
+};
+
+const toRef = (c: WaContactRef | null): ContactRef => ({
+    platform: ChannelPlatform.WHATSAPP,
+    userId: c?.userId ?? null,
+    waId: c?.waId ?? null,
+    username: c?.username ?? null,
+    profileName: c?.profileName ?? null,
+});
 
 /**
- * Applies a parsed WhatsApp delivery. Account-level events — connection
- * lifecycle, number health, history-sync progress — are handled here.
+ * Applies a parsed WhatsApp delivery: account-level events — connection
+ * lifecycle, number health, history-sync progress — onto the channel, and
+ * messages, echoes, statuses and history into the inbox.
  */
 @Injectable()
 export class WhatsAppWebhookHandler {
     private readonly logger = new Logger(WhatsAppWebhookHandler.name);
 
-    constructor(private readonly prisma: PrismaService) { }
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly ingest: MessageIngestService,
+    ) { }
 
     async handle(events: WaEvent[]): Promise<void> {
         const byWaba = new Map<string, WaEvent[]>();
@@ -56,14 +80,142 @@ export class WhatsAppWebhookHandler {
                 this.logger.log(`WhatsApp webhook for WABA ${wabaId}: ${list.length - mine.length} events for another number ignored`);
             }
 
+            const ingestChannel: IngestChannel = {
+                id: channel.id,
+                organizationId: channel.organizationId,
+                platform: ChannelPlatform.WHATSAPP,
+                address: phoneNumberId ?? wabaId,
+            };
             for (const e of mine) {
                 await this.handleAccountEvent(channel, e);
-            }
-            const messageEvents = mine.filter((e) => MESSAGE_KINDS.has(e.kind));
-            if (messageEvents.length) {
-                this.logger.log(`WhatsApp channel ${channel.id}: ${messageEvents.length} message events received`);
+                await this.handleMessageEvent(ingestChannel, e);
             }
         }
+    }
+
+    private async handleMessageEvent(channel: IngestChannel, e: WaEvent): Promise<void> {
+        switch (e.kind) {
+            case 'message':
+                await this.applyInbound(channel, e.message);
+                return;
+            case 'echo':
+                await this.applyBusinessMessage(channel, e.message, false);
+                return;
+            case 'status':
+                await this.ingest.applyStatus(channel, e.status.messageId, {
+                    status: STATUS_MAP[e.status.status] ?? MessageStatus.SENT,
+                    at: e.status.timestamp,
+                    pricing: e.status.pricing as Record<string, unknown> | null,
+                    error: e.status.errors[0]
+                        ? { code: e.status.errors[0].code !== null ? String(e.status.errors[0].code) : null, message: e.status.errors[0].details ?? e.status.errors[0].message }
+                        : null,
+                });
+                return;
+            case 'history_chunk':
+                // Chunks arrive out of order and can hold thousands of messages;
+                // each item is idempotent on its wamid, so order does not matter.
+                for (const thread of e.threads) {
+                    for (const m of thread.messages) {
+                        if (m.from === null) await this.applyBusinessMessage(channel, m, true);
+                        else await this.applyInbound(channel, m, true);
+                    }
+                }
+                return;
+            case 'history_media':
+                for (const m of e.messages) await this.ingest.applyLateMedia(channel, m.id, whatsAppContent(m));
+                return;
+            case 'contact_sync':
+                await this.ingest.applyAddressBook(
+                    channel,
+                    e.contacts.map((c) => ({ action: c.action, name: c.fullName ?? c.firstName, contact: toRef(c.contact) })),
+                );
+                return;
+            case 'user_preference':
+                if (e.category === 'marketing_messages') {
+                    await this.ingest.applyMarketingPreference(channel, toRef(e.contact), e.value, e.at ?? new Date());
+                }
+                return;
+            default:
+                return;
+        }
+    }
+
+    private async applyInbound(channel: IngestChannel, m: WaMessage, imported = false): Promise<void> {
+        const raw = m.raw;
+        switch (m.type) {
+            case 'reaction': {
+                const reaction = raw.reaction as { message_id?: string; emoji?: string } | undefined;
+                if (reaction?.message_id) await this.ingest.applyReaction(channel, reaction.message_id, reaction.emoji ?? null, 'customer');
+                return;
+            }
+            case 'edit': {
+                const edit = raw.edit as { original_message_id?: string } | undefined;
+                if (edit?.original_message_id) await this.ingest.applyEdit(channel, edit.original_message_id, m.text, m.timestamp);
+                return;
+            }
+            case 'revoke': {
+                const revoke = raw.revoke as { original_message_id?: string } | undefined;
+                if (revoke?.original_message_id) await this.ingest.applyRevoke(channel, revoke.original_message_id, m.timestamp);
+                return;
+            }
+        }
+        let from = m.from;
+        if (m.type === 'system') {
+            const system = raw.system as { type?: string; user_id?: string; previous_user_id?: string; wa_id?: string } | undefined;
+            if (system?.type === 'user_changed_number' || system?.type === 'user_changed_user_id') {
+                await this.ingest.rekeyContact(channel, {
+                    previousUserId: system.previous_user_id ?? null,
+                    userId: system.user_id ?? null,
+                    waId: system.wa_id ?? null,
+                });
+                // File the notice under the contact's new identity.
+                from = {
+                    userId: system.user_id ?? m.from?.userId ?? null,
+                    waId: system.wa_id ?? m.from?.waId ?? null,
+                    username: m.from?.username ?? null,
+                    profileName: m.from?.profileName ?? null,
+                };
+            }
+        }
+        if (!from || (!from.userId && !from.waId)) return;
+        const button = raw.button as { payload?: string } | undefined;
+        await this.ingest.recordInbound({
+            channel,
+            contact: toRef(from),
+            externalId: m.id,
+            occurredAt: m.timestamp,
+            content: whatsAppContent(m),
+            body: raw,
+            replyToExternalId: m.context?.id ?? null,
+            imported,
+            initialStatus: imported && m.historyStatus ? (HISTORY_STATUS[m.historyStatus] ?? MessageStatus.DELIVERED) : undefined,
+            consentPayload: button?.payload ?? null,
+            event: imported ? undefined : { type: 'whatsapp.message', extraPayload: { referral: m.referral } },
+        });
+    }
+
+    /** Sent from the WhatsApp Business app (coexistence), live or from history. */
+    private async applyBusinessMessage(channel: IngestChannel, m: WaMessage, imported: boolean): Promise<void> {
+        if (m.type === 'edit' || m.type === 'revoke') {
+            const ref = (m.raw[m.type] as { original_message_id?: string } | undefined)?.original_message_id;
+            if (!ref) return;
+            if (m.type === 'edit') await this.ingest.applyEdit(channel, ref, m.text, m.timestamp);
+            else await this.ingest.applyRevoke(channel, ref, m.timestamp);
+            return;
+        }
+        if (!m.to || (!m.to.userId && !m.to.waId)) return;
+        await this.ingest.recordBusinessMessage({
+            channel,
+            contact: toRef(m.to),
+            externalId: m.id,
+            occurredAt: m.timestamp,
+            content: whatsAppContent(m),
+            body: m.raw,
+            replyToExternalId: m.context?.id ?? null,
+            imported,
+            source: MessageSource.BUSINESS_APP,
+            status: imported && m.historyStatus ? (HISTORY_STATUS[m.historyStatus] ?? MessageStatus.SENT) : MessageStatus.SENT,
+        });
     }
 
     private async handleAccountEvent(channel: WhatsAppChannelRef, e: WaEvent): Promise<void> {

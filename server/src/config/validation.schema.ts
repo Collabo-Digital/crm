@@ -32,8 +32,11 @@ export const validationSchema = Joi.object({
     WHATSAPP_CONFIG_ID: Joi.string().optional(),
     MESSENGER_CONFIG_ID: Joi.string().optional(),
     MESSENGER_WEBHOOK_VERIFY_TOKEN: Joi.string().optional(),
+    MESSAGING_MEDIA_DIR: Joi.string().optional(),
+    MESSAGING_MEDIA_SECRET: Joi.string().min(32).optional(),
     WHATSAPP_GRAPH_VERSION: Joi.string().optional(),
     META_GRAPH_VERSION: Joi.string().optional(),
+    META_GRAPH_BASE_URL: Joi.string().uri().optional(),
     // Outbound rate limiter (see config/configuration.ts `rateLimit`).
     RATE_LIMIT_MODE: Joi.string().valid('enforce', 'observe', 'off').optional(),
     RATE_LIMIT_REDIS_TIMEOUT_MS: Joi.number().integer().min(50).max(5000).optional(),

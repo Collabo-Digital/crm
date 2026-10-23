@@ -87,6 +87,8 @@ export default () => ({
         appId: process.env.META_APP_ID,
         // Signs every webhook delivery (X-Hub-Signature-256) for all three surfaces.
         appSecret: process.env.META_APP_SECRET,
+        // Only ever changed to point local and CI runs at a stand-in Graph API.
+        graphBaseUrl: process.env.META_GRAPH_BASE_URL || 'https://graph.facebook.com',
         graphVersion:
             process.env.META_GRAPH_VERSION ?? process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
     },
@@ -151,6 +153,12 @@ export default () => ({
         // kept here too so the value is visible alongside its neighbours.
         shopifyPushConcurrency: Number.parseInt(process.env.SHOPIFY_PUSH_CONCURRENCY ?? '3', 10),
         whatsappConcurrency: Number.parseInt(process.env.WHATSAPP_MESSAGING_CONCURRENCY ?? '3', 10),
+    },
+    messaging: {
+        // Private chat media. Must be a persistent volume in production.
+        mediaDir: process.env.MESSAGING_MEDIA_DIR || undefined,
+        // Signs short-lived media links; rotating it only expires open links.
+        linkSecret: process.env.MESSAGING_MEDIA_SECRET || process.env.JWT_ACCESS_SECRET,
     },
     encryptionKey: process.env.ENCRYPTION_KEY || undefined,
     superAdminEmails: (process.env.SUPER_ADMIN_EMAILS || '')

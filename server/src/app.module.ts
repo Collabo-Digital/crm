@@ -47,6 +47,7 @@ import { AdminModule } from './admin/admin.module';
 import { BillingModule } from './billing/billing.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { AutomationModule } from './automation/automation.module';
+import { InboxModule } from './inbox/inbox.module';
 
 @Module({
   imports: [
@@ -111,6 +112,7 @@ import { AutomationModule } from './automation/automation.module';
     BillingModule,
     InventoryModule,
     AutomationModule,
+    InboxModule,
   ],
   controllers: [AppController],
   providers: [

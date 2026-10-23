@@ -40,6 +40,7 @@ export class MetaGraphClient {
   private readonly logger = new Logger(MetaGraphClient.name);
   private readonly appId: string;
   private readonly graphVersion: string;
+  private readonly graphBaseUrl: string;
 
   constructor(
     private readonly config: ConfigService,
@@ -47,6 +48,7 @@ export class MetaGraphClient {
   ) {
     this.appId = this.config.get<string>('meta.appId') ?? '';
     this.graphVersion = this.config.get<string>('meta.graphVersion') ?? 'v21.0';
+    this.graphBaseUrl = (this.config.get<string>('meta.graphBaseUrl') ?? 'https://graph.facebook.com').replace(/\/$/, '');
   }
 
   /** The app-level wallet every merchant shares. Empty id = unconfigured app. */
@@ -61,7 +63,7 @@ export class MetaGraphClient {
   }
 
   graphUrl(path: string, version?: string): string {
-    return `https://graph.facebook.com/${version ?? this.graphVersion}${path}`;
+    return `${this.graphBaseUrl}/${version ?? this.graphVersion}${path}`;
   }
 
   async request<T = unknown>(req: MetaRequest): Promise<MetaResponse<T>> {
@@ -97,20 +99,25 @@ export class MetaGraphClient {
         try {
           res = await fetch(url, {
             method: req.method,
+            // multipart sets no Content-Type: fetch adds it with the boundary.
             headers: {
               ...(req.accessToken ? { Authorization: `Bearer ${req.accessToken}` } : {}),
-              ...(req.form !== undefined
-                ? { 'Content-Type': 'application/x-www-form-urlencoded' }
-                : req.body !== undefined
-                  ? { 'Content-Type': 'application/json' }
-                  : {}),
+              ...(req.multipart !== undefined
+                ? {}
+                : req.form !== undefined
+                  ? { 'Content-Type': 'application/x-www-form-urlencoded' }
+                  : req.body !== undefined
+                    ? { 'Content-Type': 'application/json' }
+                    : {}),
             },
             body:
-              req.form !== undefined
-                ? new URLSearchParams(req.form).toString()
-                : req.body !== undefined
-                  ? JSON.stringify(req.body)
-                  : undefined,
+              req.multipart !== undefined
+                ? req.multipart
+                : req.form !== undefined
+                  ? new URLSearchParams(req.form).toString()
+                  : req.body !== undefined
+                    ? JSON.stringify(req.body)
+                    : undefined,
             signal: AbortSignal.timeout(req.timeoutMs ?? DEFAULT_TIMEOUT_MS),
           });
         } catch (err) {

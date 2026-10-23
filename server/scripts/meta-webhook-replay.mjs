@@ -10,7 +10,9 @@
  * The endpoint (whatsapp / messenger / instagram) follows the payload's
  * `object`. --replace swaps ids in the raw text before signing; --fresh
  * stamps a unique key into the body so a repeat run is not treated as Meta
- * redelivering the same bytes.
+ * redelivering the same bytes; --now moves every timestamp to the present
+ * (seconds and milliseconds alike), so replayed messages open a live reply
+ * window.
  */
 import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -38,6 +40,16 @@ args.forEach((a, i) => {
     const [from, to] = String(args[i + 1]).split('=');
     text = text.split(from).join(to);
 });
+if (args.includes('--now')) {
+    const nowMs = Date.now();
+    let offset = 0;
+    // Keep the payload's own ordering: each timestamp moves by the same step.
+    text = text.replace(/("(?:timestamp|time|watermark|created_time)"\s*:\s*"?)(\d{10}|\d{13})("?)/g, (_m, pre, digits, post) => {
+        offset += 1;
+        const value = digits.length === 13 ? nowMs + offset : Math.floor(nowMs / 1000) + offset;
+        return `${pre}${value}${post}`;
+    });
+}
 if (args.includes('--fresh')) {
     const body = JSON.parse(text);
     body.replay_nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;

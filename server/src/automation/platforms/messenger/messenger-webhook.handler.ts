@@ -1,43 +1,171 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ChannelPlatform } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
+import { ChannelPlatform, MessageKind, MessageSource, MessageStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { InstagramIngestService } from '../instagram/instagram-ingest.service';
-import { InstagramWebhookEntry, parseInstagramEntry } from '../instagram/instagram-webhook.parser';
-import { parseMessengerDelivery } from './messenger-webhook.parser';
+import { IngestChannel, MessageIngestService } from '../../../messaging/message-ingest.service';
+import { messengerContent } from '../../../messaging/message-content';
+import { MsEvent, parseMessengerDelivery } from './messenger-webhook.parser';
 
 /**
- * Applies a `page` or `instagram` delivery to the account it names.
+ * Applies a `page` (Messenger) or `instagram` delivery to the account it
+ * names: messages and comments into the inbox, our own sends' echoes and
+ * receipts onto the rows we wrote.
  */
 @Injectable()
 export class MessengerWebhookHandler {
     private readonly logger = new Logger(MessengerWebhookHandler.name);
+    private readonly appId: string | undefined;
 
     constructor(
         private readonly prisma: PrismaService,
-        private readonly instagramIngest: InstagramIngestService,
-    ) { }
-
-    async handle(payload: unknown): Promise<void> {
-        const body = payload as { object?: string; entry?: InstagramWebhookEntry[] };
-        if (body.object === 'instagram') {
-            for (const entry of body.entry ?? []) await this.handleInstagramEntry(entry);
-            return;
-        }
-        const events = parseMessengerDelivery(payload);
-        if (events.length) this.logger.log(`Messenger delivery: ${events.length} events received`);
+        private readonly ingest: MessageIngestService,
+        config: ConfigService,
+    ) {
+        this.appId = config.get<string>('meta.appId');
     }
 
-    private async handleInstagramEntry(entry: InstagramWebhookEntry): Promise<void> {
-        const channel = await this.prisma.channel.findFirst({
-            where: { platform: ChannelPlatform.INSTAGRAM, externalStoreId: entry.id },
-            select: { id: true, organizationId: true, externalStoreId: true },
+    async handle(payload: unknown): Promise<void> {
+        const events = parseMessengerDelivery(payload);
+        const channels = new Map<string, IngestChannel | null>();
+        for (const event of events) {
+            const key = `${event.platform}:${event.accountId}`;
+            if (!channels.has(key)) channels.set(key, await this.findChannel(event.platform, event.accountId));
+            const channel = channels.get(key);
+            if (!channel) {
+                this.logger.warn(`${event.platform} webhook for account ${event.accountId}: no connected channel`);
+                continue;
+            }
+            await this.apply(channel, event);
+        }
+    }
+
+    private async apply(channel: IngestChannel, e: MsEvent): Promise<void> {
+        const platformKey = e.platform === ChannelPlatform.INSTAGRAM ? 'instagram' : 'facebook';
+        switch (e.kind) {
+            case 'message': {
+                if (e.message.isDeleted) {
+                    await this.ingest.applyRevoke(channel, e.message.mid, e.timestamp);
+                    return;
+                }
+                await this.ingest.recordInbound({
+                    channel,
+                    contact: { platform: e.platform, scopedId: e.senderId },
+                    externalId: e.message.mid,
+                    occurredAt: e.timestamp,
+                    content: messengerContent(e.message),
+                    body: e.message.raw,
+                    replyToExternalId: e.message.replyToMid,
+                    standby: e.standby,
+                    consentPayload: e.message.quickReplyPayload,
+                    event: {
+                        type: e.platform === ChannelPlatform.INSTAGRAM ? 'instagram.message' : 'facebook.message',
+                        extraPayload: {
+                            quickReplyPayload: e.message.quickReplyPayload,
+                            storyReply: e.message.replyToStory,
+                            referral: e.message.referral,
+                        },
+                    },
+                });
+                return;
+            }
+            case 'echo': {
+                // Our own sends come back as echoes; the sender already wrote them.
+                if (e.appId && this.appId && e.appId === this.appId) return;
+                await this.ingest.recordBusinessMessage({
+                    channel,
+                    contact: { platform: e.platform, scopedId: e.recipientId },
+                    externalId: e.message.mid,
+                    occurredAt: e.timestamp,
+                    content: messengerContent(e.message),
+                    body: { ...e.message.raw, app_id: e.appId },
+                    replyToExternalId: e.message.replyToMid,
+                    source: MessageSource.OTHER_APP,
+                });
+                return;
+            }
+            case 'postback':
+                await this.ingest.recordInbound({
+                    channel,
+                    contact: { platform: e.platform, scopedId: e.senderId },
+                    externalId: e.mid ?? `postback:${e.senderId}:${e.timestamp.getTime()}`,
+                    occurredAt: e.timestamp,
+                    content: { kind: MessageKind.INTERACTIVE, text: e.title, media: null },
+                    body: { postback: { title: e.title, payload: e.payload, referral: e.referral } },
+                    standby: e.standby,
+                    consentPayload: e.payload,
+                    event: {
+                        type: e.platform === ChannelPlatform.INSTAGRAM ? 'instagram.postback' : 'facebook.postback',
+                        extraPayload: { postbackPayload: e.payload },
+                    },
+                });
+                return;
+            case 'delivery':
+                for (const mid of e.mids) {
+                    await this.ingest.applyStatus(channel, mid, { status: MessageStatus.DELIVERED, at: e.timestamp });
+                }
+                if (e.watermark) {
+                    await this.ingest.applyWatermark(channel, { platform: e.platform, scopedId: e.senderId }, MessageStatus.DELIVERED, e.watermark);
+                }
+                return;
+            case 'read':
+                if (e.mid) await this.ingest.applyStatus(channel, e.mid, { status: MessageStatus.READ, at: e.timestamp });
+                if (e.watermark) {
+                    await this.ingest.applyWatermark(channel, { platform: e.platform, scopedId: e.senderId }, MessageStatus.READ, e.watermark);
+                }
+                return;
+            case 'reaction':
+                await this.ingest.applyReaction(channel, e.mid, e.action === 'unreact' ? null : e.emoji, 'customer');
+                return;
+            case 'edit':
+                await this.ingest.applyEdit(channel, e.mid, e.text, e.timestamp);
+                return;
+            case 'comment': {
+                // The business's own comments and replies are not inbox items.
+                if (!e.fromId || e.fromId === e.accountId) return;
+                if (e.verb === 'remove') {
+                    await this.ingest.applyRevoke(channel, e.commentId, e.timestamp);
+                    return;
+                }
+                if (e.verb === 'edited') {
+                    await this.ingest.applyEdit(channel, e.commentId, e.text, e.timestamp);
+                    return;
+                }
+                if (e.verb !== 'add') return;
+                await this.ingest.recordInbound({
+                    channel,
+                    contact: {
+                        platform: e.platform,
+                        scopedId: e.fromId,
+                        ...(e.platform === ChannelPlatform.INSTAGRAM ? { username: e.fromName } : { profileName: e.fromName }),
+                    },
+                    externalId: e.commentId,
+                    occurredAt: e.timestamp,
+                    content: { kind: MessageKind.COMMENT, text: e.text, media: null },
+                    body: { comment: e.raw, postId: e.postId, parentId: e.parentId, mediaProductType: e.mediaProductType },
+                    event: {
+                        type: e.platform === ChannelPlatform.INSTAGRAM ? 'instagram.comment' : 'facebook.comment',
+                        mediaExternalId: e.platform === ChannelPlatform.INSTAGRAM ? e.postId : null,
+                        extraPayload: { postId: e.postId, parentId: e.parentId },
+                    },
+                });
+                return;
+            }
+            case 'mention':
+                this.logger.log(`Instagram mention on media ${e.mediaId ?? 'unknown'} for channel ${channel.id}`);
+                return;
+            case 'handover':
+                this.logger.log(`${platformKey} thread control for ${e.senderId}: ${e.type}`);
+                return;
+            default:
+                this.logger.debug(`${platformKey} event not stored: ${e.kind === 'other' ? e.type : e.kind}`);
+        }
+    }
+
+    private async findChannel(platform: ChannelPlatform, accountId: string): Promise<IngestChannel | null> {
+        const row = await this.prisma.channel.findFirst({
+            where: { platform, externalStoreId: accountId },
+            select: { id: true, organizationId: true, platform: true, externalStoreId: true },
         });
-        if (!channel) {
-            this.logger.warn(`Instagram webhook entry ${entry.id}: no matching channel`);
-            return;
-        }
-        for (const item of parseInstagramEntry(entry, channel)) {
-            await this.instagramIngest.ingestItem(channel, item);
-        }
+        return row ? { id: row.id, organizationId: row.organizationId, platform: row.platform, address: accountId } : null;
     }
 }

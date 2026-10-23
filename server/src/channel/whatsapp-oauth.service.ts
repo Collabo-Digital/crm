@@ -93,10 +93,6 @@ export class WhatsAppOAuthService {
         this.frontendUrl = this.config.get<string>('frontendUrl')!;
     }
 
-    private graphUrl(path: string): string {
-        return `https://graph.facebook.com/${this.graphVersion}${path}`;
-    }
-
     /**
      * GET through the shared, rate-limited Meta client. Returns the same
      * ok/not-ok shape the connect flow branches on, so each step keeps its own

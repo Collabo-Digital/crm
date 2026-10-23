@@ -261,6 +261,7 @@ model User {
   ownedAutomations            Automation[]         @relation("AutomationOwner")
   publishedAutomationVersions AutomationVersion[]  @relation("AutomationPublisher")
   assignedConversations       Conversation[]       @relation("ConversationAssignee")
+  conversationNotes           ConversationNote[]   @relation("ConversationNoteAuthor")
   refreshTokens               RefreshToken[]
   passwordResetTokens         PasswordResetToken[]
   impersonationsMade          ImpersonationLog[]   @relation("ImpersonatorLogs")
@@ -360,6 +361,8 @@ model Organization {
   automationRuns         AutomationRun[]
   automationRunSteps     AutomationRunStep[]
   messages               Message[]
+  consentEvents          ConsentEvent[]
+  conversationNotes      ConversationNote[]
 
   @@map("organizations")
 }
@@ -1936,6 +1939,45 @@ enum MessageKind {
   DOCUMENT
   IMAGE
   PRIVATE_REPLY
+  VIDEO
+  AUDIO
+  STICKER
+  LOCATION
+  CONTACTS
+  /// Buttons, lists, button and list replies, Flows.
+  INTERACTIVE
+  REACTION
+  /// One product, a product list, or a catalog message.
+  PRODUCT
+  /// A cart the customer sent from the catalog.
+  ORDER
+  /// Platform notices: a number change, an ad referral with no text.
+  SYSTEM
+  /// A type the platform could not deliver to the API.
+  UNSUPPORTED
+  /// A public comment on a post (Instagram, Facebook).
+  COMMENT
+}
+
+/// Who authored a message. Inbound rows are CUSTOMER; the rest say which
+/// part of the business sent it.
+enum MessageSource {
+  CUSTOMER
+  /// A person in the Collabo inbox.
+  AGENT
+  AUTOMATION
+  BROADCAST
+  /// Typed on the WhatsApp Business app sharing the number (coexistence).
+  BUSINESS_APP
+  /// Another app on the Page or account: Meta Business Suite, another tool.
+  OTHER_APP
+  /// The order notifications and other system sends.
+  SYSTEM
+}
+
+enum ConsentType {
+  OPT_IN
+  OPT_OUT
 }
 
 enum MessageStatus {
@@ -1968,8 +2010,24 @@ model ChannelContact {
   organizationId       String          @map("organization_id")
   channelId            String          @map("channel_id")
   platform             ChannelPlatform
-  /// IGSID for Instagram, wa_id (E.164 digits) for WhatsApp.
+  /// IGSID / PSID for Instagram and Messenger. For WhatsApp the business-scoped
+  /// user id (BSUID) when Meta sent one, else the wa_id: users who adopt a
+  /// username stop sending their phone number, so the number cannot be the key.
   externalId           String          @map("external_id")
+  /// WhatsApp phone number digits, when known. Mutable: a user can change it.
+  waId                 String?         @map("wa_id")
+  /// Ids this contact was known by before a WhatsApp number or BSUID change.
+  previousExternalIds  String[]        @default([]) @map("previous_external_ids")
+  /// Name in the business's WhatsApp Business app address book (coexistence).
+  addressBookName      String?         @map("address_book_name")
+  tags                 String[]        @default([])
+  /// Custom key/value fields set by the team, imports or automations.
+  attributes           Json?           @db.JsonB
+  /// Current marketing consent; the history is in consent_events.
+  optInAt              DateTime?       @map("opt_in_at")
+  optInSource          String?         @map("opt_in_source")
+  /// Spam or abuse: nothing is sent and new messages do not reopen the chat.
+  blockedAt            DateTime?       @map("blocked_at")
   username             String?
   displayName          String?         @map("display_name")
   profilePicUrl        String?         @map("profile_pic_url")
@@ -2003,8 +2061,10 @@ model ChannelContact {
   messages      Message[]
   conversations Conversation[]
   dailyStats    ContactDailyStat[]
+  consentEvents ConsentEvent[]
 
   @@unique([channelId, externalId])
+  @@index([channelId, waId])
   @@index([organizationId, platform])
   @@index([customerId])
   @@index([organizationId, phone])
@@ -2331,8 +2391,18 @@ model Conversation {
   /// Inbound rows not yet read by staff.
   unreadCount        Int                @default(0) @map("unread_count")
   messageCount       Int                @default(0) @map("message_count")
-  /// For the future Chat module; unused by automations.
   assignedUserId     String?            @map("assigned_user_id")
+  /// SNOOZED conversations reopen at this time, or at the next inbound message.
+  snoozedUntil       DateTime?          @map("snoozed_until")
+  closedAt           DateTime?          @map("closed_at")
+  closedById         String?            @map("closed_by_id")
+  /// First reply by a person or automation after the conversation opened;
+  /// response-time analytics read this.
+  firstResponseAt    DateTime?          @map("first_response_at")
+  lastAgentReplyAt   DateTime?          @map("last_agent_reply_at")
+  /// The next inbound message this conversation is waiting on came in at
+  /// this time and has no reply yet. Cleared by any business reply.
+  awaitingReplySince DateTime?          @map("awaiting_reply_since")
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
 
@@ -2342,9 +2412,11 @@ model Conversation {
   customer     Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
   assignedUser User?          @relation("ConversationAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
   messages     Message[]
+  notes        ConversationNote[]
 
   @@unique([channelId, contactId])
   @@index([organizationId, status, lastMessageAt])
+  @@index([organizationId, assignedUserId, status])
   @@index([customerId])
   @@map("conversations")
 }
@@ -2409,6 +2481,27 @@ model Message {
   templateLanguage    String?          @map("template_language")
   /// Instagram comment id this private reply answers.
   inReplyToExternalId String?          @map("in_reply_to_external_id")
+  /// Who authored it. Null on rows written before the column existed.
+  source              MessageSource?
+  /// The inbox member who sent it, for AGENT rows.
+  sentByUserId        String?          @map("sent_by_user_id")
+  /// The quoted message: platform id always, our row when we have it.
+  replyToExternalId   String?          @map("reply_to_external_id")
+  replyToMessageId    String?          @map("reply_to_message_id")
+  /// { mime, size, sha256, caption, filename, platformMediaId, storageKey,
+  ///   downloadedAt, error } — the file itself is copied into private
+  ///   storage because platform media URLs and ids expire.
+  media               Json?            @db.JsonB
+  /// Latest reaction from each side: { customer?: emoji, business?: emoji }.
+  reactions           Json?            @db.JsonB
+  editedAt            DateTime?        @map("edited_at")
+  /// Deleted by its author (WhatsApp revoke, Instagram unsend).
+  revokedAt           DateTime?        @map("revoked_at")
+  /// Imported from the WhatsApp Business app's history, not received live:
+  /// never triggers automations or counts toward analytics.
+  imported            Boolean          @default(false)
+  /// Meta's pricing for the delivered message: { type, category, billable }.
+  pricing             Json?            @db.JsonB
   /// Outbound: exactly what was sent to the API. Inbound: the webhook message
   /// object (attachments, quoted message, etc.).
   body                Json             @db.JsonB
@@ -2482,6 +2575,50 @@ model MetaWebhookDelivery {
   @@index([receivedAt])
   @@index([object, processedAt])
   @@map("meta_webhook_deliveries")
+}
+
+/// Every change to a contact's marketing consent, in order. WhatsApp policy
+/// needs proof of opt-in; opt-outs come from keywords, buttons, Meta's
+/// marketing preference webhook and the team.
+model ConsentEvent {
+  id             String      @id @default(cuid())
+  organizationId String      @map("organization_id")
+  contactId      String      @map("contact_id")
+  type           ConsentType
+  /// checkout | import | keyword | button | meta_preference | widget | agent | api
+  source         String
+  /// What proves it: the message id, the import file, the member who set it.
+  evidence       Json?       @db.JsonB
+  actorUserId    String?     @map("actor_user_id")
+  occurredAt     DateTime    @default(now()) @map("occurred_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact      ChannelContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId, occurredAt])
+  @@index([organizationId, occurredAt])
+  @@map("consent_events")
+}
+
+/// A team-only note on a conversation. Shown in the thread in time order;
+/// never sent to the customer.
+model ConversationNote {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  conversationId String    @map("conversation_id")
+  authorUserId   String?   @map("author_user_id")
+  body           String
+  /// User ids mentioned in the note.
+  mentions       String[]  @default([])
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User?        @relation("ConversationNoteAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@map("conversation_notes")
 }
 
 // ─── Analytics ───────────────────────────────────────────────────────────────

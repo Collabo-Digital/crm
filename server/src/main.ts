@@ -42,6 +42,12 @@ async function bootstrap() {
       threshold: 1024, // webhook acks, pixel hits and health checks stay raw
       level: 6,
       brotli: { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } },
+      // Server-sent events must reach the browser as they happen; compression
+      // would hold each small event back until its buffer filled.
+      filter: (req, res) =>
+        !String(res.getHeader('Content-Type') ?? '').includes('text/event-stream') &&
+        !(req.headers.accept ?? '').includes('text/event-stream') &&
+        compression.filter(req, res),
     }),
   );
 

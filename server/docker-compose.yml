@@ -35,6 +35,10 @@ services:
       PORT: "5000"
     expose:
       - "5000"   # internal-only, reachable by other services on webnet
+    volumes:
+      # Chat media (customer photos, documents, voice notes) copied from Meta.
+      # Private files, so not under /uploads; must outlive container redeploys.
+      - messaging_media:/app/storage/messaging
     networks:
       - webnet
     healthcheck:
@@ -86,3 +90,4 @@ volumes:
   caddy_data:
   caddy_config:
   redis_data:
+  messaging_media:

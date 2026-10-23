@@ -43,6 +43,8 @@ export interface MetaRequest {
   /// Sent as application/x-www-form-urlencoded instead of a JSON `body` —
   /// Instagram Login's code exchange accepts nothing else.
   form?: Record<string, string>;
+  /// Sent as multipart/form-data: media and attachment uploads.
+  multipart?: FormData;
   /// Wallets this call draws from, broad to specific: app, then business
   /// use case / ad account / page, then phone number.
   scopes: RateLimitScope[];

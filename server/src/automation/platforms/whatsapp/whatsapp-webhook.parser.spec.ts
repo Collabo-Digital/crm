@@ -98,7 +98,7 @@ describe('parseWhatsAppDelivery', () => {
         expect(echoes[0].from).toBeNull();
         expect(echoes[0].to).toMatchObject({ waId: '16505551234', userId: 'US.13491208655302741918' });
         expect(echoes[1].text).toBe("Here's the corrected info");
-        expect(echoes[2].raw.revoke).toEqual({ original_message_id: 'wamid.ECHOEDIT0001' });
+        expect(echoes[2].raw.revoke).toEqual({ original_message_id: echoes[0].id });
     });
 
     describe('history', () => {
