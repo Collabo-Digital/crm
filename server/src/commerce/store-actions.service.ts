@@ -1,6 +1,9 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { OrderCancelReason, UserRole } from '@prisma/client';
+import { ChannelPlatform, OrderCancelReason, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ShopifyGraphqlClient } from '../channel/shopify-graphql.client';
+import { ShopifyOAuthService } from '../channel/shopify-oauth.service';
+import { CUSTOMER_TAGS_ADD_MUTATION, type CustomerTagsAddResponse, type CustomerTagsAddVariables } from '../channel/shopify-graphql.types';
 import { OrderService } from '../order/order.service';
 import { DraftOrderService } from '../draft-order/draft-order.service';
 import { formatMoney } from './order-vars';
@@ -18,6 +21,8 @@ export interface DraftFromCart {
     checkoutUrl: string | null;
     /** Cart items that are not products of this store any more. */
     missing: string[];
+    /** The cart had a draft order already; this is that one. */
+    existing: boolean;
 }
 
 /**
@@ -34,6 +39,8 @@ export class StoreActionsService {
         private readonly prisma: PrismaService,
         private readonly orders: OrderService,
         private readonly drafts: DraftOrderService,
+        private readonly graphql: ShopifyGraphqlClient,
+        private readonly shopifyOAuth: ShopifyOAuthService,
     ) { }
 
     /**
@@ -80,10 +87,23 @@ export class StoreActionsService {
     }
 
     /** Local only: Shopify customer tags are not pushed. */
+    /** A Shopify customer is tagged in Shopify first, so the next customers/update webhook keeps the tag. */
     async tagCustomer(orgId: string, customerId: string, tag: string): Promise<{ tags: string[] }> {
-        const customer = await this.prisma.customer.findFirst({ where: { id: customerId, organizationId: orgId }, select: { tags: true } });
+        const customer = await this.prisma.customer.findFirst({
+            where: { id: customerId, organizationId: orgId },
+            select: { tags: true, externalId: true, channel: { select: { id: true, platform: true } } },
+        });
         if (!customer) throw new NotFoundException('Customer not found');
         if (customer.tags.some((t) => t.toLowerCase() === tag.toLowerCase())) return { tags: customer.tags };
+        if (customer.channel.platform === ChannelPlatform.SHOPIFY) {
+            const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(customer.channel.id);
+            const result = await this.graphql.request<CustomerTagsAddResponse, CustomerTagsAddVariables>(
+                { shopDomain, accessToken: token },
+                CUSTOMER_TAGS_ADD_MUTATION,
+                { id: ShopifyGraphqlClient.toGid('Customer', customer.externalId), tags: [tag] },
+            );
+            ShopifyGraphqlClient.throwIfUserErrors(result.tagsAdd.userErrors, 'tagsAdd');
+        }
         const tags = [...customer.tags, tag];
         await this.prisma.customer.update({ where: { id: customerId }, data: { tags } });
         return { tags };
@@ -97,8 +117,18 @@ export class StoreActionsService {
     async draftFromCart(
         orgId: string,
         actor: string,
-        input: { lines: CartLine[]; customerId: string | null; phone: string | null; firstName: string | null; note: string },
+        input: { lines: CartLine[]; customerId: string | null; phone: string | null; firstName: string | null; note: string; sourceMessageId: string | null },
     ): Promise<DraftFromCart> {
+        // One draft per cart: a second tap, another agent or the automation get the draft already made.
+        if (input.sourceMessageId) {
+            const made = await this.prisma.draftOrder.findFirst({
+                where: { organizationId: orgId, deletedAt: null, metadata: { path: ['sourceMessageId'], equals: input.sourceMessageId } },
+                select: { id: true, name: true, totalPrice: true, currency: true, invoiceUrl: true },
+            });
+            if (made) {
+                return { draftId: made.id, name: made.name, total: formatMoney(made.totalPrice.toString(), made.currency), checkoutUrl: made.invoiceUrl, missing: [], existing: true };
+            }
+        }
         const quantities = new Map<string, number>();
         for (const l of input.lines) quantities.set(l.retailerId, (quantities.get(l.retailerId) ?? 0) + Math.max(1, Math.floor(l.quantity)));
         const variants = await this.prisma.productVariant.findMany({
@@ -115,6 +145,12 @@ export class StoreActionsService {
             note: input.note,
         });
         const draftId = (created as { id: string }).id;
+        if (input.sourceMessageId) {
+            await this.prisma.$executeRaw`
+                UPDATE "draft_orders" SET "metadata" = coalesce("metadata", '{}'::jsonb) || jsonb_build_object('sourceMessageId', ${input.sourceMessageId}::text)
+                WHERE "id" = ${draftId}
+            `;
+        }
         let checkoutUrl: string | null = null;
         try {
             await this.drafts.mirrorCreateToShopify(draftId, orgId);
@@ -123,7 +159,7 @@ export class StoreActionsService {
         }
         const draft = await this.prisma.draftOrder.findUniqueOrThrow({ where: { id: draftId }, select: { name: true, totalPrice: true, currency: true, invoiceUrl: true } });
         checkoutUrl = draft.invoiceUrl;
-        return { draftId, name: draft.name, total: formatMoney(draft.totalPrice.toString(), draft.currency), checkoutUrl, missing };
+        return { draftId, name: draft.name, total: formatMoney(draft.totalPrice.toString(), draft.currency), checkoutUrl, missing, existing: false };
     }
 
     private async order(orgId: string, orderId: string) {

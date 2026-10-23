@@ -419,6 +419,30 @@ export interface OrderUpdateResponse {
   };
 }
 
+// ─── tagsAdd on a customer ──────────────────────────────────────────────────
+// Adds tags without replacing the ones Shopify already has. Needs write_customers.
+
+export const CUSTOMER_TAGS_ADD_MUTATION = /* GraphQL */ `
+  mutation CustomerTagsAdd($id: ID!, $tags: [String!]!) {
+    tagsAdd(id: $id, tags: $tags) {
+      node { id }
+      userErrors { field message }
+    }
+  }
+`;
+
+export interface CustomerTagsAddVariables {
+  id: string;
+  tags: string[];
+}
+
+export interface CustomerTagsAddResponse {
+  tagsAdd: {
+    node: { id: string } | null;
+    userErrors: ShopifyUserError[];
+  };
+}
+
 export const ORDER_UPDATE_MUTATION = /* GraphQL */ `
   mutation OrderUpdate($input: OrderInput!) {
     orderUpdate(input: $input) {

@@ -327,6 +327,7 @@ export class InboxService {
             phone: conversation.contact.phone,
             firstName: /\p{L}/u.test(name) ? name.split(/\s+/)[0] : null,
             note: 'Cart sent on WhatsApp',
+            sourceMessageId: messageId,
         });
     }
 

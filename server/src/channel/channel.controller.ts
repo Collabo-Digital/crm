@@ -55,8 +55,10 @@ export class ChannelController {
     @InjectQueue(SYNC_QUEUE) private readonly syncQueue: Queue,
   ) { }
 
-  // POST /channels/shopify/install — start public-app OAuth (shop domain only)
+  // POST /channels/shopify/install — start public-app OAuth (shop domain only).
+  // Connecting a store is for owners and admins, as the settings page offers it.
   @Post('shopify/install')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   async installShopify(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ConnectShopifyDto,
@@ -153,6 +155,7 @@ export class ChannelController {
 
   // POST /channels/shopify/manual-connect — connect using manually created custom app credentials
   @Post('shopify/manual-connect')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   async manualConnectShopify(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ManualConnectShopifyDto,
@@ -616,6 +619,7 @@ export class ChannelController {
   }
 
   @Post(':id/activate-pixel')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   async activatePixel(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     const channel = await this.prisma.channel.findFirst({
       where: { id, organizationId: user.orgId!, platform: ChannelPlatform.SHOPIFY },
@@ -632,6 +636,7 @@ export class ChannelController {
   // the new topics. Idempotent on Shopify's side: already-registered
   // topics return a "topic already registered" error which we swallow.
   @Post(':id/register-webhooks')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   async reRegisterWebhooks(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,

@@ -4421,6 +4421,8 @@ export interface DraftFromCart {
   total: string;
   checkoutUrl: string | null;
   missing: string[];
+  /** The cart had a draft order already; this is that one. */
+  existing: boolean;
 }
 
 export interface CatalogView {

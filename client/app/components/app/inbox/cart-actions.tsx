@@ -30,6 +30,7 @@ export function CartActions({ conversationId, messageId }: { conversationId: str
       <p className="font-medium">
         {draft.name ?? "Draft order"} · {draft.total}
       </p>
+      {draft.existing && <p className="text-micro text-muted-foreground">This cart already had a draft order, so it was not made twice.</p>}
       {draft.missing.length > 0 && <p className="text-micro text-warning">{draft.missing.length} item(s) are no longer in the store and were left out.</p>}
       {draft.checkoutUrl ? (
         <div className="flex flex-wrap gap-1.5">

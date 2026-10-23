@@ -434,12 +434,16 @@ export class AutomationRunner {
                 return { kind: 'next', output: await this.store.tagCustomer(orgId, s.contact.customerId, value) };
             case 'create_draft_order': {
                 if (!s.ctx.cart?.length) return fail('This run did not start from a cart.');
+                const cartMessage = s.run.eventId
+                    ? (await this.prisma.automationEvent.findUnique({ where: { id: s.run.eventId }, select: { messageId: true } }))?.messageId ?? null
+                    : null;
                 const draft = await this.store.draftFromCart(orgId, actor, {
                     lines: s.ctx.cart,
                     customerId: s.contact.customerId,
                     phone: s.contact.phone,
                     firstName: typeof s.vars.first_name === 'string' ? s.vars.first_name : null,
                     note: 'Cart sent on WhatsApp',
+                    sourceMessageId: cartMessage,
                 });
                 Object.assign(s.ctx.vars, {
                     'draft.checkout_url': draft.checkoutUrl ?? '',

@@ -400,7 +400,9 @@ Per-account subscription happens at connect time and is undone at disconnect:
   buyers who order more than once, set it to run every time.
 - **Store actions** an automation can take: tag the order or add to its note
   (Shopify `orderUpdate`), cancel it (Shopify `orderCancel` — customer
-  notified, restocked, no refund), tag the store customer (Collabo only), and
+  notified, restocked, no refund), tag the store customer (Shopify `tagsAdd`
+  for a Shopify customer, which needs the app's protected customer data
+  access; Collabo only for other customers), and
   turn a WhatsApp cart into a draft order. They run in WhatsApp automations
   only. Changes are recorded against the automation's creator, or the
   organization's owner.
@@ -453,7 +455,7 @@ Per-account subscription happens at connect time and is undone at disconnect:
   for doing it by hand. Without a Shopify store the draft stays in Collabo and
   there is no link.
 - **Not built:** sending a GST invoice from an automation (invoice PDFs are
-  only rendered in the browser today), and Shopify customer tags.
+  only rendered in the browser today).
 
 ### Messaging analytics (Analytics → Messaging)
 
