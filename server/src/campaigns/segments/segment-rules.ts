@@ -29,6 +29,8 @@ export const SegmentRuleSchema = z.discriminatedUnion('field', [
     z.object({ field: z.literal('last_order'), op: z.enum(['within_days', 'before_days']), value: days }),
     z.object({ field: z.literal('vip'), op: z.literal('in'), value: z.array(z.enum(VipLevel)).min(1) }),
     z.object({ field: z.literal('rfm'), op: z.literal('in'), value: z.array(z.enum(RFM_GROUPS)).min(1) }),
+    /** A customer segment from the Shopify admin, linked under Segments → Shopify segments. */
+    z.object({ field: z.literal('shopify_segment'), op: z.enum(['in', 'not_in']), value: z.string().min(1).max(40) }),
     z.object({
         field: z.literal('broadcast'),
         op: z.enum(['received', 'read', 'replied', 'clicked', 'not_read', 'failed']),
@@ -115,6 +117,10 @@ export function ruleWhere(rule: SegmentRule, now: Date): Prisma.ChannelContactWh
             return { customer: { is: { vipLevel: { in: rule.value } } } };
         case 'rfm':
             return { customer: { is: { rfm: { is: { segment: { in: rule.value } } } } } };
+        case 'shopify_segment': {
+            const member: Prisma.ChannelContactWhereInput = { customer: { is: { shopifySegments: { some: { segmentId: rule.value } } } } };
+            return rule.op === 'in' ? member : { NOT: member };
+        }
         case 'broadcast': {
             const base = { broadcastId: rule.value };
             switch (rule.op) {

@@ -4,6 +4,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { SectionCard } from "~/components/app/section-card";
+import { ShopifySegmentsCard } from "~/components/app/campaigns/shopify-segments-card";
 import { TableSkeleton } from "~/components/app/table-skeleton";
 import { Button } from "~/components/ui/button";
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "~/components/ui/page-header";
@@ -55,6 +56,8 @@ export default function SegmentsPage() {
           ))}
         </div>
       </SectionCard>
+
+      <ShopifySegmentsCard canManage={canManage} />
 
       <SectionCard title="Saved segments">
         {isError ? (

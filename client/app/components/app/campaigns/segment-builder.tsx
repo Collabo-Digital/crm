@@ -35,6 +35,7 @@ const FIELDS: Array<{ field: Field; label: string; group: string; ops: Array<[st
   { field: "last_order", label: "Last order", group: "Store", ops: [["within_days", "in the last"], ["before_days", "more than"]], make: () => ({ field: "last_order", op: "within_days", value: 30 }) },
   { field: "vip", label: "VIP level", group: "Store", ops: [["in", "is one of"]], make: () => ({ field: "vip", op: "in", value: [] }) },
   { field: "rfm", label: "RFM group", group: "Store", ops: [["in", "is one of"]], make: () => ({ field: "rfm", op: "in", value: [] }) },
+  { field: "shopify_segment", label: "Shopify segment", group: "Store", ops: [["in", "is"], ["not_in", "is not"]], make: () => ({ field: "shopify_segment", op: "in", value: "" }) },
   {
     field: "broadcast",
     label: "Broadcast",
@@ -83,6 +84,7 @@ export function SegmentBuilder({
   channels,
   broadcasts,
   rfmCounts,
+  shopifySegments = [],
 }: {
   definition: SegmentDefinition;
   onChange: (definition: SegmentDefinition) => void;
@@ -90,6 +92,8 @@ export function SegmentBuilder({
   channels: Array<{ id: string; name: string }>;
   broadcasts: Array<{ id: string; name: string }>;
   rfmCounts?: Partial<Record<RfmGroup, number>>;
+  /** Linked under Segments → Shopify segments. */
+  shopifySegments?: Array<{ id: string; name: string }>;
 }) {
   const setRule = (index: number, rule: SegmentRule) =>
     onChange({ ...definition, rules: definition.rules.map((r, i) => (i === index ? rule : r)) });
@@ -227,6 +231,16 @@ export function SegmentBuilder({
                 onChange={(value) => setRule(index, { ...rule, value })}
               />
             )}
+            {rule.field === "shopify_segment" && (
+              <select className={selectClass} value={rule.value} onChange={(e) => setRule(index, { ...rule, value: e.target.value })} aria-label="Shopify segment">
+                <option value="">{shopifySegments.length ? "Choose a Shopify segment" : "Link one under Segments first"}</option>
+                {shopifySegments.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            )}
             {rule.field === "broadcast" && (
               <select className={selectClass} value={rule.value} onChange={(e) => setRule(index, { ...rule, value: e.target.value })} aria-label="Broadcast">
                 <option value="">Choose a broadcast</option>
@@ -268,6 +282,7 @@ export function isComplete(definition: SegmentDefinition): boolean {
       case "tag":
       case "channel":
       case "broadcast":
+      case "shopify_segment":
         return !!r.value;
       case "attribute":
         return !!r.key && (r.op === "exists" || r.op === "not_exists" || !!r.value);

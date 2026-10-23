@@ -4066,7 +4066,28 @@ export type SegmentRule =
   | { field: "last_order"; op: "within_days" | "before_days"; value: number }
   | { field: "vip"; op: "in"; value: VipLevel[] }
   | { field: "rfm"; op: "in"; value: RfmGroup[] }
+  /** A customer segment from the Shopify admin, linked under Segments; value is the linked segment's id. */
+  | { field: "shopify_segment"; op: "in" | "not_in"; value: string }
   | { field: "broadcast"; op: "received" | "read" | "replied" | "clicked" | "not_read" | "failed"; value: string };
+
+export interface ShopifySegmentView {
+  id: string;
+  externalId: string;
+  name: string;
+  query: string | null;
+  memberCount: number | null;
+  /** Members Collabo has as store customers. */
+  matchedCount: number | null;
+  syncedAt: string | null;
+  lastError: string | null;
+}
+
+export interface ShopifySegmentsList {
+  connected: boolean;
+  error: string | null;
+  linked: ShopifySegmentView[];
+  available: Array<{ externalId: string; name: string; query: string | null }>;
+}
 
 export interface SegmentDefinition {
   match: "all" | "any";

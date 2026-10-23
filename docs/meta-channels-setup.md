@@ -549,6 +549,19 @@ or admin. That is a different account from Collabo's own subscription billing
   Razorpay's partner OAuth ("Connect with Razorpay" without copying keys)
   needs Collabo registered as a Razorpay technology partner.
 
+### Shopify customer segments (Campaigns → Segments)
+
+Segments built in the Shopify admin (Customers → Segments) can be linked as
+audiences. Collabo lists them (`segments`), reads a linked one's members
+(`customerSegmentMembers`, 1,000 a page, up to 100,000; `read_customers`,
+which the app already has), matches them to the store customers it has by
+Shopify customer id, and re-reads every linked segment daily at 4 am and on
+"Sync". A Collabo segment rule **Shopify segment is / is not …** then picks
+those customers' contacts, for broadcasts like any segment. Members Collabo
+has no customer for are counted but cannot be messaged. Shopify does not say
+whether a member id is a Customer or a CustomerSegmentMember gid; both end in
+the customer's number, which is what Collabo matches.
+
 ### Growth tools (Campaigns → Growth)
 
 - **Chat links and QR codes.** A link per campaign, poster or bio, on

@@ -364,6 +364,7 @@ model Organization {
   conversionEvents       ConversionEvent[]
   apiKeys                ApiKey[]
   webhookEndpoints       WebhookEndpoint[]
+  shopifySegments        ShopifySegment[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -620,6 +621,8 @@ model Channel {
 
   growthLinks GrowthLink[]
   siteWidgets SiteWidget[]
+
+  shopifySegments ShopifySegment[]
 
   @@index([organizationId, platform])
   @@index([organizationId])
@@ -878,6 +881,8 @@ model Customer {
   automationEvents AutomationEvent[]
   automationRuns   AutomationRun[]
   messages         Message[]
+
+  shopifySegments ShopifySegmentMember[]
 
   @@unique([channelId, externalId])
   @@unique([organizationId, email])
@@ -3476,4 +3481,49 @@ model WebhookDelivery {
   @@unique([endpointId, sourceId])
   @@index([endpointId, createdAt])
   @@map("webhook_deliveries")
+}
+
+// ─── Shopify customer segments, for broadcast audiences ────────────────────
+
+/// A customer segment from the store's Shopify admin, linked so Collabo
+/// segments can use it ("Shopify segment is …"). Its members are re-read
+/// daily and on demand.
+model ShopifySegment {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  /// The Shopify store channel.
+  channelId      String    @map("channel_id")
+  /// gid://shopify/Segment/…
+  externalId     String    @map("external_id")
+  name           String
+  /// Shopify's segment query, for reference.
+  query          String?
+  /// Members Shopify reported, and how many are customers Collabo has.
+  memberCount    Int?      @map("member_count")
+  matchedCount   Int?      @map("matched_count")
+  syncedAt       DateTime? @map("synced_at")
+  lastError      String?   @map("last_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel                @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  members      ShopifySegmentMember[]
+
+  @@unique([channelId, externalId])
+  @@index([organizationId])
+  @@map("shopify_segments")
+}
+
+model ShopifySegmentMember {
+  segmentId  String   @map("segment_id")
+  customerId String   @map("customer_id")
+  syncedAt   DateTime @map("synced_at")
+
+  segment  ShopifySegment @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+  customer Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@id([segmentId, customerId])
+  @@index([customerId])
+  @@map("shopify_segment_members")
 }

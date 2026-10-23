@@ -11,6 +11,8 @@ import { MessageRatesService } from './rates/message-rates.service';
 import { RfmService } from './segments/rfm.service';
 import { SegmentsController } from './segments/segments.controller';
 import { SegmentsService } from './segments/segments.service';
+import { ShopifySegmentsService } from './segments/shopify-segments.service';
+import { ShopifySegmentsController } from './segments/shopify-segments.controller';
 import { TemplateSyncScheduler } from './templates/template-sync.scheduler';
 import { TemplatesController } from './templates/templates.controller';
 import { TemplatesService } from './templates/templates.service';
@@ -21,12 +23,13 @@ import { TemplatesService } from './templates/templates.service';
  */
 @Module({
     imports: [ChannelModule, MessagingModule, BullModule.registerQueue({ name: BROADCAST_QUEUE })],
-    controllers: [TemplatesController, SegmentsController, BroadcastsController],
+    controllers: [TemplatesController, SegmentsController, ShopifySegmentsController, BroadcastsController],
     providers: [
         TemplatesService,
         TemplateSyncScheduler,
         SegmentsService,
         RfmService,
+        ShopifySegmentsService,
         BroadcastsService,
         BroadcastProcessor,
         MessageRatesService,

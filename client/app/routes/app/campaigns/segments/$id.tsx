@@ -16,6 +16,7 @@ import { useBroadcasts, useRfmSummary, useSegment, useSegmentPreview } from "~/h
 import { useChannels } from "~/hooks/use-channel-queries";
 import { useDebounced } from "~/hooks/use-debounced";
 import { useContactTags } from "~/hooks/use-inbox-queries";
+import { useShopifySegments } from "~/hooks/use-shopify-segments";
 import type { SegmentDefinition } from "~/types/api";
 
 export function meta() {
@@ -35,6 +36,7 @@ export default function SegmentPage() {
   const { data: channels = [] } = useChannels();
   const { data: past } = useBroadcasts({ status: "COMPLETED", limit: 50 });
   const { data: rfm } = useRfmSummary();
+  const { data: shopifySegments } = useShopifySegments();
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -88,6 +90,7 @@ export default function SegmentPage() {
                 channels={channels.filter((c) => ["WHATSAPP", "FACEBOOK", "INSTAGRAM"].includes(c.platform)).map((c) => ({ id: c.id, name: `${c.name} (${c.platform.toLowerCase()})` }))}
                 broadcasts={(past?.data ?? []).map((b) => ({ id: b.id, name: b.name }))}
                 rfmCounts={rfm}
+                shopifySegments={(shopifySegments?.linked ?? []).map((x) => ({ id: x.id, name: x.name }))}
               />
             </div>
           </SectionCard>
