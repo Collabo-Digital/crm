@@ -90,7 +90,7 @@ export type OutboundPayload =
     /** WhatsApp Pay: an update to that order's status on the customer's order page. */
     | { type: 'order_status'; text: string; referenceId: string; status: 'processing' | 'shipped' | 'completed' | 'canceled'; description?: string };
 
-export type SendOrigin = 'agent' | 'automation' | 'broadcast' | 'system';
+export type SendOrigin = 'agent' | 'automation' | 'broadcast' | 'system' | 'api';
 
 export interface GateInput {
     platform: ChannelPlatform;

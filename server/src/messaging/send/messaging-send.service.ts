@@ -38,6 +38,7 @@ const SOURCE_BY_ORIGIN: Record<SendOrigin, MessageSource> = {
     automation: MessageSource.AUTOMATION,
     broadcast: MessageSource.BROADCAST,
     system: MessageSource.SYSTEM,
+    api: MessageSource.API,
 };
 
 function kindOf(payload: OutboundPayload): MessageKind {

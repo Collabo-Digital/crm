@@ -4592,6 +4592,45 @@ export interface ConversionSetting {
   failed: number;
 }
 
+// ─── Developers: API keys and webhooks ──────────────────────────────────────
+
+export interface ApiKeyView {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  lastUsedAt: string | null;
+  createdAt: string;
+  /** Only when just made. */
+  key?: string;
+}
+
+export interface WebhookEndpointView {
+  id: string;
+  url: string;
+  description: string | null;
+  events: string[];
+  enabled: boolean;
+  createdByApi: boolean;
+  consecutiveFailures: number;
+  disabledReason: string | null;
+  lastDeliveryAt: string | null;
+  createdAt: string;
+  /** Only when just made. */
+  secret?: string;
+}
+
+export interface WebhookDeliveryView {
+  id: string;
+  event: string;
+  status: "PENDING" | "SENT" | "FAILED";
+  attempts: number;
+  responseStatus: number | null;
+  error: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
+}
+
 export interface CatalogView {
   channelId: string;
   onBusinessApp: boolean;

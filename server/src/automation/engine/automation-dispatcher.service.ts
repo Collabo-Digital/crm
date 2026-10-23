@@ -6,6 +6,7 @@ import { InboxRulesService } from '../../inbox/inbox-rules.service';
 import { Flow, keywordMatches } from './flow';
 import { RunContext, parseRunContext } from './run-context';
 import { parseDefinition } from '../blocks/definition.schema';
+import { WebhooksService } from '../../developer/webhooks.service';
 
 /** Inbound messages: what a waiting flow takes as a reply. Comments are public and never count. */
 const REPLY_EVENTS = new Set(['whatsapp.message', 'instagram.message', 'facebook.message', 'instagram.postback', 'facebook.postback']);
@@ -49,12 +50,15 @@ export class AutomationDispatcher {
         private readonly prisma: PrismaService,
         private readonly jobs: AutomationJobs,
         private readonly rules: InboxRulesService,
+        private readonly webhooks: WebhooksService,
     ) { }
 
     async handle(eventId: string): Promise<void> {
         const event = await this.prisma.automationEvent.findUnique({ where: { id: eventId } });
         if (!event || event.processedAt) return;
         const payload = (event.payload ?? {}) as EventPayload;
+        // Outgoing webhooks see every message, tag, sign-up and ad chat; each is sent once per endpoint.
+        await this.webhooks.fromAutomationEvent(event);
 
         try {
             const replied = REPLY_EVENTS.has(event.eventType) ? await this.handOffReply(event, payload) : 0;

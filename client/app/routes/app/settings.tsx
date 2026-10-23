@@ -48,6 +48,7 @@ import { InfluencersSection } from "~/components/app/influencers/influencers-sec
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { ChannelSettingsTab } from "~/components/app/settings/channel-settings-tab";
 import { InboxSettingsTab } from "~/components/app/settings/inbox-settings-tab";
+import { DevelopersIcon, DevelopersTab } from "~/components/app/settings/developers-tab";
 import { useSectionAccess } from "~/hooks/use-section-access";
 import { StoreProfileTab } from "~/components/app/settings/store-profile-tab";
 import { UpgradeOrganizationDialog } from "~/components/app/settings/upgrade-organization-dialog";
@@ -78,6 +79,7 @@ const TABS = [
   { id: "security", label: "Security", icon: Lock },
   // { id: "notifications", label: "Notifications", icon: Bell },
   { id: "members", label: "Team Members", icon: Users },
+  { id: "developers", label: "Developers", icon: DevelopersIcon },
   // { id: "billing",       label: "Billing & Plan",  icon: CreditCard },
   // { id: "appearance",    label: "Appearance",       icon: Palette },
 ];
@@ -2160,6 +2162,7 @@ export default function SettingsPage() {
           {activeTab === "channels" && <ChannelSettingsTab />}
 
           {activeTab === "inbox" && <InboxSettingsTab />}
+          {activeTab === "developers" && <DevelopersTab />}
 
           {/* ─── TAX & GST ─── */}
           {activeTab === "tax-gst" && org && (

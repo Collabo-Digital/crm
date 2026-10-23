@@ -88,6 +88,8 @@ export function guardedRequest(opts: {
     allowPrivate: boolean;
     timeoutMs?: number;
     maxBytes?: number;
+    /** Extra headers, e.g. an outgoing webhook's signature. */
+    headers?: Record<string, string>;
 }): Promise<GuardedResponse> {
     const timeoutMs = opts.timeoutMs ?? 10_000;
     const maxBytes = opts.maxBytes ?? 256 * 1024;
@@ -126,6 +128,7 @@ export function guardedRequest(opts: {
                     'user-agent': 'CollaboAutomations/1.0',
                     accept: 'application/json',
                     ...(opts.body !== undefined ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(opts.body) } : {}),
+                    ...(opts.headers ?? {}),
                 },
             },
             (res) => {

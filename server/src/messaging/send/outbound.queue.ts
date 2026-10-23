@@ -15,6 +15,8 @@ export const ORIGIN_PRIORITY: Record<SendOrigin, Priority> = {
     system: Priority.INTERACTIVE,
     automation: Priority.NORMAL,
     broadcast: Priority.BULK,
+    // Another system's sends: like an automation's, after people in the inbox.
+    api: Priority.NORMAL,
 };
 
 export const OUTBOUND_JOB_OPTS = {

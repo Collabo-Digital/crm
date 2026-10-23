@@ -362,6 +362,8 @@ model Organization {
   adReferrals            AdReferral[]
   adAccounts             AdAccount[]
   conversionEvents       ConversionEvent[]
+  apiKeys                ApiKey[]
+  webhookEndpoints       WebhookEndpoint[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -2023,6 +2025,8 @@ enum MessageSource {
   OTHER_APP
   /// The order notifications and other system sends.
   SYSTEM
+  /// Sent by another system through the public API, with an API key.
+  API
 }
 
 enum ConsentType {
@@ -3398,4 +3402,78 @@ model ConversionEvent {
   @@unique([paymentLinkId, eventName])
   @@index([organizationId, createdAt])
   @@map("conversion_events")
+}
+
+// ─── Public API and outgoing webhooks ──────────────────────────────────────
+
+/// A key for /api/v1/public/v1, shown once when made. Only its SHA-256 is kept.
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  name           String
+  /// The first characters, to tell keys apart in the list.
+  prefix         String
+  hash           String    @unique
+  /// messages:send · contacts:read · contacts:write · templates:read · webhooks:manage
+  scopes         String[]
+  createdById    String?   @map("created_by_id")
+  lastUsedAt     DateTime? @map("last_used_at")
+  revokedAt      DateTime? @map("revoked_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("api_keys")
+}
+
+/// Where Collabo posts events, signed with the endpoint's secret.
+model WebhookEndpoint {
+  id                  String    @id @default(cuid())
+  organizationId      String    @map("organization_id")
+  url                 String
+  description         String?
+  /// message.received · contact.tag_added · order.* · payment.received · website.signup · ad.referral
+  events              String[]
+  /// EncryptionService ciphertext of the signing secret.
+  secret              String
+  enabled             Boolean   @default(true)
+  /// Made through the API (a Zapier REST hook, say) with this key.
+  apiKeyId            String?   @map("api_key_id")
+  consecutiveFailures Int       @default(0) @map("consecutive_failures")
+  disabledReason      String?   @map("disabled_reason")
+  lastDeliveryAt      DateTime? @map("last_delivery_at")
+  createdById         String?   @map("created_by_id")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deliveries   WebhookDelivery[]
+
+  @@index([organizationId])
+  @@map("webhook_endpoints")
+}
+
+/// One event for one endpoint: sent, retried, or given up on.
+model WebhookDelivery {
+  id             String    @id @default(cuid())
+  endpointId     String    @map("endpoint_id")
+  organizationId String    @map("organization_id")
+  event          String
+  /// What happened, so a retried source sends once: an event row id, order:kind, payment:id.
+  sourceId       String    @map("source_id")
+  payload        Json      @db.JsonB
+  /// PENDING | SENT | FAILED
+  status         String    @default("PENDING")
+  attempts       Int       @default(0)
+  responseStatus Int?      @map("response_status")
+  error          String?
+  deliveredAt    DateTime? @map("delivered_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@unique([endpointId, sourceId])
+  @@index([endpointId, createdAt])
+  @@map("webhook_deliveries")
 }
