@@ -359,6 +359,9 @@ model Organization {
   paymentLinks           PaymentLink[]
   growthLinks            GrowthLink[]
   siteWidgets            SiteWidget[]
+  adReferrals            AdReferral[]
+  adAccounts             AdAccount[]
+  conversionEvents       ConversionEvent[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -3312,4 +3315,87 @@ model SiteWidget {
   channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
 
   @@map("site_widgets")
+}
+
+// ─── Ads: chats from click-to-message ads, their results, and conversions ──
+
+/// A chat that started from a click-to-WhatsApp, -Messenger or -Instagram ad:
+/// the referral Meta puts on the first message.
+model AdReferral {
+  id             String          @id @default(cuid())
+  organizationId String          @map("organization_id")
+  channelId      String          @map("channel_id")
+  platform       ChannelPlatform
+  contactId      String          @map("contact_id")
+  conversationId String?         @map("conversation_id")
+  /// The message that carried it; one referral per message.
+  messageId      String?         @unique @map("message_id")
+  /// WhatsApp `source_id`, Messenger and Instagram `ad_id`.
+  adId           String          @map("ad_id")
+  headline       String?
+  body           String?
+  sourceUrl      String?         @map("source_url")
+  mediaUrl       String?         @map("media_url")
+  /// WhatsApp's click id, for the Conversions API (absent for Status ads).
+  ctwaClid       String?         @map("ctwa_clid")
+  ref            String?
+  occurredAt     DateTime        @map("occurred_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, occurredAt])
+  @@index([organizationId, adId])
+  @@index([contactId, occurredAt])
+  @@map("ad_referrals")
+}
+
+/// The Meta ad account whose results (spend, conversations) the Ads page
+/// shows, read with a token from Facebook Login with `ads_read`.
+model AdAccount {
+  id             String    @id @default(cuid())
+  organizationId String    @unique @map("organization_id")
+  /// `act_…`; null until one of the shared accounts is chosen.
+  externalId     String?   @map("external_id")
+  name           String?
+  currency       String?
+  /// EncryptionService ciphertext of the user's long-lived token.
+  credentials    String
+  /// The ad accounts the token can read: [{ id, name, currency }].
+  available      Json      @default("[]") @db.JsonB
+  tokenExpiresAt DateTime? @map("token_expires_at")
+  connectedById  String?   @map("connected_by_id")
+  lastError      String?   @map("last_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("ad_accounts")
+}
+
+/// A conversion sent to Meta's Conversions API for business messaging, kept
+/// so each is sent once: Meta does not de-duplicate these.
+model ConversionEvent {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  channelId      String    @map("channel_id")
+  paymentLinkId  String?   @map("payment_link_id")
+  orderId        String?   @map("order_id")
+  eventName      String    @map("event_name")
+  datasetId      String    @map("dataset_id")
+  ctwaClid       String    @map("ctwa_clid")
+  value          Decimal   @db.Decimal(12, 2)
+  currency       String
+  /// SENT | FAILED
+  status         String
+  error          String?
+  sentAt         DateTime? @map("sent_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentLinkId, eventName])
+  @@index([organizationId, createdAt])
+  @@map("conversion_events")
 }

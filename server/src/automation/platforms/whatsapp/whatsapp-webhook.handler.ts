@@ -10,6 +10,7 @@ import { accountUpdateEffect } from './whatsapp-account-update.util';
 import type { WaContactRef, WaEvent, WaMessage } from './whatsapp-webhook.parser';
 import { WhatsAppPayService } from '../../../payments/whatsapp-pay.service';
 import { GrowthService } from '../../../growth/growth.service';
+import { AdsService } from '../../../ads/ads.service';
 
 export interface WhatsAppChannelRef {
     id: string;
@@ -60,6 +61,7 @@ export class WhatsAppWebhookHandler {
         private readonly templates: TemplatesService,
         private readonly whatsAppPay: WhatsAppPayService,
         private readonly growth: GrowthService,
+        private readonly ads: AdsService,
     ) { }
 
     async handle(events: WaEvent[]): Promise<void> {
@@ -201,6 +203,9 @@ export class WhatsAppWebhookHandler {
         });
         // A chat opened from a chat link carries its reference.
         if (recorded && !imported && m.type === 'text') await this.growth.attribute(channel.id, recorded.conversationId, m.text);
+        if (recorded && !imported && m.referral) {
+            await this.ads.captureReferral(channel, { conversationId: recorded.conversationId, messageId: recorded.messageId, referral: m.referral, at: m.timestamp });
+        }
     }
 
     /** Sent from the WhatsApp Business app (coexistence), live or from history. */

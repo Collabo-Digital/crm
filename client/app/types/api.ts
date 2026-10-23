@@ -3680,6 +3680,8 @@ export interface InboxContactDetail {
     channel: { name: string };
   }>;
   consent: Array<{ type: "OPT_IN" | "OPT_OUT"; source: string; occurredAt: string }>;
+  /** The latest click-to-message ad this person came from. */
+  fromAd: { adId: string; headline: string | null; body: string | null; sourceUrl: string | null; mediaUrl: string | null; occurredAt: string } | null;
 }
 
 export interface InboxConversationDetail extends Omit<InboxConversation, "contact"> {
@@ -4539,6 +4541,55 @@ export interface SiteWidgetView {
   /** The script tag's src, once saved. */
   scriptUrl: string | null;
   stats: { clicks: number; chats: number; popupViews: number; signups: number };
+}
+
+// ─── Ads ────────────────────────────────────────────────────────────────────
+
+export interface AdAccountView {
+  connected: boolean;
+  externalId?: string | null;
+  name?: string | null;
+  currency?: string | null;
+  available?: Array<{ id: string; name: string; currency: string | null }>;
+  tokenExpiresAt?: string | null;
+  lastError?: string | null;
+}
+
+export interface AdReportRow {
+  adId: string;
+  headline: string | null;
+  platform: ChannelPlatform | null;
+  /** People who started a chat from the ad in the period. */
+  chats: number;
+  /** Their orders in the 7 days after, and those orders' value in the organization's currency. */
+  orders: number;
+  revenue: number;
+  lastChatAt: string | null;
+  /** From Meta, when an ad account is connected. */
+  name: string | null;
+  campaign: string | null;
+  spend: number | null;
+  impressions: number | null;
+  clicks: number | null;
+  conversationsStarted: number | null;
+}
+
+export interface AdsReport {
+  period: { from: string; to: string; days: number; timeZone: string };
+  currency: string;
+  account: AdAccountView;
+  metaError: string | null;
+  totals: { chats: number; orders: number; revenue: number; spend: number | null };
+  ads: AdReportRow[];
+}
+
+export interface ConversionSetting {
+  channelId: string;
+  name: string;
+  enabled: boolean;
+  datasetId: string | null;
+  sent: number;
+  failed: number;
 }
 
 export interface CatalogView {

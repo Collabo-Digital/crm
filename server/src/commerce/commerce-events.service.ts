@@ -27,6 +27,7 @@ const phoneOf = (address: unknown): string | null => {
 export class CommerceEventsService {
     private readonly logger = new Logger(CommerceEventsService.name);
     private readonly orderListeners: Array<(orderId: string, kinds: StoreEventKind[]) => Promise<void>> = [];
+    private readonly paymentListeners: Array<(linkId: string) => Promise<void>> = [];
 
     constructor(
         private readonly prisma: PrismaService,
@@ -40,6 +41,11 @@ export class CommerceEventsService {
      */
     onOrder(listener: (orderId: string, kinds: StoreEventKind[]) => Promise<void>): void {
         this.orderListeners.push(listener);
+    }
+
+    /** Also told of every paid payment link or WhatsApp Pay bill: the Conversions API reports it this way. */
+    onPayment(listener: (linkId: string) => Promise<void>): void {
+        this.paymentListeners.push(listener);
     }
 
     async order(orderId: string, kinds: StoreEventKind[]): Promise<void> {
@@ -112,6 +118,9 @@ export class CommerceEventsService {
         contactId: string | null;
         vars: Record<string, string>;
     }): Promise<void> {
+        for (const listener of this.paymentListeners) {
+            await listener(input.linkId).catch((err) => this.logger.warn(`Payment listener for ${input.linkId} failed: ${err instanceof Error ? err.message : err}`));
+        }
         try {
             const buyer = input.orderId ? await this.buyerOf(input.orderId) : null;
             const contact = input.contactId
@@ -257,7 +266,11 @@ export class CommerceEventsService {
         });
         if (existing) {
             if (!existing.customerId && customerId) {
-                await this.prisma.channelContact.update({ where: { id: existing.id }, data: { customerId } });
+                // The chats follow, as when a customer is linked by hand or by phone, so the inbox sees their orders.
+                await this.prisma.$transaction([
+                    this.prisma.channelContact.update({ where: { id: existing.id }, data: { customerId } }),
+                    this.prisma.conversation.updateMany({ where: { contactId: existing.id, customerId: null }, data: { customerId } }),
+                ]);
             }
             return existing;
         }

@@ -221,6 +221,14 @@ export function ContactPanel({
             <dt className="text-muted-foreground">First seen</dt>
             <dd>{formatDateTime(contact.firstSeenAt)}</dd>
           </div>
+          {contact.fromAd && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-muted-foreground">From an ad</dt>
+              <dd className="min-w-0 truncate text-right" title={[contact.fromAd.headline, contact.fromAd.body, `Ad ${contact.fromAd.adId}`].filter(Boolean).join(" · ")}>
+                {contact.fromAd.headline ?? `Ad ${contact.fromAd.adId}`} · {formatDateTime(contact.fromAd.occurredAt)}
+              </dd>
+            </div>
+          )}
           <div className="flex items-center justify-between gap-2">
             <dt className="text-muted-foreground">Owner</dt>
             <dd>

@@ -16,6 +16,8 @@ export const REDIS_KEYS = {
     OAUTH_INSTAGRAM_PENDING: 'oauth:instagram:pending:',
     /// Facebook Login for Business for Pages + their Instagram accounts.
     OAUTH_META_PAGES: 'oauth:meta-pages:',
+    /// Facebook Login with ads_read, for the Ads page's results.
+    OAUTH_META_ADS: 'oauth:meta-ads:',
 };
 
 export const REDIS_TTL = {

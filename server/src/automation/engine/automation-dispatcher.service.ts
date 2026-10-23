@@ -210,6 +210,9 @@ export class AutomationDispatcher {
             }
             case 'crm.webhook':
                 return t.automationId === payload.raw?.automationId;
+            case 'crm.ad.referral':
+                // Any ad, or the ads the trigger names.
+                return !t.keywords.length || t.keywords.includes(event.text ?? '');
             case 'instagram.mention':
             case 'whatsapp.cart':
             case 'crm.checkout.abandoned':

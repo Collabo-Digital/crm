@@ -5,6 +5,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { IngestChannel, MessageIngestService } from '../../../messaging/message-ingest.service';
 import { messengerContent } from '../../../messaging/message-content';
 import { MsEvent, parseMessengerDelivery } from './messenger-webhook.parser';
+import { AdsService } from '../../../ads/ads.service';
 
 /**
  * Applies a `page` (Messenger) or `instagram` delivery to the account it
@@ -19,6 +20,7 @@ export class MessengerWebhookHandler {
     constructor(
         private readonly prisma: PrismaService,
         private readonly ingest: MessageIngestService,
+        private readonly ads: AdsService,
         config: ConfigService,
     ) {
         this.appId = config.get<string>('meta.appId');
@@ -47,7 +49,7 @@ export class MessengerWebhookHandler {
                     await this.ingest.applyRevoke(channel, e.message.mid, e.timestamp);
                     return;
                 }
-                await this.ingest.recordInbound({
+                const recorded = await this.ingest.recordInbound({
                     channel,
                     contact: { platform: e.platform, scopedId: e.senderId },
                     externalId: e.message.mid,
@@ -69,6 +71,10 @@ export class MessengerWebhookHandler {
                         },
                     },
                 });
+                // A chat from a click-to-Messenger or click-to-Instagram ad.
+                if (recorded && e.message.referral) {
+                    await this.ads.captureReferral(channel, { conversationId: recorded.conversationId, messageId: recorded.messageId, referral: e.message.referral, at: e.timestamp });
+                }
                 return;
             }
             case 'echo': {
@@ -86,8 +92,8 @@ export class MessengerWebhookHandler {
                 });
                 return;
             }
-            case 'postback':
-                await this.ingest.recordInbound({
+            case 'postback': {
+                const recorded = await this.ingest.recordInbound({
                     channel,
                     contact: { platform: e.platform, scopedId: e.senderId },
                     externalId: e.mid ?? `postback:${e.senderId}:${e.timestamp.getTime()}`,
@@ -101,6 +107,15 @@ export class MessengerWebhookHandler {
                         extraPayload: { postbackPayload: e.payload },
                     },
                 });
+                // A new thread from an ad can open with Get Started, carrying the referral.
+                if (recorded && e.referral) {
+                    await this.ads.captureReferral(channel, { conversationId: recorded.conversationId, messageId: recorded.messageId, referral: e.referral, at: e.timestamp });
+                }
+                return;
+            }
+            case 'referral':
+                // Someone with a thread already open tapped an ad: no message, just the referral.
+                await this.ads.captureForSender(channel, e.senderId, e.referral, e.timestamp);
                 return;
             case 'delivery':
                 for (const mid of e.mids) {
@@ -160,7 +175,7 @@ export class MessengerWebhookHandler {
                 this.logger.log(`${platformKey} thread control for ${e.senderId}: ${e.type}`);
                 return;
             default:
-                this.logger.debug(`${platformKey} event not stored: ${e.kind === 'other' ? e.type : e.kind}`);
+                this.logger.debug(`${platformKey} event not stored: ${e.type}`);
         }
     }
 

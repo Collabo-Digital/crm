@@ -18,6 +18,7 @@ import { InboxModule } from '../inbox/inbox.module';
 import { CommerceModule } from '../commerce/commerce.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { GrowthModule } from '../growth/growth.module';
+import { AdsModule } from '../ads/ads.module';
 import { AUTOMATION_QUEUE } from '../messaging/automation-jobs';
 import { AutomationDispatcher } from './engine/automation-dispatcher.service';
 import { AutomationRunner } from './engine/automation-runner.service';
@@ -29,7 +30,7 @@ import { ConversationStartersService } from './conversation-starters.service';
 
 @Module({
   imports: [
-    ChannelModule, MessagingModule, CampaignsModule, InboxModule, CommerceModule, PaymentsModule, GrowthModule,
+    ChannelModule, MessagingModule, CampaignsModule, InboxModule, CommerceModule, PaymentsModule, GrowthModule, AdsModule,
     BullModule.registerQueue({ name: META_INBOUND_QUEUE }),
     BullModule.registerQueue({ name: AUTOMATION_QUEUE }),
   ],

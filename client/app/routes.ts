@@ -80,6 +80,7 @@ export default [
     route("campaigns/segments/:id", "routes/app/campaigns/segments/$id.tsx"),
     route("campaigns/catalog", "routes/app/campaigns/catalog.tsx"),
     route("campaigns/growth", "routes/app/campaigns/growth.tsx"),
+    route("campaigns/ads", "routes/app/campaigns/ads.tsx"),
     route("campaigns/automations", "routes/app/campaigns/automations.tsx"),
     route("campaigns/automations/starters", "routes/app/campaigns/automations/starters.tsx"),
     route("campaigns/automations/:id", "routes/app/campaigns/automations/$id.tsx"),

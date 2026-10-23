@@ -256,7 +256,7 @@ export class InboxContactsService {
 
     /** The profile the side panel shows. */
     async view(contact: ChannelContact) {
-        const [customer, conversations, consent, owner, phoneMatches] = await Promise.all([
+        const [customer, conversations, consent, owner, phoneMatches, fromAd] = await Promise.all([
             contact.customerId
                 ? this.prisma.customer.findUnique({
                     where: { id: contact.customerId },
@@ -289,6 +289,12 @@ export class InboxContactsService {
             }),
             this.owner(contact),
             this.phoneMatches(contact),
+            // The latest click-to-message ad this person came from.
+            this.prisma.adReferral.findFirst({
+                where: { contactId: contact.id },
+                orderBy: { occurredAt: 'desc' },
+                select: { adId: true, headline: true, body: true, sourceUrl: true, mediaUrl: true, occurredAt: true },
+            }),
         ]);
         return {
             id: contact.id,
@@ -326,6 +332,7 @@ export class InboxContactsService {
             phoneMatches,
             conversations,
             consent,
+            fromAd,
         };
     }
 

@@ -578,6 +578,40 @@ or admin. That is a different account from Collabo's own subscription billing
   `/api/v1/widget/*` accepts any origin without credentials (like the
   storefront pixel); the rest of the API stays locked to the CRM.
 
+### Click-to-message ads (Campaigns → Ads)
+
+- **Chats from ads, no extra permission.** The first message of a chat from
+  a click-to-WhatsApp ad carries `referral` (`source_type: ad`, `source_id`,
+  `headline`, `body`, media, `ctwa_clid`; Status ads have no `ctwa_clid`);
+  click-to-Messenger and click-to-Instagram messages carry `ad_id` and
+  `ads_context_data`, and an ad tapped in an existing Messenger thread sends a
+  standalone `messaging_referrals` event (the Page must subscribe to it).
+  Each is recorded per message (`ad_referrals`), shown in the inbox's contact
+  panel ("From an ad"), and starts **"Someone messages you from an ad"**
+  automations (any ad, or the ad ids you list) with `{{ad.id}}`,
+  `{{ad.headline}}`, `{{ad.body}}` and `{{ad.url}}`; they may reply in text,
+  since the customer has just written. The Ads page counts people per ad and
+  credits each ad with the orders those customers place within 7 days.
+- **Meta's results (spend, impressions, conversations).** Needs a Facebook
+  Login for Business configuration with `ads_read` (`META_ADS_CONFIG_ID`), and
+  for other businesses' ad accounts Advanced access to `ads_read` plus the
+  Marketing API Access Tier (app review). A manager connects; the code becomes
+  a long-lived user token (about 60 days, stored encrypted) and the active ad
+  account is chosen. The page reads `GET /act_{id}/insights?level=ad` for the
+  period (cached 15 minutes) and shows "Messaging Conversations Started"
+  (`onsite_conversion.messaging_conversation_started_7d`), cost per chat and
+  return on ad spend. **Not verified live** until that access is granted.
+- **Purchases to the Conversions API.** Per WhatsApp number, an owner or admin
+  turns on "Report purchases to Meta": `POST /{waba_id}/dataset` gives the
+  account's dataset (needs `whatsapp_business_manage_events`, auto-approved
+  with Advanced `whatsapp_business_messaging`). A payment collected in the
+  chat (payment link or WhatsApp Pay) from someone who came from a
+  click-to-WhatsApp ad in the last 7 days is sent once as `Purchase` with the
+  ad's `ctwa_clid` (`action_source: business_messaging`); Meta does not
+  de-duplicate, so `conversion_events` does. Website orders are counted on the
+  page but not sent: Meta wants messaging events to happen in the chat.
+  Messenger and Instagram conversions are not sent yet.
+
 ### Messaging analytics (Analytics → Messaging)
 
 For owners, admins and managers; days are counted in the organization's time

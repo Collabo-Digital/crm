@@ -52,6 +52,7 @@ import { CampaignsModule } from './campaigns/campaigns.module';
 import { CommerceModule } from './commerce/commerce.module';
 import { PaymentsModule } from './payments/payments.module';
 import { GrowthModule } from './growth/growth.module';
+import { AdsModule } from './ads/ads.module';
 
 @Module({
   imports: [
@@ -121,6 +122,7 @@ import { GrowthModule } from './growth/growth.module';
     CommerceModule,
     PaymentsModule,
     GrowthModule,
+    AdsModule,
   ],
   controllers: [AppController],
   providers: [

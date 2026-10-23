@@ -20,7 +20,9 @@ export type InboundEventType =
     /** Another system called an automation's webhook URL. */
     | 'crm.webhook'
     /** A cart sent from the WhatsApp catalog. */
-    | 'whatsapp.cart';
+    | 'whatsapp.cart'
+    /** A chat that started from a click-to-message ad. */
+    | 'crm.ad.referral';
 
 /** Tags added by automations can start automations that add tags; stop after this many hops. */
 export const MAX_TAG_DEPTH = 3;

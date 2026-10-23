@@ -54,12 +54,13 @@ const TriggerConfig = z.object({
      * checkout_abandoned — a store checkout was left unfinished · cart — a
      * WhatsApp cart sent from the catalog · invoice_issued — a GST invoice was
      * issued for an order · payment_received — a payment link was paid ·
-     * website_signup — someone left their number in the website pop-up.
+     * website_signup — someone left their number in the website pop-up ·
+     * ad_message — a chat started from a click-to-message ad (any, or the ad ids in `keyword`).
      */
     event: z.enum([
         'comment', 'message', 'mention', 'postback', 'tag_added', 'webhook',
         'order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled', 'checkout_abandoned', 'cart',
-        'invoice_issued', 'payment_received', 'website_signup',
+        'invoice_issued', 'payment_received', 'website_signup', 'ad_message',
     ]),
     /** Comment: the post or reel id; empty for every post. */
     post: z.string().max(64).default(''),
@@ -318,9 +319,9 @@ const ORDER_CONTEXT = [...ORDER_EVENTS, 'invoice_issued', 'payment_received'];
 /** Store events and website sign-ups reach people who may not have written in 24 hours: WhatsApp templates only. */
 const STORE_EVENTS = [...ORDER_CONTEXT, 'checkout_abandoned', 'website_signup'];
 const EVENTS_BY_CHANNEL: Record<z.infer<typeof Channel>, string[]> = {
-    instagram: ['comment', 'message', 'mention', 'postback', 'tag_added', 'webhook'],
-    facebook: ['comment', 'message', 'postback', 'tag_added', 'webhook'],
-    whatsapp: ['message', 'tag_added', 'webhook', ...STORE_EVENTS, 'cart'],
+    instagram: ['comment', 'message', 'mention', 'postback', 'tag_added', 'webhook', 'ad_message'],
+    facebook: ['comment', 'message', 'postback', 'tag_added', 'webhook', 'ad_message'],
+    whatsapp: ['message', 'tag_added', 'webhook', ...STORE_EVENTS, 'cart', 'ad_message'],
 };
 
 export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
@@ -348,6 +349,9 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
         push(trigger.id, 'payload_missing', 'Button missing', 'Choose which ice breaker, menu item or button starts this, or choose any.');
     }
     if (t.event === 'tag_added' && !t.tag.trim()) push(trigger.id, 'tag_missing', 'Tag missing', 'Choose the tag that starts this automation.');
+    if (t.event === 'ad_message' && keywordsFor(trigger).some((id) => !/^\d{5,25}$/.test(id))) {
+        push(trigger.id, 'ad_id_invalid', 'Check the ad ids', 'Ad ids are the long numbers shown in Ads Manager, separated by commas. Leave it empty for every ad.');
+    }
 
     const actions = flow.all().filter((s) => s.step.type !== 'trigger');
     if (actions.length === 0) push(trigger.id, 'no_action', 'Add at least one action', 'An automation needs a step after the trigger.');
@@ -362,6 +366,7 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
     if (t.event === 'checkout_abandoned') saved.add('checkout');
     if (t.event === 'payment_received') saved.add('payment');
     if (t.event === 'website_signup') saved.add('signup');
+    if (t.event === 'ad_message') saved.add('ad');
     let privateReplies = 0;
     for (const { step, path } of actions) {
         const c = step.config;
@@ -568,6 +573,7 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
 export function keywordsFor(trigger: StepDef): string[] {
     const c = trigger.config as TriggerConfigT;
     if (c.event === 'tag_added') return c.tag ? [c.tag] : [];
+    if (c.event === 'ad_message') return [...new Set(c.keyword.split(',').map((k) => k.trim()).filter(Boolean))];
     if (c.match === 'any' || (c.event !== 'comment' && c.event !== 'message' && c.event !== 'postback')) return [];
     const parts = c.keyword.split(',').map((k) => k.trim()).filter(Boolean);
     return [...new Set(c.event === 'postback' ? parts : parts.map((k) => k.toLowerCase()))];
@@ -583,6 +589,7 @@ export function triggerTypeFor(trigger: StepDef): string {
     if (c.event === 'invoice_issued') return 'crm.invoice.issued';
     if (c.event === 'payment_received') return 'crm.payment.received';
     if (c.event === 'website_signup') return 'crm.website.signup';
+    if (c.event === 'ad_message') return 'crm.ad.referral';
     if (c.event === 'cart') return 'whatsapp.cart';
     if (c.event === 'mention') return 'instagram.mention';
     return `${c.channel}.${c.event}`;

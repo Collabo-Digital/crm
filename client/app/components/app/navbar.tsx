@@ -27,6 +27,7 @@ import {
   MessagesSquare,
   ShoppingBag,
   QrCode,
+  Target,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
@@ -92,6 +93,7 @@ const CAMPAIGNS_CHILDREN: NavChild[] = [
   { label: "Automations", href: "/campaigns/automations", icon: Workflow },
   { label: "Catalog", href: "/campaigns/catalog", icon: ShoppingBag },
   { label: "Growth", href: "/campaigns/growth", icon: QrCode },
+  { label: "Ads", href: "/campaigns/ads", icon: Target },
 ];
 
 /** Sub-nav for Analytics: the storefront, and chats. */

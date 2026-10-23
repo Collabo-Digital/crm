@@ -270,3 +270,22 @@ describe('a website sign-up', () => {
         expect(check(steps({ kind: 'template', templateId: 't1', templateValues: { 'body.1': '{{signup.name}}' } }))).toEqual([]);
     });
 });
+
+describe('a chat from an ad', () => {
+    const steps = (keyword: string, channel = 'whatsapp') => [
+        { id: 't', type: 'trigger', config: { channel, event: 'ad_message', keyword } },
+        { id: 'm', type: 'send_message', config: { kind: 'text', message: 'Thanks for tapping our {{ad.headline}} ad!' } },
+    ];
+    const check = (s: unknown[], platform = 'WHATSAPP') => collectIssues(parseDefinition({ steps: s }), { platform, knownMediaIds: null }).map((i) => i.code);
+
+    it('starts on any ad or the ones named, on every channel, and can reply in text', () => {
+        const any = parseDefinition({ steps: steps('') })[0];
+        expect(triggerTypeFor(any)).toBe('crm.ad.referral');
+        expect(keywordsFor(any)).toEqual([]);
+        expect(keywordsFor(parseDefinition({ steps: steps(' 120210000000001, 120210000000002 ,120210000000001') })[0])).toEqual(['120210000000001', '120210000000002']);
+        expect(check(steps(''))).toEqual([]);
+        expect(check(steps('', 'instagram'), 'INSTAGRAM')).toEqual([]);
+        expect(check(steps('', 'facebook'), 'FACEBOOK')).toEqual([]);
+        expect(check(steps('summer-sale'))).toEqual(['ad_id_invalid']);
+    });
+});

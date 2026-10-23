@@ -25,6 +25,10 @@ export default () => ({
     },
     // Merchants' own gateway accounts, for payment links sent in chat. Not
     // Collabo's subscription billing (RAZORPAY_KEY_* / BillingService).
+    // Facebook Login for Business configuration with ads_read, for ad results.
+    ads: {
+        configId: process.env.META_ADS_CONFIG_ID,
+    },
     payments: {
         razorpayApiBase: process.env.RAZORPAY_MERCHANT_API_BASE || 'https://api.razorpay.com',
     },

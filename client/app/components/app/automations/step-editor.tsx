@@ -64,6 +64,7 @@ function variablesFor(ctx: EditorContext): string[] {
   // A paid link carries {{payment.*}}; "Send a payment link" fills it for its own message and later steps.
   if (event === "payment_received") ["payment.amount", "payment.method", "payment.description"].forEach((v) => saved.add(v));
   if (event === "website_signup") ["signup.name", "signup.page"].forEach((v) => saved.add(v));
+  if (event === "ad_message") ["ad.id", "ad.headline", "ad.body", "ad.url"].forEach((v) => saved.add(v));
   if (allSteps(ctx.steps).some((s) => s.type === "send_payment_link")) ["payment.link", "payment.link_path", "payment.amount", "payment.expires"].forEach((v) => saved.add(v));
   return [
     "first_name",
@@ -365,7 +366,16 @@ function TriggerForm({ config, set, ctx }: { config: Config; set: (p: Config) =>
           </p>
         </>
       )}
-      {STORE_EVENTS.includes(config.event) && (
+      {config.event === "ad_message" && (
+        <Field label="Which ads" hint="Ad ids from Ads Manager, comma-separated. Leave empty for every ad. A “Someone sends a message” automation also sees this first message, so keep only one of them replying." htmlFor="t-ads">
+          <Input id="t-ads" value={config.keyword ?? ""} disabled={ro} maxLength={500} onChange={(e) => set({ keyword: e.target.value.replace(/[^\d,\s]/g, "") })} placeholder="120210000000001, 120210000000002" />
+        </Field>
+      )}
+      {config.event === "website_signup" ? (
+        <p className="rounded-lg bg-info-subtle p-2 text-micro text-info">
+          The person who signed up becomes a contact, opted in with the text they agreed to. Messages must be approved templates, since they have not written yet.
+        </p>
+      ) : STORE_EVENTS.includes(config.event) && (
         <p className="rounded-lg bg-info-subtle p-2 text-micro text-info">
           The buyer is found by the phone number on the order or checkout; a new number becomes a contact. Messages must be approved templates, since they may not have written in 24 hours.
         </p>

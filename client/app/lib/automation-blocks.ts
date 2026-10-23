@@ -86,6 +86,7 @@ export const EVENTS: Record<AutomationChannelKey, Array<{ value: string; label: 
     { value: "message", label: "Someone sends a DM", hint: "Any message, or one with a keyword." },
     { value: "mention", label: "Someone mentions you in their story", hint: "" },
     { value: "postback", label: "Someone taps an ice breaker or menu item", hint: "Set these up under Conversation starters." },
+    { value: "ad_message", label: "Someone messages you from an ad", hint: "A click-to-Instagram ad: any, or the ads you name. {{ad.headline}} is the ad’s title." },
     { value: "tag_added", label: "A contact gets a tag", hint: "" },
     { value: "webhook", label: "Another app calls a URL", hint: "" },
   ],
@@ -93,12 +94,14 @@ export const EVENTS: Record<AutomationChannelKey, Array<{ value: string; label: 
     { value: "comment", label: "Someone comments on a Page post", hint: "" },
     { value: "message", label: "Someone sends a message", hint: "" },
     { value: "postback", label: "Someone taps Get Started, an ice breaker or a menu item", hint: "Set these up under Conversation starters." },
+    { value: "ad_message", label: "Someone messages you from an ad", hint: "A click-to-Messenger ad: any, or the ads you name. {{ad.headline}} is the ad’s title." },
     { value: "tag_added", label: "A contact gets a tag", hint: "" },
     { value: "webhook", label: "Another app calls a URL", hint: "" },
   ],
   whatsapp: [
     { value: "message", label: "Someone sends a message", hint: "Any message, or one with a keyword." },
     { value: "cart", label: "Someone sends a cart from your catalog", hint: "Turn it into a draft order with a checkout link." },
+    { value: "ad_message", label: "Someone messages you from an ad", hint: "A click-to-WhatsApp ad: any, or the ads you name. {{ad.headline}} and {{ad.body}} are the ad’s text." },
     { value: "order_created", label: "An order is placed", hint: "In Shopify or in Collabo." },
     { value: "order_paid", label: "An order is paid", hint: "" },
     { value: "invoice_issued", label: "A GST invoice is issued", hint: "On payment or when a cash-on-delivery order ships (with automatic invoices on), by hand, in bulk, or with an offline sale. Send it with “Send the invoice”." },
@@ -271,6 +274,8 @@ export function triggerSummary(config: AutomationStep["config"]): string {
       return "A payment link is paid";
     case "website_signup":
       return "Someone signs up on your website";
+    case "ad_message":
+      return config.keyword ? `A chat from ad ${String(config.keyword).split(",").length > 1 ? "ids " : ""}${config.keyword}` : "A chat from any ad";
     case "order_fulfilled":
       return "An order ships";
     case "order_delivered":
