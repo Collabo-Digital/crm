@@ -99,6 +99,12 @@ export class InboxController {
         return this.inbox.createPaymentLink(user.orgId!, await this.teams.viewer(user), id, dto);
     }
 
+    /** A WhatsApp Pay "Review and Pay" bill, sent in this chat. */
+    @Post('conversations/:id/whatsapp-pay')
+    async requestWhatsAppPay(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Body() dto: CreatePaymentLinkDto) {
+        return this.inbox.requestWhatsAppPay(user.orgId!, await this.teams.viewer(user), id, { orderId: dto.orderId, draftOrderId: dto.draftOrderId });
+    }
+
     /** Turn a cart the customer sent into a draft order with a checkout link. */
     @Post('conversations/:id/messages/:messageId/draft-order')
     async draftFromCart(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Param('messageId') messageId: string) {

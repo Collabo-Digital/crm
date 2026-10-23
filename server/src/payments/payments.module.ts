@@ -4,18 +4,21 @@ import { OrderModule } from '../order/order.module';
 import { DraftOrderModule } from '../draft-order/draft-order.module';
 import { CommerceModule } from '../commerce/commerce.module';
 import { CommerceEventsModule } from '../commerce/commerce-events.module';
+import { MessagingModule } from '../messaging/messaging.module';
 import { PaymentsController } from './payments.controller';
 import { RazorpayMerchantWebhookController } from './razorpay-merchant-webhook.controller';
 import { PaymentAccountsService } from './payment-accounts.service';
 import { PaymentLinksService } from './payment-links.service';
 import { PaymentLinksScheduler } from './payment-links.scheduler';
 import { RazorpayMerchantClient } from './razorpay-merchant.client';
+import { WhatsAppPayService } from './whatsapp-pay.service';
+import { WhatsAppPayController } from './whatsapp-pay.controller';
 
-/** Payment links paid into each organization's own Razorpay account. */
+/** Payment links paid into each organization's own Razorpay account, and WhatsApp Pay requests. */
 @Module({
-    imports: [ChannelModule, OrderModule, DraftOrderModule, CommerceModule, CommerceEventsModule],
-    controllers: [PaymentsController, RazorpayMerchantWebhookController],
-    providers: [PaymentAccountsService, PaymentLinksService, PaymentLinksScheduler, RazorpayMerchantClient],
-    exports: [PaymentAccountsService, PaymentLinksService],
+    imports: [ChannelModule, MessagingModule, OrderModule, DraftOrderModule, CommerceModule, CommerceEventsModule],
+    controllers: [PaymentsController, RazorpayMerchantWebhookController, WhatsAppPayController],
+    providers: [PaymentAccountsService, PaymentLinksService, PaymentLinksScheduler, RazorpayMerchantClient, WhatsAppPayService],
+    exports: [PaymentAccountsService, PaymentLinksService, WhatsAppPayService],
 })
 export class PaymentsModule { }

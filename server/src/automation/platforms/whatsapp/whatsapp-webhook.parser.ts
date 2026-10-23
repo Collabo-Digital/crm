@@ -59,6 +59,19 @@ export interface WaStatus {
     raw: Record<string, unknown>;
 }
 
+/** WhatsApp Pay: a payment on an `order_details` bill, from the gateway Meta is linked to. */
+export interface WaPayment {
+    referenceId: string;
+    /** captured | pending */
+    status: string;
+    /** In paise (value / offset 100). */
+    amount: number | null;
+    currency: string | null;
+    transactionId: string | null;
+    method: string | null;
+    raw: Record<string, unknown>;
+}
+
 export interface WaSyncedContact {
     action: 'add' | 'remove' | string;
     fullName: string | null;
@@ -79,6 +92,8 @@ export type WaEvent =
     | (Base & { kind: 'message'; message: WaMessage })
     | (Base & { kind: 'echo'; message: WaMessage })
     | (Base & { kind: 'status'; status: WaStatus })
+    | (Base & { kind: 'payment'; payment: WaPayment })
+    | (Base & { kind: 'payment_configuration'; name: string | null; provider: string | null; status: string | null; value: Record<string, unknown> })
     | (Base & {
         kind: 'history_chunk';
         phase: number | null;
@@ -273,6 +288,26 @@ function toStatus(s: Obj, index: Map<string, Obj>): WaStatus | null {
     };
 }
 
+function toPayment(s: Obj): WaPayment | null {
+    const p = obj(s.payment) ?? {};
+    const referenceId = str(p.reference_id) ?? str(s.reference_id);
+    const status = str(s.status);
+    if (!referenceId || !status) return null;
+    const amount = obj(p.amount);
+    const value = num(amount?.value);
+    const offset = num(amount?.offset) ?? 100;
+    const transaction = obj(p.transaction);
+    return {
+        referenceId,
+        status,
+        amount: value === null ? null : Math.round((value * 100) / offset),
+        currency: str(p.currency),
+        transactionId: str(transaction?.id),
+        method: str(obj(transaction?.method)?.type),
+        raw: s,
+    };
+}
+
 /** Every event in one `whatsapp_business_account` delivery, in payload order. */
 export function parseWhatsAppDelivery(body: unknown): WaEvent[] {
     const events: WaEvent[] = [];
@@ -309,6 +344,11 @@ function parseChange(field: string, value: Obj, base: Base): WaEvent[] {
                 if (message) out.push({ ...base, kind: 'message', message });
             }
             for (const s of arr(value.statuses)) {
+                if (str(s.type) === 'payment') {
+                    const payment = toPayment(s);
+                    if (payment) out.push({ ...base, kind: 'payment', payment });
+                    continue;
+                }
                 const status = toStatus(s, index);
                 if (status) out.push({ ...base, kind: 'status', status });
             }
@@ -435,6 +475,10 @@ function parseChange(field: string, value: Obj, base: Base): WaEvent[] {
                 event: str(value.event) ?? str(value.new_quality_score) ?? str(value.new_category),
                 value,
             });
+            return out;
+
+        case 'payment_configuration_update':
+            out.push({ ...base, kind: 'payment_configuration', name: str(value.configuration_name), provider: str(value.provider_name), status: str(value.status), value });
             return out;
 
         case 'phone_number_quality_update':

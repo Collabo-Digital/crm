@@ -60,7 +60,7 @@ export function simulate(
                 push('done', `Sends the order's GST invoice as a PDF with the template "${opts.templateNames?.[String(c.templateId ?? '')] ?? 'not chosen'}".`);
                 break;
             case 'send_payment_link':
-                push('done', c.kind === 'text'
+                push('done', c.method === 'whatsapp_pay' ? 'Sends a WhatsApp Pay bill to review and pay in the chat.' : c.kind === 'text'
                     ? `Sends a Razorpay payment link: ${interpolate(String(c.message ?? ''), { ...vars, 'payment.link': 'https://rzp.io/rzp/example' })}`
                     : `Sends a Razorpay payment link with the template "${opts.templateNames?.[String(c.templateId ?? '')] ?? 'not chosen'}".`);
                 break;

@@ -238,3 +238,22 @@ describe('sending a payment link', () => {
         expect(check(steps)).toEqual([]);
     });
 });
+
+describe('asking for WhatsApp Pay', () => {
+    const steps = (event: string, inside = false) => [
+        { id: 't', type: 'trigger', config: { channel: 'whatsapp', event } },
+        ...(event === 'cart' ? [{ id: 'd', type: 'store_action', config: { action: 'create_draft_order' } }] : []),
+        ...(inside
+            ? [{ id: 'w', type: 'wait_for_reply', config: { amount: 1, unit: 'hours' }, branches: { replied: [{ id: 'p', type: 'send_payment_link', config: { method: 'whatsapp_pay' } }], timeout: [] } }]
+            : [{ id: 'p', type: 'send_payment_link', config: { method: 'whatsapp_pay', message: 'Your order comes to {{payment.amount}}' } }]),
+    ];
+    const check = (s: unknown[], whatsAppPayReady = true) =>
+        collectIssues(parseDefinition({ steps: s }), { platform: 'WHATSAPP', knownMediaIds: null, templates: new Map(), whatsAppPayReady }).map((i) => i.code);
+
+    it('goes right after a cart or a reply, needs no template and no Razorpay account', () => {
+        expect(check(steps('cart'))).toEqual([]);
+        expect(check(steps('order_created', true))).toEqual([]);
+        expect(check(steps('order_created'))).toEqual(['whatsapp_pay_needs_window']);
+        expect(check(steps('cart'), false)).toEqual(['whatsapp_pay_not_ready']);
+    });
+});

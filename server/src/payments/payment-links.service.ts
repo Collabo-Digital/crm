@@ -24,6 +24,7 @@ export interface LinkOptions {
 
 export interface PaymentLinkView {
     id: string;
+    provider: PaymentProvider;
     shortUrl: string;
     amount: string;
     currency: string;
@@ -148,7 +149,7 @@ export class PaymentLinksService implements OnApplicationShutdown {
 
     async list(orgId: string, where: { conversationId?: string; orderId?: string }): Promise<PaymentLinkView[]> {
         const rows = await this.prisma.paymentLink.findMany({ where: { organizationId: orgId, ...where }, orderBy: { createdAt: 'desc' }, take: 20 });
-        return rows.map((r) => this.view(r));
+        return rows.map((r) => this.toView(r));
     }
 
     async get(orgId: string, id: string): Promise<PaymentLink> {
@@ -157,25 +158,27 @@ export class PaymentLinksService implements OnApplicationShutdown {
         return link;
     }
 
-    /** Ask Razorpay, for when its webhook has not arrived. */
+    /** Ask Razorpay, for when its webhook has not arrived. WhatsApp Pay requests are checked by WhatsAppPayService. */
     async refresh(orgId: string, id: string): Promise<PaymentLinkView> {
         const link = await this.get(orgId, id);
+        if (link.provider !== PaymentProvider.RAZORPAY || !link.accountId) throw new BadRequestException('This is not a Razorpay link.');
         const account = await this.prisma.paymentAccount.findUniqueOrThrow({ where: { id: link.accountId } });
         if (!account.credentials || account.disconnectedAt) throw new BadRequestException('Reconnect Razorpay in Settings → Orders → Payments to check this link.');
         const entity = await this.razorpay.fetch(this.accounts.keys(account), link.externalId);
         const payment = entity.payments?.find((p) => p.status === 'captured') ?? entity.payments?.[0];
         await this.apply(link, entity, payment ? { id: payment.payment_id, method: payment.method } : null);
         await this.idle();
-        return this.view(await this.get(orgId, id));
+        return this.toView(await this.get(orgId, id));
     }
 
     async cancel(orgId: string, id: string): Promise<PaymentLinkView> {
         const link = await this.get(orgId, id);
+        if (link.provider !== PaymentProvider.RAZORPAY) throw new BadRequestException('A WhatsApp Pay request cannot be cancelled; it expires by itself.');
         if (!OPEN.includes(link.status)) throw new BadRequestException('Only an unpaid link can be cancelled.');
         const account = await this.accounts.require(orgId);
         const entity = await this.razorpay.cancel(this.accounts.keys(account), link.externalId);
         await this.apply(link, entity, null);
-        return this.view(await this.get(orgId, id));
+        return this.toView(await this.get(orgId, id));
     }
 
     /**
@@ -223,7 +226,7 @@ export class PaymentLinksService implements OnApplicationShutdown {
         });
         for (const link of unfinished) await this.followUp(link);
         const due = await this.prisma.paymentLink.findMany({
-            where: { status: { in: OPEN }, createdAt: { gt: new Date(now - 7 * 86_400_000) }, updatedAt: { lt: new Date(now - 10 * 60_000) } },
+            where: { provider: PaymentProvider.RAZORPAY, status: { in: OPEN }, createdAt: { gt: new Date(now - 7 * 86_400_000) }, updatedAt: { lt: new Date(now - 10 * 60_000) } },
             orderBy: { updatedAt: 'asc' },
             take: limit,
         });
@@ -247,7 +250,7 @@ export class PaymentLinksService implements OnApplicationShutdown {
             where: { organizationId: orgId, ...target, status: PaymentLinkStatus.CREATED, expiresAt: { gt: new Date(Date.now() + 3_600_000) } },
             orderBy: { createdAt: 'desc' },
         });
-        return open && open.amount.equals(amount) ? { ...this.view(open), existing: true } : null;
+        return open && open.amount.equals(amount) ? { ...this.toView(open), existing: true } : null;
     }
 
     private async create(
@@ -310,7 +313,7 @@ export class PaymentLinksService implements OnApplicationShutdown {
                     expiresAt,
                 },
             });
-            return this.view(row);
+            return this.toView(row);
         } catch (err) {
             // A payable link we cannot track would take money we never record.
             await this.razorpay.cancel(keys, entity.id).catch(() => undefined);
@@ -325,26 +328,42 @@ export class PaymentLinksService implements OnApplicationShutdown {
      */
     private async apply(link: PaymentLink, entity: RazorpayPaymentLink, payment: { id: string; method: string | null } | null): Promise<void> {
         const status = statusFromRazorpay(entity.status);
-        if (!status || status === link.status || link.status === PaymentLinkStatus.PAID) return;
+        if (!status) return;
+        await this.settle(link, { status, amountPaidPaise: entity.amount_paid ?? 0, currency: entity.currency, paymentId: payment?.id ?? null, method: payment?.method ?? null, source: 'Razorpay' });
+    }
+
+    /**
+     * Take the gateway's state of a link or WhatsApp Pay request. Paid is
+     * claimed once (whoever gets there first does the follow-up), only for the
+     * full amount, and a paid link never goes back. True when this call
+     * claimed the payment.
+     */
+    async settle(
+        link: PaymentLink,
+        outcome: { status: PaymentLinkStatus; amountPaidPaise: number; currency: string; paymentId: string | null; method: string | null; source: string },
+    ): Promise<boolean> {
+        const { status } = outcome;
+        if (status === link.status || link.status === PaymentLinkStatus.PAID) return false;
         if (status !== PaymentLinkStatus.PAID) {
             await this.prisma.paymentLink.updateMany({
                 where: { id: link.id, status: { not: PaymentLinkStatus.PAID } },
-                data: { status, amountPaid: fromPaise(entity.amount_paid ?? 0) },
+                data: { status, amountPaid: fromPaise(outcome.amountPaidPaise) },
             });
-            return;
+            return false;
         }
-        if (entity.amount_paid !== toPaise(link.amount) || entity.currency !== link.currency) {
+        if (outcome.amountPaidPaise !== toPaise(link.amount) || outcome.currency !== link.currency) {
             await this.prisma.paymentLink.update({
                 where: { id: link.id },
-                data: { followUpError: `Razorpay reported ${entity.amount_paid / 100} ${entity.currency} paid on a link for ${link.amount} ${link.currency}; the order was not marked paid.` },
+                data: { followUpError: `${outcome.source} reported ${outcome.amountPaidPaise / 100} ${outcome.currency} paid on a link for ${link.amount} ${link.currency}; the order was not marked paid.` },
             });
-            return;
+            return false;
         }
         const claimed = await this.prisma.paymentLink.updateMany({
             where: { id: link.id, status: { not: PaymentLinkStatus.PAID } },
-            data: { status: PaymentLinkStatus.PAID, paidAt: new Date(), amountPaid: link.amount, paymentId: payment?.id ?? null, paymentMethod: payment?.method ?? null },
+            data: { status: PaymentLinkStatus.PAID, paidAt: new Date(), amountPaid: link.amount, paymentId: outcome.paymentId, paymentMethod: outcome.method },
         });
-        if (claimed.count) void this.followUp({ ...link, paymentId: payment?.id ?? null, paymentMethod: payment?.method ?? null });
+        if (claimed.count) void this.followUp({ ...link, paymentId: outcome.paymentId, paymentMethod: outcome.method });
+        return claimed.count > 0;
     }
 
     /** Runs the follow-up once per call, tracked so shutdown and "Check status" can wait for it. */
@@ -362,7 +381,7 @@ export class PaymentLinksService implements OnApplicationShutdown {
         let orderId = link.orderId;
         try {
             const actor = await this.store.actorFor(link.organizationId, link.createdById);
-            const via = `Paid online with a Razorpay payment link${link.paymentId ? ` (${link.paymentId})` : ''}`;
+            const via = `Paid online with ${link.provider === PaymentProvider.WHATSAPP_PAY ? 'WhatsApp Pay' : 'a Razorpay payment link'}${link.paymentId ? ` (${link.paymentId})` : ''}`;
             if (link.orderId) {
                 const order = await this.prisma.order.findUnique({ where: { id: link.orderId }, select: { financialStatus: true } });
                 if (order && order.financialStatus !== OrderFinancialStatus.PAID) await this.orders.markPaid(link.orderId, link.organizationId, actor, via);
@@ -402,9 +421,10 @@ export class PaymentLinksService implements OnApplicationShutdown {
         });
     }
 
-    private view(r: PaymentLink): PaymentLinkView {
+    toView(r: PaymentLink): PaymentLinkView {
         return {
             id: r.id,
+            provider: r.provider,
             shortUrl: r.shortUrl,
             amount: r.amount.toString(),
             currency: r.currency,

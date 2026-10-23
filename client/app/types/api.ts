@@ -4455,6 +4455,8 @@ export type PaymentLinkStatus = "CREATED" | "PARTIALLY_PAID" | "PAID" | "EXPIRED
 
 export interface PaymentLink {
   id: string;
+  /** RAZORPAY: a link to pay · WHATSAPP_PAY: a Review and Pay bill in the chat (no link). */
+  provider: "RAZORPAY" | "WHATSAPP_PAY";
   shortUrl: string;
   amount: string;
   currency: string;
@@ -4475,6 +4477,22 @@ export interface PaymentLink {
 export interface ConversationPayments {
   links: PaymentLink[];
   unpaidOrders: Array<{ id: string; name: string; totalPrice: string; currency: string; paymentGateways: string[]; createdAt: string }>;
+  /** This chat's WhatsApp number has WhatsApp Pay turned on. */
+  whatsappPay: boolean;
+}
+
+export interface WhatsAppPayConfiguration {
+  name: string;
+  provider: string | null;
+  status: string;
+  active: boolean;
+}
+
+export interface WhatsAppPayView {
+  selected: { configurationName: string; provider: string; status: string; active: boolean; selectedAt: string } | null;
+  configurations: WhatsAppPayConfiguration[];
+  /** Meta's answer when the configurations could not be read. */
+  error: string | null;
 }
 
 export interface CreatePaymentLinkRequest {

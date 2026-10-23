@@ -14,6 +14,7 @@ import { ASSIGNABLE_ROLES } from '../../inbox/inbox-team.service';
 import { StoreActionsService } from '../../commerce/store-actions.service';
 import { PaymentLinksService } from '../../payments/payment-links.service';
 import { paymentVars } from '../../payments/payment-link.util';
+import { WhatsAppPayService } from '../../payments/whatsapp-pay.service';
 import { isCashOnDelivery } from '../../commerce/order-vars';
 import { ParamValue, renderTemplate, sendComponents, templateParams } from '../../campaigns/templates/template-components';
 import { SendMessageConfigT, StepDef, parseDefinition } from '../blocks/definition.schema';
@@ -71,6 +72,7 @@ export class AutomationRunner {
         private readonly inboxSettings: InboxSettingsService,
         private readonly store: StoreActionsService,
         private readonly paymentLinks: PaymentLinksService,
+        private readonly whatsAppPay: WhatsAppPayService,
         config: ConfigService,
     ) {
         this.allowPrivate = config.get<string>('AUTOMATION_HTTP_ALLOW_PRIVATE') === 'true';
@@ -348,7 +350,8 @@ export class AutomationRunner {
      * made from a cart. A retried step finds the link it made the first time.
      */
     private async sendPaymentLink(s: StepState, step: FlowStep): Promise<Outcome> {
-        const c = step.config as { kind?: string; message?: string; templateId?: string; templateValues?: Record<string, string>; expiresInHours?: number; tagOnPaid?: string };
+        const c = step.config as { method?: string; kind?: string; message?: string; templateId?: string; templateValues?: Record<string, string>; expiresInHours?: number; tagOnPaid?: string };
+        if (c.method === 'whatsapp_pay') return this.sendWhatsAppPay(s, step, c);
         const opts = {
             contactId: s.contact.id,
             conversationId: await this.conversationId(s),
@@ -372,6 +375,31 @@ export class AutomationRunner {
         const payload = await this.templatePayload(s, { kind: 'template', templateId: c.templateId, templateValues: c.templateValues ?? {} } as SendMessageConfigT);
         if (typeof payload === 'string') return fail(payload);
         return this.deliver(s, step, payload);
+    }
+
+    /** A WhatsApp Pay bill for the run's order or cart draft; WhatsAppPayService sends it. */
+    private async sendWhatsAppPay(s: StepState, step: FlowStep, c: { message?: string; expiresInHours?: number; tagOnPaid?: string }): Promise<Outcome> {
+        const target = s.run.orderId ? { orderId: s.run.orderId } : s.ctx.draftId ? { draftOrderId: s.ctx.draftId } : null;
+        if (!target) return fail('This run has no order or draft order to collect payment for.');
+        try {
+            const { link, outcome } = await this.whatsAppPay.request(s.run.organizationId, target, {
+                conversationId: await this.conversationId(s),
+                contactId: s.contact.id,
+                userId: s.run.automation?.ownerUserId ?? null,
+                automationRunId: s.run.id,
+                automation: { automationId: s.run.automationId, runId: s.run.id, stepKey: step.id },
+                origin: 'automation',
+                text: c.message ? interpolate(c.message, s.vars) : undefined,
+                expiresInHours: c.expiresInHours,
+                tagOnPaid: c.tagOnPaid ? interpolate(c.tagOnPaid, s.vars) : null,
+            });
+            const vars = { 'payment.amount': paymentVars({ shortUrl: '', amount: link.amount, currency: link.currency, expiresAt: new Date(link.expiresAt) })['payment.amount'] };
+            Object.assign(s.ctx.vars, vars);
+            Object.assign(s.vars, vars);
+            return { kind: 'next', ...(outcome.ok && outcome.messageId ? { messageId: outcome.messageId } : {}), output: { paymentRequestId: link.id } };
+        } catch (err) {
+            return fail(err instanceof Error ? err.message : String(err));
+        }
     }
 
     private async deliver(s: StepState, step: FlowStep, payload: OutboundPayload): Promise<Outcome> {

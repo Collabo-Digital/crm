@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CatalogService } from '../commerce/catalog.service';
 import { StoreActionsService } from '../commerce/store-actions.service';
 import { PaymentLinksService } from '../payments/payment-links.service';
+import { WhatsAppPayService } from '../payments/whatsapp-pay.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
 import { MessagingSendService, SendOutcome } from '../messaging/send/messaging-send.service';
 import { MessagingMediaStorage } from '../messaging/media/messaging-media.storage';
@@ -94,6 +95,7 @@ export class InboxService {
         private readonly catalog: CatalogService,
         private readonly storeActions: StoreActionsService,
         private readonly paymentLinks: PaymentLinksService,
+        private readonly whatsAppPay: WhatsAppPayService,
         config: ConfigService,
     ) {
         this.linkSecret = config.get<string>('messaging.linkSecret')!;
@@ -347,9 +349,7 @@ export class InboxService {
             return this.paymentLinks.forOrder(orgId, input.orderId, opts);
         }
         if (input.draftOrderId) {
-            const draft = await this.prisma.draftOrder.findFirst({ where: { id: input.draftOrderId, organizationId: orgId }, select: { customerId: true, metadata: true } });
-            const fromThisChat = await this.prisma.message.count({ where: { conversationId: conversation.id, id: (draft?.metadata as { sourceMessageId?: string } | null)?.sourceMessageId ?? '' } });
-            if (!draft || (draft.customerId !== conversation.customerId && !fromThisChat)) throw new NotFoundException('Draft order not found');
+            await this.ownDraft(orgId, conversation, input.draftOrderId);
             return this.paymentLinks.forDraft(orgId, input.draftOrderId, opts);
         }
         if (input.amount === undefined || !input.description?.trim()) throw new BadRequestException('Enter the amount and what the payment is for.');
@@ -360,6 +360,22 @@ export class InboxService {
             phone: conversation.contact.phone,
             name: contactName(conversation.contact).replace(/^@/, '') || null,
         }, opts);
+    }
+
+    /** A WhatsApp Pay "Review and Pay" bill for this customer's order or cart draft, sent now. */
+    async requestWhatsAppPay(orgId: string, viewer: InboxViewer, id: string, input: { orderId?: string; draftOrderId?: string }) {
+        if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot request payments.');
+        const conversation = await this.loadConversation(orgId, viewer, id);
+        if (input.orderId) await this.ownOrder(orgId, conversation, input.orderId);
+        else if (input.draftOrderId) await this.ownDraft(orgId, conversation, input.draftOrderId);
+        else throw new BadRequestException('Choose the order or draft order to collect payment for.');
+        const { link } = await this.whatsAppPay.request(orgId, input.orderId ? { orderId: input.orderId } : { draftOrderId: input.draftOrderId }, {
+            conversationId: conversation.id,
+            contactId: conversation.contactId,
+            userId: viewer.userId,
+            origin: 'agent',
+        });
+        return link;
     }
 
     /** This chat's links, newest first, and the customer's unpaid orders to request payment for. */
@@ -374,7 +390,18 @@ export class InboxService {
                 select: { id: true, name: true, totalPrice: true, currency: true, paymentGateways: true, createdAt: true },
             })
             : [];
-        return { links, unpaidOrders: unpaid.map((o) => ({ ...o, totalPrice: o.totalPrice.toString() })) };
+        return {
+            links,
+            unpaidOrders: unpaid.map((o) => ({ ...o, totalPrice: o.totalPrice.toString() })),
+            whatsappPay: await this.whatsAppPay.available(conversation.channelId),
+        };
+    }
+
+    /** A draft for this customer, or made from a cart sent in this chat. */
+    private async ownDraft(orgId: string, conversation: ConversationRow, draftId: string) {
+        const draft = await this.prisma.draftOrder.findFirst({ where: { id: draftId, organizationId: orgId }, select: { customerId: true, metadata: true } });
+        const fromThisChat = await this.prisma.message.count({ where: { conversationId: conversation.id, id: (draft?.metadata as { sourceMessageId?: string } | null)?.sourceMessageId ?? '' } });
+        if (!draft || ((!conversation.customerId || draft.customerId !== conversation.customerId) && !fromThisChat)) throw new NotFoundException('Draft order not found');
     }
 
     private async ownOrder(orgId: string, conversation: ConversationRow, orderId: string) {

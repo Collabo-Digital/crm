@@ -7,6 +7,7 @@ export const paymentKeys = {
   all: ["payments"] as const,
   account: () => [...paymentKeys.all, "account"] as const,
   conversation: (id: string) => [...paymentKeys.all, "conversation", id] as const,
+  whatsAppPay: (channelId: string) => [...paymentKeys.all, "whatsapp-pay", channelId] as const,
 };
 
 export function usePaymentAccount() {
@@ -64,5 +65,36 @@ export function usePaymentLinkActionMutation(conversationId: string) {
       action === "refresh" ? paymentsService.refresh(id) : paymentsService.cancel(id),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: paymentKeys.conversation(conversationId) }),
     onError: (error) => handleMutationError(error, "The payment link was not updated."),
+  });
+}
+
+export function useRequestWhatsAppPayMutation(conversationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { orderId?: string; draftOrderId?: string }) => paymentsService.requestWhatsAppPay(conversationId, data),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: paymentKeys.conversation(conversationId) }),
+    onError: (error) => handleMutationError(error, "The WhatsApp Pay request was not sent."),
+  });
+}
+
+export function useWhatsAppPay(channelId: string | undefined) {
+  return useQuery({ queryKey: paymentKeys.whatsAppPay(channelId ?? ""), queryFn: () => paymentsService.whatsAppPay(channelId!), enabled: !!channelId });
+}
+
+export function useWhatsAppPayMutation(channelId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (action: { kind: "create"; name: string; provider: string } | { kind: "link"; name: string } | { kind: "select"; name: string | null }) => {
+      if (action.kind === "select") return { view: await paymentsService.selectConfiguration(channelId, action.name) };
+      const link = action.kind === "create"
+        ? await paymentsService.createConfiguration(channelId, { name: action.name, provider: action.provider, redirectUrl: `${window.location.origin}/campaigns/catalog` })
+        : await paymentsService.linkConfigurationAgain(channelId, action.name);
+      return { link };
+    },
+    onSuccess: (result) => {
+      if ("view" in result) queryClient.setQueryData(paymentKeys.whatsAppPay(channelId), result.view);
+      else void queryClient.invalidateQueries({ queryKey: paymentKeys.whatsAppPay(channelId) });
+    },
+    onError: (error) => handleMutationError(error, "WhatsApp Pay was not updated."),
   });
 }

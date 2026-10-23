@@ -5,7 +5,7 @@ import { Link } from "react-router";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { useSendMessageMutation } from "~/hooks/use-inbox-mutations";
-import { useConversationPayments, useCreatePaymentLinkMutation, usePaymentAccount, usePaymentLinkActionMutation } from "~/hooks/use-payments";
+import { useConversationPayments, useCreatePaymentLinkMutation, usePaymentAccount, usePaymentLinkActionMutation, useRequestWhatsAppPayMutation } from "~/hooks/use-payments";
 import { formatDateTime } from "~/lib/inbox-format";
 import { cn, formatCurrency } from "~/lib/utils";
 import type { PaymentLink, PaymentLinkStatus } from "~/types/api";
@@ -27,10 +27,14 @@ function LinkRow({ link, conversationId, canEdit }: { link: PaymentLink; convers
   const [sent, setSent] = useState(false);
   const status = STATUS[link.status];
   const open = link.status === "CREATED";
+  const inApp = link.provider === "WHATSAPP_PAY";
   return (
     <li className="space-y-1.5 rounded-lg border p-2.5">
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-caption font-medium">{link.description}</span>
+        <span className="min-w-0 flex-1 truncate text-caption font-medium">
+          {inApp && <span className="mr-1 rounded bg-muted px-1 text-micro text-muted-foreground">WhatsApp Pay</span>}
+          {link.description}
+        </span>
         <span className="text-caption tabular-nums">{formatCurrency(link.amount, link.currency)}</span>
         <span className={cn("rounded-full px-1.5 py-0.5 text-micro font-medium", status.className)}>{status.label}</span>
       </div>
@@ -47,7 +51,15 @@ function LinkRow({ link, conversationId, canEdit }: { link: PaymentLink; convers
           Paid, but the order was not updated: {link.followUpError}
         </p>
       )}
-      {open && canEdit && (
+      {open && canEdit && inApp && (
+        <div className="flex flex-wrap gap-1">
+          <Button size="xs" variant="ghost" disabled={action.isPending} onClick={() => action.mutate({ id: link.id, action: "refresh" })}>
+            <RefreshCw />
+            Check whether it was paid
+          </Button>
+        </div>
+      )}
+      {open && canEdit && !inApp && (
         <div className="flex flex-wrap gap-1">
           <Button
             size="xs"
@@ -86,14 +98,15 @@ function LinkRow({ link, conversationId, canEdit }: { link: PaymentLink; convers
  */
 export function PaymentsSection({ conversationId, canEdit }: { conversationId: string; canEdit: boolean }) {
   const { data: account } = usePaymentAccount();
-  const { data, isLoading } = useConversationPayments(conversationId, !!account?.connected);
+  const { data, isLoading } = useConversationPayments(conversationId);
   const create = useCreatePaymentLinkMutation(conversationId);
+  const inApp = useRequestWhatsAppPayMutation(conversationId);
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [custom, setCustom] = useState(false);
 
-  if (!account) return null;
-  if (!account.connected) {
+  if (!account || isLoading || !data) return <Loader2 className="size-4 animate-spin text-muted-foreground" />;
+  if (!account.connected && !data.whatsappPay && data.links.length === 0) {
     return (
       <p className="text-caption text-muted-foreground">
         Connect your Razorpay account in{" "}
@@ -101,7 +114,6 @@ export function PaymentsSection({ conversationId, canEdit }: { conversationId: s
       </p>
     );
   }
-  if (isLoading || !data) return <Loader2 className="size-4 animate-spin text-muted-foreground" />;
 
   const linked = new Set(data.links.filter((l) => l.status === "CREATED" && l.orderId).map((l) => l.orderId));
   const unpaid = data.unpaidOrders.filter((o) => !linked.has(o.id));
@@ -116,11 +128,21 @@ export function PaymentsSection({ conversationId, canEdit }: { conversationId: s
       {canEdit && (
         <div className="space-y-1.5">
           {unpaid.map((order) => (
-            <Button key={order.id} size="xs" variant="outline" disabled={create.isPending} onClick={() => create.mutate({ orderId: order.id })}>
-              Request {formatCurrency(order.totalPrice, order.currency, { maximumFractionDigits: 0 })} for {order.name}
-            </Button>
+            <div key={order.id} className="flex flex-wrap gap-1">
+              {account.connected && (
+                <Button size="xs" variant="outline" disabled={create.isPending} onClick={() => create.mutate({ orderId: order.id })}>
+                  Request {formatCurrency(order.totalPrice, order.currency, { maximumFractionDigits: 0 })} for {order.name}
+                </Button>
+              )}
+              {data.whatsappPay && (
+                <Button size="xs" variant="outline" disabled={inApp.isPending} onClick={() => inApp.mutate({ orderId: order.id })}>
+                  {inApp.isPending && <Loader2 className="animate-spin" />}
+                  WhatsApp Pay {account.connected ? "" : `${formatCurrency(order.totalPrice, order.currency, { maximumFractionDigits: 0 })} for ${order.name}`}
+                </Button>
+              )}
+            </div>
           ))}
-          {custom ? (
+          {!account.connected ? null : custom ? (
             <form
               className="space-y-1.5"
               onSubmit={(e) => {

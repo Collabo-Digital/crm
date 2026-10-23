@@ -609,6 +609,8 @@ model Channel {
   ///
   /// There is deliberately NO @@unique([organizationId, platform]) — it is what
   /// made multiple Instagram accounts impossible.
+  paymentLinks PaymentLink[]
+
   @@index([organizationId, platform])
   @@index([organizationId])
   /// Drives "the channels this influencer connected" on every page load.
@@ -3149,6 +3151,8 @@ model CatalogItem {
 
 enum PaymentProvider {
   RAZORPAY
+  /// WhatsApp Pay (India): an order_details bill paid through the gateway linked in WhatsApp Manager.
+  WHATSAPP_PAY
 }
 
 enum PaymentLinkStatus {
@@ -3192,51 +3196,57 @@ model PaymentAccount {
 /// prepaid, or an unpaid order), for a draft order made from a cart, or for
 /// an amount typed in the inbox.
 model PaymentLink {
-  id              String            @id @default(cuid())
-  organizationId  String            @map("organization_id")
-  accountId       String            @map("account_id")
-  provider        PaymentProvider
+  id                   String            @id @default(cuid())
+  organizationId       String            @map("organization_id")
+  /// The Razorpay account; null for WhatsApp Pay, which is paid through the number's payment configuration.
+  accountId            String?           @map("account_id")
+  /// WhatsApp Pay: the number the bill was sent from, and its payment configuration.
+  channelId            String?           @map("channel_id")
+  paymentConfiguration String?           @map("payment_configuration")
+  provider             PaymentProvider
   /// The gateway's id (`plink_…`).
-  externalId      String            @map("external_id")
-  shortUrl        String            @map("short_url")
+  externalId           String            @map("external_id")
+  shortUrl             String            @map("short_url")
   /// Sent as the gateway's reference_id; unique per gateway account.
-  referenceId     String            @unique @map("reference_id")
-  amount          Decimal           @db.Decimal(12, 2)
-  amountPaid      Decimal           @default(0) @map("amount_paid") @db.Decimal(12, 2)
-  currency        String            @default("INR")
-  description     String
-  status          PaymentLinkStatus @default(CREATED)
-  orderId         String?           @map("order_id")
-  draftOrderId    String?           @map("draft_order_id")
-  customerId      String?           @map("customer_id")
-  contactId       String?           @map("contact_id")
-  conversationId  String?           @map("conversation_id")
-  automationRunId String?           @map("automation_run_id")
-  createdById     String?           @map("created_by_id")
+  referenceId          String            @unique @map("reference_id")
+  amount               Decimal           @db.Decimal(12, 2)
+  amountPaid           Decimal           @default(0) @map("amount_paid") @db.Decimal(12, 2)
+  currency             String            @default("INR")
+  description          String
+  status               PaymentLinkStatus @default(CREATED)
+  orderId              String?           @map("order_id")
+  draftOrderId         String?           @map("draft_order_id")
+  customerId           String?           @map("customer_id")
+  contactId            String?           @map("contact_id")
+  conversationId       String?           @map("conversation_id")
+  automationRunId      String?           @map("automation_run_id")
+  createdById          String?           @map("created_by_id")
   /// Added to the order when it is paid, e.g. "cod-to-prepaid".
-  tagOnPaid       String?           @map("tag_on_paid")
-  expiresAt       DateTime          @map("expires_at")
-  paidAt          DateTime?         @map("paid_at")
-  paymentId       String?           @map("payment_id")
-  paymentMethod   String?           @map("payment_method")
+  tagOnPaid            String?           @map("tag_on_paid")
+  expiresAt            DateTime          @map("expires_at")
+  paidAt               DateTime?         @map("paid_at")
+  paymentId            String?           @map("payment_id")
+  paymentMethod        String?           @map("payment_method")
   /// Why the paid order or draft could not be updated; the payment itself stands.
-  followUpError   String?           @map("follow_up_error")
+  followUpError        String?           @map("follow_up_error")
   /// When the order or draft was updated after payment (or the attempt recorded). Null on a
   /// paid link means the follow-up never finished, and the sweep runs it again.
-  followedUpAt    DateTime?         @map("followed_up_at")
-  createdAt       DateTime          @default(now()) @map("created_at")
-  updatedAt       DateTime          @updatedAt @map("updated_at")
+  followedUpAt         DateTime?         @map("followed_up_at")
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  account      PaymentAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  order        Order?         @relation(fields: [orderId], references: [id], onDelete: SetNull)
-  draftOrder   DraftOrder?    @relation(fields: [draftOrderId], references: [id], onDelete: SetNull)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  account      PaymentAccount? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  channel      Channel?        @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  order        Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  draftOrder   DraftOrder?     @relation(fields: [draftOrderId], references: [id], onDelete: SetNull)
 
   @@unique([accountId, externalId])
   @@index([organizationId, createdAt])
   @@index([orderId])
   @@index([draftOrderId])
   @@index([conversationId])
+  @@index([channelId])
   /// The status sweep for links whose webhook never came.
   @@index([status, expiresAt])
   @@map("payment_links")

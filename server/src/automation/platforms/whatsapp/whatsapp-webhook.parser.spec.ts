@@ -178,3 +178,30 @@ describe('parseWhatsAppDelivery', () => {
         expect(pref.contact.userId).toBe('US.13491208655302741918');
     });
 });
+
+describe('WhatsApp Pay webhooks', () => {
+    const delivery = (field: string, value: unknown) => ({ object: 'whatsapp_business_account', entry: [{ id: 'WABA1', changes: [{ field, value }] }] });
+
+    it('reads a payment on a Review and Pay bill, apart from message statuses', () => {
+        const events = parseWhatsAppDelivery(delivery('messages', {
+            messaging_product: 'whatsapp',
+            metadata: { display_phone_number: '15550783881', phone_number_id: 'PN1' },
+            statuses: [
+                { id: 'wamid.X', status: 'delivered', timestamp: '1700000000', recipient_id: '919811100021' },
+                {
+                    id: 'wamid.Y', recipient_id: '919811100021', type: 'payment', status: 'captured', timestamp: '1700000001',
+                    payment: { reference_id: 'cw_abc', amount: { value: 239800, offset: 100 }, currency: 'INR', transaction: { id: 'txn_1', type: 'razorpay', status: 'success', method: { type: 'upi' } } },
+                },
+            ],
+        }));
+        expect(events.map((e) => e.kind)).toEqual(['status', 'payment']);
+        const payment = events[1] as Extract<WaEvent, { kind: 'payment' }>;
+        expect(payment.payment).toMatchObject({ referenceId: 'cw_abc', status: 'captured', amount: 239800, currency: 'INR', transactionId: 'txn_1', method: 'upi' });
+        expect(payment.phoneNumberId).toBe('PN1');
+    });
+
+    it('reads a payment configuration update', () => {
+        const [e] = parseWhatsAppDelivery(delivery('payment_configuration_update', { configuration_name: 'acme-razorpay', provider_name: 'razorpay', status: 'Active' }));
+        expect(e).toMatchObject({ kind: 'payment_configuration', name: 'acme-razorpay', provider: 'razorpay', status: 'Active' });
+    });
+});

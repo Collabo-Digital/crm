@@ -26,15 +26,29 @@ const phoneOf = (address: unknown): string | null => {
 @Injectable()
 export class CommerceEventsService {
     private readonly logger = new Logger(CommerceEventsService.name);
+    private readonly orderListeners: Array<(orderId: string, kinds: StoreEventKind[]) => Promise<void>> = [];
 
     constructor(
         private readonly prisma: PrismaService,
         private readonly jobs: AutomationJobs,
     ) { }
 
+    /**
+     * Also told of every order event, whether or not an automation listens:
+     * WhatsApp Pay keeps the customer's order page up to date this way. Lets
+     * a module that depends on this one react without this one depending on it.
+     */
+    onOrder(listener: (orderId: string, kinds: StoreEventKind[]) => Promise<void>): void {
+        this.orderListeners.push(listener);
+    }
+
     async order(orderId: string, kinds: StoreEventKind[]): Promise<void> {
+        const unique = [...new Set(kinds)];
+        for (const listener of this.orderListeners) {
+            if (!unique.length) break;
+            await listener(orderId, unique).catch((err) => this.logger.warn(`Order listener for ${orderId} failed: ${err instanceof Error ? err.message : err}`));
+        }
         try {
-            const unique = [...new Set(kinds)];
             if (!unique.length) return;
             const buyer = await this.buyerOf(orderId);
             if (!buyer) return;

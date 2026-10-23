@@ -3,6 +3,7 @@ import { AlertTriangle, Loader2, RefreshCw, ShoppingBag, Unlink } from "lucide-r
 
 import { ChannelBadge } from "~/components/app/channel-badge";
 import { SectionCard } from "~/components/app/section-card";
+import { WhatsAppPayCard } from "~/components/app/campaigns/whatsapp-pay-card";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
@@ -199,6 +200,8 @@ export default function CatalogPage() {
                   )}
                 </div>
               </SectionCard>
+
+              <WhatsAppPayCard className="lg:col-span-2" channelId={channelId} />
             </div>
           )}
         </>

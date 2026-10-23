@@ -518,6 +518,28 @@ or admin. That is a different account from Collabo's own subscription billing
   paid order (Shopify `draftOrderComplete`, or a local order with an invoice).
   If the order or draft cannot follow, the payment is kept and the reason is
   shown on the link.
+- **WhatsApp Pay (India), checkout inside the chat.** Under Campaigns →
+  Catalog → WhatsApp Pay, an owner or admin picks the number's payment
+  configuration, or creates one (`POST /{waba}/payment_configuration`) and
+  opens Meta's link to connect their own Razorpay, PayU, BillDesk or Zaakpay
+  account; Meta lists it as Active once it is connected and tested in WhatsApp
+  Manager. The WhatsApp account needs WhatsApp's payments terms accepted, and
+  the `payment_configuration_update` webhook field keeps the status current.
+  In the inbox ("WhatsApp Pay" on an unpaid order, "Request in WhatsApp Pay"
+  under a cart) and in automations (Send a payment link → WhatsApp Pay) Collabo
+  sends an `order_details` "Review and Pay" bill: the order's items (from the
+  number's catalog when every item is in it, else with the importer from your
+  GSTIN registration), its total in paise adding up the way Meta checks, and
+  the delivery address in India, which Meta requires. Bills go only within 24
+  hours of the customer's last message and up to ₹5,00,000 (UPI's cap). A
+  payment arrives as a `statuses[]` entry with `type: payment`; Collabo
+  confirms it with `GET /{phone_number_id}/payments/{configuration}/{reference_id}`
+  before the order follows, exactly like a paid link, then sends `order_status`
+  "processing", and "shipped" and "completed" as the order ships and is
+  delivered. A paid order is never marked cancelled on the order page (Meta
+  refuses it). Unconfirmed bills are checked every 10 minutes.
+  Not verified live: whether payments work on a number shared with the
+  WhatsApp Business app (Meta's payments pages do not say).
 - **Not built, and why.** A discount for paying online would change the
   order's total, which needs Shopify's `write_order_edits` scope; adding it to
   the app's access scopes makes every connected store re-approve the app. So

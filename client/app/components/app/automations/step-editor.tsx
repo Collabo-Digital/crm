@@ -861,15 +861,32 @@ export function StepEditor({ step, onChange, ctx }: { step: AutomationStep; onCh
       body = (
         <div className="space-y-3">
           <p className="text-caption text-muted-foreground">
-            Makes a payment link in your own Razorpay account for the order this automation is about, or for the draft order an earlier step made from a cart. Paying it marks the order paid, in Shopify too, or turns the draft into an order.
+            Collects payment for the order this automation is about, or for the draft order an earlier step made from a cart. Paying marks the order paid, in Shopify too, or turns the draft into an order.
           </p>
+          <Field label="How the customer pays" htmlFor="pl-method">
+            <select id="pl-method" className={selectClass} value={c.method ?? "link"} disabled={ro} onChange={(e) => set({ method: e.target.value })}>
+              <option value="link">A payment link from your Razorpay account</option>
+              <option value="whatsapp_pay">WhatsApp Pay, inside the chat (India)</option>
+            </select>
+          </Field>
+          {c.method === "whatsapp_pay" ? (
+            <>
+              <p className="rounded-lg border border-dashed p-2 text-caption text-muted-foreground">
+                Sends a “Review and Pay” bill with the order’s items. Only within 24 hours of the customer’s last message (right after a cart, or after “Wait for a reply”), and the order needs a delivery address in India. Turn it on per number in Campaigns → Catalog.
+              </p>
+              <Field label="Message" hint="Optional; the bill’s items and total are shown either way." htmlFor="pl-wp-text">
+                <TextWithVariables id="pl-wp-text" rows={2} value={c.message ?? ""} onChange={(message) => set({ message })} ctx={ctx} maxLength={1024} placeholder="Thanks {{first_name}}! Review your order and pay below." />
+              </Field>
+            </>
+          ) : (
           <Field label="Send it as" htmlFor="pl-kind">
             <select id="pl-kind" className={selectClass} value={c.kind ?? "template"} disabled={ro} onChange={(e) => set({ kind: e.target.value })}>
               <option value="template">A WhatsApp template (works any time)</option>
               <option value="text">A message (only within 24 hours of their last message, e.g. right after a cart)</option>
             </select>
           </Field>
-          {c.kind === "text" ? (
+          )}
+          {c.method === "whatsapp_pay" ? null : c.kind === "text" ? (
             <Field label="Message" hint="Put {{payment.link}} where the link should go." htmlFor="pl-text">
               <TextWithVariables id="pl-text" value={c.message ?? ""} onChange={(message) => set({ message })} ctx={ctx} maxLength={4096} placeholder="Pay {{payment.amount}} here: {{payment.link}}" />
             </Field>

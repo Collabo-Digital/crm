@@ -4,7 +4,7 @@ import { Check, Copy, Loader2, ReceiptText, Send } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { useDraftFromCartMutation } from "~/hooks/use-automation-mutations";
 import { useSendMessageMutation } from "~/hooks/use-inbox-mutations";
-import { useCreatePaymentLinkMutation, usePaymentAccount } from "~/hooks/use-payments";
+import { useConversationPayments, useCreatePaymentLinkMutation, usePaymentAccount, useRequestWhatsAppPayMutation } from "~/hooks/use-payments";
 import type { DraftFromCart } from "~/types/api";
 
 import { paymentLinkMessage } from "./payments-section";
@@ -19,7 +19,10 @@ export function CartActions({ conversationId, messageId }: { conversationId: str
   const create = useDraftFromCartMutation(conversationId);
   const send = useSendMessageMutation(conversationId);
   const { data: payments } = usePaymentAccount();
+  const { data: chatPayments } = useConversationPayments(conversationId);
   const payLink = useCreatePaymentLinkMutation(conversationId);
+  const inApp = useRequestWhatsAppPayMutation(conversationId);
+  const [inAppSent, setInAppSent] = useState(false);
   const [draft, setDraft] = useState<DraftFromCart | null>(null);
   const [sent, setSent] = useState(false);
   const [paySent, setPaySent] = useState(false);
@@ -27,12 +30,20 @@ export function CartActions({ conversationId, messageId }: { conversationId: str
     payLink.mutate({ draftOrderId: draft!.draftId }, {
       onSuccess: (link) => send.mutate({ payload: { type: "text", text: paymentLinkMessage(link) } }, { onSuccess: (o) => o.ok && setPaySent(true) }),
     });
-  const payButton = payments?.connected ? (
+  const linkButton = payments?.connected ? (
     <Button size="xs" variant={draft?.checkoutUrl ? "outline" : "accent"} disabled={payLink.isPending || send.isPending || paySent} onClick={sendPaymentLink}>
       {paySent ? <Check /> : payLink.isPending ? <Loader2 className="animate-spin" /> : <Send />}
       {paySent ? "Payment link sent" : "Send payment link"}
     </Button>
   ) : null;
+  // A Review and Pay bill in the chat; the draft needs a delivery address in India.
+  const inAppButton = chatPayments?.whatsappPay ? (
+    <Button size="xs" variant="outline" disabled={inApp.isPending || inAppSent} onClick={() => inApp.mutate({ draftOrderId: draft!.draftId }, { onSuccess: () => setInAppSent(true) })}>
+      {inAppSent ? <Check /> : inApp.isPending ? <Loader2 className="animate-spin" /> : <Send />}
+      {inAppSent ? "WhatsApp Pay sent" : "Request in WhatsApp Pay"}
+    </Button>
+  ) : null;
+  const payButton = linkButton || inAppButton ? <>{linkButton}{inAppButton}</> : null;
 
   if (!draft) {
     return (

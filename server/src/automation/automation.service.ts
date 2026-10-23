@@ -16,6 +16,7 @@ import { templateParams } from '../campaigns/templates/template-components';
 import { UpdateAutomationDto } from './dto/update-automation.dto';
 import { SaveDefinitionDto } from './dto/save-definition.dto';
 import { DuplicateAutomationDto } from './dto/duplicate-automation.dto';
+import { WhatsAppPayService } from '../payments/whatsapp-pay.service';
 
 
 /** Who is asking. Same shape ChannelService uses for its visibility scope. */
@@ -71,7 +72,10 @@ const DETAIL_INCLUDE = {
 
 @Injectable()
 export class AutomationService {
-    constructor(private readonly prisma: PrismaService) { }
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly whatsAppPay: WhatsAppPayService,
+    ) { }
 
     // ─── Scoping ────────────────────────────────────────────────────────────
 
@@ -143,10 +147,12 @@ export class AutomationService {
             params: templateParams(r.components as Record<string, unknown>[], r.parameterFormat === 'NAMED' ? 'NAMED' : 'POSITIONAL')
                 .map((p) => ({ key: p.key, name: p.name, kind: p.kind })),
         }]));
-        const paymentsConnected = new Flow(steps).all().some(({ step }) => step.type === 'send_payment_link')
+        const paySteps = new Flow(steps).all().filter(({ step }) => step.type === 'send_payment_link');
+        const paymentsConnected = paySteps.some(({ step }) => step.config.method !== 'whatsapp_pay')
             ? !!(await this.prisma.paymentAccount.findFirst({ where: { organizationId: row.organizationId, disconnectedAt: null, credentials: { not: null } }, select: { id: true } }))
             : undefined;
-        return { platform: row.platform, knownMediaIds, templates, paymentsConnected };
+        const whatsAppPayReady = paySteps.some(({ step }) => step.config.method === 'whatsapp_pay') ? await this.whatsAppPay.available(row.channelId) : undefined;
+        return { platform: row.platform, knownMediaIds, templates, paymentsConnected, whatsAppPayReady };
     }
 
 

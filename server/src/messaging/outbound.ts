@@ -80,7 +80,15 @@ export type OutboundPayload =
         sections: Array<{ title: string; productRetailerIds: string[] }>;
     }
     /** WhatsApp: a button that opens the whole catalog. */
-    | { type: 'catalog'; text: string; footer?: string; thumbnailRetailerId?: string };
+    | { type: 'catalog'; text: string; footer?: string; thumbnailRetailerId?: string }
+    /**
+     * WhatsApp Pay (India): the "Review and Pay" bill. `parameters` is Meta's
+     * `action.parameters` (reference_id, order, payment_settings…); `summary`
+     * is for the thread only.
+     */
+    | { type: 'order_details'; text: string; footer?: string; parameters: Record<string, unknown>; summary: string }
+    /** WhatsApp Pay: an update to that order's status on the customer's order page. */
+    | { type: 'order_status'; text: string; referenceId: string; status: 'processing' | 'shipped' | 'completed' | 'canceled'; description?: string };
 
 export type SendOrigin = 'agent' | 'automation' | 'broadcast' | 'system';
 
@@ -207,6 +215,11 @@ function checkShape(platform: ChannelPlatform, payload: OutboundPayload): GateRe
             if (!payload.header.trim() || !payload.text.trim()) return refuse('invalid_payload', 'A product list needs a header and a message.');
             return null;
         }
+        case 'order_details':
+        case 'order_status':
+            if (!wa) return refuse('unsupported_on_platform', 'WhatsApp Pay requests go on WhatsApp only.');
+            if (!payload.text.trim() || payload.text.length > 1024) return refuse('invalid_payload', 'Write a message of up to 1,024 characters.');
+            return null;
         case 'catalog':
             if (!wa) return refuse('unsupported_on_platform', 'The catalog can be sent on WhatsApp only.');
             if (!payload.text.trim() || payload.text.length > 1024) return refuse('invalid_payload', 'Write a message of up to 1,024 characters.');
@@ -334,6 +347,33 @@ export function buildWhatsAppBody(
                     },
                 },
             };
+        case 'order_details':
+            return {
+                ...base,
+                type: 'interactive',
+                interactive: {
+                    type: 'order_details',
+                    body: { text: payload.text },
+                    ...(payload.footer ? { footer: { text: payload.footer } } : {}),
+                    action: { name: 'review_and_pay', parameters: payload.parameters },
+                },
+            };
+        case 'order_status':
+            return {
+                ...base,
+                type: 'interactive',
+                interactive: {
+                    type: 'order_status',
+                    body: { text: payload.text },
+                    action: {
+                        name: 'review_order',
+                        parameters: {
+                            reference_id: payload.referenceId,
+                            order: { status: payload.status, ...(payload.description ? { description: payload.description.slice(0, 120) } : {}) },
+                        },
+                    },
+                },
+            };
         default:
             throw new Error(`${payload.type} cannot be sent on WhatsApp`);
     }
@@ -423,6 +463,10 @@ export function outboundText(payload: OutboundPayload): string | null {
         case 'product_list':
             return `${payload.header}\n${payload.text}`;
         case 'catalog':
+            return payload.text;
+        case 'order_details':
+            return payload.summary;
+        case 'order_status':
             return payload.text;
     }
 }

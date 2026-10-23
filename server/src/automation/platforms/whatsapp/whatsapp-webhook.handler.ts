@@ -8,6 +8,7 @@ import { ContactRef } from '../../../messaging/contact-identity.service';
 import { whatsAppContent } from '../../../messaging/message-content';
 import { accountUpdateEffect } from './whatsapp-account-update.util';
 import type { WaContactRef, WaEvent, WaMessage } from './whatsapp-webhook.parser';
+import { WhatsAppPayService } from '../../../payments/whatsapp-pay.service';
 
 export interface WhatsAppChannelRef {
     id: string;
@@ -56,6 +57,7 @@ export class WhatsAppWebhookHandler {
         private readonly prisma: PrismaService,
         private readonly ingest: MessageIngestService,
         private readonly templates: TemplatesService,
+        private readonly whatsAppPay: WhatsAppPayService,
     ) { }
 
     async handle(events: WaEvent[]): Promise<void> {
@@ -282,6 +284,12 @@ export class WhatsAppWebhookHandler {
             }
             case 'template_update':
                 await this.templates.applyWebhook(channel, e);
+                return;
+            case 'payment':
+                await this.whatsAppPay.onPayment(channel.id, e.payment);
+                return;
+            case 'payment_configuration':
+                await this.whatsAppPay.onConfigurationUpdate(channel.id, e);
                 return;
             case 'value_errors':
                 this.logger.warn(

@@ -148,7 +148,7 @@ export function newStep(type: AutomationBlockType, channel: AutomationChannelKey
     case "send_invoice":
       return { id, type, config: { templateValues: {} } };
     case "send_payment_link":
-      return { id, type, config: { kind: "template", message: "", templateValues: {}, expiresInHours: 48, tagOnPaid: "" } };
+      return { id, type, config: { method: "link", kind: "template", message: "", templateValues: {}, expiresInHours: 48, tagOnPaid: "" } };
     case "store_action":
       return { id, type, config: { action: "tag_order", value: "" } };
     default:
@@ -315,6 +315,7 @@ export function stepSummary(step: AutomationStep, templateName?: (id: string) =>
     case "send_invoice":
       return c.templateId ? `The invoice PDF with “${templateName?.(c.templateId) ?? "a template"}”` : "Choose the template";
     case "send_payment_link":
+      if (c.method === "whatsapp_pay") return "A WhatsApp Pay bill in the chat";
       if (c.kind === "text") return c.message ? clip(c.message) : "Write the message";
       return c.templateId ? `A payment link with “${templateName?.(c.templateId) ?? "a template"}”` : "Choose a template";
     case "store_action":

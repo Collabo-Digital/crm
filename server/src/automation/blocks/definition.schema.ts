@@ -35,6 +35,8 @@ export interface IssueContext {
     templates?: Map<string, { name: string; params: Array<{ key: string; name: string; kind: string }> }>;
     /** Whether the organization has its own Razorpay account connected. Absent when not loaded. */
     paymentsConnected?: boolean;
+    /** Whether the automation's WhatsApp number has WhatsApp Pay turned on. Absent when not loaded. */
+    whatsAppPayReady?: boolean;
 }
 
 const StepId = z.string().min(1).max(64);
@@ -127,6 +129,8 @@ const SendInvoiceConfig = z.object({
  * a template (whose URL button is https://rzp.io/{{1}}) or as text.
  */
 const SendPaymentLinkConfig = z.object({
+    /** link — a Razorpay payment link · whatsapp_pay — a "Review and Pay" bill paid inside WhatsApp. */
+    method: z.enum(['link', 'whatsapp_pay']).default('link'),
     kind: z.enum(['template', 'text']).default('template'),
     message: z.string().max(4096).default(''),
     templateId: z.string().max(64).optional(),
@@ -452,6 +456,15 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                     push(step.id, 'payment_needs_order', 'Needs an order', 'A payment link is for the order the trigger is about, or the draft order an earlier “Create draft order” step made from a cart.');
                 }
                 if (t.event === 'payment_received') push(step.id, 'payment_already_paid', 'Already paid', 'This automation starts when a payment is made; there is nothing left to collect.');
+                if (v.method === 'whatsapp_pay') {
+                    if (ctx.whatsAppPayReady === false) push(step.id, 'whatsapp_pay_not_ready', 'Turn on WhatsApp Pay', 'Choose an active payment configuration for this number in Campaigns → Catalog → WhatsApp Pay.');
+                    if (t.event !== 'cart' && !insideReply) {
+                        push(step.id, 'whatsapp_pay_needs_window', 'Only right after the customer writes',
+                            'A WhatsApp Pay bill can be sent within 24 hours of the customer’s last message: after a cart, or after “Wait for a reply”. Send a payment link template otherwise.');
+                    }
+                    checkText(v.message);
+                    break;
+                }
                 if (ctx.paymentsConnected === false) push(step.id, 'payments_not_connected', 'Connect Razorpay', 'Connect your Razorpay account in Settings → Orders → Payments first, so customers pay you directly.');
                 const usesLink = (text: string) => /\{\{\s*payment\.link(_path)?\s*\}\}/.test(text);
                 if (v.kind === 'template') {
