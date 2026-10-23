@@ -1,6 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Loader2, MessageCircle, ExternalLink } from "lucide-react";
-import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -10,10 +9,12 @@ import {
   DialogDescription,
 } from "~/components/ui/dialog";
 import { Button } from "~/components/ui/button";
+import { RadioGroup, RadioCard } from "~/components/ui/radio-group";
 import {
   useWhatsAppInstallMutation,
   useCompleteWhatsAppInstallMutation,
 } from "~/hooks/use-whatsapp-mutations";
+import { ensureMetaSdk, readEmbeddedSignupMessage, type EmbeddedSignupEvent } from "~/lib/meta-sdk";
 
 interface WhatsAppConnectDialogProps {
   open: boolean;
@@ -26,17 +27,25 @@ interface WhatsAppConnectDialogProps {
   reconnectChannelId?: string;
 }
 
+type NumberChoice = "business-app" | "new-number";
+
+/// How long to wait for Embedded Signup's FINISH message after FB.login
+/// returns the code. The two race; the code lives 30 seconds.
+const SESSION_INFO_WAIT_MS = 2_000;
+
 /**
- * Dialog that kicks off Meta's WhatsApp Embedded Signup flow.
+ * Dialog that kicks off Meta's WhatsApp Embedded Signup flow (v5).
  *
  * Flow:
  *   1. Click "Continue with Meta" → backend returns { configId, state }.
- *   2. Launch FB.login popup with that configId — merchant picks/creates
- *      their WABA + phone number inside Meta's UI.
- *   3. Meta returns a short-lived `code` to the popup callback.
- *   4. Forward { code, state } to the backend, which exchanges the code for
- *      a long-lived token, reads the WABA + phone number IDs, and creates
- *      the Channel row.
+ *   2. Launch FB.login with that configId. By default Meta offers to connect
+ *      the business's existing WhatsApp Business app number (coexistence);
+ *      "A new number" opts out of that.
+ *   3. The popup posts session info (which account and number, whether it is
+ *      a Business app number) and returns a short-lived `code`.
+ *   4. Forward both to the backend, which exchanges the code, subscribes to
+ *      the number's webhooks, registers a new number, and for a Business app
+ *      number starts importing contacts and chat history.
  */
 export function WhatsAppConnectDialog({
   open,
@@ -44,62 +53,28 @@ export function WhatsAppConnectDialog({
   reconnectChannelId,
 }: WhatsAppConnectDialogProps) {
   const [launching, setLaunching] = useState(false);
+  const [choice, setChoice] = useState<NumberChoice>("business-app");
+  const sessionRef = useRef<Extract<EmbeddedSignupEvent, { kind: "finish" }> | null>(null);
 
   const startInstall = useWhatsAppInstallMutation();
   const completeInstall = useCompleteWhatsAppInstallMutation();
 
-  /**
-   * Ensures window.FB is available — loads the SDK on-demand if it hasn't
-   * been loaded yet (e.g., user clicked before MetaSdkInit finished, or
-   * VITE_META_APP_ID wasn't set at root mount).
-   */
-  async function ensureSdk(): Promise<boolean> {
-    if (window.FB) return true;
-
-    const appId = import.meta.env.VITE_META_APP_ID;
-    if (!appId) {
-      toast.error(
-        "VITE_META_APP_ID is missing from client environment. Set it in .env and restart the dev server.",
-      );
-      return false;
-    }
-
-    return new Promise((resolve) => {
-      window.fbAsyncInit = () => {
-        window.FB?.init({ appId, cookie: true, xfbml: false, version: "v21.0" });
-        resolve(true);
-      };
-      if (!document.getElementById("facebook-jssdk")) {
-        const script = document.createElement("script");
-        script.id = "facebook-jssdk";
-        script.src = "https://connect.facebook.net/en_US/sdk.js";
-        script.async = true;
-        script.defer = true;
-        script.crossOrigin = "anonymous";
-        script.onerror = () => {
-          toast.error("Failed to load Meta SDK. Check your network.");
-          resolve(false);
-        };
-        document.body.appendChild(script);
-      }
-      // Safety timeout — if SDK never loads within 10s, bail.
-      setTimeout(() => {
-        if (!window.FB) {
-          toast.error("Meta SDK did not load in time. Please try again.");
-          resolve(false);
-        }
-      }, 10000);
-    });
-  }
-
   async function handleConnect() {
     setLaunching(true);
 
-    const ready = await ensureSdk();
+    const ready = await ensureMetaSdk();
     if (!ready || !window.FB) {
       setLaunching(false);
       return;
     }
+
+    sessionRef.current = null;
+    const onMessage = (event: MessageEvent) => {
+      const parsed = readEmbeddedSignupMessage(event);
+      if (parsed?.kind === "finish") sessionRef.current = parsed;
+    };
+    window.addEventListener("message", onMessage);
+    const stopListening = () => window.removeEventListener("message", onMessage);
 
     try {
       const { configId, state } = await startInstall.mutateAsync({ reconnectChannelId });
@@ -108,34 +83,63 @@ export function WhatsAppConnectDialog({
         (response) => {
           const code = response.authResponse?.code;
           if (!code) {
+            stopListening();
             setLaunching(false);
             // User closed the popup or denied — not an error worth toasting.
             return;
           }
-          completeInstall.mutate(
-            { code, state },
-            {
-              onSuccess: () => {
-                setLaunching(false);
-                onOpenChange(false);
+          void waitForSession().then((session) => {
+            stopListening();
+            completeInstall.mutate(
+              {
+                code,
+                state,
+                phoneNumberId: session?.phoneNumberId,
+                wabaId: session?.wabaId,
+                isOnBizApp: session?.isOnBizApp,
+                businessId: session?.businessId,
               },
-              onError: () => setLaunching(false),
-            },
-          );
+              {
+                onSuccess: () => {
+                  setLaunching(false);
+                  onOpenChange(false);
+                },
+                onError: () => setLaunching(false),
+              },
+            );
+          });
         },
         {
           config_id: configId,
           response_type: "code",
           override_default_response_type: true,
           extras: {
-            feature: "whatsapp_embedded_signup",
-            sessionInfoVersion: 3,
+            version: "v5",
+            setup: {},
+            // v5 offers the Business app number by default; opt out for a
+            // number that will run on the Cloud API alone.
+            ...(choice === "new-number"
+              ? { features: [{ name: "whatsapp_business_app_onboarding", enabled: false }] }
+              : {}),
           },
         },
       );
     } catch {
+      stopListening();
       setLaunching(false);
     }
+  }
+
+  function waitForSession(): Promise<typeof sessionRef.current> {
+    if (sessionRef.current) return Promise.resolve(sessionRef.current);
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const tick = () => {
+        if (sessionRef.current || Date.now() - started > SESSION_INFO_WAIT_MS) resolve(sessionRef.current);
+        else setTimeout(tick, 100);
+      };
+      tick();
+    });
   }
 
   const isPending = launching || completeInstall.isPending;
@@ -151,67 +155,75 @@ export function WhatsAppConnectDialog({
             Connect WhatsApp Business
           </DialogTitle>
           <DialogDescription>
-            Link your WhatsApp Business Account and phone number using Meta's
-            Embedded Signup — no manual credentials required.
+            Link a WhatsApp number using Meta's Embedded Signup — no manual
+            credentials required.
           </DialogDescription>
         </DialogHeader>
 
-        {/* Prerequisites */}
-        <div className="rounded-lg border border-border bg-success-subtle p-4">
-          <p className="mb-2 text-caption font-semibold text-success">
-            Before you continue, make sure you have:
-          </p>
-          <ul className="list-inside list-disc space-y-1.5 text-caption text-success">
-            <li>
-              A <strong>Meta Business Manager</strong> account (
-              <a
-                href="https://business.facebook.com/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-0.5 underline"
-              >
-                business.facebook.com
-                <ExternalLink className="size-3" />
-              </a>
-              )
-            </li>
-            <li>
-              A verified phone number you want to use for WhatsApp Business (or
-              a free test number Meta provides during signup)
-            </li>
-            <li>
-              Admin access to the Facebook account you'll log in with during
-              the popup
-            </li>
-          </ul>
-        </div>
+        <RadioGroup
+          value={choice}
+          onValueChange={(value) => setChoice(value as NumberChoice)}
+          className="gap-3"
+          aria-label="Which number to connect"
+        >
+          <RadioCard value="business-app" id="wa-number-business-app" disabled={isPending}>
+            <p className="text-label text-foreground">The number I use on the WhatsApp Business app</p>
+            <p className="mt-1 text-caption text-muted-foreground">
+              Keep chatting from the app on your phone. Up to six months of chats are
+              imported, and messages you send from the phone show up here too.
+            </p>
+          </RadioCard>
+          <RadioCard value="new-number" id="wa-number-new" disabled={isPending}>
+            <p className="text-label text-foreground">A new number for Collabo only</p>
+            <p className="mt-1 text-caption text-muted-foreground">
+              The number must not be in use on any WhatsApp app. You'll confirm it
+              with a code during signup.
+            </p>
+          </RadioCard>
+        </RadioGroup>
 
-        {/* What happens next */}
-        <div className="rounded-lg border border-border bg-muted p-3">
-          <p className="mb-1 text-caption font-medium text-foreground">
-            After clicking Continue:
-          </p>
-          <ol className="list-inside list-decimal space-y-0.5 text-caption text-muted-foreground">
-            <li>A Meta popup will open asking you to log in to Facebook</li>
-            <li>
-              Create or select a WhatsApp Business Account and phone number
-            </li>
-            <li>
-              Grant permission for our app to manage messages on your behalf
-            </li>
-            <li>
-              The popup closes and your WhatsApp channel appears as "Connected"
-            </li>
-          </ol>
-        </div>
+        {choice === "business-app" ? (
+          <div className="rounded-lg border border-border bg-muted p-3">
+            <p className="mb-1 text-caption font-medium text-foreground">Using your app number</p>
+            <ul className="list-inside list-disc space-y-1 text-caption text-muted-foreground">
+              <li>Have the phone with WhatsApp Business (version 2.24.17 or later) nearby — Meta sends a confirmation to it.</li>
+              <li>Keep the app open until the import finishes. It can take a few minutes.</li>
+              <li>Open the app at least once every two weeks, or Meta disconnects the number from Collabo.</li>
+              <li>Groups, calls, broadcast lists, labels and the app's quick replies stay in the app; they don't sync here.</li>
+              <li>Sending from Collabo is limited to 20 messages a second on this number.</li>
+            </ul>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-border bg-success-subtle p-4">
+            <p className="mb-2 text-caption font-semibold text-success">Before you continue, make sure you have:</p>
+            <ul className="list-inside list-disc space-y-1.5 text-caption text-success">
+              <li>
+                A <strong>Meta Business</strong> account (
+                <a
+                  href="https://business.facebook.com/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-0.5 underline"
+                >
+                  business.facebook.com
+                  <ExternalLink className="size-3" />
+                </a>
+                )
+              </li>
+              <li>A phone number that can receive an SMS or call to verify it</li>
+              <li>Admin access to the Facebook account you'll log in with</li>
+            </ul>
+          </div>
+        )}
 
-        {/* Actions */}
+        <p className="text-caption text-muted-foreground">
+          After connecting, add a payment method in WhatsApp Manager. Meta bills your
+          business directly for messages, and without one Meta stops delivering
+          replies once the free monthly allowance is used.
+        </p>
+
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={isPending}
-          >
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>
             Cancel
           </Button>
           <Button variant="accent" onClick={handleConnect} disabled={isPending}>

@@ -1,0 +1,21 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": 1751247600,
+      "changes": [
+        {
+          "value": {
+            "previous_quality_score": "GREEN",
+            "new_quality_score": "YELLOW",
+            "message_template_id": 1689556908129832,
+            "message_template_name": "order_confirmation",
+            "message_template_language": "en-US"
+          },
+          "field": "message_template_quality_update"
+        }
+      ]
+    }
+  ]
+}

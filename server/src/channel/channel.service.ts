@@ -9,10 +9,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { describeRateLimit } from '../rate-limit/rate-limit-state.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { InstagramOAuthService } from './instagram-oauth.service';
+import { MetaPagesOAuthService, FACEBOOK_LOGIN_FLOW } from './meta-pages-oauth.service';
+import { WhatsAppAccountService } from './whatsapp-account.service';
+import { EncryptionService } from './encryption.service';
 import { UpdateChannelDto } from './dto/update-channel.dto';
 import { UpdateSyncSettingsDto } from './dto/update-sync-settings.dto';
 import {
   describeAccount,
+  describeMessagingStatus,
   deriveConnectionState,
   readTokenExpiry,
 } from './channel-connection.util';
@@ -36,6 +40,9 @@ export class ChannelService {
     private readonly prisma: PrismaService,
     private readonly shopifyOAuth: ShopifyOAuthService,
     private readonly instagramOAuth: InstagramOAuthService,
+    private readonly metaPages: MetaPagesOAuthService,
+    private readonly whatsappAccount: WhatsAppAccountService,
+    private readonly encryption: EncryptionService,
   ) { }
 
   /**
@@ -76,6 +83,7 @@ export class ChannelService {
         new Date(),
       ),
       account: describeAccount(channel.platform, credentials, metadata),
+      messaging: describeMessagingStatus(channel.platform, credentials, metadata),
       tokenExpiresAt,
       disconnectedAt,
     };
@@ -418,13 +426,31 @@ export class ChannelService {
     // on the provider's side, and that must not block us from clearing it here.
     if (channel.credentials) {
       try {
+        const creds = channel.credentials as Record<string, unknown>;
         if (channel.platform === ChannelPlatform.SHOPIFY) {
           await this.shopifyOAuth.unregisterWebhooks(channelId);
-        } else if (channel.platform === ChannelPlatform.INSTAGRAM) {
+        } else if (channel.platform === ChannelPlatform.INSTAGRAM && creds.authFlow !== FACEBOOK_LOGIN_FLOW) {
           await this.instagramOAuth.revokeWebhookSubscription(channel);
+        } else if (channel.platform === ChannelPlatform.FACEBOOK || channel.platform === ChannelPlatform.INSTAGRAM) {
+          // One Page subscription carries both the Page's Messenger and its
+          // linked Instagram account, so it goes only when neither is left.
+          const pageId = typeof creds.pageId === 'string' ? creds.pageId : null;
+          const stillUsed = pageId
+            ? await this.prisma.channel.count({
+                where: {
+                  id: { not: channelId },
+                  organizationId: orgId,
+                  status: { not: ChannelStatus.DISCONNECTED },
+                  credentials: { path: ['pageId'], equals: pageId },
+                },
+              })
+            : 0;
+          if (pageId && stillUsed === 0) await this.metaPages.unsubscribePage(pageId, creds.pageAccessToken);
+        } else if (channel.platform === ChannelPlatform.WHATSAPP) {
+          const wabaId = typeof creds.wabaId === 'string' ? creds.wabaId : null;
+          const token = typeof creds.accessToken === 'string' ? this.encryption.decrypt(creds.accessToken) : null;
+          if (wabaId && token) await this.whatsappAccount.unsubscribeApp(wabaId, token);
         }
-        // WhatsApp subscribes nothing at connect time, so there is nothing to
-        // revoke; the token simply stops being used.
       } catch {
         // Ignored by design.
       }

@@ -24,6 +24,11 @@ import { EncryptionService } from './encryption.service';
 import { SYNC_QUEUE } from './sync.queue';
 import { SHOPIFY_PUSH_QUEUE } from './shopify-push.queue';
 import { WHATSAPP_MESSAGING_QUEUE } from './whatsapp.queue';
+import { WHATSAPP_ONBOARDING_QUEUE } from './whatsapp-onboarding.queue';
+import { WhatsAppAccountService } from './whatsapp-account.service';
+import { WhatsAppOnboardingProcessor } from './whatsapp-onboarding.processor';
+import { MetaPagesOAuthService } from './meta-pages-oauth.service';
+import { WhatsAppHealthScheduler } from './whatsapp-health.scheduler';
 import { DRAFT_MIRROR_QUEUE } from '../draft-order/draft-mirror.queue';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { OrganizationSettingsModule } from '../organization-settings/organization-settings.module';
@@ -35,6 +40,7 @@ import { InvoiceModule } from '../invoice/invoice.module';
     BullModule.registerQueue({ name: SYNC_QUEUE }),
     BullModule.registerQueue({ name: SHOPIFY_PUSH_QUEUE }),
     BullModule.registerQueue({ name: WHATSAPP_MESSAGING_QUEUE }),
+    BullModule.registerQueue({ name: WHATSAPP_ONBOARDING_QUEUE }),
     // Register a reference to the draft-mirror queue so ShopifySyncService
     // can enqueue `bulk-mirror` trigger jobs without depending on the
     // DraftOrderModule (which already depends on us). BullMQ multi-registers
@@ -56,13 +62,14 @@ import { InvoiceModule } from '../invoice/invoice.module';
   providers: [
     ChannelService, ShopifyOAuthService, InstagramOAuthService, InstagramTokenScheduler, WhatsAppOAuthService,
     WhatsAppMessagingService, WhatsAppMessagingProcessor, WhatsAppTriggerService,
+    WhatsAppAccountService, WhatsAppOnboardingProcessor, MetaPagesOAuthService, WhatsAppHealthScheduler,
     ShopifySyncService, ShopifyLocationSyncService, ShopifyAnalyticsService, SyncProcessor, EncryptionService,
     ShopifyPushService, ShopifyPushProcessor, ShopifyPushEnqueuer,
     ShopifyGraphqlClient, MetaGraphClient, ShopifyPixelService,
   ],
   exports: [
     ChannelService, ShopifyOAuthService, InstagramOAuthService, WhatsAppOAuthService,
-    WhatsAppMessagingService, WhatsAppTriggerService,
+    WhatsAppMessagingService, WhatsAppTriggerService, WhatsAppAccountService,
     ShopifySyncService, ShopifyLocationSyncService, ShopifyAnalyticsService, EncryptionService,
     ShopifyPushService, ShopifyPushEnqueuer,
     ShopifyGraphqlClient, MetaGraphClient,

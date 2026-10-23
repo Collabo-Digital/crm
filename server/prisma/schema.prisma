@@ -2456,6 +2456,34 @@ model Message {
   @@map("messages")
 }
 
+/// Every webhook delivery from Meta (WhatsApp, Messenger, Instagram), stored
+/// raw before it is processed. The endpoint acknowledges as soon as this row
+/// exists, because Messenger unsubscribes an app whose deliveries keep failing
+/// for an hour and a single coexistence history delivery can describe
+/// thousands of messages. Processing happens on the meta-inbound queue, and a
+/// stored row can be replayed while debugging. Pruned after 14 days.
+model MetaWebhookDelivery {
+  id          String    @id @default(cuid())
+  /// whatsapp_business_account | page | instagram
+  object      String
+  /// entry[].id values: WABA, Page or Instagram account ids.
+  entryIds    String[]  @default([]) @map("entry_ids")
+  /// changes[].field values, plus "messaging" / "standby" for Messenger events.
+  fields      String[]  @default([])
+  payload     Json      @db.JsonB
+  /// sha256 of the raw body. Meta redelivers byte-identical bodies, so a
+  /// repeat lands on this unique key instead of being processed twice.
+  bodyHash    String    @unique @map("body_hash")
+  receivedAt  DateTime  @default(now()) @map("received_at")
+  processedAt DateTime? @map("processed_at")
+  attempts    Int       @default(0)
+  error       String?
+
+  @@index([receivedAt])
+  @@index([object, processedAt])
+  @@map("meta_webhook_deliveries")
+}
+
 // ─── Analytics ───────────────────────────────────────────────────────────────
 
 enum AnalyticsGranularity {

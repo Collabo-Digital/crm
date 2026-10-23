@@ -33,8 +33,8 @@ export function isActive(status: ChannelStatus): boolean {
  * How many accounts of a platform one organization may hold at once.
  * `null` = unbounded.
  *
- * Instagram is the only unbounded one: a merchant runs several handles and must
- * be able to connect all of them. WhatsApp is capped at one because Meta issues
+ * Instagram and Facebook Pages are unbounded: a merchant runs several handles
+ * and Pages and must be able to connect all of them. WhatsApp is capped at one because Meta issues
  * one WhatsApp Business Account per business and the messaging services resolve
  * "the org's WhatsApp channel" by lookup, not by choice.
  */
@@ -45,7 +45,7 @@ export const CONNECTION_POLICY: Record<
     [ChannelPlatform.SHOPIFY]: { maxActive: 1, label: 'Shopify' },
     [ChannelPlatform.WOOCOMMERCE]: { maxActive: 1, label: 'WooCommerce' },
     [ChannelPlatform.INSTAGRAM]: { maxActive: null, label: 'Instagram' },
-    [ChannelPlatform.FACEBOOK]: { maxActive: 1, label: 'Facebook' },
+    [ChannelPlatform.FACEBOOK]: { maxActive: null, label: 'Facebook Page' },
     [ChannelPlatform.WHATSAPP]: { maxActive: 1, label: 'WhatsApp Business' },
     [ChannelPlatform.TIKTOK]: { maxActive: 1, label: 'TikTok' },
     [ChannelPlatform.MANUAL]: { maxActive: 1, label: 'Manual' },
@@ -325,9 +325,10 @@ export function describeAccount(
             };
         }
         case ChannelPlatform.WHATSAPP: {
+            // Quality has its own row in the messaging status; this line only
+            // says which account and whether the Business app shares the number.
             const waba = str(creds, 'wabaName');
-            const quality = str(creds, 'qualityRating');
-            const detail = [waba, quality ? `quality ${quality.toLowerCase()}` : null]
+            const detail = [waba, creds.isOnBizApp === true ? 'also on the WhatsApp Business app' : null]
                 .filter(Boolean)
                 .join(' · ');
             return {
@@ -336,6 +337,16 @@ export function describeAccount(
                 displayName: str(creds, 'verifiedName'),
                 avatarUrl: null,
                 detail: detail || null,
+            };
+        }
+        case ChannelPlatform.FACEBOOK: {
+            const pageName = str(creds, 'pageName');
+            return {
+                externalId: str(creds, 'pageId'),
+                handle: pageName,
+                displayName: pageName,
+                avatarUrl: str(creds, 'pictureUrl'),
+                detail: 'Facebook Page · Messenger',
             };
         }
         case ChannelPlatform.SHOPIFY: {
@@ -351,6 +362,83 @@ export function describeAccount(
         default:
             return null;
     }
+}
+
+/** Messaging health for the channels page: whitelisted, never a token. */
+export interface MessagingStatusSummary {
+    /** WhatsApp number also used on the WhatsApp Business app (coexistence). */
+    isOnBizApp: boolean;
+    quality: string | null;
+    messagingLimit: string | null;
+    throughput: string | null;
+    nameStatus: string | null;
+    coexistence: { state: string; sendsPaused: boolean } | null;
+    historySync: {
+        status: string;
+        progress: number | null;
+        messagesReceived: number | null;
+        error: string | null;
+    } | null;
+    setup: { webhooks: string; registration: string } | null;
+    /** Pages and Instagram accounts: did the webhook subscription succeed. */
+    webhooksOk: boolean | null;
+}
+
+function num(source: Record<string, unknown> | null, key: string): number | null {
+    const value = source?.[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The messaging-specific state a merchant needs to see on a channel, read
+ * from the places the connect flow and webhooks write it. Null for
+ * non-messaging platforms.
+ */
+export function describeMessagingStatus(
+    platform: ChannelPlatform,
+    credentials: unknown,
+    metadata: unknown,
+): MessagingStatusSummary | null {
+    if (
+        platform !== ChannelPlatform.WHATSAPP &&
+        platform !== ChannelPlatform.FACEBOOK &&
+        platform !== ChannelPlatform.INSTAGRAM
+    ) {
+        return null;
+    }
+    const creds = asRecord(credentials);
+    const meta = asRecord(metadata);
+    const health = asRecord(meta?.health);
+    const number = asRecord(health?.number);
+    const quality = asRecord(health?.quality);
+    const coexistence = asRecord(meta?.coexistence);
+    const history = asRecord(meta?.historySync);
+    const setup = asRecord(meta?.setup);
+    const subscription = asRecord(meta?.webhookSubscription);
+
+    return {
+        isOnBizApp: creds?.isOnBizApp === true,
+        quality: str(number, 'quality_rating') ?? str(creds, 'qualityRating'),
+        messagingLimit:
+            str(quality, 'current_limit') ?? str(number, 'whatsapp_business_manager_messaging_limit'),
+        throughput: str(asRecord(number?.throughput), 'level'),
+        nameStatus: str(number, 'name_status'),
+        coexistence: coexistence
+            ? { state: str(coexistence, 'state') ?? 'connected', sendsPaused: coexistence.sendsPaused === true }
+            : null,
+        historySync: history
+            ? {
+                status: str(history, 'status') ?? 'pending',
+                progress: num(history, 'progress'),
+                messagesReceived: num(history, 'messagesReceived'),
+                error: str(history, 'error'),
+            }
+            : null,
+        setup: setup
+            ? { webhooks: str(setup, 'webhooks') ?? 'ok', registration: str(setup, 'registration') ?? 'ok' }
+            : null,
+        webhooksOk: subscription ? subscription.ok === true : null,
+    };
 }
 
 /**

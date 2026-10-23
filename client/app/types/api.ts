@@ -670,6 +670,8 @@ export interface Channel {
   connectionState: ChannelConnectionState;
   /** Null for platforms with nothing to show, and for a never-connected row. */
   account: ChannelAccountSummary | null;
+  /** WhatsApp / Messenger / Instagram health. Null for other platforms. */
+  messaging?: ChannelMessagingStatus | null;
   externalStoreId: string | null;
   externalStoreUrl: string | null;
   /** When this account was linked. Not `createdAt` — a revived row keeps that. */
@@ -691,6 +693,25 @@ export interface Channel {
   rateLimitReason?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Messaging health for a WhatsApp number, Facebook Page or Instagram account. */
+export interface ChannelMessagingStatus {
+  /** WhatsApp number also used on the WhatsApp Business app (coexistence). */
+  isOnBizApp: boolean;
+  quality: string | null;
+  messagingLimit: string | null;
+  throughput: string | null;
+  nameStatus: string | null;
+  coexistence: { state: string; sendsPaused: boolean } | null;
+  historySync: {
+    status: "pending" | "requested" | "importing" | "complete" | "declined" | "failed" | "expired" | (string & {});
+    progress: number | null;
+    messagesReceived: number | null;
+    error: string | null;
+  } | null;
+  setup: { webhooks: string; registration: string } | null;
+  webhooksOk: boolean | null;
 }
 
 /** Live outbound rate-limit summary for a channel (from GET /channels/:id). */
@@ -849,6 +870,18 @@ export interface WhatsAppInstallResponse {
 export interface WhatsAppCallbackRequest {
   code: string;
   state: string;
+  /** Session info Embedded Signup posted to the page on FINISH. */
+  phoneNumberId?: string;
+  wabaId?: string;
+  isOnBizApp?: boolean;
+  businessId?: string;
+}
+
+export interface WhatsAppSetupOutcome {
+  webhooks: "ok" | "failed";
+  webhooksError?: string;
+  registration: "ok" | "failed" | "not_needed";
+  registrationError?: string;
 }
 
 /** Response from POST /channels/whatsapp/callback after the channel is created. */
@@ -856,6 +889,43 @@ export interface WhatsAppCallbackResponse {
   channelId: string;
   redirectUrl: string;
   account: ChannelAccountSummary | null;
+  /** The number also stays on the WhatsApp Business app (coexistence). */
+  isOnBizApp: boolean;
+  setup: WhatsAppSetupOutcome;
+}
+
+/** Response from POST /channels/:id/whatsapp/refresh-health. */
+export interface WhatsAppNumberHealth {
+  id: string;
+  display_phone_number?: string;
+  verified_name?: string;
+  quality_rating?: string;
+  platform_type?: string;
+  throughput?: { level?: string };
+  name_status?: string;
+  is_on_biz_app?: boolean;
+  whatsapp_business_manager_messaging_limit?: string;
+}
+
+/** Facebook Login for Business: Pages (Messenger) and their Instagram accounts. */
+export interface MessengerInstallResponse {
+  configId: string;
+  state: string;
+}
+
+export interface MessengerCallbackRequest {
+  code: string;
+  state: string;
+}
+
+export interface MessengerCallbackResponse {
+  connected: Array<{
+    channelId: string;
+    platform: ChannelPlatform;
+    account: ChannelAccountSummary | null;
+    webhooks: "ok" | "failed";
+  }>;
+  skipped: Array<{ name: string; reason: string }>;
 }
 
 // ─── Product Types ───────────────────────────────────────────────────────────

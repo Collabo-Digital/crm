@@ -16,6 +16,7 @@ import { useThemeStore } from "~/stores/theme.store";
 import { useAuthStore } from "~/stores/auth.store";
 import { useEffect, useRef } from "react";
 import "./app.css";
+import { META_SDK_VERSION } from "~/lib/meta-sdk";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", sizes: "32x32" },
@@ -64,7 +65,7 @@ function MetaSdkInit() {
         appId,
         cookie: true,
         xfbml: false,
-        version: "v21.0",
+        version: META_SDK_VERSION,
       });
     };
 

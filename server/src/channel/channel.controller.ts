@@ -25,6 +25,9 @@ import { TriggerSyncDto } from './dto/trigger-sync.dto';
 import { UpdateSyncSettingsDto } from './dto/update-sync-settings.dto';
 import { InstagramOAuthService } from './instagram-oauth.service';
 import { WhatsAppOAuthService } from './whatsapp-oauth.service';
+import { WhatsAppAccountService } from './whatsapp-account.service';
+import { MetaPagesOAuthService } from './meta-pages-oauth.service';
+import { MetaPagesCallbackDto } from './dto/meta-pages-callback.dto';
 import { WhatsAppCallbackDto } from './dto/whatsapp-callback.dto';
 import { classifyMetaCallbackError } from './channel-connection.util';
 import { ShopifyPixelService } from './shopify-pixel.service';
@@ -45,6 +48,8 @@ export class ChannelController {
     private readonly shopifyPixel: ShopifyPixelService,
     private readonly instagramOAuth: InstagramOAuthService,
     private readonly whatsappOAuth: WhatsAppOAuthService,
+    private readonly whatsappAccount: WhatsAppAccountService,
+    private readonly metaPages: MetaPagesOAuthService,
     private readonly config: ConfigService,
     private readonly rateLimitState: RateLimitStateService,
     @InjectQueue(SYNC_QUEUE) private readonly syncQueue: Queue,
@@ -282,7 +287,45 @@ export class ChannelController {
   @Post('whatsapp/callback')
   @Roles(UserRole.OWNER, UserRole.ADMIN)
   async whatsappCallback(@CurrentUser() user: JwtPayload, @Body() dto: WhatsAppCallbackDto) {
-    return this.whatsappOAuth.handleSignupCallback(dto.code, dto.state, user.orgId!, user.sub);
+    return this.whatsappOAuth.handleSignupCallback(dto.code, dto.state, user.orgId!, user.sub, {
+      phoneNumberId: dto.phoneNumberId,
+      wabaId: dto.wabaId,
+      isOnBizApp: dto.isOnBizApp,
+      businessId: dto.businessId,
+    });
+  }
+
+  // POST /channels/messenger/install — config id + CSRF state for the Facebook
+  // Login for Business popup that shares Pages and their Instagram accounts.
+  @Post('messenger/install')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  async installMessenger(@CurrentUser() user: JwtPayload) {
+    return this.metaPages.getConnectConfig(user.orgId!, user.sub);
+  }
+
+  // POST /channels/messenger/callback — the popup's code; connects every Page
+  // granted, plus the Instagram account linked to each.
+  @Post('messenger/callback')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  async messengerCallback(@CurrentUser() user: JwtPayload, @Body() dto: MetaPagesCallbackDto) {
+    return this.metaPages.handleCallback(dto.code, dto.state, user.orgId!, user.sub);
+  }
+
+  // POST /channels/:id/whatsapp/retry-setup — re-run webhook subscription and
+  // number registration after a partial setup failure.
+  @Post(':id/whatsapp/retry-setup')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  async whatsappRetrySetup(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.whatsappOAuth.retrySetup(id, user.orgId!);
+  }
+
+  // POST /channels/:id/whatsapp/refresh-health — re-read quality rating,
+  // messaging limit and display-name status from Meta.
+  @Post(':id/whatsapp/refresh-health')
+  @Roles(UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER)
+  async whatsappRefreshHealth(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    await this.channelService.findOne(id, user.orgId!, { userId: user.sub, role: user.role });
+    return this.whatsappAccount.refreshHealth(id);
   }
 
   // GET /channels — list org's channels.

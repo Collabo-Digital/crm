@@ -1,5 +1,6 @@
 import { ChannelPlatform, ChannelStatus } from '@prisma/client';
 import {
+    describeMessagingStatus,
     assertCanConnect,
     resolveConnectTarget,
     deriveConnectionState,
@@ -351,8 +352,14 @@ describe('describeAccount', () => {
             handle: '+91 98765 43210',
             displayName: 'Acme',
             avatarUrl: null,
-            detail: 'Acme Business · quality green',
+            detail: 'Acme Business',
         });
+    });
+
+    it('notes when the WhatsApp number is also on the Business app', () => {
+        expect(
+            describeAccount(ChannelPlatform.WHATSAPP, { wabaId: 'w', wabaName: 'Acme Business', isOnBizApp: true })?.detail,
+        ).toBe('Acme Business · also on the WhatsApp Business app');
     });
 
     it('summarises Shopify by shop domain', () => {
@@ -468,5 +475,45 @@ describe('classifyMetaCallbackError', () => {
     it('falls back to a generic failure', () => {
         expect(classifyMetaCallbackError({}, new Error('socket hang up'))).toBe('connect_failed');
         expect(classifyMetaCallbackError({})).toBe('connect_failed');
+    });
+});
+
+describe('describeMessagingStatus', () => {
+    it('summarises a coexistence number mid history import, without exposing secrets', () => {
+        const summary = describeMessagingStatus(
+            ChannelPlatform.WHATSAPP,
+            { isOnBizApp: true, qualityRating: 'GREEN', accessToken: 'enc-secret', registrationPin: null },
+            {
+                health: {
+                    number: { quality_rating: 'YELLOW', throughput: { level: 'STANDARD' }, name_status: 'APPROVED' },
+                    quality: { current_limit: 'TIER_2K' },
+                },
+                coexistence: { state: 'connected', sendsPaused: false },
+                historySync: { status: 'importing', progress: 55, messagesReceived: 1200 },
+                setup: { webhooks: 'ok', registration: 'not_needed' },
+            },
+        );
+        expect(summary).toEqual({
+            isOnBizApp: true,
+            quality: 'YELLOW',
+            messagingLimit: 'TIER_2K',
+            throughput: 'STANDARD',
+            nameStatus: 'APPROVED',
+            coexistence: { state: 'connected', sendsPaused: false },
+            historySync: { status: 'importing', progress: 55, messagesReceived: 1200, error: null },
+            setup: { webhooks: 'ok', registration: 'not_needed' },
+            webhooksOk: null,
+        });
+        expect(JSON.stringify(summary)).not.toContain('enc-secret');
+    });
+
+    it('reports a Page whose webhook subscription failed', () => {
+        const summary = describeMessagingStatus(ChannelPlatform.FACEBOOK, { pageId: 'p1' }, { webhookSubscription: { ok: false } });
+        expect(summary?.webhooksOk).toBe(false);
+        expect(summary?.isOnBizApp).toBe(false);
+    });
+
+    it('is null for non-messaging platforms', () => {
+        expect(describeMessagingStatus(ChannelPlatform.SHOPIFY, {}, {})).toBeNull();
     });
 });

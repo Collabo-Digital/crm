@@ -30,6 +30,8 @@ export const validationSchema = Joi.object({
     INSTAGRAM_WEBHOOK_VERIFY_TOKEN: Joi.string().optional(),
     WHATSAPP_WEBHOOK_VERIFY_TOKEN: Joi.string().optional(),
     WHATSAPP_CONFIG_ID: Joi.string().optional(),
+    MESSENGER_CONFIG_ID: Joi.string().optional(),
+    MESSENGER_WEBHOOK_VERIFY_TOKEN: Joi.string().optional(),
     WHATSAPP_GRAPH_VERSION: Joi.string().optional(),
     META_GRAPH_VERSION: Joi.string().optional(),
     // Outbound rate limiter (see config/configuration.ts `rateLimit`).

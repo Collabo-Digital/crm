@@ -8,6 +8,7 @@ import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { ShopifyConnectDialog } from "~/components/app/shopify-connect-dialog";
 import { WhatsAppConnectDialog } from "~/components/app/whatsapp-connect-dialog";
+import { MessengerConnectDialog } from "~/components/app/channels/messenger-connect-dialog";
 import { ChannelProviderCards } from "~/components/app/channels/channel-provider-cards";
 import { ConnectedAccountsTable } from "~/components/app/channels/connected-accounts-table";
 import { ChannelManageDialog } from "~/components/app/channels/channel-manage-dialog";
@@ -38,6 +39,7 @@ export function ChannelSettingsTab() {
   const [shopifyOpen, setShopifyOpen] = useState(false);
   const [instagramOpen, setInstagramOpen] = useState(false);
   const [whatsappOpen, setWhatsappOpen] = useState(false);
+  const [messengerOpen, setMessengerOpen] = useState(false);
   /** Set when a dialog is re-authorizing an existing row rather than adding one. */
   const [reconnectChannelId, setReconnectChannelId] = useState<string | undefined>();
   const [manageChannel, setManageChannel] = useState<Channel | null>(null);
@@ -81,6 +83,8 @@ export function ChannelSettingsTab() {
               ? "Instagram account connected"
               : connected === "whatsapp"
                 ? "WhatsApp Business connected"
+                : connected === "messenger"
+                  ? "Facebook Pages connected"
                 : "Channel connected",
       );
       queryClient.invalidateQueries({ queryKey: channelKeys.all });
@@ -113,6 +117,7 @@ export function ChannelSettingsTab() {
     if (provider.platform === "SHOPIFY") setShopifyOpen(true);
     if (provider.platform === "INSTAGRAM") setInstagramOpen(true);
     if (provider.platform === "WHATSAPP") setWhatsappOpen(true);
+    if (provider.platform === "FACEBOOK") setMessengerOpen(true);
   }
 
   function reconnect(channel: Channel) {
@@ -134,6 +139,10 @@ export function ChannelSettingsTab() {
     if (channel.platform === "WHATSAPP") {
       setReconnectChannelId(channel.id);
       setWhatsappOpen(true);
+    }
+    if (channel.platform === "FACEBOOK") {
+      // One popup re-shares every Page; reconnecting re-authorizes in place.
+      setMessengerOpen(true);
     }
   }
 
@@ -208,7 +217,17 @@ export function ChannelSettingsTab() {
           if (!open) setReconnectChannelId(undefined);
         }}
         reconnectChannelId={reconnectChannelId}
+        onUseFacebook={
+          isInfluencer
+            ? undefined
+            : () => {
+                setInstagramOpen(false);
+                setMessengerOpen(true);
+              }
+        }
       />
+
+      <MessengerConnectDialog open={messengerOpen} onOpenChange={setMessengerOpen} />
 
       {/* WhatsApp Embedded Signup dialog */}
       <WhatsAppConnectDialog

@@ -1,0 +1,26 @@
+{
+  "object": "page",
+  "entry": [
+    {
+      "id": "682498302938465",
+      "time": 1458692752478,
+      "messaging": [
+        {
+          "sender": {
+            "id": "682498302938465"
+          },
+          "recipient": {
+            "id": "6783960784969421"
+          },
+          "timestamp": 1457764197627,
+          "message": {
+            "is_echo": true,
+            "app_id": 263902037430900,
+            "mid": "m_FBECHO0001",
+            "text": "Replied from the Page inbox"
+          }
+        }
+      ]
+    }
+  ]
+}

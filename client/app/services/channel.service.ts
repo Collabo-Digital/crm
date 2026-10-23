@@ -19,6 +19,11 @@ import type {
   InstagramPendingResponse,
   CompleteInstagramRequest,
   CompleteInstagramResponse,
+  WhatsAppSetupOutcome,
+  WhatsAppNumberHealth,
+  MessengerInstallResponse,
+  MessengerCallbackRequest,
+  MessengerCallbackResponse,
 } from "~/types/api";
 
 /**
@@ -82,4 +87,20 @@ export const channelService = {
   /** Step 2 of WhatsApp Embedded Signup: forward the code Meta returned to the backend. */
   completeWhatsAppInstall: (data: WhatsAppCallbackRequest) =>
     apiClient.post<WhatsAppCallbackResponse>("/channels/whatsapp/callback", data).then((response) => response.data),
+
+  /** Re-run webhook subscription and number registration after a partial setup failure. */
+  retryWhatsAppSetup: (id: string) =>
+    apiClient.post<WhatsAppSetupOutcome>(`/channels/${id}/whatsapp/retry-setup`).then((response) => response.data),
+
+  /** Re-read the number's quality rating, messaging limit and name status from Meta. */
+  refreshWhatsAppHealth: (id: string) =>
+    apiClient.post<WhatsAppNumberHealth>(`/channels/${id}/whatsapp/refresh-health`).then((response) => response.data),
+
+  /** Step 1 of connecting Facebook Pages (and their Instagram accounts). */
+  installMessenger: () =>
+    apiClient.post<MessengerInstallResponse>("/channels/messenger/install").then((response) => response.data),
+
+  /** Step 2: forward the popup's code; every Page granted is connected. */
+  completeMessengerInstall: (data: MessengerCallbackRequest) =>
+    apiClient.post<MessengerCallbackResponse>("/channels/messenger/callback", data).then((response) => response.data),
 };

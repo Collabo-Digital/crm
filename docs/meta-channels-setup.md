@@ -56,8 +56,18 @@ Instagram Login.
 ### WhatsApp Embedded Signup configuration
 
 Facebook Login for Business → **Configurations** → create one from the
-"WhatsApp Embedded Signup" template. Copy its **Configuration ID** into
-`WHATSAPP_CONFIG_ID`.
+"WhatsApp Embedded Signup" template, with the products **Cloud API** and
+**WhatsApp Business app onboarding** selected. Copy its **Configuration ID**
+into `WHATSAPP_CONFIG_ID`.
+
+### Messenger configuration
+
+A second Facebook Login for Business configuration, token type **System-user
+access token**, assets **Pages** and **Instagram accounts**, permissions
+`pages_show_list`, `pages_manage_metadata`, `pages_messaging`,
+`pages_read_engagement`, `pages_manage_engagement`, `business_management`,
+`instagram_basic`, `instagram_manage_messages`, `instagram_manage_comments`.
+Copy its **Configuration ID** into `MESSENGER_CONFIG_ID`.
 
 Without it, `POST /api/v1/channels/whatsapp/install` returns 400 and the
 WhatsApp dialog cannot open the popup.
@@ -108,7 +118,9 @@ INSTAGRAM_APP_SECRET=               # "Instagram app secret" from the same page
 INSTAGRAM_WEBHOOK_VERIFY_TOKEN=     # any string you choose; echoed back to Meta
 WHATSAPP_WEBHOOK_VERIFY_TOKEN=
 WHATSAPP_CONFIG_ID=
-WHATSAPP_GRAPH_VERSION=v21.0        # optional; used by BOTH Meta channels
+MESSENGER_WEBHOOK_VERIFY_TOKEN=
+MESSENGER_CONFIG_ID=
+WHATSAPP_GRAPH_VERSION=v25.0        # optional; used by every Meta surface
 APP_URL=                            # public URL of THIS API
 FRONTEND_URL=                       # where OAuth sends the merchant back
 ENCRYPTION_KEY=                     # exactly 32 chars; encrypts stored tokens
@@ -164,6 +176,50 @@ fails cleanly; Instagram Login never parks a selection.
 Because the popup returns to the page rather than navigating, WhatsApp has no
 browser callback route and needs no redirect URI.
 
+### WhatsApp: existing Business app number (coexistence) or a new number
+
+The dialog runs Embedded Signup **v5**, where onboarding the business's
+WhatsApp Business app number is the default; "A new number for Collabo only"
+passes the opt-out (`features: [{ name: "whatsapp_business_app_onboarding",
+enabled: false }]`). On `FINISH` the popup posts `phone_number_id`,
+`messaging_account_ids` and `is_on_biz_app`, which the client forwards with
+the code (the code expires after 30 seconds).
+
+The server then:
+
+1. exchanges the code for a business integration system user token (no
+   expiry, so no long-lived exchange);
+2. reads the number, writes the channel row;
+3. subscribes the app to the account's webhooks;
+4. for a new number, registers it (`POST /{phone_number_id}/register`) with a
+   six-digit PIN it keeps encrypted; a Business app number is never registered;
+5. for a Business app number, queues `coexistence-sync` on
+   `whatsapp-onboarding`, which calls `POST /{phone_number_id}/smb_app_data`
+   with `smb_app_state_sync` (contacts) and then `history`. Each may run once,
+   within 24 hours of onboarding; the job retries for about four hours and
+   records failures on the channel.
+
+A failure in steps 3 or 4 leaves a connected channel with an error and a
+**Retry setup** action (`POST /channels/:id/whatsapp/retry-setup`). Number
+health is re-read daily and on demand (`POST /channels/:id/whatsapp/refresh-health`).
+
+Coexistence numbers send at most 20 messages per second, cannot use groups,
+calls, broadcast lists or catalogs through the API, and are disconnected by
+Meta if the phone app is not opened for about 14 days (`account_update` →
+`PARTNER_REMOVED` / `PRIMARY_INACTIVITY`, shown on the channel).
+
+### Messenger and Page-linked Instagram
+
+`POST /channels/messenger/install` returns `MESSENGER_CONFIG_ID` and a state
+for a Facebook Login for Business popup; `POST /channels/messenger/callback`
+connects every Page the business shared (a `FACEBOOK` channel each) and the
+Instagram professional account linked to each Page (an `INSTAGRAM` channel with
+`authFlow: "facebook_login"`). Page tokens derived this way do not expire.
+
+Meta allows an app to use Facebook Login **or** Instagram Login for Instagram,
+not both. The Instagram Login flow above is kept for influencer accounts that
+have no Page; check which Instagram setup the app actually has in the dashboard.
+
 ### Connection limits
 
 Enforced in `channel-connection.util.ts` and again by partial unique indexes
@@ -179,29 +235,37 @@ Enforced in `channel-connection.util.ts` and again by partial unique indexes
 
 ## 4. Webhooks
 
-Instagram → API setup with Instagram login → **Configure webhooks**:
+Three callbacks, one per product. Each is verified with its own token and every
+delivery is signed with `META_APP_SECRET` (Instagram Login accounts are signed
+with `INSTAGRAM_APP_SECRET`, which is also accepted on the Instagram endpoint).
 
-| Object | Callback URL | Verify token |
-|---|---|---|
-| Instagram | `{APP_URL}/api/v1/webhooks/instagram` | `INSTAGRAM_WEBHOOK_VERIFY_TOKEN` |
+| Product (dashboard) | Callback URL | Verify token | Fields |
+|---|---|---|---|
+| WhatsApp → Configuration | `{APP_URL}/api/v1/webhooks/whatsapp` | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | messages, smb_message_echoes, history, smb_app_state_sync, account_update, message_template_status_update, message_template_quality_update, template_category_update, phone_number_quality_update, phone_number_name_update, business_capability_update, user_preferences |
+| Messenger → Settings | `{APP_URL}/api/v1/webhooks/messenger` | `MESSENGER_WEBHOOK_VERIFY_TOKEN` | messages, message_echoes, message_deliveries, message_reads, message_reactions, message_edits, messaging_postbacks, messaging_referrals, messaging_handovers, standby, feed |
+| Instagram | `{APP_URL}/api/v1/webhooks/instagram` | `INSTAGRAM_WEBHOOK_VERIFY_TOKEN` | messages, messaging_postbacks, messaging_seen, message_reactions, message_edit, messaging_referral, messaging_handover, standby, comments, mentions |
 
-Subscribe to `messages`, `messaging_postbacks` and `comments`. The server
-subscribes each account automatically on connect and unsubscribes it on
-disconnect.
+Per-account subscription happens at connect time and is undone at disconnect:
 
-Meta's documentation says the app must be **Live** to receive real
-notifications, and `comments` needs Advanced Access. The dashboard's *Test*
-button delivers in Development mode.
+- **WhatsApp:** `POST /{waba_id}/subscribed_apps` with the business token.
+  Before this branch nothing subscribed the account, so no WhatsApp webhook
+  ever arrived.
+- **Pages:** `POST /{page_id}/subscribed_apps?subscribed_fields=...` with the
+  Page token. One Page subscription carries both Messenger and the Instagram
+  account linked to the Page, so it is only removed when neither is connected.
 
-The webhook controller is diagnostic for now: it verifies the signature against
-`INSTAGRAM_APP_SECRET` or `META_APP_SECRET` and logs which one matched, then logs
-each entry's event kinds and whether `entry.id` matched a connected channel.
-Nothing is stored yet.
+### What happens to a delivery
 
-There is no WhatsApp webhook controller yet, so `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
-is configured but unused: WhatsApp delivery and read receipts are not ingested.
-
----
+1. The endpoint checks `X-Hub-Signature-256` against the raw body, stores the
+   body in `meta_webhook_deliveries` (unique on its sha256, so Meta's
+   byte-identical redeliveries are no-ops), queues it on `meta-inbound`, and
+   answers 200. A bad signature is answered 200 with `received: false` and
+   not stored.
+2. The `meta-inbound` worker parses it (`whatsapp-webhook.parser.ts`,
+   `messenger-webhook.parser.ts`), routes it by account id to the channel, and
+   applies it. Errors are written to the row and the job retries.
+3. `MetaWebhookMaintenance` re-queues rows whose job was lost and prunes rows
+   after 14 days.
 
 ## 5. Local testing
 
@@ -230,3 +294,17 @@ The return states can be exercised without Meta by visiting them directly:
 ```
 
 The `reason` slugs and their copy live in `client/app/lib/channel-providers.ts`.
+
+### Replaying webhooks without Meta
+
+`server/test/fixtures/meta/` holds payloads built from Meta's documented
+examples. `server/scripts/meta-webhook-replay.mjs` signs one with
+`META_APP_SECRET` and posts it to a running API:
+
+```
+META_APP_SECRET=... node scripts/meta-webhook-replay.mjs test/fixtures/meta/wa-statuses.json \
+  --url http://localhost:5000 --replace 102290129340398=<your WABA id>
+```
+
+The endpoint follows the payload's `object`; `--fresh` makes a repeat run a
+new delivery rather than a redelivery.

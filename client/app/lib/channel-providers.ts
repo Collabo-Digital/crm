@@ -21,9 +21,10 @@ export interface ChannelProvider {
    * How connecting starts:
    *   redirect         — leave the app for the provider, come back to a callback
    *   embedded-signup  — Meta's popup, driven by their JS SDK, no navigation
+   *   facebook-login   — Facebook Login for Business popup (Pages + Instagram)
    *   dialog           — collect input from the merchant first (Shopify domain)
    */
-  connect: "redirect" | "embedded-signup" | "dialog";
+  connect: "redirect" | "embedded-signup" | "facebook-login" | "dialog";
   features: string[];
 }
 
@@ -32,10 +33,19 @@ export const CHANNEL_PROVIDERS: ChannelProvider[] = [
     platform: "WHATSAPP",
     label: "WhatsApp Business",
     description:
-      "Send order updates and reply to customers on WhatsApp. One business number per organization.",
+      "Chat with customers and send order updates. Keep using the WhatsApp Business app on the same number, or connect a new one. One number per organization.",
     maxConnections: 1,
     connect: "embedded-signup",
-    features: ["Order notifications", "Customer chat", "Message templates"],
+    features: ["Shared inbox", "Business app sync", "Message templates"],
+  },
+  {
+    platform: "FACEBOOK",
+    label: "Messenger",
+    description:
+      "Connect your Facebook Pages to answer Messenger chats and Page comments. Instagram accounts linked to them connect too.",
+    maxConnections: null,
+    connect: "facebook-login",
+    features: ["Messenger inbox", "Page comments", "Linked Instagram"],
   },
   {
     platform: "INSTAGRAM",
@@ -44,7 +54,7 @@ export const CHANNEL_PROVIDERS: ChannelProvider[] = [
       "Connect the Instagram business accounts you run. Add as many handles as you manage.",
     maxConnections: null,
     connect: "redirect",
-    features: ["Direct messages", "Comments & mentions", "Profile insights"],
+    features: ["Direct messages", "Comments & mentions", "Story replies"],
   },
   {
     platform: "SHOPIFY",

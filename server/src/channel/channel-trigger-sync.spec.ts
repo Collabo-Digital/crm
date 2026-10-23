@@ -51,6 +51,8 @@ describe('ChannelController.triggerSync', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
+      {} as never,
       queue as never,
     );
     // Silence the expected warn/error lines.

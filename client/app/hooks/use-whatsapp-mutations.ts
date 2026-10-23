@@ -17,19 +17,53 @@ export function useWhatsAppInstallMutation() {
 }
 
 /**
- * Step 2 of WhatsApp Embedded Signup: forward the short-lived code returned by
- * the Meta popup to the backend so it can exchange it for an access token,
- * fetch the WABA + phone number, and create the Channel row.
+ * Step 2 of WhatsApp Embedded Signup: forward the code and session info the
+ * Meta popup returned so the backend can exchange it, subscribe to the
+ * number's webhooks and create the Channel row.
  */
 export function useCompleteWhatsAppInstallMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (data: WhatsAppCallbackRequest) => channelService.completeWhatsAppInstall(data),
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: channelKeys.all });
-      toast.success("WhatsApp Business connected!");
+      const incomplete = result.setup.webhooks === "failed" || result.setup.registration === "failed";
+      if (incomplete) {
+        toast.warning("WhatsApp connected, but setup is incomplete. Open the channel to retry.");
+      } else if (result.isOnBizApp) {
+        toast.success(
+          "WhatsApp Business app number connected. Importing up to six months of chats — keep the app open on the phone.",
+        );
+      } else {
+        toast.success("WhatsApp Business connected!");
+      }
     },
     onError: (error) => handleMutationError(error, "Failed to connect WhatsApp Business."),
+  });
+}
+
+export function useRetryWhatsAppSetupMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (channelId: string) => channelService.retryWhatsAppSetup(channelId),
+    onSuccess: (outcome) => {
+      queryClient.invalidateQueries({ queryKey: channelKeys.all });
+      if (outcome.webhooks === "failed" || outcome.registration === "failed") {
+        toast.error(outcome.webhooksError ?? outcome.registrationError ?? "Setup still failed. Check the number in WhatsApp Manager.");
+      } else {
+        toast.success("WhatsApp setup completed.");
+      }
+    },
+    onError: (error) => handleMutationError(error, "Could not retry WhatsApp setup."),
+  });
+}
+
+export function useRefreshWhatsAppHealthMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (channelId: string) => channelService.refreshWhatsAppHealth(channelId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: channelKeys.all }),
+    onError: (error) => handleMutationError(error, "Could not refresh the number's status."),
   });
 }

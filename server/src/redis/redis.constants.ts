@@ -14,6 +14,8 @@ export const REDIS_KEYS = {
     /// Holds the Instagram accounts one login turned out to grant, between the
     /// Meta redirect and the merchant picking one. Short-lived and single-use.
     OAUTH_INSTAGRAM_PENDING: 'oauth:instagram:pending:',
+    /// Facebook Login for Business for Pages + their Instagram accounts.
+    OAUTH_META_PAGES: 'oauth:meta-pages:',
 };
 
 export const REDIS_TTL = {

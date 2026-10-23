@@ -20,6 +20,7 @@ import {
   formatChannelDate,
 } from "~/lib/channel-providers";
 import { ChannelAvatar } from "./channel-account-cell";
+import { MessagingStatusPanel } from "./messaging-status-panel";
 import { cn } from "~/lib/utils";
 import type { Channel } from "~/types/api";
 
@@ -134,6 +135,8 @@ export function ChannelManageDialog({
             />
           )}
         </div>
+
+        <MessagingStatusPanel channel={channel} canManage={canManage} />
 
         {canManage && !isDisconnected && (
           <div className="space-y-4">

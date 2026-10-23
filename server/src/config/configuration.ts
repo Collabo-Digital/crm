@@ -72,12 +72,21 @@ export default () => ({
         appSecret: process.env.META_APP_SECRET,
         configId: process.env.WHATSAPP_CONFIG_ID,
         graphVersion: process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
+        webhookVerifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+    },
+    // Facebook Pages (Messenger) and the Instagram accounts linked to them,
+    // connected through Facebook Login for Business with its own configuration.
+    messenger: {
+        configId: process.env.MESSENGER_CONFIG_ID,
+        webhookVerifyToken: process.env.MESSENGER_WEBHOOK_VERIFY_TOKEN,
     },
     // One Meta app serves WhatsApp, Instagram and (later) Marketing. The
     // outbound rate limiter keys the app-level wallet on this id, and the
     // shared Graph client reads one version for every surface.
     meta: {
         appId: process.env.META_APP_ID,
+        // Signs every webhook delivery (X-Hub-Signature-256) for all three surfaces.
+        appSecret: process.env.META_APP_SECRET,
         graphVersion:
             process.env.META_GRAPH_VERSION ?? process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
     },
