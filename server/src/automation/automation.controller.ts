@@ -2,12 +2,13 @@ import {
     Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
-import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
+import type { SessionPayload } from '../auth/interfaces/jwt-payload.interface';
 import { AllowInfluencer } from '../auth/decorators/allow-influencer.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { OrgId } from '../auth/decorators/org-id.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { CHANNEL_MANAGERS, Roles } from '../auth/decorators/roles.decorator';
+import { hasPermission } from '../auth/permissions';
 import { AutomationService, type AutomationViewer } from './automation.service';
 import { InstagramMediaService } from './platforms/instagram/instagram-media.service';
 import { CreateAutomationDto } from './dto/create-automation.dto';
@@ -31,8 +32,10 @@ import { ConversationStartersService } from './conversation-starters.service';
 const READERS: UserRole[] = [...CHANNEL_MANAGERS, UserRole.MANAGER, UserRole.AGENT, UserRole.VIEWER];
 const EDITORS: UserRole[] = [...CHANNEL_MANAGERS, UserRole.MANAGER];
 
-function viewerOf(user: JwtPayload): AutomationViewer {
-    return { userId: user.sub, role: user.role };
+function viewerOf(user: SessionPayload): AutomationViewer {
+    // Exactly what lets a request through the EDITORS routes below.
+    const canManage = !!user.role && EDITORS.includes(user.role) && hasPermission(user.role, user.permissions, 'campaigns.manage');
+    return { userId: user.sub, role: user.role, canManage };
 }
 
 @Controller('automations')
@@ -49,7 +52,7 @@ export class AutomationController {
     @Roles(...READERS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.view')
-    list(@OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Query() query: QueryAutomationsDto) {
+    list(@OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Query() query: QueryAutomationsDto) {
         return this.automations.list(orgId, viewerOf(user), query);
     }
 
@@ -58,7 +61,7 @@ export class AutomationController {
     @Roles(...EDITORS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.manage')
-    create(@OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: CreateAutomationDto) {
+    create(@OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Body() dto: CreateAutomationDto) {
         return this.automations.create(orgId, viewerOf(user), dto);
     }
 
@@ -68,7 +71,7 @@ export class AutomationController {
     @Roles(...READERS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.view')
-    listMedia(@OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Query() query: QueryMediaDto) {
+    listMedia(@OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Query() query: QueryMediaDto) {
         return this.media.list(query.channelId, orgId, viewerOf(user), query);
     }
 
@@ -78,7 +81,7 @@ export class AutomationController {
     @Roles(...EDITORS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.manage')
-    syncMedia(@OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: SyncMediaDto) {
+    syncMedia(@OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Body() dto: SyncMediaDto) {
         return this.media.refresh(dto.channelId, orgId, viewerOf(user));
     }
 
@@ -87,7 +90,7 @@ export class AutomationController {
     @Roles(...READERS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.view')
-    getStarters(@Param('channelId') channelId: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload) {
+    getStarters(@Param('channelId') channelId: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload) {
         return this.starters.get(orgId, viewerOf(user), channelId);
     }
 
@@ -96,7 +99,7 @@ export class AutomationController {
     @Roles(...EDITORS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.manage')
-    saveStarters(@Param('channelId') channelId: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: SaveStartersDto) {
+    saveStarters(@Param('channelId') channelId: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Body() dto: SaveStartersDto) {
         return this.starters.save(orgId, viewerOf(user), channelId, dto.starters);
     }
 
@@ -105,7 +108,7 @@ export class AutomationController {
     @Roles(...READERS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.view')
-    findOne(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload) {
+    findOne(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload) {
         return this.automations.findOne(id, orgId, viewerOf(user));
     }
 
@@ -114,7 +117,7 @@ export class AutomationController {
     @Roles(...READERS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.view')
-    issues(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload) {
+    issues(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload) {
         return this.automations.issues(id, orgId, viewerOf(user));
     }
 
@@ -123,7 +126,7 @@ export class AutomationController {
     @Roles(...READERS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.view')
-    async stats(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload) {
+    async stats(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload) {
         return this.insights.stats(await this.automations.getVisible(id, orgId, viewerOf(user)));
     }
 
@@ -132,7 +135,7 @@ export class AutomationController {
     @Roles(...READERS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.view')
-    async runs(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Query() query: QueryRunsDto) {
+    async runs(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Query() query: QueryRunsDto) {
         return this.insights.runs(await this.automations.getVisible(id, orgId, viewerOf(user)), query);
     }
 
@@ -142,7 +145,7 @@ export class AutomationController {
     @Roles(...EDITORS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.manage')
-    async test(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: TestAutomationDto) {
+    async test(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Body() dto: TestAutomationDto) {
         return this.insights.test(orgId, await this.automations.getVisible(id, orgId, viewerOf(user)), dto);
     }
 
@@ -151,7 +154,7 @@ export class AutomationController {
     @Roles(...EDITORS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.manage')
-    update(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateAutomationDto) {
+    update(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Body() dto: UpdateAutomationDto) {
         return this.automations.update(id, orgId, viewerOf(user), dto);
     }
 
@@ -160,7 +163,7 @@ export class AutomationController {
     @Roles(...EDITORS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.manage')
-    saveDefinition(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: SaveDefinitionDto) {
+    saveDefinition(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Body() dto: SaveDefinitionDto) {
         return this.automations.saveDefinition(id, orgId, viewerOf(user), dto);
     }
 
@@ -170,7 +173,7 @@ export class AutomationController {
     @Roles(...EDITORS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.manage')
-    publish(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload) {
+    publish(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload) {
         return this.automations.publish(id, orgId, viewerOf(user));
     }
 
@@ -179,7 +182,7 @@ export class AutomationController {
     @Roles(...EDITORS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.manage')
-    pause(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload) {
+    pause(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload) {
         return this.automations.pause(id, orgId, viewerOf(user));
     }
 
@@ -188,7 +191,7 @@ export class AutomationController {
     @Roles(...EDITORS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.manage')
-    resume(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload) {
+    resume(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload) {
         return this.automations.resume(id, orgId, viewerOf(user));
     }
 
@@ -196,7 +199,7 @@ export class AutomationController {
     @Roles(...EDITORS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.manage')
-    duplicate(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: DuplicateAutomationDto) {
+    duplicate(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Body() dto: DuplicateAutomationDto) {
         return this.automations.duplicate(id, orgId, viewerOf(user), dto);
     }
 
@@ -205,7 +208,7 @@ export class AutomationController {
     @Roles(...EDITORS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.manage')
-    archive(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload) {
+    archive(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: SessionPayload) {
         return this.automations.archive(id, orgId, viewerOf(user));
     }
 }

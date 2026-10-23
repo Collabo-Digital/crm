@@ -2229,6 +2229,9 @@ model AutomationTrigger {
   /// The post a comment trigger listens on. FK for the UI, external id for the
   /// webhook (Instagram sends the media id, not our cuid).
   mediaId        String?  @map("media_id")
+  /// The post's external id for a comment trigger; the secret token for a webhook trigger.
+  /// SQL-only partial unique: (subject_id) WHERE trigger_type = 'crm.webhook'
+  /// (migration 20261023160000_webhook_token_unique).
   subjectId      String?  @map("subject_id")
   /// Lower-cased keywords for "contains" / "exact". Empty means any comment.
   keywords       String[] @default([])

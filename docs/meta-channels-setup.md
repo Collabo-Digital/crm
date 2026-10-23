@@ -310,8 +310,12 @@ Per-account subscription happens at connect time and is undone at disconnect:
   automation-added tag can start at most three further hops); contact imports
   do not.
 - **Order of work for one event:** a contact waiting at a “Wait for a reply”
-  step gets the message as their reply (comments never count as replies);
-  otherwise the single most specific matching automation starts (a chosen post
+  step gets the message as their reply (comments never count as replies). One
+  reply answers one waiting run: a reply that answers an automation's message
+  (quotes it, as tapping a WhatsApp template's button does, or taps one of its
+  Instagram or Messenger buttons) goes to that message's run, or to none if it
+  has stopped waiting; any other reply goes to the run of a live automation
+  that started waiting most recently. Otherwise the single most specific matching automation starts (a chosen post
   beats any post, exact words beat keywords, keywords beat “any message”; tag
   and webhook triggers start every match). Inbox rules run either way: routing
   and round-robin for a new conversation, then the welcome or away message
@@ -340,14 +344,21 @@ Per-account subscription happens at connect time and is undone at disconnect:
   coexistence numbers, so a refusal is written as a note on the conversation.
 - **Webhook trigger.** Publishing an automation whose trigger is “Another app
   calls a URL” issues a secret URL,
-  `POST {APP_URL}/api/v1/automations/hooks/{token}`. The body is JSON with the
-  person's phone number (international format) at the field the trigger names;
-  other top-level fields become `{{webhook.<field>}}`. Send an
-  `Idempotency-Key` header to make retries safe. On WhatsApp an unknown number
-  becomes a contact; on Instagram and Messenger the person must already be a
-  contact with that number. The global rate limit applies.
+  `POST {APP_URL}/api/v1/automations/hooks/{token}`. Only the server issues the
+  token (18 random bytes), each token belongs to one automation, and only people
+  who can edit automations (owners, admins, managers, and influencers with
+  `campaigns.manage`) are shown it. The body is JSON with the person's phone
+  number (international format) at the field the trigger names; other
+  top-level fields become `{{webhook.<field>}}`. Send an `Idempotency-Key`
+  header to make retries safe. The contact with exactly that number is used.
+  On WhatsApp an unknown number becomes a new contact; on Instagram and
+  Messenger the person must be the one contact linked to a store customer with
+  that number (matched the same way as linking, below). A number starting with
+  00 is read as international; one still starting with 0 is refused. The global
+  rate limit applies.
 - **“Call a URL” steps** refuse private, loopback, link-local and metadata
-  addresses after DNS resolution, follow no redirects, time out after 10
+  addresses, written as IPv4 or as any IPv6 form that carries one (mapped,
+  NAT64, 6to4), both for literal addresses and after DNS resolution, follow no redirects, time out after 10
   seconds and read at most 256 KB.
 - **Free-form messages from automations** still obey the 24-hour window (7-day
   human-agent tag is for people only): a run whose message cannot go stops,
@@ -360,19 +371,31 @@ Per-account subscription happens at connect time and is undone at disconnect:
   Collabo — and checkout abandoned. Each is raised once per order and kind,
   and only when an active automation listens. The buyer is found by the
   order's (or checkout's) phone number on each listening WhatsApp number; a new
-  number becomes a contact linked to the store customer. Messages from these
+  number becomes a contact linked to the store customer. (Any WhatsApp contact
+  links to the one store customer with the same number. The last ten digits
+  must match, and before them the store's number may have nothing, the country
+  code, or the country code and a trunk 0, as in "+44 (0)7911 123456"; Mexican
+  and Argentine WhatsApp numbers also match without their mobile 1 or 9. So
+  +44 7911 123456 never links to a customer saved as +91 79111 23456.)
+  Messages from these
   triggers must be approved templates: the builder refuses free text there.
   Shopify has no delivered order state; a fulfilment whose carrier
   `shipment_status` is `delivered` counts, as does marking it delivered in
   Collabo.
 - **Cash on delivery** is read from Shopify's `payment_gateway_names` (for
   example "Cash on Delivery (COD)"), stored on the order from live webhooks.
-  Orders imported by the historical backfill do not carry it.
+  Orders imported by the historical backfill do not carry it. The “Confirm
+  cash-on-delivery orders” playbook decides only on whole replies: “Confirm
+  order”, “Confirm” or “Yes” tags the order `cod-confirmed`; “Cancel order” or
+  “Cancel” cancels it; any other reply (“Please don't cancel”, “When will it
+  arrive?”) goes to the team (tag `cod-check`, assigned, with a note). For
+  buyers who order more than once, set it to run every time.
 - **Store actions** an automation can take: tag the order or add to its note
   (Shopify `orderUpdate`), cancel it (Shopify `orderCancel` — customer
   notified, restocked, no refund), tag the store customer (Collabo only), and
-  turn a WhatsApp cart into a draft order. Changes are recorded against the
-  automation's creator, or the organization's owner.
+  turn a WhatsApp cart into a draft order. They run in WhatsApp automations
+  only. Changes are recorded against the automation's creator, or the
+  organization's owner.
 - **The old order message is gone.** Shopify `orders/create` used to send
   Meta's sample `hello_world` template to every consenting customer whenever a
   WhatsApp number was connected; order messages now come only from
@@ -398,6 +421,8 @@ Per-account subscription happens at connect time and is undone at disconnect:
   variants without an image or a product page are held back with the reason.
   Unchanged items are not re-sent; products taken off sale are deleted.
   Catalog visibility and the cart are `POST /{phone_number_id}/whatsapp_commerce_settings`.
+  Connecting, changing and syncing the catalog is for owners, admins and
+  managers; agents with campaign access can see it.
   The token is the WhatsApp business token: Meta's reference names no specific
   permission for catalog writes ("Marketing API access level"), so whether the
   system user needs `catalog_management` or a catalog assignment in Business

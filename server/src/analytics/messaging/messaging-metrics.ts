@@ -112,9 +112,10 @@ export function csvLine(values: Array<string | number | null | undefined>): stri
     return values
         .map((v) => {
             const s = v === null || v === undefined ? '' : String(v);
-            // A leading = + - @ would run as a formula in a spreadsheet.
-            const safe = /^[=+\-@]/.test(s) ? `'${s}` : s;
-            return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+            // A leading = + - @ (or a tab or CR before one) would run as a formula in a spreadsheet.
+            const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+            // A bare CR is a line break to some spreadsheets, so it is quoted like a newline.
+            return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
         })
         .join(',');
 }

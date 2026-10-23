@@ -58,4 +58,10 @@ describe('csvLine', () => {
     it('quotes and defuses spreadsheet formulas', () => {
         expect(csvLine(['Asha, A', 'say "hi"', null, 3, '=SUM(A1)'])).toBe('"Asha, A","say ""hi""",,3,\'=SUM(A1)');
     });
+
+    it('keeps a carriage return inside its cell, so it cannot start a row with a formula', () => {
+        expect(csvLine(['Asha x\r=cmd|\' /C calc\'!A0', 'AGENT'])).toBe('"Asha x\r=cmd|\' /C calc\'!A0",AGENT');
+        expect(csvLine(['\r=1+1'])).toBe('"\'\r=1+1"');
+        expect(csvLine(['\t=1+1'])).toBe('\'\t=1+1');
+    });
 });

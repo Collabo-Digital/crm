@@ -9,6 +9,18 @@ describe('isPrivateAddress', () => {
         }
         for (const ip of ['8.8.8.8', '172.32.0.1', '2606:4700::1111']) expect([ip, isPrivateAddress(ip)]).toEqual([ip, false]);
     });
+
+    it('judges IPv6 by value, including addresses that carry an IPv4 address', () => {
+        const internal = [
+            '::', '::ffff:7f00:1', '::ffff:a9fe:a9fe', '::ffff:a00:1', '0:0:0:0:0:ffff:127.0.0.1', '0:0:0:0:0:FFFF:7F00:0001',
+            '::127.0.0.1', '::ffff:0:7f00:1', '64:ff9b::7f00:1', '64:ff9b::169.254.169.254', '2002:7f00:1::1', '2002:a9fe:a9fe::',
+            'fe80::1%lo0', 'fec0::1', 'ff02::1', 'FD12:3456::1', '2001::1', '2001:db8::1', '100::1', '64:ff9b:1::1', 'not-an-ip',
+        ];
+        for (const ip of internal) expect([ip, isPrivateAddress(ip)]).toEqual([ip, true]);
+        for (const ip of ['::ffff:808:808', '::ffff:8.8.8.8', '64:ff9b::808:808', '2002:808:808::1', '2a00:1450:4001:80b::200e', '2001:4860:4860::8888']) {
+            expect([ip, isPrivateAddress(ip)]).toEqual([ip, false]);
+        }
+    });
 });
 
 describe('guardedRequest', () => {
@@ -32,6 +44,13 @@ describe('guardedRequest', () => {
         await expect(guardedRequest({ method: 'GET', url: `http://127.0.0.1:${port}/`, allowPrivate: false })).rejects.toThrow('private or internal');
         await expect(guardedRequest({ method: 'GET', url: `http://localhost:${port}/`, allowPrivate: false })).rejects.toThrow('private or internal');
         await expect(guardedRequest({ method: 'GET', url: 'ftp://example.com/', allowPrivate: false })).rejects.toThrow('Only http');
+    });
+
+    it('refuses IPv4-mapped IPv6 literals, which the URL parser rewrites to hex', async () => {
+        for (const host of ['[::ffff:127.0.0.1]', '[::ffff:7f00:1]', '[0:0:0:0:0:ffff:7f00:1]', '[::1]', '[64:ff9b::7f00:1]']) {
+            await expect(guardedRequest({ method: 'GET', url: `http://${host}:${port}/`, allowPrivate: false })).rejects.toThrow('private or internal');
+        }
+        await expect(guardedRequest({ method: 'GET', url: 'http://[::ffff:169.254.169.254]/latest/meta-data/', allowPrivate: false })).rejects.toThrow('private or internal');
     });
 
     it('sends JSON and reads JSON back when allowed', async () => {

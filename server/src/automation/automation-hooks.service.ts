@@ -4,6 +4,7 @@ import { AutomationStatus, ChannelPlatform, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AutomationEventService } from '../messaging/automation-event.service';
 import { AutomationJobs } from '../messaging/automation-jobs';
+import { storedPhoneIs } from '../messaging/contact-identity.service';
 
 const MAX_FIELDS = 30;
 
@@ -34,8 +35,9 @@ export class AutomationHooksService {
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Send a JSON object.');
 
         const phoneField = ((trigger.config ?? {}) as { phoneField?: string }).phoneField || 'phone';
-        const digits = String(pick(body, phoneField) ?? '').replace(/\D/g, '');
-        if (digits.length < 11 || digits.length > 15) {
+        // 00 is the international prefix; a number that still starts with 0 has no country code.
+        const digits = String(pick(body, phoneField) ?? '').replace(/\D/g, '').replace(/^00/, '');
+        if (digits.length < 11 || digits.length > 15 || digits.startsWith('0')) {
             throw new BadRequestException(`Send "${phoneField}" as a full phone number with its country code, like +919876543210.`);
         }
 
@@ -69,20 +71,28 @@ export class AutomationHooksService {
     }
 
     /**
-     * WhatsApp can message any number, so a new one becomes a contact.
-     * Instagram and Messenger cannot: the person must already be a contact
-     * whose number we know.
+     * A contact with exactly this number always wins. WhatsApp can message
+     * any number, so a new one becomes a contact. Instagram and Messenger
+     * cannot: the person must be the one contact linked to a store customer
+     * with this number (storedPhoneIs).
      */
     private async contactFor(orgId: string, channel: { id: string; platform: ChannelPlatform }, digits: string) {
         const existing = await this.prisma.channelContact.findFirst({
-            where: {
-                channelId: channel.id,
-                OR: [{ waId: digits }, { externalId: digits }, { phone: `+${digits}` }, { customer: { phone: { endsWith: digits.slice(-10) } } }],
-            },
+            where: { channelId: channel.id, OR: [{ waId: digits }, { externalId: digits }, { phone: `+${digits}` }] },
             select: { id: true, externalId: true },
         });
         if (existing) return existing;
         if (channel.platform !== ChannelPlatform.WHATSAPP) {
+            const linked = await this.prisma.$queryRaw<Array<{ id: string; externalId: string }>>`
+                SELECT cc."id", cc."external_id" AS "externalId"
+                FROM "channel_contacts" cc
+                JOIN "customers" c ON c."id" = cc."customer_id"
+                WHERE cc."channel_id" = ${channel.id}
+                  AND c."deleted_at" IS NULL
+                  AND ${storedPhoneIs(Prisma.raw('c."phone"'), digits)}
+                LIMIT 2
+            `;
+            if (linked.length === 1) return linked[0];
             throw new NotFoundException('Nobody with this phone number has messaged this account yet.');
         }
         try {

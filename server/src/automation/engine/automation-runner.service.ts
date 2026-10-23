@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AutomationRunStatus, AutomationStatus, ConversationStatus, Prisma } from '@prisma/client';
+import { AutomationRunStatus, AutomationStatus, ChannelPlatform, ConversationStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AutomationEventService } from '../../messaging/automation-event.service';
 import { AutomationJobs } from '../../messaging/automation-jobs';
@@ -409,6 +409,8 @@ export class AutomationRunner {
     }
 
     private async storeAction(s: StepState, c: { action: string; value: string }): Promise<Outcome> {
+        // Publish refuses these elsewhere; this also stops versions published before that check.
+        if (s.contact.platform !== ChannelPlatform.WHATSAPP) return fail('Store actions run in WhatsApp automations only.');
         const orgId = s.run.organizationId;
         const actor = await this.store.actorFor(orgId, s.run.automation.ownerUserId);
         const value = interpolate(c.value ?? '', s.vars).trim();

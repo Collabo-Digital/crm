@@ -13,6 +13,7 @@ import { Input } from "~/components/ui/input";
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "~/components/ui/page-header";
 import { useAutomations } from "~/hooks/use-automation-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
+import { canEditAutomations } from "~/lib/permissions";
 import { useDebounced } from "~/hooks/use-debounced";
 import { AUTOMATION_STATUS_CLASS, AUTOMATION_STATUS_LABEL, CHANNEL_LABEL, PLAYBOOKS, type Playbook } from "~/lib/automation-blocks";
 import { formatRelativeTime } from "~/lib/format-date";
@@ -37,8 +38,8 @@ export default function AutomationsPage() {
   const [search, setSearch] = useState("");
   const debounced = useDebounced(search, 300);
   const { data, isLoading, isError, refetch } = useAutomations({ ...(status ? { status } : {}), ...(debounced.trim() ? { search: debounced.trim() } : {}) });
-  const { can, isInfluencer } = useCurrentRole();
-  const canManage = can("campaigns.manage");
+  const { role, permissions, isInfluencer } = useCurrentRole();
+  const canManage = canEditAutomations(role, permissions);
   const [creating, setCreating] = useState<Playbook | null | "blank">(null);
   const rows = data?.data ?? [];
 

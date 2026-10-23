@@ -62,3 +62,24 @@ describe('order conditions', () => {
         expect(conditionMatches(rule('order_payment', 'is', 'cod'), facts())).toBe(false);
     });
 });
+
+describe('parseRunContext', () => {
+    it('keeps the event of the last reply a run took, and drops unknown keys', () => {
+        const ctx = parseRunContext({ vars: { a: '1' }, replied: true, replyEventId: 'evt_1', stray: 'x' });
+        expect(ctx).toEqual({ vars: { a: '1' }, trigger: { eventType: '', commentId: null, postId: null }, depth: 0, replied: true, replyEventId: 'evt_1' });
+    });
+});
+
+describe('the COD playbook’s reply rules', () => {
+    // Whole replies decide; anything else ("Please don't cancel") goes to the team.
+    const confirm = rule('last_reply', 'equals', 'confirm, confirm order, yes');
+    const cancel = rule('last_reply', 'equals', 'cancel, cancel order, cancel my order');
+    const said = (text: string) => facts({ context: parseRunContext({ vars: { last_reply: text } }) });
+    it('confirms and cancels only on those words', () => {
+        for (const t of ['Confirm order', 'confirm', ' YES ']) expect([t, conditionMatches(confirm, said(t))]).toEqual([t, true]);
+        for (const t of ['Cancel order', 'cancel']) expect([t, conditionMatches(cancel, said(t))]).toEqual([t, true]);
+        for (const t of ['Please don’t cancel, I need it', 'Can I cancel later?', 'Yes, cancel it', 'I don’t want to confirm', 'When will it arrive?']) {
+            expect([t, conditionMatches(confirm, said(t)), conditionMatches(cancel, said(t))]).toEqual([t, false, false]);
+        }
+    });
+});

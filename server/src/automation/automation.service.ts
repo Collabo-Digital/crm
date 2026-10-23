@@ -20,6 +20,19 @@ import { DuplicateAutomationDto } from './dto/duplicate-automation.dto';
 export interface AutomationViewer {
     userId: string;
     role?: UserRole;
+    /** May edit automations. Everyone else reads them without the webhook URL's secret. */
+    canManage?: boolean;
+}
+
+/** The webhook URL is a credential: blank its token for people who only read the automation. */
+function withoutWebhookToken<T extends { definition: Prisma.JsonValue; triggers: Array<{ triggerType: string; subjectId: string | null }> }>(row: T): T {
+    const definition = row.definition as { steps?: Array<{ config?: Record<string, unknown> }> } | null;
+    const [first, ...rest] = definition?.steps ?? [];
+    return {
+        ...row,
+        definition: first?.config?.token ? { ...definition, steps: [{ ...first, config: { ...first.config, token: '' } }, ...rest] } : row.definition,
+        triggers: row.triggers.map((t) => (t.triggerType === 'crm.webhook' ? { ...t, subjectId: null } : t)),
+    } as T;
 }
 
 const DEFAULT_SETTINGS = { oncePerContact: 'ever' } as const;
@@ -149,7 +162,8 @@ export class AutomationService {
     }
 
     async findOne(id: string, orgId: string, viewer: AutomationViewer) {
-        return this.withIssues(await this.getVisible(id, orgId, viewer));
+        const row = await this.withIssues(await this.getVisible(id, orgId, viewer));
+        return viewer.canManage ? row : withoutWebhookToken(row);
     }
 
     async issues(id: string, orgId: string, viewer: AutomationViewer): Promise<Issue[]> {
@@ -215,20 +229,24 @@ export class AutomationService {
         this.assertNotArchived(row.status);
 
         const steps = parseDefinition(dto.definition);
-        // An editor that loaded the draft before its first publish must not drop the webhook URL issued since.
-        const storedToken = (row.definition as { steps?: Array<{ config?: { token?: string } }> })?.steps?.[0]?.config?.token;
-        if (steps[0].config.event === 'webhook' && !steps[0].config.token && storedToken) {
-            steps[0].config = { ...steps[0].config, token: storedToken };
-        }
         const settings = { ...DEFAULT_SETTINGS, ...(row.settings as object ?? {}), ...(dto.settings ?? {}) };
 
-        const updated = await this.prisma.automation.update({
-            where: { id: row.id },
-            data: {
-                definition: { steps } as unknown as Prisma.InputJsonValue,
-                settings: settings as Prisma.InputJsonValue,
-            },
-            include: DETAIL_INCLUDE,
+        const updated = await this.prisma.$transaction(async (tx) => {
+            // Only publish issues the webhook URL's token. One sent by the client is ignored, so nobody can pick a
+            // guessable token or another automation's. It is read under the row lock publish also takes, so a save
+            // that races the first publish keeps the URL that publish issued.
+            const [current] = await tx.$queryRaw<Array<{ token: string | null }>>`
+                SELECT "definition" #>> '{steps,0,config,token}' AS "token" FROM "automations" WHERE "id" = ${row.id} FOR UPDATE
+            `;
+            steps[0].config = { ...steps[0].config, token: current?.token ?? '' };
+            return tx.automation.update({
+                where: { id: row.id },
+                data: {
+                    definition: { steps } as unknown as Prisma.InputJsonValue,
+                    settings: settings as Prisma.InputJsonValue,
+                },
+                include: DETAIL_INCLUDE,
+            });
         });
         return this.withIssues(updated);
     }
@@ -253,9 +271,13 @@ export class AutomationService {
         }
 
         const trigger = steps[0];
-        // A webhook trigger gets its secret URL on first publish and keeps it.
+        // A webhook trigger gets its secret URL on first publish and keeps it: a draft that lost its
+        // token takes back the one already live rather than changing a URL other systems call.
         const issueToken = trigger.config.event === 'webhook' && !trigger.config.token;
-        if (issueToken) trigger.config = { ...trigger.config, token: randomBytes(18).toString('base64url') };
+        if (issueToken) {
+            const live = row.triggers.find((t) => t.triggerType === 'crm.webhook')?.subjectId;
+            trigger.config = { ...trigger.config, token: live || randomBytes(18).toString('base64url') };
+        }
         const post = triggerPostFor(trigger);
         const media = post && row.channelId
             ? await this.prisma.channelMedia.findUnique({
@@ -278,10 +300,16 @@ export class AutomationService {
                 },
             });
 
+            // Only the token goes into the draft, so an edit saved since this publish read it is kept.
+            if (issueToken) {
+                await tx.$executeRaw`
+                    UPDATE "automations" SET "definition" = jsonb_set("definition", '{steps,0,config,token}', to_jsonb(${String(trigger.config.token)}::text))
+                    WHERE "id" = ${row.id}
+                `;
+            }
             await tx.automation.update({
                 where: { id: row.id },
                 data: {
-                    ...(issueToken ? { definition: { steps } as unknown as Prisma.InputJsonValue } : {}),
                     version: nextVersion,
                     publishedVersionId: version.id,
                     publishedAt: new Date(),

@@ -35,8 +35,9 @@ export default function CatalogPage() {
   }, [numbers, channelId]);
   const { data, isLoading, isError } = useCatalog(channelId || undefined);
   const act = useCatalogMutation(channelId);
-  const { can } = useCurrentRole();
-  const canManage = can("campaigns.manage");
+  const { role } = useCurrentRole();
+  // Catalog and commerce settings are the number's configuration on Meta: managers only, like on the server.
+  const canManage = role === "OWNER" || role === "ADMIN" || role === "MANAGER"; // ORG_MANAGERS
   const [catalogId, setCatalogId] = useState("");
 
   return (

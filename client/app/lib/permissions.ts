@@ -63,6 +63,15 @@ export function hasPermission(
 }
 
 /**
+ * May edit automations and conversation starters: the server's EDITORS
+ * (owners, admins, managers, influencers) holding campaigns.manage. Agents and
+ * viewers only read them, even with that grant.
+ */
+export function canEditAutomations(role: UserRole | undefined, grants: readonly string[] | undefined): boolean {
+  return role !== "AGENT" && role !== "VIEWER" && hasPermission(role, grants, "campaigns.manage");
+}
+
+/**
  * Roles that are OUTSIDE parties rather than staff.
  *
  * Both are deny-by-default on the server and get a reduced navigation here.

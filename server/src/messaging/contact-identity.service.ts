@@ -1,6 +1,24 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChannelContact, ChannelPlatform, Prisma } from '@prisma/client';
 
+/**
+ * SQL: is the phone stored in `column` (as typed, in any format) the number
+ * `digits` (with its country code)? The last ten digits must match, and in
+ * front of them may stand only nothing (a national number, with or without a
+ * trunk 0), the country code, or the country code and a trunk 0
+ * ("+44 (0)7911 123456"). So +44 7911 123456 never matches a number saved as
+ * +91 79111 23456.
+ */
+export function storedPhoneIs(column: Prisma.Sql, digits: string): Prisma.Sql {
+    const cc = digits.slice(0, -10);
+    const before = ['', cc, `${cc}0`];
+    // WhatsApp writes Mexican and Argentine mobiles as 521… and 549…; stores usually save them without the 1 or 9.
+    if (/^521\d{10}$/.test(digits)) before.push('52');
+    if (/^549\d{10}$/.test(digits)) before.push('54');
+    const stored = Prisma.sql`regexp_replace(${column}, '\\D', '', 'g')`;
+    return Prisma.sql`(right(${stored}, 10) = ${digits.slice(-10)} AND ltrim(left(${stored}, -10), '0') IN (${Prisma.join(before)}))`;
+}
+
 /** Who a message is from (or to), as the platform identified them. */
 export interface ContactRef {
     platform: ChannelPlatform;
@@ -150,18 +168,16 @@ export class ContactIdentityService {
 
     /**
      * Link a WhatsApp contact to the store customer with the same phone
-     * number, when exactly one matches. Compared on the last ten digits, since
-     * store phone numbers are often saved without a country code.
+     * number (see storedPhoneIs), when exactly one matches.
      */
     async linkCustomerByPhone(tx: Prisma.TransactionClient, contact: ChannelContact): Promise<string | null> {
         if (contact.customerId || !contact.waId || contact.waId.length < 10) return contact.customerId;
-        const last10 = contact.waId.slice(-10);
         const matches = await tx.$queryRaw<Array<{ id: string }>>`
             SELECT "id" FROM "customers"
             WHERE "organization_id" = ${contact.organizationId}
               AND "deleted_at" IS NULL
               AND "phone" IS NOT NULL
-              AND right(regexp_replace("phone", '\\D', '', 'g'), 10) = ${last10}
+              AND ${storedPhoneIs(Prisma.raw('"phone"'), contact.waId)}
             LIMIT 2
         `;
         if (matches.length !== 1) return null;

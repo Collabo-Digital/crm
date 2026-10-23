@@ -141,4 +141,11 @@ describe('store triggers', () => {
         expect(codes([trigger({ keyword: 'x' })].concat([{ id: 'n', type: 'add_note', config: { text: 'x' } }] as never), 'INSTAGRAM')).not.toContain('event_unavailable');
         expect(codes([{ id: 't', type: 'trigger', config: { channel: 'instagram', event: 'order_paid' } }, { id: 'n', type: 'add_note', config: { text: 'x' } }])).toContain('event_unavailable');
     });
+
+    it('keep store actions to WhatsApp', () => {
+        const tagCustomer = { id: 'a', type: 'store_action', config: { action: 'tag_customer', value: 'vip' } };
+        expect(codes([trigger({ match: 'any' }), tagCustomer] as never, 'INSTAGRAM')).toContain('store_needs_whatsapp');
+        expect(codes([{ id: 't', type: 'trigger', config: { channel: 'facebook', event: 'message', match: 'any' } }, tagCustomer], 'FACEBOOK')).toContain('store_needs_whatsapp');
+        expect(wa('message', [tagCustomer])).not.toContain('store_needs_whatsapp');
+    });
 });

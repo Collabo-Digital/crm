@@ -101,7 +101,8 @@ export class AutomationInsightsService {
         const issues = collectIssues(steps, { platform: automation.platform, knownMediaIds: null });
         const contact = input.contactId
             ? await this.prisma.channelContact.findFirst({
-                where: { id: input.contactId, organizationId: orgId },
+                // A contact of the automation's own account: an influencer sees no one else's.
+                where: { id: input.contactId, organizationId: orgId, ...(automation.channelId ? { channelId: automation.channelId } : {}) },
                 include: { customer: { select: { firstName: true, lastName: true, ordersCount: true, tags: true } } },
             })
             : null;

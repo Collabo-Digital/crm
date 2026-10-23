@@ -85,39 +85,87 @@ export class AutomationDispatcher {
         }
     }
 
-    /** Give a reply to each run of this contact waiting for one. Returns how many took it. */
+    /**
+     * Give a reply to the one run waiting for it. A reply that answers an
+     * automation's message (quotes it, as a tapped WhatsApp button does, or
+     * taps one of its Instagram or Messenger buttons) belongs to that
+     * message's run, and to nobody if that run is no longer waiting. Any
+     * other reply goes to the live automation's run that started waiting
+     * last. One "Cancel" must never answer two order confirmations, not even
+     * when the event is retried. Returns 1 if a run took it.
+     */
     private async handOffReply(event: AutomationEvent, payload: EventPayload): Promise<number> {
         if (!event.contactId) return 0;
-        const waiting = await this.prisma.automationRun.findMany({
-            where: { contactId: event.contactId, waitingForReply: true, status: AutomationRunStatus.WAITING, isTest: false },
-            include: { version: { select: { definition: true } } },
+        const handed = await this.prisma.automationRun.findFirst({
+            where: { contactId: event.contactId, context: { path: ['replyEventId'], equals: event.id } },
+            select: { id: true },
         });
-        let handed = 0;
-        const reply = event.text ?? payload.raw?.postbackPayload ?? '';
-        for (const run of waiting) {
-            const ctx: RunContext = parseRunContext(run.context);
-            ctx.vars.last_reply = reply;
-            ctx.replied = true;
-            const step = run.currentStepKey ? new Flow(parseDefinition(run.version.definition)).step(run.currentStepKey) : null;
-            const saveAs = typeof step?.config.saveAs === 'string' ? step.config.saveAs : '';
-
-            // Only one of the reply and the timeout may wake the run: the flag decides.
-            const { count } = await this.prisma.automationRun.updateMany({
-                where: { id: run.id, status: AutomationRunStatus.WAITING, waitingForReply: true },
-                data: { waitingForReply: false, resumeAt: null, context: ctx as unknown as Prisma.InputJsonValue },
-            });
-            if (!count) continue;
-            if (saveAs) {
-                const contact = await this.prisma.channelContact.findUnique({ where: { id: event.contactId }, select: { attributes: true } });
-                await this.prisma.channelContact.update({
-                    where: { id: event.contactId },
-                    data: { attributes: { ...((contact?.attributes as Record<string, unknown>) ?? {}), [saveAs]: reply.slice(0, 500) } as Prisma.InputJsonValue },
-                });
-            }
-            await this.jobs.resume(run.id, 'reply');
-            handed++;
+        if (handed) {
+            // A retry of this event: the run already has the reply. Queue its resume again in case that was lost.
+            await this.jobs.resume(handed.id, 'reply');
+            return 1;
         }
-        return handed;
+        const answeredRunId = await this.answeredRun(event, payload);
+        const run = await this.prisma.automationRun.findFirst({
+            where: {
+                contactId: event.contactId,
+                waitingForReply: true,
+                status: AutomationRunStatus.WAITING,
+                isTest: false,
+                // A paused or archived automation's run is cancelled when it wakes; it must not take the reply.
+                automation: { status: AutomationStatus.ACTIVE },
+                ...(answeredRunId ? { id: answeredRunId } : {}),
+            },
+            include: { version: { select: { definition: true } } },
+            orderBy: { updatedAt: 'desc' },
+        });
+        if (!run) return 0;
+
+        const reply = event.text ?? payload.raw?.postbackPayload ?? '';
+        const ctx: RunContext = parseRunContext(run.context);
+        ctx.vars.last_reply = reply;
+        ctx.replied = true;
+        ctx.replyEventId = event.id;
+        const step = run.currentStepKey ? new Flow(parseDefinition(run.version.definition)).step(run.currentStepKey) : null;
+        const saveAs = typeof step?.config.saveAs === 'string' ? step.config.saveAs : '';
+
+        // Only one of the reply and the timeout may wake the run: the flag decides.
+        const { count } = await this.prisma.automationRun.updateMany({
+            where: { id: run.id, status: AutomationRunStatus.WAITING, waitingForReply: true },
+            data: { waitingForReply: false, resumeAt: null, context: ctx as unknown as Prisma.InputJsonValue },
+        });
+        if (!count) return 0;
+        if (saveAs) {
+            const contact = await this.prisma.channelContact.findUnique({ where: { id: event.contactId }, select: { attributes: true } });
+            await this.prisma.channelContact.update({
+                where: { id: event.contactId },
+                data: { attributes: { ...((contact?.attributes as Record<string, unknown>) ?? {}), [saveAs]: reply.slice(0, 500) } as Prisma.InputJsonValue },
+            });
+        }
+        await this.jobs.resume(run.id, 'reply');
+        return 1;
+    }
+
+    /**
+     * The run whose message this reply answers, if any: the message a
+     * WhatsApp reply quotes, or the step whose Instagram or Messenger button
+     * or quick reply was tapped (its payload is `<stepKey>_<n>`).
+     */
+    private async answeredRun(event: AutomationEvent, payload: EventPayload): Promise<string | null> {
+        const quotedId = event.messageId
+            ? (await this.prisma.message.findUnique({ where: { id: event.messageId }, select: { replyToMessageId: true } }))?.replyToMessageId
+            : null;
+        if (quotedId) {
+            return (await this.prisma.message.findUnique({ where: { id: quotedId }, select: { automationRunId: true } }))?.automationRunId ?? null;
+        }
+        const stepKey = /^(.+)_\d+$/.exec(payload.raw?.postbackPayload ?? payload.raw?.quickReplyPayload ?? '')?.[1];
+        if (!stepKey || !event.contactId) return null;
+        const sent = await this.prisma.message.findFirst({
+            where: { contactId: event.contactId, stepKey, automationRunId: { not: null } },
+            orderBy: { createdAt: 'desc' },
+            select: { automationRunId: true },
+        });
+        return sent?.automationRunId ?? null;
     }
 
     /** Start the automations this event triggers. Returns the runs to execute. */

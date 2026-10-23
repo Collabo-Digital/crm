@@ -13,6 +13,7 @@ import { useSaveStartersMutation } from "~/hooks/use-automation-mutations";
 import { useConversationStarters } from "~/hooks/use-automation-queries";
 import { useChannels } from "~/hooks/use-channel-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
+import { canEditAutomations } from "~/lib/permissions";
 import { formatDateTime } from "~/lib/format-date";
 import { cn } from "~/lib/utils";
 import type { ConversationStarters } from "~/types/api";
@@ -39,8 +40,8 @@ export default function ConversationStartersPage() {
   }, [usable, channelId]);
   const { data, isLoading } = useConversationStarters(channelId || undefined);
   const save = useSaveStartersMutation();
-  const { can } = useCurrentRole();
-  const readOnly = !can("campaigns.manage");
+  const { role, permissions } = useCurrentRole();
+  const readOnly = !canEditAutomations(role, permissions);
   const [draft, setDraft] = useState<Draft>(EMPTY);
   useEffect(() => {
     if (data) setDraft({ getStarted: data.getStarted, iceBreakers: data.iceBreakers, persistentMenu: data.persistentMenu });

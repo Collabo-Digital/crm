@@ -425,6 +425,7 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 break;
             case 'store_action': {
                 const a = c as z.infer<typeof StoreActionConfig>;
+                if (t.channel !== 'whatsapp') push(step.id, 'store_needs_whatsapp', 'Store actions are WhatsApp only', 'Use a WhatsApp automation to work with orders and customers.');
                 if (['tag_order', 'note_order', 'cancel_order'].includes(a.action) && !ORDER_EVENTS.includes(t.event)) {
                     push(step.id, 'needs_order', 'Needs an order', 'Order actions work when the trigger is an order event.');
                 }

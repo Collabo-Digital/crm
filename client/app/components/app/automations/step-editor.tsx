@@ -27,6 +27,8 @@ export interface EditorContext {
   /** Templates and files need Campaigns access; an influencer has neither. */
   storeTools: boolean;
   readOnly: boolean;
+  /** May edit automations; only they are sent a webhook trigger's URL. */
+  canEdit: boolean;
 }
 
 const selectClass = "h-8 w-full rounded-lg border bg-background px-2 text-body disabled:opacity-60";
@@ -246,9 +248,15 @@ function PostPicker({ channelId, value, onChange, readOnly }: { channelId: strin
   );
 }
 
-function WebhookUrl({ token, phoneField }: { token: string; phoneField: string }) {
+function WebhookUrl({ token, phoneField, canEdit }: { token: string; phoneField: string; canEdit: boolean }) {
   const [copied, setCopied] = useState(false);
-  if (!token) return <p className="rounded-lg border border-dashed p-3 text-caption text-muted-foreground">The URL is created when you publish.</p>;
+  if (!token) {
+    return (
+      <p className="rounded-lg border border-dashed p-3 text-caption text-muted-foreground">
+        {canEdit ? "The URL is created when you publish." : "Only people who can edit automations see this URL."}
+      </p>
+    );
+  }
   const url = `${API_BASE.startsWith("http") ? API_BASE : `${window.location.origin}${API_BASE}`}/automations/hooks/${token}`;
   // A dotted field nests: customer.phone → {"customer": {"phone": …}}.
   const body = phoneField.split(".").reduceRight<unknown>((inner, key) => ({ [key]: inner }), "+919876543210") as Record<string, unknown>;
@@ -370,7 +378,7 @@ function TriggerForm({ config, set, ctx }: { config: Config; set: (p: Config) =>
             <Input id="t-phone" value={config.phoneField ?? "phone"} disabled={ro} maxLength={60} onChange={(e) => set({ phoneField: e.target.value.trim() })} />
           </Field>
           <Field label="URL">
-            <WebhookUrl token={config.token ?? ""} phoneField={config.phoneField || "phone"} />
+            <WebhookUrl token={config.token ?? ""} phoneField={config.phoneField || "phone"} canEdit={ctx.canEdit} />
           </Field>
           {ctx.channel !== "whatsapp" && <p className="text-micro text-muted-foreground">On {CHANNEL_LABEL[ctx.channel]} the person must already have messaged you, with that number saved on their contact.</p>}
         </>

@@ -490,7 +490,7 @@ export const PLAYBOOKS: Playbook[] = [
   {
     key: "cod_confirmation",
     name: "Confirm cash-on-delivery orders",
-    description: "Ask COD buyers to confirm with a button; tag confirmed orders and cancel the ones they reject.",
+    description: "Ask COD buyers to confirm with a button; tag confirmed orders, cancel the ones they cancel and pass anything else to the team.",
     channels: ["whatsapp"],
     steps: (channel) => [
       t(channel, { event: "order_created" }),
@@ -499,9 +499,20 @@ export const PLAYBOOKS: Playbook[] = [
           s("send_message", { kind: "template", templateValues: { "body.1": "{{first_name}}", "body.2": "{{order.name}}", "body.3": "{{order.total}}" }, options: [] }),
           s("wait_for_reply", { amount: 24, unit: "hours", saveAs: "" }, {
             replied: [
-              s("condition", { match: "all", rules: [{ field: "last_reply", op: "contains", key: "", value: "confirm, yes" }] }, {
+              // Whole replies only (the template's buttons, or the word alone): "Please don't cancel" or
+              // "When will it arrive?" must not decide the order, so anything else goes to the team.
+              s("condition", { match: "all", rules: [{ field: "last_reply", op: "equals", key: "", value: "confirm, confirm order, yes" }] }, {
                 yes: [s("store_action", { action: "tag_order", value: "cod-confirmed" })],
-                no: [s("store_action", { action: "cancel_order", value: "Customer declined on WhatsApp" }), s("add_note", { text: "{{first_name}} cancelled {{order.name}} on WhatsApp" })],
+                no: [
+                  s("condition", { match: "all", rules: [{ field: "last_reply", op: "equals", key: "", value: "cancel, cancel order, cancel my order" }] }, {
+                    yes: [s("store_action", { action: "cancel_order", value: "Customer declined on WhatsApp" }), s("add_note", { text: "{{first_name}} cancelled {{order.name}} on WhatsApp" })],
+                    no: [
+                      s("store_action", { action: "tag_order", value: "cod-check" }),
+                      s("assign", { mode: "round_robin", userId: "", teamId: "" }),
+                      s("add_note", { text: "{{first_name}} replied about {{order.name}} without confirming: “{{last_reply}}”" }),
+                    ],
+                  }),
+                ],
               }),
             ],
             timeout: [s("store_action", { action: "tag_order", value: "cod-unconfirmed" })],

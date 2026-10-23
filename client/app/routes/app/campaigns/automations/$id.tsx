@@ -24,6 +24,7 @@ import {
 import { automationKeys, useAutomation, useAutomationStats } from "~/hooks/use-automation-queries";
 import { useTemplates } from "~/hooks/use-campaign-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
+import { canEditAutomations } from "~/lib/permissions";
 import { useContactTags, useInboxMembers, useInboxTeams } from "~/hooks/use-inbox-queries";
 import { useSectionAccess } from "~/hooks/use-section-access";
 import {
@@ -61,10 +62,10 @@ export default function AutomationPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: detail, isLoading, isError } = useAutomation(id);
-  const { can, isInfluencer } = useCurrentRole();
+  const { role, permissions, isInfluencer } = useCurrentRole();
   const { canAccess } = useSectionAccess();
   const inbox = canAccess("/inbox") && !isInfluencer;
-  const editor = can("campaigns.manage");
+  const editor = canEditAutomations(role, permissions);
   const lifecycle = useAutomationLifecycleMutation();
   const duplicate = useDuplicateAutomationMutation();
   const archive = useArchiveAutomationMutation();
@@ -147,6 +148,7 @@ export default function AutomationPage() {
     teams: teams.map((t) => ({ id: t.id, name: t.name })),
     storeTools,
     readOnly,
+    canEdit: editor,
   };
 
   const publish = async () => {
