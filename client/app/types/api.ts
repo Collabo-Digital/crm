@@ -3520,3 +3520,426 @@ export interface LabelData {
   price: number | string;
   defaultQty: number;
 }
+
+// ─── Inbox Types ────────────────────────────────────────────────────────────
+// Mirrors server/src/inbox. Dates arrive as ISO strings.
+
+export type ConversationStatus = "OPEN" | "SNOOZED" | "CLOSED";
+export type InboxListView = "all" | "mine" | "unassigned";
+export type InboxListStatus = "open" | "snoozed" | "closed" | "any";
+export type MessageDirection = "INBOUND" | "OUTBOUND";
+export type InboxMessageStatus = "QUEUED" | "SENT" | "DELIVERED" | "READ" | "FAILED";
+export type InboxMessageKind =
+  | "TEXT"
+  | "TEMPLATE"
+  | "DOCUMENT"
+  | "IMAGE"
+  | "PRIVATE_REPLY"
+  | "VIDEO"
+  | "AUDIO"
+  | "STICKER"
+  | "LOCATION"
+  | "CONTACTS"
+  | "INTERACTIVE"
+  | "REACTION"
+  | "PRODUCT"
+  | "ORDER"
+  | "SYSTEM"
+  | "UNSUPPORTED"
+  | "COMMENT";
+/** Who sent an outbound message, or that the customer did. */
+export type MessageSource =
+  | "CUSTOMER"
+  | "AGENT"
+  | "AUTOMATION"
+  | "BROADCAST"
+  | "BUSINESS_APP"
+  | "OTHER_APP"
+  | "SYSTEM";
+export type InboxAvailability = "ONLINE" | "AWAY";
+export type InboxPresence = "online" | "away" | "offline";
+export type InboxShareScope = "PERSONAL" | "TEAM" | "ORGANIZATION";
+export type InboxMediaKind = "image" | "video" | "audio" | "document";
+
+export interface InboxPerson {
+  id: string;
+  name: string;
+  avatarUrl?: string | null;
+}
+
+export interface InboxTeamRef {
+  id: string;
+  name: string;
+}
+
+export interface ReplyWindowState {
+  open: boolean;
+  /** WhatsApp: when free-form replies stop. Null until the customer writes. */
+  closesAt: string | null;
+  /** Messenger / Instagram: a person may still reply until here. */
+  humanAgentUntil: string | null;
+}
+
+export interface InboxConversation {
+  id: string;
+  platform: ChannelPlatform;
+  status: ConversationStatus;
+  snoozedUntil: string | null;
+  channel: { id: string; name: string; platform: ChannelPlatform };
+  contact: {
+    id: string;
+    name: string;
+    username: string | null;
+    phone: string | null;
+    avatarUrl: string | null;
+    tags: string[];
+    optedOut: boolean;
+    blocked: boolean;
+  };
+  customerId: string | null;
+  assignee: InboxPerson | null;
+  team: InboxTeamRef | null;
+  lastMessagePreview: string | null;
+  lastMessageAt: string | null;
+  lastInboundAt: string | null;
+  unreadCount: number;
+  awaitingReplySince: string | null;
+  window: ReplyWindowState;
+}
+
+export interface InboxCursor {
+  beforeAt: string | undefined;
+  beforeId: string;
+}
+
+export interface InboxConversationPage {
+  items: InboxConversation[];
+  nextCursor: InboxCursor | null;
+}
+
+export interface InboxCustomerMatch {
+  id: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  ordersCount: number;
+}
+
+export interface InboxContactDetail {
+  id: string;
+  platform: ChannelPlatform;
+  name: string;
+  displayName: string | null;
+  addressBookName: string | null;
+  username: string | null;
+  phone: string | null;
+  externalId: string;
+  avatarUrl: string | null;
+  tags: string[];
+  attributes: Record<string, string | number | boolean>;
+  optedOutAt: string | null;
+  optInAt: string | null;
+  blockedAt: string | null;
+  firstSeenAt: string;
+  lastInboundAt: string | null;
+  owner: { user: InboxPerson | null; team: InboxTeamRef | null };
+  customer: {
+    id: string;
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+    ordersCount: number;
+    totalSpent: string;
+    vipLevel: VipLevel;
+    tags: string[];
+    since: string;
+    recentOrders: Array<{
+      id: string;
+      name: string;
+      totalPrice: string;
+      currency: string;
+      financialStatus: FinancialStatus;
+      fulfillmentStatus: FulfillmentStatus;
+      createdAt: string;
+      cancelledAt: string | null;
+    }>;
+  } | null;
+  phoneMatches: InboxCustomerMatch[];
+  conversations: Array<{
+    id: string;
+    platform: ChannelPlatform;
+    status: ConversationStatus;
+    lastMessageAt: string | null;
+    lastMessagePreview: string | null;
+    channel: { name: string };
+  }>;
+  consent: Array<{ type: "OPT_IN" | "OPT_OUT"; source: string; occurredAt: string }>;
+}
+
+export interface InboxConversationDetail extends Omit<InboxConversation, "contact"> {
+  contact: InboxContactDetail;
+  reply: { canReply: boolean; window: ReplyWindowState };
+}
+
+export interface InboxMedia {
+  mime: string | null;
+  filename: string | null;
+  size: number | null;
+  voice: boolean;
+  /** Signed, expiring link; null while the file is still downloading. */
+  url: string | null;
+  pending: boolean;
+  error: string | null;
+}
+
+export interface InboxCommentDetails {
+  postId: string | null;
+  parentId: string | null;
+  mediaProductType: string | null;
+  post: { permalink: string | null; thumbnailUrl: string | null; caption: string | null } | null;
+  privateReplied: boolean;
+  publicReplied: boolean;
+}
+
+/** The structured parts of a message beyond its text; shape depends on kind. */
+export interface InboxMessageDetails {
+  payload?: Record<string, unknown> & { type?: string };
+  order?: { catalog_id?: string; text?: string; product_items?: Array<{ product_retailer_id: string; quantity: number; item_price: number; currency: string }> } | null;
+  location?: { latitude: number; longitude: number; name?: string; address?: string } | null;
+  contacts?: Array<{ name?: { formatted_name?: string }; phones?: Array<{ phone?: string }> }> | null;
+  reply?: Record<string, unknown> | null;
+  referral?: Record<string, unknown>;
+  comment?: InboxCommentDetails;
+}
+
+export interface InboxMessage {
+  id: string;
+  direction: MessageDirection;
+  kind: InboxMessageKind;
+  source: MessageSource;
+  text: string | null;
+  status: InboxMessageStatus;
+  createdAt: string;
+  sentAt: string | null;
+  deliveredAt: string | null;
+  readAt: string | null;
+  failedAt: string | null;
+  errorMessage: string | null;
+  /** History imported from the WhatsApp Business app. */
+  imported: boolean;
+  editedAt: string | null;
+  revokedAt: string | null;
+  /** { customer?: emoji, business?: emoji } */
+  reactions: Record<string, string | null> | null;
+  templateName: string | null;
+  sentBy: { id: string; name: string | null } | null;
+  replyTo: { id: string; text: string | null; kind: InboxMessageKind; direction: MessageDirection } | null;
+  media: InboxMedia | null;
+  details: InboxMessageDetails | null;
+}
+
+export interface InboxNote {
+  id: string;
+  body: string;
+  mentions: string[];
+  createdAt: string;
+  author: { id: string; name: string } | null;
+}
+
+export interface InboxMessagePage {
+  messages: InboxMessage[];
+  notes: InboxNote[];
+  nextCursor: InboxCursor | null;
+}
+
+export interface InboxCounts {
+  mine: number;
+  unassigned: number;
+  all: number;
+  unread: number;
+  teams: Record<string, number>;
+  views: Record<string, number>;
+}
+
+export interface InboxMember extends InboxPerson {
+  role: UserRole;
+  presence: InboxPresence;
+  teamIds: string[];
+}
+
+export interface InboxMe {
+  userId: string;
+  status: InboxAvailability;
+  teams: InboxTeamRef[];
+  access: {
+    seesAll: boolean;
+    seesUnassigned: boolean;
+    canReply: boolean;
+    canAssignOthers: boolean;
+    canManage: boolean;
+  };
+}
+
+export interface InboxTeam {
+  id: string;
+  name: string;
+  openConversations: number;
+  members: Array<{ id: string; name: string; presence: InboxPresence }>;
+}
+
+export interface QuickReplyAttachment {
+  storageKey: string;
+  mime: string;
+  filename: string | null;
+  mediaKind: InboxMediaKind;
+}
+
+export interface QuickReply {
+  id: string;
+  shortcut: string;
+  body: string;
+  keywords: string[];
+  attachment: QuickReplyAttachment | null;
+  scope: InboxShareScope;
+  team: InboxTeamRef | null;
+  canEdit: boolean;
+  updatedAt: string;
+}
+
+export interface SaveQuickReplyRequest {
+  shortcut: string;
+  body: string;
+  keywords?: string[];
+  attachment?: QuickReplyAttachment | null;
+  scope: InboxShareScope;
+  teamId?: string;
+}
+
+/** Same shape as the conversation list query, minus the cursor. */
+export interface InboxFilters {
+  view?: InboxListView;
+  status?: InboxListStatus;
+  channelId?: string;
+  platform?: ChannelPlatform;
+  tag?: string;
+  /** A team id, or "none". */
+  teamId?: string;
+  assigneeId?: string;
+  unread?: boolean;
+  comments?: boolean;
+  search?: string;
+}
+
+export interface InboxSavedView {
+  id: string;
+  name: string;
+  filters: InboxFilters;
+  scope: InboxShareScope;
+  team: InboxTeamRef | null;
+  position: number;
+  canEdit: boolean;
+}
+
+export interface SaveInboxViewRequest {
+  name: string;
+  filters: InboxFilters;
+  scope: InboxShareScope;
+  teamId?: string;
+}
+
+export interface InboxUpload {
+  storageKey: string;
+  mime: string;
+  size: number;
+  filename: string;
+  mediaKind: InboxMediaKind;
+}
+
+/** What the composer can send. Mirrors the server's send payload schema. */
+export type InboxSendPayload =
+  | { type: "text"; text: string }
+  | { type: "media"; mediaKind: InboxMediaKind; storageKey: string; mime: string; filename?: string; caption?: string }
+  | { type: "buttons"; text: string; buttons: Array<{ id: string; title: string }>; footer?: string }
+  | { type: "quick_replies"; text: string; replies: Array<{ title: string; payload: string }> }
+  | { type: "reaction"; messageId: string; emoji: string }
+  | { type: "private_reply"; commentMessageId: string; text: string }
+  | { type: "comment_reply"; commentMessageId: string; text: string };
+
+export type InboxSendRefusal =
+  | "channel_unavailable"
+  | "contact_blocked"
+  | "opted_out"
+  | "window_closed"
+  | "unsupported_on_platform"
+  | "invalid_payload";
+
+export type InboxSendOutcome =
+  | { ok: true; messageId: string; duplicate?: boolean }
+  | { ok: false; code: InboxSendRefusal; message: string };
+
+export type InboxBulkAction = "assign" | "team" | "close" | "reopen" | "snooze" | "mark_read" | "tag" | "untag";
+
+export interface InboxBulkRequest {
+  ids: string[];
+  action: InboxBulkAction;
+  assignedUserId?: string | null;
+  teamId?: string | null;
+  snoozedUntil?: string;
+  tag?: string;
+}
+
+export interface InboxBulkResult {
+  updated: number;
+  skipped: Array<{ id: string; reason: string }>;
+}
+
+export interface UpdateInboxContactRequest {
+  displayName?: string;
+  tags?: string[];
+  attributes?: Record<string, string | number | boolean | null>;
+  customerId?: string | null;
+  blocked?: boolean;
+  ownerUserId?: string | null;
+  ownerTeamId?: string | null;
+}
+
+export interface InboxContactRow {
+  id: string;
+  name: string;
+  platform: ChannelPlatform;
+  channel: { id: string; name: string };
+  phone: string | null;
+  username: string | null;
+  avatarUrl: string | null;
+  tags: string[];
+  optedOut: boolean;
+  blocked: boolean;
+  customer: { id: string; name: string | null } | null;
+  owner: { user: InboxPerson | null; team: InboxTeamRef | null };
+  lastInboundAt: string | null;
+  createdAt: string;
+  conversationId: string | null;
+}
+
+export interface InboxContactQuery {
+  page?: number;
+  limit?: number;
+  sortBy?: "createdAt" | "lastInboundAt";
+  sortOrder?: "asc" | "desc";
+  search?: string;
+  platform?: ChannelPlatform;
+  channelId?: string;
+  tag?: string;
+  ownerUserId?: string;
+  ownerTeamId?: string;
+  consent?: "subscribed" | "opted_out" | "blocked";
+  from?: string;
+  to?: string;
+}
+
+/** One live inbox change; the stream names ids, never content. */
+export type InboxStreamEvent =
+  | { type: "conversation.updated"; conversationId: string }
+  | { type: "message.created"; conversationId: string; messageId: string }
+  | { type: "message.updated"; conversationId: string; messageId: string }
+  | { type: "note.created"; conversationId: string; noteId: string };

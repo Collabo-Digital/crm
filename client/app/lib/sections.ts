@@ -36,13 +36,14 @@ const SECTIONS: SectionDef[] = [
   { id: "customers", label: "Customers", prefix: "/orders/customers" },
   { id: "invoices", label: "Invoices", prefix: "/orders/invoices" },
   { id: "products", label: "Products", prefix: "/products" },
+  { id: "chat", label: "Inbox", prefix: "/inbox" },
   { id: "analytics", label: "Analytics", prefix: "/analytics" },
 ];
 
 /**
- * The sections this build actually has. Chat, Campaigns and Logistics are not
- * on the production branch; their ids stay in `SectionId` because a grant list
- * may still name them.
+ * The sections this build actually has. Campaigns and Logistics are not on
+ * this branch; their ids stay in `SectionId` because a grant list may still
+ * name them.
  */
 export const AVAILABLE_SECTIONS: SectionDef[] = SECTIONS;
 
@@ -110,6 +111,7 @@ const INFLUENCER_DENIED_PREFIXES = [
   "/settings/orders",
   "/settings/tax-gst",
   "/settings/loyalty",
+  "/settings/inbox",
 ];
 
 export interface SectionAccess {

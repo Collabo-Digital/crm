@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import {
   Building2, Lock, Bell, CreditCard, Palette, Users, Shield, Smartphone,
   Check, ChevronRight, AlertTriangle, Loader2, Plus, X, Mail, Trash2,
-  Sun, Moon, Monitor, Receipt, Star, MapPin, Package, ShoppingBag, Layers,
+  Sun, Moon, Monitor, Receipt, Star, MapPin, Package, ShoppingBag, Layers, MessageSquare,
   Pencil, Store,
 } from "lucide-react";
 import {
@@ -47,6 +47,8 @@ import {
 import { InfluencersSection } from "~/components/app/influencers/influencers-section";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { ChannelSettingsTab } from "~/components/app/settings/channel-settings-tab";
+import { InboxSettingsTab } from "~/components/app/settings/inbox-settings-tab";
+import { useSectionAccess } from "~/hooks/use-section-access";
 import { StoreProfileTab } from "~/components/app/settings/store-profile-tab";
 import { UpgradeOrganizationDialog } from "~/components/app/settings/upgrade-organization-dialog";
 import { SectionAccessPicker } from "~/components/app/settings/section-access-picker";
@@ -70,6 +72,7 @@ const TABS = [
   { id: "products", label: "Products", icon: Package },
   { id: "orders", label: "Orders", icon: ShoppingBag },
   { id: "channels", label: "Channels", icon: Layers },
+  { id: "inbox", label: "Inbox", icon: MessageSquare },
   { id: "tax-gst", label: "Tax & GST", icon: Receipt },
   { id: "loyalty", label: "Loyalty Tiers", icon: Star },
   { id: "security", label: "Security", icon: Lock },
@@ -1502,9 +1505,11 @@ export default function SettingsPage() {
   const { data: members, isLoading: membersLoading } = useOrgMembers(currentOrgId);
   const { data: invites } = useOrgInvites(currentOrgId);
   const { role: memberRole, isInfluencer } = useCurrentRole();
+  const { canAccess } = useSectionAccess();
+  // Inbox settings are for members who can open the Inbox; the API refuses the rest.
   const visibleTabs = isInfluencer
     ? TABS.filter((t) => INFLUENCER_TABS.includes(t.id))
-    : TABS;
+    : TABS.filter((t) => t.id !== "inbox" || canAccess("/inbox"));
   // Who may invite, resend and cancel. The server is the real boundary
   // (`requireRole` on every invite route); this hides affordances that would
   // only be refused.
@@ -2153,6 +2158,8 @@ export default function SettingsPage() {
 
           {/* ── Channels ─────────────────────────────────────────── */}
           {activeTab === "channels" && <ChannelSettingsTab />}
+
+          {activeTab === "inbox" && <InboxSettingsTab />}
 
           {/* ─── TAX & GST ─── */}
           {activeTab === "tax-gst" && org && (

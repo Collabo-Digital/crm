@@ -262,6 +262,8 @@ model User {
   publishedAutomationVersions AutomationVersion[]  @relation("AutomationPublisher")
   assignedConversations       Conversation[]       @relation("ConversationAssignee")
   conversationNotes           ConversationNote[]   @relation("ConversationNoteAuthor")
+  inboxTeams                  InboxTeamMember[]
+  ownedContacts               ChannelContact[]     @relation("ContactOwner")
   refreshTokens               RefreshToken[]
   passwordResetTokens         PasswordResetToken[]
   impersonationsMade          ImpersonationLog[]   @relation("ImpersonatorLogs")
@@ -363,6 +365,9 @@ model Organization {
   messages               Message[]
   consentEvents          ConsentEvent[]
   conversationNotes      ConversationNote[]
+  inboxTeams             InboxTeam[]
+  quickReplies           QuickReply[]
+  inboxViews             InboxView[]
 
   @@map("organizations")
 }
@@ -391,16 +396,20 @@ model OrganizationSettings {
 }
 
 model OrganizationMember {
-  id             String   @id @default(cuid())
-  organizationId String   @map("organization_id")
-  userId         String   @map("user_id")
-  role           UserRole @default(AGENT)
-  permissions    Json?    @db.JsonB // Fine-grained overrides
-  vendorScope    String?  @map("vendor_scope") // For VENDOR role: the Product.vendor value this member is limited to
-  isActive       Boolean  @default(true) @map("is_active")
-  joinedAt       DateTime @default(now()) @map("joined_at")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id             String            @id @default(cuid())
+  organizationId String            @map("organization_id")
+  userId         String            @map("user_id")
+  role           UserRole          @default(AGENT)
+  permissions    Json?             @db.JsonB // Fine-grained overrides
+  vendorScope    String?           @map("vendor_scope") // For VENDOR role: the Product.vendor value this member is limited to
+  isActive       Boolean           @default(true) @map("is_active")
+  /// What the member chose in the inbox. Whether they are actually there is
+  /// inboxSeenAt, refreshed while an inbox is open.
+  inboxStatus    InboxAvailability @default(ONLINE) @map("inbox_status")
+  inboxSeenAt    DateTime?         @map("inbox_seen_at")
+  joinedAt       DateTime          @default(now()) @map("joined_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -2049,6 +2058,9 @@ model ChannelContact {
   consecutiveFailures  Int             @default(0) @map("consecutive_failures")
   /// Manual or automatic cool-off; no sends while in the future.
   mutedUntil           DateTime?       @map("muted_until")
+  /// The member or team responsible for this contact.
+  ownerUserId          String?         @map("owner_user_id")
+  ownerTeamId          String?         @map("owner_team_id")
   metadata             Json?           @db.JsonB
   createdAt            DateTime        @default(now()) @map("created_at")
   updatedAt            DateTime        @updatedAt @map("updated_at")
@@ -2056,6 +2068,8 @@ model ChannelContact {
   organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   channel       Channel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
   customer      Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  ownerUser     User?              @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerTeam     InboxTeam?         @relation("ContactOwnerTeam", fields: [ownerTeamId], references: [id], onDelete: SetNull)
   events        AutomationEvent[]
   runs          AutomationRun[]
   messages      Message[]
@@ -2068,6 +2082,7 @@ model ChannelContact {
   @@index([organizationId, platform])
   @@index([customerId])
   @@index([organizationId, phone])
+  @@index([organizationId, createdAt])
   @@map("channel_contacts")
 }
 
@@ -2392,6 +2407,8 @@ model Conversation {
   unreadCount        Int                @default(0) @map("unread_count")
   messageCount       Int                @default(0) @map("message_count")
   assignedUserId     String?            @map("assigned_user_id")
+  /// The team the conversation is queued for; a person may also be assigned.
+  teamId             String?            @map("team_id")
   /// SNOOZED conversations reopen at this time, or at the next inbound message.
   snoozedUntil       DateTime?          @map("snoozed_until")
   closedAt           DateTime?          @map("closed_at")
@@ -2406,17 +2423,19 @@ model Conversation {
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  channel      Channel        @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  contact      ChannelContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  customer     Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  assignedUser User?          @relation("ConversationAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  contact      ChannelContact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  customer     Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  assignedUser User?              @relation("ConversationAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  team         InboxTeam?         @relation(fields: [teamId], references: [id], onDelete: SetNull)
   messages     Message[]
   notes        ConversationNote[]
 
   @@unique([channelId, contactId])
   @@index([organizationId, status, lastMessageAt])
   @@index([organizationId, assignedUserId, status])
+  @@index([organizationId, teamId, status])
   @@index([customerId])
   @@map("conversations")
 }
@@ -2603,15 +2622,15 @@ model ConsentEvent {
 /// A team-only note on a conversation. Shown in the thread in time order;
 /// never sent to the customer.
 model ConversationNote {
-  id             String    @id @default(cuid())
-  organizationId String    @map("organization_id")
-  conversationId String    @map("conversation_id")
-  authorUserId   String?   @map("author_user_id")
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  conversationId String   @map("conversation_id")
+  authorUserId   String?  @map("author_user_id")
   body           String
   /// User ids mentioned in the note.
-  mentions       String[]  @default([])
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
+  mentions       String[] @default([])
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
@@ -2696,4 +2715,99 @@ model RawAnalyticsEvent {
   @@index([eventName, occurredAt])
   @@index([sessionId])
   @@map("raw_analytics_events")
+}
+
+// ─── Inbox: teams, quick replies, saved views ───────────────────────────────
+
+enum InboxAvailability {
+  ONLINE
+  AWAY
+}
+
+/// Who a quick reply or saved view is for.
+enum InboxShareScope {
+  PERSONAL
+  TEAM
+  ORGANIZATION
+}
+
+/// A named group of members that conversations and contacts are queued for.
+model InboxTeam {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  name           String
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members       InboxTeamMember[]
+  conversations Conversation[]
+  contacts      ChannelContact[]  @relation("ContactOwnerTeam")
+  quickReplies  QuickReply[]
+  views         InboxView[]
+
+  @@unique([organizationId, name])
+  @@map("inbox_teams")
+}
+
+model InboxTeamMember {
+  teamId    String   @map("team_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  team InboxTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([teamId, userId])
+  @@index([userId])
+  @@map("inbox_team_members")
+}
+
+/// A saved answer the composer inserts when an agent types "/" and its shortcut.
+model QuickReply {
+  id             String          @id @default(cuid())
+  organizationId String          @map("organization_id")
+  shortcut       String
+  body           String
+  /// Extra words the picker matches on.
+  keywords       String[]        @default([])
+  /// { storageKey, mime, filename, mediaKind }: sent as a file with the body as its caption.
+  attachment     Json?           @db.JsonB
+  scope          InboxShareScope @default(ORGANIZATION)
+  /// TEAM scope only.
+  teamId         String?         @map("team_id")
+  /// PERSONAL scope only.
+  ownerUserId    String?         @map("owner_user_id")
+  createdById    String?         @map("created_by_id")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  team         InboxTeam?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, shortcut])
+  @@map("quick_replies")
+}
+
+/// A saved inbox filter. Each member still sees only the conversations
+/// their own access allows.
+model InboxView {
+  id             String          @id @default(cuid())
+  organizationId String          @map("organization_id")
+  name           String
+  /// The conversation list filters: status, channelId, platform, tag, teamId,
+  /// assigneeId, unread, comments, search.
+  filters        Json            @db.JsonB
+  scope          InboxShareScope @default(PERSONAL)
+  teamId         String?         @map("team_id")
+  ownerUserId    String?         @map("owner_user_id")
+  position       Int             @default(0)
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  team         InboxTeam?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("inbox_views")
 }

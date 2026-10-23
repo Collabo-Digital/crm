@@ -1,31 +1,24 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-    ChannelContact,
-    ConsentType,
-    ConversationStatus,
-    MessageDirection,
-    Prisma,
-    UserRole,
-} from '@prisma/client';
+import { ConversationStatus, MessageDirection, MessageKind, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { ConsentService } from '../messaging/consent.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
 import { MessagingSendService, SendOutcome } from '../messaging/send/messaging-send.service';
 import { MessagingMediaStorage } from '../messaging/media/messaging-media.storage';
 import { signMediaPath, verifyMediaSignature } from '../messaging/media/media-url';
 import { replyWindow } from '../messaging/outbound';
-import { InboxViewer, canAssign, canReply, seesUnassigned, visibilityWhere } from './inbox-visibility';
+import { InboxViewer, canAssign, canAssignOthers, canReply, visibilityWhere } from './inbox-visibility';
+import { ConversationFilters, conversationWhere, openWhere } from './inbox-filters';
+import { ASSIGNABLE_ROLES, InboxTeamService } from './inbox-team.service';
+import { InboxContactsService, contactName } from './inbox-contacts.service';
+import { InboxViewService } from './inbox-view.service';
 import { QueryConversationsDto } from './dto/query-conversations.dto';
 import { QueryMessagesDto } from './dto/query-messages.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { UpdateConversationDto } from './dto/update-conversation.dto';
 import { CreateNoteDto } from './dto/create-note.dto';
-import { UpdateContactDto } from './dto/update-contact.dto';
-import { RecordConsentDto } from './dto/record-consent.dto';
+import { BulkConversationsDto } from './dto/bulk-conversations.dto';
 import { asOutbound, parseSendPayload } from './send-payload.schema';
-
-const ASSIGNABLE_ROLES: UserRole[] = [UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.AGENT];
 
 /** Files the composer may attach, by the media kind they are sent as. */
 const UPLOAD_KINDS: Record<string, 'image' | 'video' | 'audio' | 'document'> = {
@@ -68,12 +61,17 @@ const conversationInclude = {
     contact: true,
     channel: { select: { id: true, name: true, platform: true } },
     assignedUser: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } },
+    team: { select: { id: true, name: true } },
 } satisfies Prisma.ConversationInclude;
 
 type ConversationRow = Prisma.ConversationGetPayload<{ include: typeof conversationInclude }>;
 
-export function contactName(c: Pick<ChannelContact, 'displayName' | 'addressBookName' | 'username' | 'phone' | 'externalId'>): string {
-    return c.displayName ?? c.addressBookName ?? (c.username ? `@${c.username}` : null) ?? c.phone ?? c.externalId;
+/** What one conversation update asks for; the single and bulk paths share it. */
+interface ConversationChange {
+    assignedUserId?: string | null;
+    teamId?: string | null;
+    status?: 'OPEN' | 'CLOSED' | 'SNOOZED';
+    snoozedUntil?: string;
 }
 
 /** The inbox's read side and the actions a member takes on a conversation. */
@@ -84,9 +82,11 @@ export class InboxService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly sender: MessagingSendService,
-        private readonly consent: ConsentService,
         private readonly storage: MessagingMediaStorage,
         private readonly events: InboxEventsService,
+        private readonly teams: InboxTeamService,
+        private readonly contacts: InboxContactsService,
+        private readonly views: InboxViewService,
         config: ConfigService,
     ) {
         this.linkSecret = config.get<string>('messaging.linkSecret')!;
@@ -97,54 +97,28 @@ export class InboxService {
     async listConversations(orgId: string, viewer: InboxViewer, q: QueryConversationsDto) {
         const now = new Date();
         const limit = q.limit ?? 30;
-        const and: Prisma.ConversationWhereInput[] = [{ organizationId: orgId }, visibilityWhere(viewer)];
-
-        if (q.view === 'mine') and.push({ assignedUserId: viewer.userId });
-        if (q.view === 'unassigned') {
-            if (!seesUnassigned(viewer)) throw new ForbiddenException('You cannot see unassigned conversations.');
-            and.push({ assignedUserId: null });
-        }
-        switch (q.status ?? 'open') {
-            case 'open':
-                and.push({
-                    OR: [
-                        { status: ConversationStatus.OPEN },
-                        { status: ConversationStatus.SNOOZED, snoozedUntil: { lte: now } },
-                    ],
-                });
-                break;
-            case 'snoozed':
-                and.push({ status: ConversationStatus.SNOOZED, snoozedUntil: { gt: now } });
-                break;
-            case 'closed':
-                and.push({ status: ConversationStatus.CLOSED });
-                break;
-        }
-        if (q.channelId) and.push({ channelId: q.channelId });
-        if (q.platform) and.push({ platform: q.platform });
-        if (q.tag) and.push({ contact: { tags: { has: q.tag } } });
-        if (q.unread === 'true') and.push({ unreadCount: { gt: 0 } });
-        if (q.search?.trim()) {
-            const term = q.search.trim();
-            const like = { contains: term, mode: 'insensitive' as const };
-            and.push({
-                OR: [
-                    { contact: { displayName: like } },
-                    { contact: { addressBookName: like } },
-                    { contact: { username: like } },
-                    { contact: { phone: { contains: term.replace(/[^\d+]/g, '') || term } } },
-                    { lastMessagePreview: like },
-                    { messages: { some: { text: like } } },
-                ],
-            });
-        }
+        const filters: ConversationFilters = {
+            view: q.view,
+            status: q.status,
+            channelId: q.channelId,
+            platform: q.platform,
+            tag: q.tag,
+            teamId: q.teamId,
+            assigneeId: q.assigneeId,
+            unread: q.unread === 'true',
+            comments: q.comments === 'true',
+            search: q.search,
+        };
+        const where = conversationWhere(orgId, viewer, filters, now);
         if (q.beforeAt && q.beforeId) {
             const at = new Date(q.beforeAt);
-            and.push({ OR: [{ lastMessageAt: { lt: at } }, { lastMessageAt: at, id: { lt: q.beforeId } }] });
+            (where.AND as Prisma.ConversationWhereInput[]).push({
+                OR: [{ lastMessageAt: { lt: at } }, { lastMessageAt: at, id: { lt: q.beforeId } }],
+            });
         }
 
         const rows = await this.prisma.conversation.findMany({
-            where: { AND: and },
+            where,
             include: conversationInclude,
             orderBy: [{ lastMessageAt: { sort: 'desc', nulls: 'last' } }, { id: 'desc' }],
             take: limit + 1,
@@ -157,23 +131,30 @@ export class InboxService {
         };
     }
 
-    /** Badge counts for the views, among open conversations the member may see. */
+    /** Badge counts among open conversations the member may see: per view, per team, per saved view. */
     async counts(orgId: string, viewer: InboxViewer) {
         const now = new Date();
-        const open: Prisma.ConversationWhereInput = {
-            organizationId: orgId,
-            OR: [{ status: ConversationStatus.OPEN }, { status: ConversationStatus.SNOOZED, snoozedUntil: { lte: now } }],
-        };
-        const visible = visibilityWhere(viewer);
-        const [mine, unassigned, all, unread] = await Promise.all([
+        const open = { AND: [{ organizationId: orgId }, openWhere(now), visibilityWhere(viewer)] };
+        const [mine, unassigned, all, unread, byTeam, views] = await Promise.all([
             this.prisma.conversation.count({ where: { AND: [open, { assignedUserId: viewer.userId }] } }),
-            seesUnassigned(viewer)
-                ? this.prisma.conversation.count({ where: { AND: [open, { assignedUserId: null }] } })
-                : Promise.resolve(0),
-            this.prisma.conversation.count({ where: { AND: [open, visible] } }),
-            this.prisma.conversation.count({ where: { AND: [open, visible, { unreadCount: { gt: 0 } }] } }),
+            this.prisma.conversation.count({ where: { AND: [open, { assignedUserId: null }] } }),
+            this.prisma.conversation.count({ where: open }),
+            this.prisma.conversation.count({ where: { AND: [open, { unreadCount: { gt: 0 } }] } }),
+            this.prisma.conversation.groupBy({
+                by: ['teamId'],
+                where: { AND: [open, { teamId: { not: null } }] },
+                _count: { _all: true },
+            }),
+            this.views.counts(orgId, viewer, now),
         ]);
-        return { mine, unassigned, all, unread };
+        return {
+            mine,
+            unassigned,
+            all,
+            unread,
+            teams: Object.fromEntries(byTeam.map((t) => [t.teamId!, t._count._all])),
+            views,
+        };
     }
 
     async getConversation(orgId: string, viewer: InboxViewer, id: string) {
@@ -181,7 +162,7 @@ export class InboxService {
         const view = this.toConversationView(row, new Date());
         return {
             ...view,
-            contact: await this.contactView(row.contact),
+            contact: await this.contacts.view(row.contact),
             reply: {
                 canReply: canReply(viewer),
                 window: replyWindow(row.platform, row.lastInboundAt),
@@ -205,23 +186,39 @@ export class InboxService {
         const page = rows.slice(0, limit).reverse();
         const replyIds = [...new Set(page.map((m) => m.replyToMessageId).filter((x): x is string => !!x))];
         const userIds = [...new Set(page.map((m) => m.sentByUserId).filter((x): x is string => !!x))];
-        const quoted = replyIds.length
-            ? await this.prisma.message.findMany({
-                where: { id: { in: replyIds } },
-                select: { id: true, text: true, kind: true, direction: true },
-            })
-            : [];
-        const users = userIds.length
-            ? await this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, firstName: true, lastName: true } })
-            : [];
+        const comments = page.filter((m) => m.kind === MessageKind.COMMENT && m.direction === MessageDirection.INBOUND && m.externalId);
+        const quotedQuery = this.prisma.message.findMany({
+            where: { id: { in: replyIds } },
+            select: { id: true, text: true, kind: true, direction: true },
+        });
+        const usersQuery = this.prisma.user.findMany({
+            where: { id: { in: userIds } },
+            select: { id: true, firstName: true, lastName: true },
+        });
         // Notes are few; they come whole with the newest page.
-        const notes = q.beforeAt
-            ? []
-            : await this.prisma.conversationNote.findMany({
+        const notesQuery = q.beforeAt
+            ? Promise.resolve([])
+            : this.prisma.conversationNote.findMany({
                 where: { conversationId: conversation.id },
                 orderBy: { createdAt: 'asc' },
                 include: { author: { select: { id: true, firstName: true, lastName: true } } },
             });
+        const repliesQuery = this.prisma.message.findMany({
+            where: {
+                conversationId: conversation.id,
+                direction: MessageDirection.OUTBOUND,
+                inReplyToExternalId: { in: comments.map((c) => c.externalId!) },
+                status: { not: 'FAILED' },
+            },
+            select: { kind: true, inReplyToExternalId: true },
+        });
+        const [quoted, users, notes, commentReplies, posts] = await Promise.all([
+            quotedQuery,
+            usersQuery,
+            notesQuery,
+            repliesQuery,
+            this.postsFor(conversation.channelId, comments.map((c) => (c.body as { postId?: string } | null)?.postId)),
+        ]);
         const quotedById = new Map(quoted.map((m) => [m.id, m]));
         const userById = new Map(users.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
         const oldest = page[0];
@@ -247,7 +244,10 @@ export class InboxService {
                 sentBy: m.sentByUserId ? { id: m.sentByUserId, name: userById.get(m.sentByUserId) ?? null } : null,
                 replyTo: m.replyToMessageId ? quotedById.get(m.replyToMessageId) ?? null : null,
                 media: this.mediaView(m.id, m.media),
-                details: this.messageDetails(m),
+                details:
+                    m.kind === MessageKind.COMMENT && m.direction === MessageDirection.INBOUND
+                        ? this.commentDetails(m, commentReplies, posts)
+                        : this.messageDetails(m),
             })),
             notes: notes.map((n) => ({
                 id: n.id,
@@ -274,17 +274,20 @@ export class InboxService {
             idempotencyKey,
         };
 
-        if (input.type === 'reaction' || input.type === 'private_reply') {
+        if (input.type === 'reaction' || input.type === 'private_reply' || input.type === 'comment_reply') {
             const targetId = input.type === 'reaction' ? input.messageId : input.commentMessageId;
             const target = await this.prisma.message.findFirst({
                 where: { id: targetId, conversationId: conversation.id },
                 select: { externalId: true, kind: true },
             });
             if (!target?.externalId) throw new BadRequestException('That message cannot be reacted to or replied to yet.');
+            if (input.type !== 'reaction' && target.kind !== MessageKind.COMMENT) {
+                throw new BadRequestException('Only comments can be replied to this way.');
+            }
             const payload =
                 input.type === 'reaction'
                     ? { type: 'reaction' as const, targetExternalId: target.externalId, emoji: input.emoji }
-                    : { type: 'private_reply' as const, commentId: target.externalId, text: input.text };
+                    : { type: input.type, commentId: target.externalId, text: input.text };
             return this.sender.send({ ...base, payload, replyToMessageId: null });
         }
         return this.sender.send({ ...base, payload: asOutbound(input) });
@@ -301,35 +304,8 @@ export class InboxService {
 
     async update(orgId: string, viewer: InboxViewer, id: string, dto: UpdateConversationDto) {
         const conversation = await this.loadConversation(orgId, viewer, id);
-        const data: Prisma.ConversationUpdateInput = {};
-
-        if (dto.assignedUserId !== undefined && dto.assignedUserId !== conversation.assignedUserId) {
-            if (!canAssign(viewer, conversation.assignedUserId, dto.assignedUserId)) {
-                throw new ForbiddenException('You cannot assign this conversation to someone else.');
-            }
-            if (dto.assignedUserId) {
-                const member = await this.prisma.organizationMember.findFirst({
-                    where: { organizationId: orgId, userId: dto.assignedUserId, isActive: true, role: { in: ASSIGNABLE_ROLES } },
-                    select: { id: true },
-                });
-                if (!member) throw new BadRequestException('That person is not an active team member who can reply.');
-            }
-            data.assignedUser = dto.assignedUserId ? { connect: { id: dto.assignedUserId } } : { disconnect: true };
-        }
-
-        if (dto.status) {
-            if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot change a conversation.');
-            if (dto.status === 'SNOOZED') {
-                const until = dto.snoozedUntil ? new Date(dto.snoozedUntil) : null;
-                if (!until || until <= new Date()) throw new BadRequestException('Choose a snooze time in the future.');
-                Object.assign(data, { status: ConversationStatus.SNOOZED, snoozedUntil: until });
-            } else if (dto.status === 'CLOSED') {
-                Object.assign(data, { status: ConversationStatus.CLOSED, closedAt: new Date(), closedById: viewer.userId, snoozedUntil: null });
-            } else {
-                Object.assign(data, { status: ConversationStatus.OPEN, snoozedUntil: null, closedAt: null, closedById: null });
-            }
-        }
-        if (Object.keys(data).length === 0) return this.getConversation(orgId, viewer, id);
+        const data = await this.changeData(orgId, viewer, conversation, dto);
+        if (!data) return this.getConversation(orgId, viewer, id);
 
         await this.prisma.conversation.update({ where: { id: conversation.id }, data });
         this.events.publish(orgId, { type: 'conversation.updated', conversationId: conversation.id });
@@ -340,6 +316,70 @@ export class InboxService {
             if (err instanceof NotFoundException) return { id, visible: false };
             throw err;
         }
+    }
+
+    /**
+     * One action on many conversations. Each is checked as if done alone;
+     * the ones the member may not change are reported, not fatal.
+     */
+    async bulk(orgId: string, viewer: InboxViewer, dto: BulkConversationsDto) {
+        if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot change conversations.');
+        const ids = [...new Set(dto.ids)];
+        const rows = await this.prisma.conversation.findMany({
+            where: { AND: [{ id: { in: ids }, organizationId: orgId }, visibilityWhere(viewer)] },
+            include: conversationInclude,
+        });
+        const skipped: Array<{ id: string; reason: string }> = ids
+            .filter((id) => !rows.some((r) => r.id === id))
+            .map((id) => ({ id, reason: 'Not found' }));
+
+        if (dto.action === 'mark_read') {
+            // Clears the badge only. Read receipts go out when someone opens the chat.
+            const { count } = await this.prisma.conversation.updateMany({
+                where: { id: { in: rows.map((r) => r.id) }, unreadCount: { gt: 0 } },
+                data: { unreadCount: 0 },
+            });
+            this.publishAll(orgId, rows.map((r) => r.id));
+            return { updated: count, skipped };
+        }
+
+        if (dto.action === 'tag' || dto.action === 'untag') {
+            const tag = dto.tag?.trim();
+            if (!tag) throw new BadRequestException('Choose a tag.');
+            const result = await this.contacts.bulkTag(orgId, viewer, {
+                ids: [...new Set(rows.map((r) => r.contactId))],
+                ...(dto.action === 'tag' ? { add: [tag] } : { remove: [tag] }),
+            });
+            return { updated: result.updated, skipped };
+        }
+
+        const change: ConversationChange =
+            dto.action === 'assign'
+                ? { assignedUserId: dto.assignedUserId ?? null }
+                : dto.action === 'team'
+                    ? { teamId: dto.teamId ?? null }
+                    : dto.action === 'close'
+                        ? { status: 'CLOSED' }
+                        : dto.action === 'reopen'
+                            ? { status: 'OPEN' }
+                            : { status: 'SNOOZED', snoozedUntil: dto.snoozedUntil };
+        let updated = 0;
+        for (const row of rows) {
+            try {
+                const data = await this.changeData(orgId, viewer, row, change);
+                if (!data) continue;
+                await this.prisma.conversation.update({ where: { id: row.id }, data });
+                this.events.publish(orgId, { type: 'conversation.updated', conversationId: row.id });
+                updated++;
+            } catch (err) {
+                if (err instanceof ForbiddenException || err instanceof BadRequestException) {
+                    skipped.push({ id: row.id, reason: err.message });
+                    continue;
+                }
+                throw err;
+            }
+        }
+        return { updated, skipped };
     }
 
     async addNote(orgId: string, viewer: InboxViewer, id: string, dto: CreateNoteDto) {
@@ -363,79 +403,6 @@ export class InboxService {
             createdAt: note.createdAt,
             author: note.author ? { id: note.author.id, name: `${note.author.firstName} ${note.author.lastName}`.trim() } : null,
         };
-    }
-
-    // ─── Contacts ─────────────────────────────────────────────────────
-
-    async getContact(orgId: string, viewer: InboxViewer, contactId: string) {
-        const contact = await this.prisma.channelContact.findFirst({ where: { id: contactId, organizationId: orgId } });
-        if (!contact) throw new NotFoundException('Contact not found');
-        await this.assertSeesContact(orgId, viewer, contact.id);
-        return this.contactView(contact);
-    }
-
-    async updateContact(orgId: string, viewer: InboxViewer, contactId: string, dto: UpdateContactDto) {
-        if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot edit contacts.');
-        const contact = await this.prisma.channelContact.findFirst({ where: { id: contactId, organizationId: orgId } });
-        if (!contact) throw new NotFoundException('Contact not found');
-        await this.assertSeesContact(orgId, viewer, contact.id);
-
-        if (dto.customerId) {
-            const customer = await this.prisma.customer.findFirst({
-                where: { id: dto.customerId, organizationId: orgId, deletedAt: null },
-                select: { id: true },
-            });
-            if (!customer) throw new BadRequestException('Customer not found');
-        }
-        const attributes = dto.attributes
-            ? Object.fromEntries(Object.entries({ ...((contact.attributes as Record<string, unknown>) ?? {}), ...dto.attributes }).filter(([, v]) => v !== null))
-            : undefined;
-
-        const updated = await this.prisma.$transaction(async (tx) => {
-            const row = await tx.channelContact.update({
-                where: { id: contact.id },
-                data: {
-                    ...(dto.displayName !== undefined ? { displayName: dto.displayName.trim() || null } : {}),
-                    ...(dto.tags ? { tags: [...new Set(dto.tags.map((t) => t.trim()).filter(Boolean))] } : {}),
-                    ...(attributes ? { attributes: attributes as Prisma.InputJsonValue } : {}),
-                    ...(dto.customerId !== undefined ? { customerId: dto.customerId } : {}),
-                    ...(dto.blocked !== undefined ? { blockedAt: dto.blocked ? new Date() : null } : {}),
-                },
-            });
-            if (dto.customerId !== undefined) {
-                await tx.conversation.updateMany({ where: { contactId: contact.id }, data: { customerId: dto.customerId } });
-            }
-            return row;
-        });
-        const conversations = await this.prisma.conversation.findMany({ where: { contactId: contact.id }, select: { id: true } });
-        for (const c of conversations) this.events.publish(orgId, { type: 'conversation.updated', conversationId: c.id });
-        return this.contactView(updated);
-    }
-
-    async recordConsent(orgId: string, viewer: InboxViewer, contactId: string, dto: RecordConsentDto) {
-        if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot change consent.');
-        const contact = await this.prisma.channelContact.findFirst({ where: { id: contactId, organizationId: orgId } });
-        if (!contact) throw new NotFoundException('Contact not found');
-        await this.assertSeesContact(orgId, viewer, contact.id);
-        await this.prisma.$transaction((tx) =>
-            this.consent.record(tx, contact, dto.type as ConsentType, 'agent', dto.note ? { note: dto.note } : null, viewer.userId),
-        );
-        return this.getContact(orgId, viewer, contact.id);
-    }
-
-    /** Active members a conversation can be assigned to. */
-    async assignableMembers(orgId: string) {
-        const members = await this.prisma.organizationMember.findMany({
-            where: { organizationId: orgId, isActive: true, role: { in: ASSIGNABLE_ROLES } },
-            select: { role: true, user: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } } },
-            orderBy: { user: { firstName: 'asc' } },
-        });
-        return members.map((m) => ({
-            id: m.user.id,
-            name: `${m.user.firstName} ${m.user.lastName}`.trim(),
-            avatarUrl: m.user.avatarUrl,
-            role: m.role,
-        }));
     }
 
     // ─── Media ────────────────────────────────────────────────────────
@@ -473,12 +440,48 @@ export class InboxService {
         return row;
     }
 
-    private async assertSeesContact(orgId: string, viewer: InboxViewer, contactId: string) {
-        const visible = await this.prisma.conversation.findFirst({
-            where: { AND: [{ contactId, organizationId: orgId }, visibilityWhere(viewer)] },
-            select: { id: true },
-        });
-        if (!visible) throw new NotFoundException('Contact not found');
+    /** The update a change makes, after checking the member may make it; null when nothing changes. */
+    private async changeData(
+        orgId: string,
+        viewer: InboxViewer,
+        conversation: ConversationRow,
+        change: ConversationChange,
+    ): Promise<Prisma.ConversationUpdateInput | null> {
+        const data: Prisma.ConversationUpdateInput = {};
+
+        if (change.assignedUserId !== undefined && change.assignedUserId !== conversation.assignedUserId) {
+            if (!canAssign(viewer, conversation.assignedUserId, change.assignedUserId)) {
+                throw new ForbiddenException('You cannot assign this conversation to someone else.');
+            }
+            if (change.assignedUserId) {
+                const member = await this.prisma.organizationMember.findFirst({
+                    where: { organizationId: orgId, userId: change.assignedUserId, isActive: true, role: { in: ASSIGNABLE_ROLES } },
+                    select: { id: true },
+                });
+                if (!member) throw new BadRequestException('That person is not an active team member who can reply.');
+            }
+            data.assignedUser = change.assignedUserId ? { connect: { id: change.assignedUserId } } : { disconnect: true };
+        }
+
+        if (change.teamId !== undefined && change.teamId !== conversation.teamId) {
+            if (!canAssignOthers(viewer)) throw new ForbiddenException('You cannot move this conversation to another team.');
+            if (change.teamId) await this.teams.assertTeam(orgId, change.teamId);
+            data.team = change.teamId ? { connect: { id: change.teamId } } : { disconnect: true };
+        }
+
+        if (change.status) {
+            if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot change a conversation.');
+            if (change.status === 'SNOOZED') {
+                const until = change.snoozedUntil ? new Date(change.snoozedUntil) : null;
+                if (!until || until <= new Date()) throw new BadRequestException('Choose a snooze time in the future.');
+                Object.assign(data, { status: ConversationStatus.SNOOZED, snoozedUntil: until });
+            } else if (change.status === 'CLOSED') {
+                Object.assign(data, { status: ConversationStatus.CLOSED, closedAt: new Date(), closedById: viewer.userId, snoozedUntil: null });
+            } else {
+                Object.assign(data, { status: ConversationStatus.OPEN, snoozedUntil: null, closedAt: null, closedById: null });
+            }
+        }
+        return Object.keys(data).length ? data : null;
     }
 
     private toConversationView(row: ConversationRow, now: Date) {
@@ -504,80 +507,13 @@ export class InboxService {
             assignee: row.assignedUser
                 ? { id: row.assignedUser.id, name: `${row.assignedUser.firstName} ${row.assignedUser.lastName}`.trim(), avatarUrl: row.assignedUser.avatarUrl }
                 : null,
+            team: row.team,
             lastMessagePreview: row.lastMessagePreview,
             lastMessageAt: row.lastMessageAt,
             lastInboundAt: row.lastInboundAt,
             unreadCount: row.unreadCount,
             awaitingReplySince: row.awaitingReplySince,
             window: { open: window.open, closesAt: window.closesAt, humanAgentUntil: window.humanAgentUntil },
-        };
-    }
-
-    private async contactView(contact: ChannelContact) {
-        const [customer, conversations, consent] = await Promise.all([
-            contact.customerId
-                ? this.prisma.customer.findUnique({
-                    where: { id: contact.customerId },
-                    select: {
-                        id: true, firstName: true, lastName: true, email: true, phone: true, ordersCount: true,
-                        totalSpent: true, vipLevel: true, tags: true,
-                        orders: {
-                            where: { deletedAt: null },
-                            orderBy: { createdAt: 'desc' },
-                            take: 5,
-                            select: { id: true, name: true, totalPrice: true, currency: true, financialStatus: true, fulfillmentStatus: true, createdAt: true, cancelledAt: true },
-                        },
-                    },
-                })
-                : Promise.resolve(null),
-            // The same person on every channel, through the linked customer.
-            this.prisma.conversation.findMany({
-                where: contact.customerId
-                    ? { organizationId: contact.organizationId, customerId: contact.customerId }
-                    : { contactId: contact.id },
-                select: { id: true, platform: true, status: true, lastMessageAt: true, lastMessagePreview: true, channel: { select: { name: true } } },
-                orderBy: { lastMessageAt: 'desc' },
-                take: 10,
-            }),
-            this.prisma.consentEvent.findMany({
-                where: { contactId: contact.id },
-                orderBy: { occurredAt: 'desc' },
-                take: 10,
-                select: { type: true, source: true, occurredAt: true },
-            }),
-        ]);
-        return {
-            id: contact.id,
-            platform: contact.platform,
-            name: contactName(contact),
-            displayName: contact.displayName,
-            addressBookName: contact.addressBookName,
-            username: contact.username,
-            phone: contact.phone,
-            externalId: contact.externalId,
-            avatarUrl: contact.profilePicUrl,
-            tags: contact.tags,
-            attributes: (contact.attributes as Record<string, unknown> | null) ?? {},
-            optedOutAt: contact.optedOutAt,
-            optInAt: contact.optInAt,
-            blockedAt: contact.blockedAt,
-            firstSeenAt: contact.createdAt,
-            lastInboundAt: contact.lastInboundMessageAt,
-            customer: customer
-                ? {
-                    id: customer.id,
-                    name: [customer.firstName, customer.lastName].filter(Boolean).join(' ') || null,
-                    email: customer.email,
-                    phone: customer.phone,
-                    ordersCount: customer.ordersCount,
-                    totalSpent: customer.totalSpent.toString(),
-                    vipLevel: customer.vipLevel,
-                    tags: customer.tags,
-                    recentOrders: customer.orders.map((o) => ({ ...o, totalPrice: o.totalPrice.toString() })),
-                }
-                : null,
-            conversations,
-            consent,
         };
     }
 
@@ -610,12 +546,47 @@ export class InboxService {
                 return { location: body.location ?? null };
             case 'CONTACTS':
                 return { contacts: body.contacts ?? null };
-            case 'COMMENT':
-                return { postId: body.postId ?? null, parentId: body.parentId ?? null };
             case 'INTERACTIVE':
                 return { reply: body.interactive ?? body.button ?? body.postback ?? null };
             default:
                 return body.referral ? { referral: body.referral } : null;
         }
+    }
+
+    /**
+     * A comment, with the post it is on and whether the team has already
+     * answered it — Meta allows one private reply per comment.
+     */
+    private commentDetails(
+        m: { externalId: string | null; body: Prisma.JsonValue },
+        replies: Array<{ kind: MessageKind; inReplyToExternalId: string | null }>,
+        posts: Map<string, { permalink: string | null; thumbnailUrl: string | null; caption: string | null }>,
+    ) {
+        const body = (m.body ?? {}) as { postId?: string; parentId?: string; mediaProductType?: string };
+        const mine = replies.filter((r) => r.inReplyToExternalId === m.externalId);
+        return {
+            comment: {
+                postId: body.postId ?? null,
+                parentId: body.parentId ?? null,
+                mediaProductType: body.mediaProductType ?? null,
+                post: body.postId ? posts.get(body.postId) ?? null : null,
+                privateReplied: mine.some((r) => r.kind === MessageKind.PRIVATE_REPLY),
+                publicReplied: mine.some((r) => r.kind === MessageKind.COMMENT),
+            },
+        };
+    }
+
+    private async postsFor(channelId: string, postIds: Array<string | undefined>) {
+        const ids = [...new Set(postIds.filter((x): x is string => !!x))];
+        if (!ids.length) return new Map<string, { permalink: string | null; thumbnailUrl: string | null; caption: string | null }>();
+        const rows = await this.prisma.channelMedia.findMany({
+            where: { channelId, externalId: { in: ids } },
+            select: { externalId: true, permalink: true, thumbnailUrl: true, caption: true },
+        });
+        return new Map(rows.map((r) => [r.externalId, { permalink: r.permalink, thumbnailUrl: r.thumbnailUrl, caption: r.caption }]));
+    }
+
+    private publishAll(orgId: string, conversationIds: string[]) {
+        for (const id of conversationIds) this.events.publish(orgId, { type: 'conversation.updated', conversationId: id });
     }
 }

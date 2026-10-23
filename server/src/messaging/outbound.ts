@@ -61,7 +61,9 @@ export type OutboundPayload =
     | { type: 'location'; latitude: number; longitude: number; name?: string; address?: string }
     | { type: 'reaction'; targetExternalId: string; emoji: string }
     /** One private reply to an Instagram or Facebook comment. */
-    | { type: 'private_reply'; commentId: string; text: string };
+    | { type: 'private_reply'; commentId: string; text: string }
+    /** A public reply under an Instagram or Facebook comment. */
+    | { type: 'comment_reply'; commentId: string; text: string };
 
 export type SendOrigin = 'agent' | 'automation' | 'broadcast' | 'system';
 
@@ -117,8 +119,9 @@ export function checkSend(input: GateInput): GateResult {
         }
         return { ok: true, humanAgentTag: false };
     }
-    if (payload.type === 'private_reply' || payload.type === 'reaction') {
-        // Private replies have their own 7-day rule, enforced by Meta per comment.
+    if (payload.type === 'private_reply' || payload.type === 'comment_reply' || payload.type === 'reaction') {
+        // Private replies have their own 7-day rule, enforced by Meta per comment;
+        // a public reply is a comment, not a message, and has no window at all.
         return { ok: true, humanAgentTag: false };
     }
     if (window.open) return { ok: true, humanAgentTag: false };
@@ -172,7 +175,8 @@ function checkShape(platform: ChannelPlatform, payload: OutboundPayload): GateRe
             }
             return null;
         case 'private_reply':
-            return wa ? refuse('unsupported_on_platform', 'Private replies are for Instagram and Facebook comments.') : null;
+        case 'comment_reply':
+            return wa ? refuse('unsupported_on_platform', 'Comment replies are for Instagram and Facebook comments.') : null;
         default:
             return null;
     }
@@ -327,6 +331,7 @@ export function outboundText(payload: OutboundPayload): string | null {
         case 'list':
         case 'quick_replies':
         case 'private_reply':
+        case 'comment_reply':
             return payload.text;
         case 'media':
             return payload.caption ?? null;

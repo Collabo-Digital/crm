@@ -1,7 +1,7 @@
 import { UserRole } from '@prisma/client';
 import { canAssign, canReply, seesAll, visibilityWhere } from './inbox-visibility';
 
-const viewer = (role: UserRole, grants: string[] = []) => ({ userId: 'me', role, grants });
+const viewer = (role: UserRole, grants: string[] = [], teamIds: string[] = []) => ({ userId: 'me', role, grants, teamIds });
 
 describe('inbox visibility', () => {
     it('shows owners, admins, managers and view-all agents everything', () => {
@@ -14,6 +14,16 @@ describe('inbox visibility', () => {
     it('limits an agent to their own conversations, plus the queue when granted', () => {
         expect(visibilityWhere(viewer(UserRole.AGENT, ['section.chat']))).toEqual({ OR: [{ assignedUserId: 'me' }] });
         expect(visibilityWhere(viewer(UserRole.AGENT, ['section.chat', 'chat.view_unassigned']))).toEqual({
+            OR: [{ assignedUserId: 'me' }, { assignedUserId: null }],
+        });
+    });
+
+    it('opens the part of the queue routed to an agent\'s teams', () => {
+        expect(visibilityWhere(viewer(UserRole.AGENT, [], ['t1', 't2']))).toEqual({
+            OR: [{ assignedUserId: 'me' }, { assignedUserId: null, teamId: { in: ['t1', 't2'] } }],
+        });
+        // The whole queue already includes the team's part.
+        expect(visibilityWhere(viewer(UserRole.AGENT, ['chat.view_unassigned'], ['t1']))).toEqual({
             OR: [{ assignedUserId: 'me' }, { assignedUserId: null }],
         });
     });

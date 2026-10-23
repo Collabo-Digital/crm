@@ -17,6 +17,8 @@ import {
   ArrowLeftRight,
   FileText,
   Lock,
+  MessageSquare,
+  Contact,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
@@ -36,6 +38,7 @@ import { authService } from "~/services/auth.service";
 import { useStopImpersonating } from "~/hooks/use-admin-queries";
 import { useSectionAccess } from "~/hooks/use-section-access";
 import { useCurrentRole } from "~/hooks/use-current-role";
+import { useInboxCounts } from "~/hooks/use-inbox-queries";
 import { toast } from "sonner";
 
 type NavChild = { label: string; href: string; icon: typeof LayoutDashboard };
@@ -66,10 +69,17 @@ const PRODUCTS_CHILDREN: NavChild[] = [
   { label: "Inventory", href: "/products/inventory", icon: Boxes },
 ];
 
+/** Sub-nav for the Inbox section. */
+const INBOX_CHILDREN: NavChild[] = [
+  { label: "Conversations", href: "/inbox", icon: MessageSquare },
+  { label: "Contacts", href: "/inbox/contacts", icon: Contact },
+];
+
 const NAV_LINKS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Orders", href: "/orders", icon: ShoppingCart, children: ORDERS_CHILDREN },
   { label: "Products", href: "/products", icon: Package, children: PRODUCTS_CHILDREN },
+  { label: "Inbox", href: "/inbox", icon: MessageSquare, children: INBOX_CHILDREN },
   { label: "Analytics", href: "/analytics", icon: BarChart3 },
 ];
 
@@ -116,7 +126,12 @@ export function Navbar() {
     user?.isSuperAdmin && !impersonatedBy
       ? [...NAV_LINKS, { label: "Super Admin", href: "/admin/users", icon: ShieldCheck }]
       : NAV_LINKS;
-  const navLinks = isInfluencer ? allLinks.filter((item) => pillTarget(item) !== null) : allLinks;
+  // Unread chats on the Inbox pill, for members who can open it.
+  const { data: inboxCounts } = useInboxCounts(canAccess("/inbox") && !isInfluencer);
+  const withBadges = allLinks.map((item) =>
+    item.href === "/inbox" && inboxCounts?.unread ? { ...item, badge: inboxCounts.unread } : item,
+  );
+  const navLinks = isInfluencer ? withBadges.filter((item) => pillTarget(item) !== null) : withBadges;
 
   // Longest-prefix match, so a child route keeps its parent pill lit.
   const activeTop = matchNav(navLinks, location.pathname);

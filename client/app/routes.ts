@@ -61,11 +61,15 @@ export default [
     // packing-slip / pick-slip / invoice print).
     route("products/inventory/labels/print", "routes/app/products/inventory/labels-print.tsx"),
     route("products/:id", "routes/app/products/$id.tsx"),
-    // Chat, Campaigns and Logistics are not on this branch. Their old URLs
-    // fall through legacy-redirect to /dashboard rather than the bare 404.
+    // Inbox section: WhatsApp, Messenger and Instagram conversations, and the
+    // contacts behind them. The old preview lived at /conversation.
+    route("inbox", "routes/app/inbox.tsx"),
+    route("inbox/contacts", "routes/app/inbox/contacts.tsx"),
+    route("conversation/*", "routes/app/legacy-redirect.tsx", { id: "legacy-conversation" }),
+    // Campaigns and Logistics are not on this branch. Their old URLs fall
+    // through legacy-redirect to the landing page rather than the bare 404.
     route("logistics/*", "routes/app/legacy-redirect.tsx", { id: "removed-logistics" }),
     route("campaigns/*", "routes/app/legacy-redirect.tsx", { id: "removed-campaigns" }),
-    route("conversation/*", "routes/app/legacy-redirect.tsx", { id: "removed-conversation" }),
     // A visual preview with no backend yet.
     route("analytics", "routes/app/analytics.tsx"),
     route("profile", "routes/app/profile.tsx"),

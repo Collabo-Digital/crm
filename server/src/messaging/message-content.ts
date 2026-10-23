@@ -134,6 +134,7 @@ const KIND_LABEL: Partial<Record<MessageKind, string>> = {
     [MessageKind.PRODUCT]: 'Product',
     [MessageKind.TEMPLATE]: 'Template message',
     [MessageKind.UNSUPPORTED]: 'Message',
+    [MessageKind.COMMENT]: 'Comment',
 };
 
 /** The one line the conversation list shows for a message. */

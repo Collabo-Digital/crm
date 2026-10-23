@@ -54,6 +54,8 @@ function kindOf(payload: OutboundPayload): MessageKind {
             return MessageKind.REACTION;
         case 'private_reply':
             return MessageKind.PRIVATE_REPLY;
+        case 'comment_reply':
+            return MessageKind.COMMENT;
         default:
             return MessageKind.INTERACTIVE;
     }
@@ -138,7 +140,8 @@ export class MessagingSendService {
                         text,
                         templateName: input.payload.type === 'template' ? input.payload.name : null,
                         templateLanguage: input.payload.type === 'template' ? input.payload.language : null,
-                        inReplyToExternalId: input.payload.type === 'private_reply' ? input.payload.commentId : null,
+                        inReplyToExternalId:
+                            input.payload.type === 'private_reply' || input.payload.type === 'comment_reply' ? input.payload.commentId : null,
                         replyToMessageId: replyTo?.id ?? null,
                         replyToExternalId: replyTo?.externalId ?? null,
                         body: { payload: input.payload, humanAgentTag: gate.humanAgentTag } as unknown as Prisma.InputJsonValue,

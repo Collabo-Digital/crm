@@ -102,9 +102,11 @@ export class PlatformSenderService {
         const channel = await this.access.get(message.channelId);
         try {
             const externalId =
-                channel.platform === ChannelPlatform.WHATSAPP
-                    ? await this.sendWhatsApp(channel, message.contact, payload, message.replyToExternalId)
-                    : await this.sendMessenger(channel, message.contact.externalId, payload, message.replyToExternalId, humanAgentTag);
+                payload.type === 'comment_reply'
+                    ? await this.replyToComment(channel, payload)
+                    : channel.platform === ChannelPlatform.WHATSAPP
+                        ? await this.sendWhatsApp(channel, message.contact, payload, message.replyToExternalId)
+                        : await this.sendMessenger(channel, message.contact.externalId, payload, message.replyToExternalId, humanAgentTag);
             await this.markSent(message.id, message.channelId, externalId);
             if (payload.type === 'reaction') {
                 await this.applyBusinessReaction(channel, payload.targetExternalId, payload.emoji);
@@ -211,6 +213,27 @@ export class PlatformSenderService {
         });
         // Reactions answer without a message id; there is no row to key.
         return res.data.message_id ?? `${payload.type}:${Date.now()}`;
+    }
+
+    /**
+     * A public reply under a comment: Facebook `POST /{comment-id}/comments`,
+     * Instagram `POST /{ig-comment-id}/replies`. Our own reply comes back on
+     * the comments webhook from the account itself, which the handler skips.
+     */
+    private async replyToComment(channel: ChannelAccess, payload: Extract<OutboundPayload, { type: 'comment_reply' }>): Promise<string> {
+        const path = channel.platform === ChannelPlatform.INSTAGRAM ? `/${payload.commentId}/replies` : `/${payload.commentId}/comments`;
+        const res = await this.metaGraph.request<{ id?: string }>({
+            method: 'POST',
+            ...(channel.baseUrl ? { url: `${channel.baseUrl}${path}` } : { path }),
+            accessToken: channel.token,
+            body: { message: payload.text },
+            scopes: channel.scopes,
+            pageId: channel.pageId ?? undefined,
+            priority: Priority.INTERACTIVE,
+            channelId: channel.id,
+        });
+        if (!res.data.id) throw new MetaGraphError('Meta returned no comment id', 'API_ERROR');
+        return res.data.id;
     }
 
     private async uploadWhatsAppMedia(channel: ChannelAccess, payload: Extract<OutboundPayload, { type: 'media' }>): Promise<string> {

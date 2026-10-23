@@ -76,6 +76,14 @@ describe('checkSend', () => {
         expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: text, channel: { status: ChannelStatus.CONNECTED, isEnabled: true, sendsPaused: true } })).toMatchObject({ code: 'channel_unavailable' });
     });
 
+    it('lets a public comment reply go out whatever the window, on Instagram and Facebook only', () => {
+        const reply = { type: 'comment_reply' as const, commentId: '17858893269000001', text: 'Sent you a DM!' };
+        const closed = replyWindow(ChannelPlatform.INSTAGRAM, hoursBefore(24 * 30), now);
+        expect(gate({ platform: ChannelPlatform.INSTAGRAM, payload: reply, window: closed })).toEqual({ ok: true, humanAgentTag: false });
+        expect(gate({ platform: ChannelPlatform.FACEBOOK, payload: reply, window: closed }).ok).toBe(true);
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: reply })).toMatchObject({ ok: false, code: 'unsupported_on_platform' });
+    });
+
     it('checks shapes per platform', () => {
         expect(gate({ platform: ChannelPlatform.FACEBOOK, payload: { type: 'template', name: 'x', language: 'en' } })).toMatchObject({ code: 'unsupported_on_platform' });
         expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: { type: 'buttons', text: 'Pick', buttons: [1, 2, 3, 4].map((i) => ({ id: `${i}`, title: `B${i}` })) } })).toMatchObject({ code: 'invalid_payload' });

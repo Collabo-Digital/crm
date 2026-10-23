@@ -8,4 +8,8 @@ export class UpdateContactDto {
     /** Link to a store customer, or null to unlink. */
     @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() customerId?: string | null;
     @IsOptional() @IsBoolean() blocked?: boolean;
+    /** The member responsible for this contact, or null. */
+    @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() ownerUserId?: string | null;
+    /** The team responsible for this contact, or null. */
+    @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() ownerTeamId?: string | null;
 }

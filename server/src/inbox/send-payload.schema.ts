@@ -51,6 +51,8 @@ const SendPayloadSchema = z.discriminatedUnion('type', [
     /** The composer names our message row; the service resolves its platform id. */
     z.object({ type: z.literal('reaction'), messageId: z.string().min(1), emoji: z.string().max(16) }),
     z.object({ type: z.literal('private_reply'), commentMessageId: z.string().min(1), text }),
+    /** A public reply under an Instagram or Facebook comment. */
+    z.object({ type: z.literal('comment_reply'), commentMessageId: z.string().min(1), text: z.string().trim().min(1).max(2000) }),
 ]);
 
 export type SendPayloadInput = z.infer<typeof SendPayloadSchema>;
@@ -65,6 +67,6 @@ export function parseSendPayload(raw: unknown): SendPayloadInput {
 }
 
 /** The payload types that pass straight through to the send service. */
-export function asOutbound(input: Exclude<SendPayloadInput, { type: 'reaction' | 'private_reply' }>): OutboundPayload {
+export function asOutbound(input: Exclude<SendPayloadInput, { type: 'reaction' | 'private_reply' | 'comment_reply' }>): OutboundPayload {
     return input as OutboundPayload;
 }
