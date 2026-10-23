@@ -56,9 +56,9 @@ function money(amount: number, currency: string) {
 /** Stat tile: label, value (proportional figures), optional note. */
 function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-xl border bg-card p-4">
+    <div className="min-w-0 rounded-xl border border-border/60 bg-card p-4">
       <p className="text-caption text-muted-foreground">{label}</p>
-      <p className="mt-1 text-section font-semibold">{value}</p>
+      <p className="mt-2 break-words text-subhead tabular-nums">{value}</p>
       {sub && <p className="mt-0.5 text-micro text-muted-foreground">{sub}</p>}
     </div>
   );
@@ -70,10 +70,10 @@ function BarList({ rows, total }: { rows: Array<{ label: string; value: number; 
   return (
     <ul className="space-y-3">
       {rows.map((r) => (
-        <li key={r.label} className="grid grid-cols-[minmax(7rem,12rem)_1fr] items-center gap-3 text-caption">
-          <span className="truncate text-muted-foreground">{r.label}</span>
-          <span className="flex items-center gap-2">
-            <span className="h-2.5 rounded-r-[4px] bg-[var(--viz-1)]" style={{ width: `${(r.value / max) * 85}%`, minWidth: r.value ? 4 : 0 }} aria-hidden />
+        <li key={r.label} className="grid grid-cols-1 items-center gap-1.5 text-caption sm:grid-cols-[minmax(7rem,12rem)_1fr] sm:gap-3">
+          <span className="text-muted-foreground">{r.label}</span>
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="h-2.5 shrink rounded-sm bg-[var(--viz-1)]" style={{ width: `${(r.value / max) * 85}%`, minWidth: r.value ? 4 : 0 }} aria-hidden />
             <span className="whitespace-nowrap tabular-nums text-foreground">
               {num(r.value)}
               {total !== undefined && <span className="text-muted-foreground"> · {pct(r.value, total)}</span>}
@@ -147,7 +147,7 @@ export default function MessagingAnalyticsPage() {
 
       {/* One filter row; everything below follows it. */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex rounded-lg bg-muted p-0.5" role="tablist" aria-label="Period">
+        <div className="flex w-full rounded-xl bg-muted p-1 sm:w-auto sm:rounded-lg sm:p-0.5" role="tablist" aria-label="Period">
           {PERIODS.map((p) => (
             <button
               key={p}
@@ -155,13 +155,13 @@ export default function MessagingAnalyticsPage() {
               role="tab"
               aria-selected={days === p}
               onClick={() => setDays(p)}
-              className={cn("rounded-md px-3 py-1 text-caption font-medium", days === p ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground")}
+              className={cn("flex-1 rounded-lg px-3 py-2 text-caption font-medium sm:flex-none sm:rounded-md sm:py-1", days === p ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground")}
             >
               Last {p} days
             </button>
           ))}
         </div>
-        <select className="h-8 rounded-lg border bg-background px-2 text-caption" value={channelId} onChange={(e) => setChannelId(e.target.value)} aria-label="Channel">
+        <select className="h-8 w-full min-w-0 max-w-full rounded-lg border bg-background px-3 text-caption sm:w-auto" value={channelId} onChange={(e) => setChannelId(e.target.value)} aria-label="Channel">
           <option value="">All channels</option>
           {messaging.map((c) => (
             <option key={c.id} value={c.id}>
@@ -169,7 +169,7 @@ export default function MessagingAnalyticsPage() {
             </option>
           ))}
         </select>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
           <Button variant="outline" size="sm" onClick={() => void download("daily")} disabled={!!downloading || forbidden}>
             {downloading === "daily" ? <Loader2 className="animate-spin" /> : <Download />}
             Daily CSV
@@ -208,9 +208,9 @@ export default function MessagingAnalyticsPage() {
 
           <SectionCard
             title="Messages per day"
-            description={`Days in ${data.period.timeZone}. Hover a day for its numbers.`}
+            description={`Days in ${data.period.timeZone}. Select a day for its numbers.`}
             action={
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <ul className="flex items-center gap-3 text-caption">
                   {SERIES.map((s) => (
                     <li key={s.key} className="flex items-center gap-1.5">
@@ -286,7 +286,24 @@ export default function MessagingAnalyticsPage() {
             {data.agents.length === 0 ? (
               <p className="px-5 py-6 text-caption text-muted-foreground">No team members can reply yet.</p>
             ) : (
-              <div className="overflow-x-auto">
+              <>
+              <ul className="divide-y sm:hidden">
+                {data.agents.map((a) => (
+                  <li key={a.userId} className="space-y-3 p-4">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <p className="min-w-0 break-words text-body font-semibold">{a.name}</p>
+                      <span className="shrink-0 text-caption capitalize text-muted-foreground">{a.role.toLowerCase()}</span>
+                    </div>
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-caption">
+                      <div><dt className="text-muted-foreground">Replies</dt><dd className="mt-1 text-body tabular-nums">{num(a.replies)}</dd></div>
+                      <div><dt className="text-muted-foreground">Conversations</dt><dd className="mt-1 text-body tabular-nums">{num(a.conversations)}</dd></div>
+                      <div><dt className="text-muted-foreground">Median first reply</dt><dd className="mt-1 text-body tabular-nums">{formatDuration(a.medianFirstReplySec)}{a.firstReplies > 0 && <span className="text-caption text-muted-foreground"> · {num(a.firstReplies)} replies</span>}</dd></div>
+                      <div><dt className="text-muted-foreground">Closed / open</dt><dd className="mt-1 text-body tabular-nums">{num(a.closed)} / {num(a.openNow)}</dd></div>
+                    </dl>
+                  </li>
+                ))}
+              </ul>
+              <div className="hidden overflow-x-auto sm:block">
                 <table className="w-full min-w-[40rem] text-caption">
                   <thead className="border-b text-left text-muted-foreground">
                     <tr>
@@ -318,6 +335,7 @@ export default function MessagingAnalyticsPage() {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </SectionCard>
 
@@ -357,7 +375,21 @@ export default function MessagingAnalyticsPage() {
               {data.automations.length === 0 ? (
                 <p className="px-5 py-6 text-caption text-muted-foreground">No automation ran in this period.</p>
               ) : (
-                <div className="overflow-x-auto">
+                <>
+                <ul className="divide-y sm:hidden">
+                  {data.automations.slice(0, 10).map((a) => (
+                    <li key={a.id} className="space-y-3 p-4">
+                      <Link to={`/campaigns/automations/${a.id}`} className="block break-words text-body font-semibold text-brand-strong">{a.name}</Link>
+                      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-caption">
+                        <div><dt className="text-muted-foreground">Started</dt><dd className="mt-1 text-body tabular-nums">{num(a.started)}</dd></div>
+                        <div><dt className="text-muted-foreground">Finished</dt><dd className="mt-1 text-body tabular-nums">{num(a.completed)}</dd></div>
+                        <div><dt className="text-muted-foreground">Stopped</dt><dd className="mt-1 text-body tabular-nums">{num(a.failed)}</dd></div>
+                        <div><dt className="text-muted-foreground">Messages read / sent</dt><dd className="mt-1 text-body tabular-nums">{num(a.messagesRead)} / {num(a.messagesSent)}</dd></div>
+                      </dl>
+                    </li>
+                  ))}
+                </ul>
+                <div className="hidden overflow-x-auto sm:block">
                   <table className="w-full min-w-[28rem] text-caption">
                     <thead className="border-b text-left text-muted-foreground">
                       <tr>
@@ -388,6 +420,7 @@ export default function MessagingAnalyticsPage() {
                     </tbody>
                   </table>
                 </div>
+                </>
               )}
             </SectionCard>
           </div>

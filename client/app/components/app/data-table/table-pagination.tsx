@@ -43,21 +43,23 @@ export function TablePagination({
     total === undefined ? `Loading ${noun}…` : `${fmt(from)}–${fmt(to)} of ${fmt(total)} ${noun}`;
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-3 py-2">
-      <span aria-live="polite" className="text-label tabular-nums text-muted-foreground">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-4 md:px-3 md:py-2">
+      <span aria-live="polite" className="w-full text-center text-xs tabular-nums text-muted-foreground md:w-auto md:text-left md:text-label">
         {summary}
       </span>
-      <div className="flex flex-wrap items-center gap-4">
+      <div className="flex w-full flex-wrap items-center justify-between gap-3 md:w-auto md:justify-start md:gap-4">
         <div className="flex items-center gap-2">
-          <span className="text-label text-muted-foreground">Rows per page</span>
+          <span className="hidden text-label text-muted-foreground md:inline">Rows per page</span>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
                 aria-haspopup="listbox"
-                className="inline-flex h-7 items-center gap-1.5 rounded-md bg-card pl-2.5 pr-2 text-label font-medium tabular-nums text-foreground ring-1 ring-border transition-colors hover:bg-muted aria-expanded:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+                aria-label="Rows per page"
+                className="inline-flex h-11 items-center gap-1.5 rounded-xl bg-card pl-3 pr-2.5 text-label font-medium tabular-nums text-foreground ring-1 ring-border transition-colors hover:bg-muted aria-expanded:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 md:h-7 md:rounded-md md:pl-2.5 md:pr-2"
               >
                 {limit}
+                <span className="font-normal text-muted-foreground md:hidden">/ page</span>
                 <ChevronDown className="size-3.5 text-muted-foreground" />
               </button>
             </DropdownMenuTrigger>
@@ -79,6 +81,8 @@ export function TablePagination({
           <PageButton onClick={() => onPage(page - 1)} disabled={page <= 1} aria-label="Previous page">
             <ChevronLeft className="size-4" />
           </PageButton>
+          <span className="px-2 text-xs tabular-nums text-muted-foreground md:hidden">{fmt(page)} / {fmt(pages)}</span>
+          <div className="hidden items-center gap-0.5 md:flex">
           {pageItems(page, pages).map((item, index) =>
             item.kind === "gap" ? (
               <span
@@ -104,6 +108,7 @@ export function TablePagination({
               </PageButton>
             ),
           )}
+          </div>
           <PageButton onClick={() => onPage(page + 1)} disabled={page >= pages} aria-label="Next page">
             <ChevronRight className="size-4" />
           </PageButton>
@@ -118,7 +123,7 @@ function PageButton({ className, ...props }: React.ComponentProps<"button">) {
     <button
       type="button"
       className={cn(
-        "flex h-7 min-w-7 items-center justify-center rounded-md text-label text-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50",
+        "flex h-11 min-w-11 items-center justify-center rounded-xl bg-muted/60 text-label text-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 md:h-7 md:min-w-7 md:rounded-md md:bg-transparent",
         className,
       )}
       {...props}

@@ -47,17 +47,17 @@ export const ConversationListRow = memo(function ConversationListRow({
         // Flat fill for the selected row rather than an accent rule down the
         // side: at list density a coloured bar reads as a second, competing
         // divider between every pair of rows.
-        "group relative flex w-full items-start gap-3 px-3 py-3.5 text-left transition-colors",
+        "group relative flex w-full items-start gap-3.5 px-4 py-5 text-left transition-colors active:bg-muted/70 md:gap-3 md:px-3 md:py-3.5",
         isSelected ? "bg-muted" : "hover:bg-muted/50",
         isChecked && "bg-brand/10",
       )}
     >
       <div className="relative shrink-0">
         {/* The checkbox takes the avatar's place on hover or while selecting. */}
-        <div className={cn(selecting ? "hidden" : "group-hover:hidden")}>
-          <ConversationAvatar name={contact.name} avatarUrl={contact.avatarUrl} platform={platform} />
+        <div className={cn(selecting ? "hidden" : "md:group-hover:hidden")}>
+          <ConversationAvatar name={contact.name} avatarUrl={contact.avatarUrl} platform={platform} className="max-md:[&_[data-slot=avatar]]:size-12 max-md:[&_[data-slot=avatar-fallback]]:text-base" />
         </div>
-        <div className={cn("relative z-10 size-8 items-center justify-center", selecting ? "flex" : "hidden group-hover:flex")}>
+        <div className={cn("relative z-10 size-12 items-center justify-center md:size-8", selecting ? "flex" : "hidden md:group-hover:flex")}>
           <Checkbox
             checked={isChecked}
             onCheckedChange={(value) => onCheck(conversation.id, value === true)}
@@ -74,7 +74,7 @@ export const ConversationListRow = memo(function ConversationListRow({
         className="min-w-0 flex-1 text-left outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-ring/50"
       >
         <div className="flex items-baseline justify-between gap-2">
-          <span className={cn("truncate text-caption text-foreground", unread && "font-semibold")}>
+          <span className={cn("truncate text-[15px] font-medium text-foreground md:text-caption md:font-normal", unread && "font-semibold md:font-semibold")}>
             {contact.name}
           </span>
           <span className="shrink-0 text-micro text-muted-foreground">
@@ -82,7 +82,7 @@ export const ConversationListRow = memo(function ConversationListRow({
           </span>
         </div>
 
-        <p className={cn("mt-0.5 flex items-center gap-1 truncate text-caption", unread ? "text-foreground" : "text-muted-foreground")}>
+        <p className={cn("mt-1 flex items-center gap-1 truncate text-sm md:mt-0.5 md:text-caption", unread ? "text-foreground" : "text-muted-foreground")}>
           {conversation.lastMessagePreview?.startsWith("Comment") && <MessageCircle className="size-3 shrink-0" />}
           <span className="truncate">{conversation.lastMessagePreview ?? "No messages yet"}</span>
         </p>
@@ -105,7 +105,7 @@ export const ConversationListRow = memo(function ConversationListRow({
 
       {unread && (
         <span
-          className="mt-0.5 flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-brand px-1 text-micro font-semibold text-brand-foreground"
+          className="mt-0.5 flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand px-1 text-[11px] font-semibold text-brand-foreground md:h-4 md:min-w-4 md:text-micro"
           aria-label={`${unreadCount} unread`}
         >
           {unreadCount > 99 ? "99+" : unreadCount}

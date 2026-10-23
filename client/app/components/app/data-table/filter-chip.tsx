@@ -83,7 +83,7 @@ export function FilterChip<Row>({
             type="button"
             aria-haspopup="listbox"
             aria-expanded={open}
-            className="flex h-7 items-center gap-1 whitespace-nowrap rounded-full pl-3 pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+            className="flex h-10 items-center gap-1 whitespace-nowrap rounded-full pl-3 pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 md:h-7"
           >
             <span className="font-medium">{def.label}:</span>
             <span className="max-w-50 truncate">{valueLabel}</span>

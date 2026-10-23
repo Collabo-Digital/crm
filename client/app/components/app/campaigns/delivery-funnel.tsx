@@ -24,9 +24,9 @@ export function DeliveryFunnel({ stats, className }: { stats: BroadcastStats; cl
         {STAGES.map((stage) => {
           const value = stats[stage.key] as number;
           return (
-            <div key={stage.key} className="grid grid-cols-[8rem_minmax(0,1fr)_5rem] items-center gap-3" title={stage.hint}>
+            <div key={stage.key} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 sm:grid-cols-[8rem_minmax(0,1fr)_5rem]" title={stage.hint}>
               <span className="text-caption text-muted-foreground">{stage.label}</span>
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
+              <div className="col-span-2 row-start-2 h-2 overflow-hidden rounded-full bg-muted sm:col-span-1 sm:row-auto">
                 {/* Computed geometry — the one case DESIGN.md allows `style`. */}
                 <div className={cn("h-full rounded-full", stage.fill)} style={{ width: base ? `${Math.min(100, (value / base) * 100)}%` : "0%" }} />
               </div>

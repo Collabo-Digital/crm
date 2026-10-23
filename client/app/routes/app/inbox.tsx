@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import { useSearchParams } from "react-router";
 
 import { AvailabilityMenu } from "~/components/app/inbox/availability-menu";
@@ -13,7 +14,9 @@ import { SaveViewDialog } from "~/components/app/inbox/save-view-dialog";
 import { TemplatePickerDialog } from "~/components/app/inbox/template-picker-dialog";
 import { ThreadHeader } from "~/components/app/inbox/thread-header";
 import { QueryErrorState } from "~/components/app/query-error-state";
+import { Button } from "~/components/ui/button";
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderTitle } from "~/components/ui/page-header";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "~/components/ui/sheet";
 import { useChannels } from "~/hooks/use-channel-queries";
 import {
   useAddNoteMutation,
@@ -102,7 +105,9 @@ function readFilters(params: URLSearchParams): InboxFilters {
 export default function InboxPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const panelOpensByDefault = useMediaQuery(PANEL_DEFAULT_OPEN_QUERY);
+  const hasRoomForPanel = useMediaQuery("(min-width: 1024px)");
   const [isPanelOpen, setIsPanelOpen] = useState(panelOpensByDefault);
+  const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [quote, setQuote] = useState<InboxMessage | null>(null);
@@ -210,6 +215,7 @@ export default function InboxPage() {
   useEffect(() => {
     setQuote(null);
     setCommentTarget(null);
+    setMobileDetailsOpen(false);
   }, [selectedId]);
 
   /** Closing or snoozing moves the conversation out of this list; keep the agent moving. */
@@ -235,10 +241,11 @@ export default function InboxPage() {
   const seesOthers = !!me?.access.seesAll;
 
   return (
-    <div className="flex h-full flex-col gap-2">
-      <PageHeader className="shrink-0 items-center">
+    <div className="flex h-full min-h-0 flex-col gap-4 md:gap-2">
+      <PageHeader className={cn("shrink-0 items-center", selectedId && "hidden md:flex")}>
         <PageHeaderContent>
           <PageHeaderTitle>Inbox</PageHeaderTitle>
+          <p className="text-sm text-muted-foreground md:hidden">Every conversation, in one place.</p>
         </PageHeaderContent>
         <PageHeaderActions>
           <AvailabilityMenu
@@ -261,7 +268,8 @@ export default function InboxPage() {
       */}
       <div
         className={cn(
-          "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden rounded-xl bg-card shadow-sm ring-1 ring-border",
+          "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden rounded-[24px] bg-card shadow-sm ring-1 ring-border/60 md:rounded-xl md:ring-border",
+          selectedId && "max-md:rounded-none max-md:shadow-none max-md:ring-0",
           "md:grid-cols-[300px_minmax(0,1fr)]",
           showPanel && "lg:grid-cols-[300px_minmax(0,1fr)_288px]",
         )}
@@ -312,10 +320,16 @@ export default function InboxPage() {
             setCheckedIds(new Set());
           }}
           onBulk={runBulk}
-          className={cn("border-r md:flex", selectedId ? "hidden" : "flex")}
+          className={cn("md:flex md:border-r", selectedId ? "hidden" : "flex")}
         />
 
         <div className={cn("relative min-h-0 min-w-0 flex-col", selectedId ? "flex" : "hidden md:flex")}>
+          {selectedId && !conversation && (
+            <div className="flex shrink-0 items-center gap-2 border-b px-3 py-3 md:hidden">
+              <Button variant="ghost" size="icon" className="size-11 rounded-full" onClick={() => patchParams({ c: null })} aria-label="Back to conversations"><ArrowLeft className="size-5" /></Button>
+              <span className="font-semibold">Conversation</span>
+            </div>
+          )}
           {detailQuery.isError ? (
             <div className="p-6">
               <QueryErrorState resource="this conversation" onRetry={() => void detailQuery.refetch()} />
@@ -331,9 +345,9 @@ export default function InboxPage() {
                 members={members}
                 teams={teams}
                 me={me}
-                isPanelOpen={isPanelOpen}
+                isPanelOpen={hasRoomForPanel ? isPanelOpen : mobileDetailsOpen}
                 isMutating={update.isPending}
-                onTogglePanel={() => setIsPanelOpen((previous) => !previous)}
+                onTogglePanel={() => hasRoomForPanel ? setIsPanelOpen((previous) => !previous) : setMobileDetailsOpen(true)}
                 onBack={() => patchParams({ c: null })}
                 onAssign={(assignedUserId) =>
                   update.mutate(
@@ -410,11 +424,7 @@ export default function InboxPage() {
           )}
         </div>
 
-        {/*
-          A docked column, never an overlay. A Sheet dismisses on outside click,
-          which would throw away a half-typed reply — and the agent reads this
-          panel *while* composing, not instead of it.
-        */}
+        {/* The docked desktop panel and mobile sheet leave the composer mounted. */}
         {conversation && (
           <ContactPanel
             key={conversation.contact.id}
@@ -433,6 +443,32 @@ export default function InboxPage() {
           />
         )}
       </div>
+
+      {conversation && (
+        <Sheet open={mobileDetailsOpen && !hasRoomForPanel} onOpenChange={setMobileDetailsOpen}>
+          <SheetContent className="max-w-md pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] [&>button]:top-[max(1rem,env(safe-area-inset-top))] [&>button]:size-11 [&>button]:rounded-full">
+            <SheetHeader className="shrink-0 px-5 py-6 pr-16">
+              <SheetTitle className="text-xl">{conversation.contact.name}</SheetTitle>
+              <SheetDescription>Contact details, orders and team notes</SheetDescription>
+            </SheetHeader>
+            <ContactPanel
+              key={conversation.contact.id}
+              contact={conversation.contact}
+              conversationId={conversation.id}
+              notes={notes}
+              members={members}
+              teams={teams}
+              canEdit={conversation.reply.canReply}
+              canAssignOthers={!!me?.access.canAssignOthers}
+              meId={me?.userId}
+              defaultCurrency={org?.currency ?? "INR"}
+              isSavingNote={addNote.isPending}
+              onAddNote={(body) => addNote.mutate(body)}
+              className="min-h-0 flex-1 overscroll-contain bg-muted/30 [&>section]:mx-3 [&>section]:my-3 [&>section]:rounded-2xl [&>section]:border-0 [&>section]:bg-card [&>section]:p-5 [&_button]:min-h-11 [&_input]:min-h-11 [&_input]:text-base [&_h3]:text-xs [&_dl]:space-y-3 [&_dl]:text-sm"
+            />
+          </SheetContent>
+        </Sheet>
+      )}
 
       <SaveViewDialog
         key={saveViewOpen ? "open" : "closed"}

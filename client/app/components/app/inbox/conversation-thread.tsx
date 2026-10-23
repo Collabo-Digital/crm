@@ -88,7 +88,7 @@ export function ConversationThread({
       role="log"
       aria-live="polite"
       aria-label="Message thread"
-      className={cn("min-h-0 flex-1 overflow-y-auto px-5 py-4", className)}
+      className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain bg-muted/25 px-3 py-5 md:bg-transparent md:px-5 md:py-4", className)}
     >
       {hasEarlier && (
         <div className="flex justify-center pb-3">
@@ -109,9 +109,9 @@ export function ConversationThread({
         <p className="py-8 text-center text-caption text-muted-foreground">No messages in this conversation yet.</p>
       ) : (
         days.map((day) => (
-          <section key={day.key} className="flex flex-col gap-3 pb-3">
+          <section key={day.key} className="flex flex-col gap-4 pb-4 md:gap-3 md:pb-3">
             <div className="flex items-center justify-center py-1">
-              <span className="rounded-full bg-muted px-2.5 py-0.5 text-micro font-medium text-muted-foreground">{day.label}</span>
+              <span className="rounded-full bg-card px-3 py-1.5 text-[11px] font-medium text-muted-foreground shadow-sm md:bg-muted md:px-2.5 md:py-0.5 md:text-micro md:shadow-none">{day.label}</span>
             </div>
 
             {day.items.map((item) =>

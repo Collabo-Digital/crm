@@ -34,7 +34,7 @@ export function AvailabilityMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" disabled={disabled} aria-label={`Your status: ${label}`}>
+        <Button variant="outline" size="sm" disabled={disabled} aria-label={`Your status: ${label}`} className="min-h-11 rounded-full px-3 text-xs md:min-h-0 md:rounded-lg md:px-2.5">
           <span className={cn("size-2 rounded-full", PRESENCE_DOT[presence])} />
           {label}
           <ChevronDown className="size-3 text-muted-foreground" />

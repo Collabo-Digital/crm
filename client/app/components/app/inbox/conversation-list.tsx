@@ -29,7 +29,7 @@ function FilterChip({ label, onClear }: { label: string; onClear: () => void }) 
     <button
       type="button"
       onClick={onClear}
-      className="inline-flex w-fit items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-micro font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="inline-flex min-h-9 w-fit items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-xs font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:min-h-0 md:gap-1 md:px-2 md:py-0.5 md:text-micro"
     >
       {label}
       <X className="size-3" />
@@ -133,16 +133,16 @@ export function ConversationList({
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
-      <div className="shrink-0 space-y-2.5 border-b px-3 py-3">
+      <div className="shrink-0 space-y-2.5 border-b border-border/60 px-4 pt-4 pb-2 md:px-3 md:py-3">
         <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground md:left-2.5 md:size-3.5" />
           <Input
             type="search"
             value={filters.search ?? ""}
             onChange={(event) => onFiltersChange({ search: event.target.value || undefined })}
-            placeholder="Search name, number or message"
+            placeholder="Search conversations"
             aria-label="Search conversations"
-            className="pl-8 text-caption"
+            className="h-12 rounded-2xl border-transparent bg-muted/70 pl-11 text-base shadow-none md:h-9 md:rounded-md md:border-input md:bg-transparent md:pl-8 md:text-caption"
           />
         </div>
 
@@ -158,7 +158,7 @@ export function ConversationList({
             onClear={onToggleSelecting}
           />
         ) : (
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center justify-between gap-2 max-md:[&_button]:min-h-11 max-md:[&_button]:min-w-11 max-md:[&_button]:rounded-xl">
             <InboxFolderMenu
               counts={counts}
               view={view}
@@ -207,7 +207,7 @@ export function ConversationList({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2 md:pb-0">
         {isError ? (
           <div className="p-4">
             <QueryErrorState resource="conversations" onRetry={onRetry} />

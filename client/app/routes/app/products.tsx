@@ -4,7 +4,7 @@ import { Link, useNavigate } from "react-router";
 import {
   Plus, Package, ListChecks,
   PackageX, Loader2, Pencil, Trash2, UploadCloud,
-  Download, Upload, Boxes, Barcode,
+  Download, Upload, Boxes, Barcode, MoreHorizontal,
 } from "lucide-react";
 import { StatCard } from "~/components/app/stat-card";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -42,6 +42,8 @@ import { ShopifySyncCell } from "~/components/app/shopify-sync-cell";
 import type { ProductStatus, ProductListParams, Product, ProductStatsResponse, StockStatus } from "~/types/api";
 import { Separator } from "~/components/ui/separator";
 import { Button } from "~/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
+import { PageHeader, PageHeaderContent, PageHeaderTitle, PageHeaderDescription, PageHeaderActions } from "~/components/ui/page-header";
 
 export function meta() {
   return [{ title: "Products | Collabo CRM" }];
@@ -355,15 +357,14 @@ export default function ProductsPage() {
     // pagination row.
     <div className={showDock ? "space-y-6 pb-24" : "space-y-6"}>
       {/* Page header */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Products</h1>
-          <p className="text-sm text-muted-foreground">
-            Manage your product catalog, inventory, and pricing.
-          </p>
-        </div>
+      <PageHeader>
+        <PageHeaderContent>
+          <PageHeaderTitle>Products</PageHeaderTitle>
+          <PageHeaderDescription>Your catalog, stock, and pricing in one place.</PageHeaderDescription>
+        </PageHeaderContent>
         {!isVendor && (
-          <div className="flex items-center gap-2">
+          <PageHeaderActions className="w-full justify-end md:w-auto">
+            <div className="hidden items-center gap-2 md:flex">
             <Button
               variant="outline"
               size="action"
@@ -395,17 +396,31 @@ export default function ProductsPage() {
               <Barcode className="size-3.5" />
               {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}
             </Button>
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="mr-auto size-11 rounded-xl md:hidden" aria-label="More product actions">
+                  <MoreHorizontal className="size-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onSelect={handleExport} disabled={exporting}><Download /> Export products</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setImportOpen(true)}><Upload /> Import products</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setCodesOpen(true)}><Barcode /> {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button
               variant="brand"
               size="action"
               onClick={() => setCreatingProduct(true)}
+              className="h-11 rounded-xl px-5 md:h-8 md:rounded-lg md:px-3"
             >
               <Plus className="size-3.5" />
               Add Product
             </Button>
-          </div>
+          </PageHeaderActions>
         )}
-      </div>
+      </PageHeader>
 
       <ProductCodesDialog open={codesOpen} onOpenChange={setCodesOpen} />
 
@@ -419,22 +434,21 @@ export default function ProductsPage() {
       )}
 
       {/* Stat cards */}
-      <div className="grid grid-cols-1  sm:grid-cols-2 lg:grid-cols-4  bg-white p-3 rounded-xl gap-5">
+      <div className="grid grid-cols-2 gap-4 rounded-3xl bg-card p-4 md:gap-5 md:rounded-xl md:p-3 lg:grid-cols-4">
         {statsLoading ? (
           Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="rounded-xl bg-white dark:bg-gray-900 p-5 shadow-sm ring-1 ring-border">
+            <div key={i} className="min-w-0 p-1 md:p-5">
               <Skeleton className="h-3 w-24 mb-4" />
               <Skeleton className="h-7 w-20" />
             </div>
           ))
         ) : stats ? (
           STAT_CARDS.map(({ key, label, icon }, i, arr) => (
-            <div key={key} className="flex items-center gap-4">
+            <div key={key} className="flex min-w-0 items-center gap-4">
               <StatCard
                 variant="inline"
                 label={label}
                 value={stats[key].toLocaleString()}
-                change={0}
                 icon={icon}
                 className="flex-1"
               />
@@ -445,7 +459,7 @@ export default function ProductsPage() {
           ))
         ) : (
           STAT_CARDS.map(({ key, label, icon }) => (
-            <StatCard key={key} variant="inline" label={label} value="—" change={0} icon={icon} />
+            <StatCard key={key} variant="inline" label={label} value="—" icon={icon} />
           ))
         )}
       </div>
@@ -459,6 +473,7 @@ export default function ProductsPage() {
         noun="products"
         searchPlaceholder="Search by name, vendor or SKU…"
         onRowClick={(product) => navigate(`/products/${product.id}`)}
+        mobileRow={(product) => <ProductMobileSummary product={product} currency={orgCurrency} lowStockThreshold={lowStockThreshold} />}
         selection={{
           isSelected: (product) => selected.has(product.id),
           onToggle: toggleSelect,
@@ -500,6 +515,44 @@ export default function ProductsPage() {
       {/* CSV import wizard */}
       {importOpen && <CsvImportWizard onClose={() => setImportOpen(false)} />}
 
+    </div>
+  );
+}
+
+function ProductMobileSummary({ product, currency, lowStockThreshold }: { product: Product; currency: string; lowStockThreshold: number }) {
+  const priceCurrency = product.channel?.currency ?? currency;
+  const [failedImage, setFailedImage] = useState<string | null>(null);
+  return (
+    <div className="space-y-3">
+      <div className="flex items-start gap-3">
+        {product.image?.src && failedImage !== product.image.src ? (
+          <img src={product.image.src} alt="" loading="lazy" onError={() => setFailedImage(product.image!.src)} className="size-14 shrink-0 rounded-xl bg-muted object-cover" />
+        ) : (
+          <span className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground"><Package className="size-6" /></span>
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="line-clamp-2 text-sm font-semibold leading-snug text-foreground">{product.title}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {[product.vendor, product.variantCount > 1 ? `${product.variantCount} variants` : product.productType].filter(Boolean).join(" · ")}
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-semibold tabular-nums text-foreground">
+          {formatCurrency(product.priceRange.min, priceCurrency)}
+          {product.priceRange.min !== product.priceRange.max && <><span className="mx-1 text-muted-foreground">–</span>{formatCurrency(product.priceRange.max, priceCurrency)}</>}
+        </p>
+        <StatusPill className={cn("h-6 px-2.5 text-[11px]", STATUS_CLASS[product.status])}>{STATUS_LABEL[product.status]}</StatusPill>
+      </div>
+      <Link
+        to={`/products/inventory?search=${encodeURIComponent(product.title)}`}
+        className={cn("flex min-h-10 w-fit items-center gap-1.5 text-xs font-medium", product.totalStock === 0 ? "text-danger" : product.totalStock <= lowStockThreshold ? "text-warning-strong" : "text-muted-foreground")}
+      >
+        <span className="size-1.5 rounded-full bg-current" />
+        {product.totalStock === 0 ? "Out of stock" : `${product.totalStock.toLocaleString("en-IN")} in stock`}
+        {product.totalStock > 0 && product.totalStock <= lowStockThreshold && <span>· Low stock</span>}
+      </Link>
+      <ShopifySyncCell summary={describeProductShopifySync(product)} />
     </div>
   );
 }

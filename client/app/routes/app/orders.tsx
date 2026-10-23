@@ -8,7 +8,7 @@ import { useListUrlState } from "~/hooks/use-list-url-state";
 import { Link, useNavigate } from "react-router";
 import {
   Download, Upload, ShoppingBag, Package, Loader2,
-  Target, Box, Plus, Printer, FileText,
+  Target, Box, Plus, Printer, FileText, MoreHorizontal,
 } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import {
@@ -21,7 +21,10 @@ import {
 import { StatCard } from "~/components/app/stat-card";
 import { MoneyTotal } from "~/components/app/money-total";
 import { DataTable, useDataTableState } from "~/components/app/data-table";
-import { OrderRowActions, useOrderColumns } from "~/components/app/orders-table";
+import { OrderMobileSummary, OrderRowActions, useOrderColumns } from "~/components/app/orders-table";
+import { ShopifySyncCell } from "~/components/app/shopify-sync-cell";
+import { describeOrderShopifySync } from "~/lib/shopify-sync";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
 import { DockButton, FloatingDock } from "~/components/app/floating-dock";
 import { BulkInvoiceDialog } from "~/components/app/bulk-invoice-dialog";
 import { useInvoiceActionGates } from "~/hooks/use-invoice-action-gates";
@@ -176,6 +179,19 @@ export default function OrdersPage() {
     return direction === "down" ? -percentage : percentage;
   }
 
+  const downloadReport = () => startDownload(
+    "report",
+    () => dashboardService.exportCsv(statsParams),
+    `orders-report-${fileTag}.csv`,
+    "Couldn't download the report. Please try again.",
+  );
+  const exportOrders = () => startDownload(
+    "json",
+    () => orderService.exportJson({ dateFrom, dateTo }),
+    `orders-${fileTag}.json`,
+    "Couldn't export the orders. Please try again.",
+  );
+
   return (
     // Bottom padding while the bulk-action dock is up, so it never covers the
     // pagination row.
@@ -185,10 +201,10 @@ export default function OrdersPage() {
         <PageHeaderContent>
           <PageHeaderTitle>Orders</PageHeaderTitle>
           <PageHeaderDescription>
-            An overview of recent data of customers info, products details and analysis.
+            Track sales, payments, and fulfillment.
           </PageHeaderDescription>
         </PageHeaderContent>
-        <PageHeaderActions>
+        <PageHeaderActions className="w-full justify-end md:w-auto">
           {/* "Download Report" is the dashboard's order CSV for the chosen
               date range. "Export JSON" is the same orders as a JSON file via
               the orders export route. Both take the date range only — the
@@ -197,18 +213,13 @@ export default function OrdersPage() {
               Both lock while either runs; the clicked one shows progress
               until its file arrives or fails. */}
           {!isVendor && (
-            <>
+            <div className="hidden items-center gap-2 md:flex">
               <Button
                 variant="brand"
                 size="action"
                 disabled={activeDownload !== null}
                 aria-busy={activeDownload === "report"}
-                onClick={() => startDownload(
-                  "report",
-                  () => dashboardService.exportCsv(statsParams),
-                  `orders-report-${fileTag}.csv`,
-                  "Couldn't download the report. Please try again.",
-                )}
+                onClick={downloadReport}
               >
                 {activeDownload === "report" ? (
                   <Loader2 className="size-3.5 animate-spin" />
@@ -222,12 +233,7 @@ export default function OrdersPage() {
                 size="action"
                 disabled={activeDownload !== null}
                 aria-busy={activeDownload === "json"}
-                onClick={() => startDownload(
-                  "json",
-                  () => orderService.exportJson({ dateFrom, dateTo }),
-                  `orders-${fileTag}.json`,
-                  "Couldn't export the orders. Please try again.",
-                )}
+                onClick={exportOrders}
               >
                 {activeDownload === "json" ? (
                   <Loader2 className="size-3.5 animate-spin" />
@@ -236,9 +242,22 @@ export default function OrdersPage() {
                 )}
                 {activeDownload === "json" ? "Exporting…" : "Export JSON"}
               </Button>
-            </>
+            </div>
           )}
-          <Button asChild variant="brand" size="action">
+          {!isVendor && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="mr-auto size-11 rounded-xl md:hidden" aria-label="More order actions">
+                  <MoreHorizontal className="size-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onSelect={downloadReport} disabled={activeDownload !== null}><Download /> Download report</DropdownMenuItem>
+                <DropdownMenuItem onSelect={exportOrders} disabled={activeDownload !== null}><Upload /> Export JSON</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          <Button asChild variant="brand" size="action" className="h-11 rounded-xl px-5 md:h-8 md:rounded-lg md:px-3">
             <Link to="/orders/new">
               <Plus className="size-3.5" />
               Create Order
@@ -248,10 +267,10 @@ export default function OrdersPage() {
       </PageHeader>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 bg-white dark:bg-gray-900 p-3 rounded-xl gap-5">
+      <div className="grid grid-cols-2 gap-4 rounded-3xl bg-card p-4 md:gap-5 md:rounded-xl md:p-3 lg:grid-cols-4">
         {statsLoading ? (
           Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="p-5">
+            <div key={i} className="min-w-0 p-1 md:p-5">
               <Skeleton className="h-3 w-24 mb-4" />
               <Skeleton className="h-7 w-20" />
             </div>
@@ -260,7 +279,7 @@ export default function OrdersPage() {
           STAT_CARDS.map(({ key, label, icon, currency }, i, arr) => {
             const metric = stats[key];
             return (
-              <div key={key} className="flex items-center gap-4">
+              <div key={key} className="flex min-w-0 items-center gap-4">
                 <StatCard
                   variant="inline"
                   label={label}
@@ -310,6 +329,12 @@ export default function OrdersPage() {
         noun="orders"
         searchPlaceholder="Search order #, customer or email…"
         onRowClick={(order) => navigate(`/orders/${order.id}`)}
+        mobileRow={(order) => (
+          <>
+            <OrderMobileSummary order={order} currency={orgCurrency} />
+            {showShopifyColumn && <div className="mt-3"><ShopifySyncCell summary={describeOrderShopifySync(order)} /></div>}
+          </>
+        )}
         selection={{
           isSelected: (order) => selectedIds.has(order.id),
           onToggle: toggleRow,

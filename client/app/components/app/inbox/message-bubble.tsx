@@ -9,6 +9,7 @@ import {
   Lock,
   MapPin,
   MessageCircle,
+  MoreHorizontal,
   ShoppingCart,
   SmilePlus,
   UserRound,
@@ -58,7 +59,7 @@ function MessageMedia({ message, isOutbound }: { message: InboxMessage; isOutbou
       return (
         <div className="space-y-1">
           {media.voice && <p className="text-micro opacity-80">Voice message</p>}
-          <audio src={media.url} controls preload="none" className="h-9 max-w-64" />
+          <audio src={media.url} controls preload="none" className="h-9 w-full max-w-64" />
         </div>
       );
     default:
@@ -320,8 +321,8 @@ export const MessageBubble = memo(function MessageBubble({
           className={cn(
             // 14px, not 12px. `text-caption` is meta-text size — timestamps and
             // labels. Message bodies are the thing being read on this page.
-            "rounded-xl px-4 py-3 text-body",
-            isOutbound ? "rounded-tr-sm bg-brand text-brand-foreground" : "rounded-tl-sm bg-muted text-foreground",
+            "rounded-[20px] px-4 py-3 text-[15px] leading-relaxed md:rounded-xl md:text-body",
+            isOutbound ? "rounded-tr-sm bg-brand text-brand-foreground" : "rounded-tl-sm bg-card text-foreground shadow-sm md:bg-muted md:shadow-none",
             // The queued bubble is dimmed rather than hidden — the agent needs
             // to see their own words land the instant they hit send.
             isPending && "opacity-70",
@@ -376,17 +377,22 @@ export const MessageBubble = memo(function MessageBubble({
       </div>
 
       {canAct && (
-        <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          <Button variant="ghost" size="icon-xs" onClick={() => onQuote(message)} aria-label="Reply to this message" title="Reply">
+        <div className="flex shrink-0 items-center text-muted-foreground transition-opacity md:opacity-0 md:group-hover:opacity-100 focus-within:opacity-100">
+          <Button variant="ghost" size="icon-xs" onClick={() => onQuote(message)} aria-label="Reply to this message" title="Reply" className="hidden md:inline-flex">
             <CornerUpLeft />
           </Button>
           <Popover open={reactOpen} onOpenChange={setReactOpen}>
             <PopoverTrigger asChild>
-              <Button variant="ghost" size="icon-xs" aria-label="React to this message" title="React">
-                <SmilePlus />
+              <Button variant="ghost" size="icon-xs" aria-label="Message actions" title="Message actions" className="size-11 rounded-full md:size-6 md:rounded-md">
+                <MoreHorizontal className="size-4 md:hidden" />
+                <SmilePlus className="hidden md:block" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent side="top" className="flex w-auto gap-1 p-1.5">
+            <PopoverContent side="top" className="w-auto rounded-2xl p-2 md:rounded-lg md:p-1.5">
+              <Button variant="ghost" onClick={() => { onQuote(message); setReactOpen(false); }} className="mb-1 h-11 w-full justify-start rounded-xl md:hidden">
+                <CornerUpLeft className="size-4" />Reply to message
+              </Button>
+              <div className="flex gap-0.5 md:gap-1">
               {QUICK_REACTIONS.map((emoji) => (
                 <button
                   key={emoji}
@@ -395,12 +401,13 @@ export const MessageBubble = memo(function MessageBubble({
                     onReact(message, emoji);
                     setReactOpen(false);
                   }}
-                  className="rounded-md px-1.5 py-1 text-body hover:bg-muted"
+                  className="flex size-11 items-center justify-center rounded-xl text-xl hover:bg-muted md:size-auto md:rounded-md md:px-1.5 md:py-1 md:text-body"
                   aria-label={`React with ${emoji}`}
                 >
                   {emoji}
                 </button>
               ))}
+              </div>
             </PopoverContent>
           </Popover>
         </div>

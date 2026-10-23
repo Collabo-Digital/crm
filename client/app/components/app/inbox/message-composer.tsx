@@ -5,6 +5,7 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
 import { Textarea } from "~/components/ui/textarea";
+import { useMediaQuery } from "~/hooks/use-media-query";
 import { fillQuickReply, formatBytes, windowPhase } from "~/lib/inbox-format";
 import { cn } from "~/lib/utils";
 import type {
@@ -86,6 +87,8 @@ export function MessageComposer({
   const [pickerDismissed, setPickerDismissed] = useState(false);
   const [products, setProducts] = useState<StoreProduct[]>([]);
   const [productsAsCards, setProductsAsCards] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const isMobile = useMediaQuery("(max-width: 767px)");
   const fileRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -103,7 +106,7 @@ export function MessageComposer({
   const blockedReason = !canReply
     ? "You have view-only access to the inbox."
     : contact.blockedAt
-      ? "This contact is blocked. Unblock them in the side panel to reply."
+      ? "This contact is blocked. Open contact details to unblock them."
       : commentMode
         ? null
         : phase.phase === "template_only"
@@ -191,10 +194,11 @@ export function MessageComposer({
   }
 
   /**
-   * Enter sends, Shift+Enter breaks the line — the convention every messaging
-   * app uses. While the quick-reply list is open, the arrows and Enter drive it.
+   * Desktop Enter sends; on mobile, Return adds a line and the send button
+   * submits. While the quick-reply list is open, arrows and Enter drive it.
    */
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.nativeEvent.isComposing) return;
     if (matches) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -213,7 +217,7 @@ export function MessageComposer({
         return;
       }
     }
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (event.key === "Enter" && !event.shiftKey && !isMobile) {
       event.preventDefault();
       void submit();
     }
@@ -227,10 +231,10 @@ export function MessageComposer({
         : "Write a public reply under the comment"
       : staged
         ? "Add a caption, or send the file on its own"
-        : "Write a reply… type / for quick replies";
+        : isMobile ? "Message…" : "Write a reply… type / for quick replies";
 
   return (
-    <div className={cn("relative shrink-0 border-t px-4 py-3 transition-colors", isNoteMode && "bg-warning-subtle")}>
+    <div className={cn("relative shrink-0 border-t border-border/60 bg-card px-3 pt-3 pb-[max(.75rem,env(safe-area-inset-bottom))] transition-colors md:px-4 md:py-3", isNoteMode && "bg-warning-subtle")}>
       {matches && (
         <QuickReplyPicker replies={matches} activeIndex={Math.min(pickerIndex, Math.max(0, matches.length - 1))} onPick={pickQuickReply} onHover={setPickerIndex} />
       )}
@@ -308,7 +312,7 @@ export function MessageComposer({
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-0.5">
+      <div className={cn("flex-wrap items-center gap-1 rounded-2xl bg-muted/50 p-1 md:flex md:gap-0.5 md:rounded-none md:bg-transparent md:p-0 max-md:[&_button]:min-h-11 max-md:[&_button]:min-w-11 max-md:[&_button]:rounded-xl", toolsOpen ? "flex" : "hidden")}>
         <input
           ref={fileRef}
           type="file"
@@ -406,7 +410,7 @@ export function MessageComposer({
           </Button>
         )}
 
-        <div className="ml-auto min-w-0 text-right">
+        <div className="ml-auto hidden min-w-0 text-right md:block">
           {isNoteMode ? (
             <p className="text-micro font-medium text-warning">Internal note — the customer will not see this</p>
           ) : (
@@ -415,9 +419,12 @@ export function MessageComposer({
         </div>
       </div>
 
+      {isNoteMode && <p className="mb-1 mt-2 px-1 text-xs font-medium text-warning-strong md:hidden">Internal note · Only your team can see this</p>}
+
       {replyLocked ? (
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted px-3 py-2.5">
           <p className="text-caption text-muted-foreground">{blockedReason}</p>
+          {canReply && <Button size="sm" variant="ghost" onClick={() => setIsNoteMode(true)} className="min-h-11 md:hidden"><Lock className="size-4" />Add internal note</Button>}
           {phase.phase === "template_only" && canReply && !contact.blockedAt && onOpenTemplates && (
             <Button size="sm" variant="accent" onClick={onOpenTemplates}>
               <LayoutTemplate className="size-3.5" />
@@ -426,7 +433,17 @@ export function MessageComposer({
           )}
         </div>
       ) : (
-        <div className="mt-2 flex items-end gap-2">
+        <div className={cn("flex items-end gap-2 md:mt-2", toolsOpen && "mt-2")}>
+          <Button
+            variant={toolsOpen ? "secondary" : "ghost"}
+            size="icon"
+            onClick={() => setToolsOpen((previous) => !previous)}
+            aria-label={toolsOpen ? "Hide message tools" : "Show message tools"}
+            aria-expanded={toolsOpen}
+            className="size-12 shrink-0 rounded-full md:hidden"
+          >
+            {toolsOpen ? <X className="size-5" /> : <Plus className="size-5" />}
+          </Button>
           <Textarea
             ref={textRef}
             value={draft}
@@ -435,7 +452,7 @@ export function MessageComposer({
             rows={1}
             aria-label={isNoteMode ? "Write an internal note" : "Write a reply"}
             placeholder={placeholder}
-            className="max-h-40 min-h-10 flex-1 resize-none text-body"
+            className="max-h-40 min-h-12 min-w-0 flex-1 resize-none rounded-[22px] border-transparent bg-muted/70 px-4 py-3 text-base leading-6 shadow-none md:min-h-10 md:rounded-lg md:border-input md:bg-transparent md:px-3 md:py-2 md:text-body"
           />
           <Button
             variant="accent"
@@ -443,6 +460,7 @@ export function MessageComposer({
             onClick={() => void submit()}
             disabled={!canSubmit}
             aria-label={isNoteMode ? "Save note" : "Send message"}
+            className="size-12 shrink-0 rounded-full md:size-10 md:rounded-lg"
           >
             {isNoteMode ? <Lock className="size-3.5" /> : <Send className="size-3.5" />}
           </Button>

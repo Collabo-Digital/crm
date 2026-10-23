@@ -253,7 +253,7 @@ export function OfflineOrderForm({
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-      <div className="space-y-6 lg:col-span-2">
+      <div className="min-w-0 space-y-6 lg:col-span-2">
         <Section
           title="Customer"
           subtitle="Search an existing customer or create a new one. Existing customers (e.g. someone who bought online) keep their order history."
@@ -326,7 +326,7 @@ export function OfflineOrderForm({
       </div>
 
       <div className="lg:col-span-1">
-        <div className="sticky top-6">
+        <div className="lg:sticky lg:top-6">
           <BillSummary
             lines={lines}
             currency={currency}
@@ -361,7 +361,7 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-xl bg-white dark:bg-gray-900 p-5 shadow-sm ring-1 ring-border">
+    <section className="min-w-0 rounded-xl bg-card p-4 shadow-sm ring-1 ring-border sm:p-5">
       <div className="mb-4">
         <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
           {title}

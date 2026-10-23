@@ -117,21 +117,21 @@ export function StatCard({
 
     if (variant === "inline") {
         return (
-            <div className={cn("", className)}>
+            <div data-slot="stat-card" className={cn("min-w-0", className)}>
                 <div className="flex items-center gap-3">
-                    <div className="flex flex-1 flex-col gap-2">
+                    <div className="flex min-w-0 flex-1 flex-col gap-2">
                         <div className="flex items-center gap-3">
                             <p className="text-body font-medium text-muted-foreground">{label}</p>
                             {/* {icon && <div className={iconChip}>{icon}</div>} */}
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
                             <p className="text-subhead text-foreground">{value ?? "—"}</p>
                             {trendBadge}
                         </div>
                     </div>
-                    <div className="w-full flex-1">
+                    {Boolean(sparklineData?.length) && <div className="min-w-0 flex-1">
                         <Sparkline data={sparklineData} />
-                    </div>
+                    </div>}
                 </div>
                 {changeLabel && (
                     <p className="mt-1.5 text-caption text-muted-foreground">{changeLabel}</p>
@@ -142,14 +142,15 @@ export function StatCard({
 
     return (
         <div
+            data-slot="stat-card"
             className={cn(
-                "bg-card p-5 shadow-sm ring-1 ring-border",
+                "min-w-0 rounded-xl bg-card p-4 md:p-5 shadow-sm ring-1 ring-border",
                 isInverted && "bg-ink ring-ink",
                 className
             )}
         >
             <div className="flex items-start justify-between gap-4">
-                <div className="flex flex-2 flex-col gap-3">
+                <div className="flex min-w-0 flex-2 flex-col gap-3">
                     <div className="flex items-start justify-between gap-2">
                         <p
                             className={cn(

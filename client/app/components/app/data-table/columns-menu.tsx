@@ -24,7 +24,7 @@ export function ColumnsMenu<Row>({ state }: { state: DataTableState<Row> }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline">
+        <Button variant="outline" className="h-11 rounded-xl md:h-8 md:rounded-lg">
           <Columns3 />
           Columns
         </Button>

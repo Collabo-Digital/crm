@@ -61,33 +61,46 @@ export function ThreadHeader({
   const isClosed = status === "CLOSED";
 
   return (
-    <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b px-4 py-3">
-      <div className="flex min-w-0 items-center gap-3">
+    <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border/60 bg-card px-3 pt-[max(.75rem,env(safe-area-inset-top))] pb-2 md:px-4 md:py-3">
+      <div className="flex min-w-0 flex-1 items-center gap-2 md:gap-3">
         {/* Mobile only — the list and the thread share one column below md. */}
-        <Button variant="ghost" size="icon-sm" onClick={onBack} aria-label="Back to conversations" className="md:hidden">
-          <ArrowLeft className="size-4" />
+        <Button variant="ghost" size="icon-sm" onClick={onBack} aria-label="Back to conversations" className="size-11 rounded-full md:hidden">
+          <ArrowLeft className="size-5" />
         </Button>
 
-        <ConversationAvatar name={contact.name} avatarUrl={contact.avatarUrl} />
-
-        <div className="min-w-0">
-          <p className="truncate text-body font-semibold text-foreground">{contact.name}</p>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-micro text-muted-foreground">
-            <ChannelBadge platform={channel.platform} name={channel.name} size={11} />
-            {contact.phone && <span>{contact.phone}</span>}
-            {!contact.phone && contact.username && <span>@{contact.username}</span>}
-            <ReplyWindowPill platform={conversation.platform} window={conversation.window} />
-            {status === "SNOOZED" && conversation.snoozedUntil && (
-              <span className="text-info">Snoozed until {formatDateTime(conversation.snoozedUntil)}</span>
-            )}
+        <button type="button" onClick={onTogglePanel} aria-label={`Show contact details for ${contact.name}`} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <ConversationAvatar name={contact.name} avatarUrl={contact.avatarUrl} className="max-md:[&_[data-slot=avatar]]:size-11" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-base font-semibold text-foreground md:text-body">{contact.name}</p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground md:text-micro">
+              <ChannelBadge platform={channel.platform} size={11} className="md:hidden" />
+              <ChannelBadge platform={channel.platform} name={channel.name} size={11} className="hidden md:inline-flex" />
+              {contact.phone && <span className="hidden sm:inline">{contact.phone}</span>}
+              {!contact.phone && contact.username && <span>@{contact.username}</span>}
+              <ReplyWindowPill platform={conversation.platform} window={conversation.window} />
+              {status === "SNOOZED" && conversation.snoozedUntil && (
+                <span className="text-info">Snoozed until {formatDateTime(conversation.snoozedUntil)}</span>
+              )}
+            </div>
           </div>
-        </div>
+        </button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onTogglePanel}
+          aria-pressed={isPanelOpen}
+          aria-label={isPanelOpen ? "Hide contact details" : "Show contact details"}
+          title={isPanelOpen ? "Hide details" : "Show details"}
+          className={cn("size-11 rounded-full md:hidden", isPanelOpen && "bg-muted")}
+        >
+          <PanelRight className="size-5" />
+        </Button>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1.5">
+      <div className="flex w-full shrink-0 items-center gap-1.5 rounded-2xl bg-muted/50 px-1 md:w-auto md:rounded-none md:bg-transparent md:px-0 max-md:[&_button]:min-h-11 max-md:[&_button]:min-w-11 max-md:[&_button]:rounded-xl">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" disabled={isMutating || !canReply} aria-label="Assign conversation">
+            <Button variant="ghost" size="sm" disabled={isMutating || !canReply} aria-label="Assign conversation" className="max-md:min-w-0 max-md:flex-1 max-md:justify-start">
               {assignee ? (
                 <span className="relative">
                   <ConversationAvatar name={assignee.name} avatarUrl={assignee.avatarUrl} size="sm" />
@@ -100,7 +113,7 @@ export function ThreadHeader({
               ) : (
                 <UserPlus className="size-3.5 text-muted-foreground" />
               )}
-              <span className="hidden max-w-28 truncate lg:inline">{assignee?.name ?? "Unassigned"}</span>
+              <span className="min-w-0 max-w-24 truncate text-xs md:hidden lg:inline lg:max-w-28">{assignee?.name ?? "Assign"}</span>
               <ChevronDown className="size-3 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
@@ -171,21 +184,17 @@ export function ThreadHeader({
 
         {canReply &&
           (isClosed || status === "SNOOZED" ? (
-            <Button variant="ghost" size="sm" onClick={onReopen} disabled={isMutating}>
+            <Button variant="ghost" size="sm" onClick={onReopen} disabled={isMutating} className="max-md:ml-auto">
               <RotateCcw className="size-3.5" />
               Reopen
             </Button>
           ) : (
-            <Button variant="accent" size="sm" onClick={onClose} disabled={isMutating}>
+            <Button variant="accent" size="sm" onClick={onClose} disabled={isMutating} className="max-md:ml-auto">
               <Check className="size-3.5" />
               Close
             </Button>
           ))}
 
-        {/*
-          Hidden below lg: there the panel has no room to become a column, so
-          the control would be inert. A dead toggle reads as a bug.
-        */}
         <Button
           variant="ghost"
           size="icon-sm"
@@ -193,7 +202,7 @@ export function ThreadHeader({
           aria-pressed={isPanelOpen}
           aria-label={isPanelOpen ? "Hide contact details" : "Show contact details"}
           title={isPanelOpen ? "Hide details" : "Show details"}
-          className={cn("hidden lg:inline-flex", isPanelOpen && "bg-muted")}
+          className={cn("hidden md:inline-flex", isPanelOpen && "bg-muted")}
         >
           <PanelRight className="size-4" />
         </Button>

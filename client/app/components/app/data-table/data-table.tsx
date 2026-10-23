@@ -6,7 +6,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { ArrowDown, ArrowUp, ChevronsUpDown, Search, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, ChevronsUpDown, Search, X } from "lucide-react";
 
 import { DateRangeFilter } from "~/components/app/date-range-filter";
 import { SegmentedTabs } from "~/components/app/segmented-tabs";
@@ -91,6 +91,8 @@ export interface DataTableProps<Row> {
   selection?: DataTableSelection<Row>;
   /** Fixed right-hand column — a ⋯ menu, a Sync button. Stops the row click. */
   rowActions?: (row: Row) => ReactNode;
+  /** A focused card body on phones. Other lists use labelled column values. */
+  mobileRow?: (row: Row) => ReactNode;
   actionsWidth?: number;
   emptyState: EmptyStateSpec;
   /** Right of Sort / Columns — an export button, a secondary action. */
@@ -131,6 +133,7 @@ export function DataTable<Row>({
   onRowClick,
   selection,
   rowActions,
+  mobileRow,
   actionsWidth = 56,
   emptyState,
   toolbarEnd,
@@ -250,8 +253,8 @@ export function DataTable<Row>({
   const searchControls = (
     <>
       {searchable && (
-        <div className="relative min-w-55 max-w-110 flex-[1_1_280px]">
-          <Search className="pointer-events-none absolute left-2.5 top-2 size-4 text-muted-foreground" />
+        <div className="relative min-w-0 basis-full md:min-w-55 md:max-w-110 md:flex-[1_1_280px]">
+          <Search className="pointer-events-none absolute left-3.5 top-3.5 size-4 text-muted-foreground md:left-2.5 md:top-2" />
           <Input
             ref={searchRef}
             type="search"
@@ -262,7 +265,7 @@ export function DataTable<Row>({
             }}
             placeholder={searchPlaceholder}
             aria-label={searchPlaceholder}
-            className="h-8 pl-8 pr-8 text-label [&::-webkit-search-cancel-button]:hidden"
+            className="h-11 rounded-xl bg-muted/50 pl-10 pr-10 text-base md:h-8 md:rounded-lg md:bg-transparent md:pl-8 md:pr-8 md:text-label [&::-webkit-search-cancel-button]:hidden"
           />
           {state.search ? (
             <button
@@ -270,7 +273,7 @@ export function DataTable<Row>({
               onClick={() => state.setSearch("")}
               aria-label="Clear search"
               title="Clear search"
-              className="absolute right-1 top-1 flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="absolute right-0 top-0 flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground md:right-1 md:top-1 md:size-6"
             >
               <X className="size-3.5" />
             </button>
@@ -278,7 +281,7 @@ export function DataTable<Row>({
             <kbd
               aria-hidden
               title="Press / to search"
-              className="pointer-events-none absolute right-2 top-[7px] flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] font-mono text-[11px] text-muted-foreground ring-1 ring-border"
+              className="pointer-events-none absolute right-2 top-[7px] hidden h-[18px] min-w-[18px] items-center justify-center rounded-[4px] font-mono text-[11px] text-muted-foreground ring-1 ring-border md:flex"
             >
               /
             </kbd>
@@ -318,12 +321,12 @@ export function DataTable<Row>({
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-col rounded-xl bg-card text-card-foreground shadow-sm ring-1 ring-border",
+        "flex min-w-0 flex-col rounded-3xl bg-card text-card-foreground shadow-sm ring-1 ring-border/60 md:rounded-xl md:ring-border",
         className,
       )}
     >
       {/* Row 1 — tabs (or, without tabs, the search and scopes), Sort, Columns */}
-      <div className="flex flex-wrap items-center gap-2 px-2.5 pt-2.5">
+      <div className="flex flex-wrap items-center gap-2 px-4 pt-4 md:px-2.5 md:pt-2.5">
         {hasTabs && tabs ? (
           <SegmentedTabs
             variant="table"
@@ -332,20 +335,22 @@ export function DataTable<Row>({
             items={tabs.items}
             value={state.tab}
             onChange={state.setTab}
-            className="max-w-full flex-nowrap overflow-x-auto"
+            className="max-w-full basis-full flex-nowrap overflow-x-auto md:basis-auto"
           />
         ) : (
           searchControls
         )}
         <div className="flex-1" />
         <SortMenu state={state} />
-        <ColumnsMenu state={state} />
+        <div className={mobileRow ? "hidden md:block" : undefined}>
+          <ColumnsMenu state={state} />
+        </div>
         {toolbarEnd}
       </div>
 
       {/* Row 2 — search, scopes (only when tabs took row 1) */}
       {hasTabs && hasSearchControls && (
-        <div className="flex flex-wrap items-center gap-2 px-2.5 pb-1.5 pt-2">
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-2 pt-2 md:px-2.5 md:pb-1.5">
           {searchControls}
         </div>
       )}
@@ -353,7 +358,7 @@ export function DataTable<Row>({
 
       {/* Row 3 — date chip, filter chips, + Filter, Clear all */}
       {hasChipRow && (
-        <div className="flex flex-wrap items-center gap-1.5 px-2.5 pb-2.5">
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-4 md:gap-1.5 md:px-2.5 md:pb-2.5">
           {dateConfig && state.date && (
             <DateRangeFilter
               variant="chip"
@@ -398,7 +403,7 @@ export function DataTable<Row>({
                 setPendingKey(null);
                 state.clearAll();
               }}
-              className="h-7 px-2 text-label font-medium text-brand-strong underline-offset-3 hover:underline"
+              className="h-10 px-2 text-label font-medium text-brand-strong underline-offset-3 hover:underline md:h-7"
             >
               Clear all
             </button>
@@ -407,8 +412,89 @@ export function DataTable<Row>({
       )}
       {!hasChipRow && <div className={searchable ? "pb-1" : "pb-2.5"} />}
 
-      {/* The grid */}
-      <div className="relative border-t border-border">
+      {/* Phone lists use one vertical reading path instead of sideways tables. */}
+      <div
+        className={cn("border-t border-border/60 md:hidden", dimmed && "opacity-50")}
+        aria-label={noun}
+        aria-busy={status.isLoading || status.isPlaceholderData || undefined}
+      >
+        {selection && hasRows && (
+          <label className="flex min-h-12 items-center gap-3 border-b border-border/60 px-4 text-xs font-medium text-muted-foreground">
+            <Checkbox
+              checked={allOnPage ? true : someOnPage ? "indeterminate" : false}
+              onCheckedChange={() => selection.onToggleAll(rows, !allOnPage)}
+              aria-label={allOnPage ? "Deselect all on this page" : "Select all on this page"}
+            />
+            {rows.filter((row) => selection.isSelected(row)).length > 0
+              ? `${rows.filter((row) => selection.isSelected(row)).length} selected on this page`
+              : "Select all on this page"}
+            <span className="ml-auto tabular-nums">{meta?.total?.toLocaleString()} {noun}</span>
+          </label>
+        )}
+        {showSkeleton && (
+          <div className="divide-y divide-border/60" aria-label={`Loading ${noun}`}>
+            {Array.from({ length: 4 }, (_, index) => (
+              <div key={index} className="space-y-3 p-4 motion-safe:animate-pulse">
+                <div className="h-4 w-3/5 rounded bg-muted" />
+                <div className="h-3 w-2/5 rounded bg-muted" />
+                <div className="h-7 w-full rounded-lg bg-muted/70" />
+              </div>
+            ))}
+          </div>
+        )}
+        {rows.map((row) => {
+          const selected = selection?.isSelected(row) ?? false;
+          return (
+            <div
+              key={rowKey(row)}
+              tabIndex={onRowClick ? 0 : undefined}
+              onClick={(event) => handleRowClick(row, event)}
+              onKeyDown={(event) => handleRowKey(row, event)}
+              className={cn(
+                "group/row border-b border-border/60 p-4 last:border-b-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-strong/50",
+                selected && "bg-brand/15",
+                onRowClick && "cursor-pointer active:bg-muted/60",
+              )}
+            >
+              <div className="flex items-start gap-3">
+                {selection && (
+                  <label className="-ml-2 -mt-2 flex size-10 shrink-0 items-center justify-center" data-row-stop>
+                    <Checkbox
+                      checked={selected}
+                      onCheckedChange={(checked) => selection.onToggle(row, checked === true)}
+                      aria-label={selection.label?.(row) ?? (selected ? "Deselect row" : "Select row")}
+                    />
+                  </label>
+                )}
+                <div className="min-w-0 flex-1">
+                  {mobileRow ? mobileRow(row) : (
+                    <>
+                      {columns[0] && <div className="min-w-0 text-sm font-semibold">{columns[0].cell(row)}</div>}
+                      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
+                        {columns.slice(1).map((column) => (
+                          <div key={column.key} className={cn("min-w-0", column.minWidth && column.minWidth > 160 && "col-span-2")}>
+                            <dt className="mb-1 text-[11px] font-medium text-muted-foreground">{column.label}</dt>
+                            <dd className="flex min-w-0 flex-wrap text-sm [overflow-wrap:anywhere]">{column.cell(row)}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </>
+                  )}
+                </div>
+                {onRowClick && <ChevronRight aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground/60" />}
+              </div>
+              {rowActions && (
+                <div data-row-stop className="mt-3 flex flex-wrap items-center justify-end gap-2 border-t border-border/50 pt-2 [&_button]:min-h-10 [&_button]:min-w-10">
+                  {rowActions(row)}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop grid */}
+      <div className="relative hidden border-t border-border md:block">
         {dimmed && (
           <div
             aria-hidden

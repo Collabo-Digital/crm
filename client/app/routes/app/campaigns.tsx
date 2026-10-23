@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { Plus, Receipt } from "lucide-react";
+import { ArrowUpRight, FileText, Megaphone, Plus, Receipt, Users, Workflow } from "lucide-react";
 
 import { RatesDialog } from "~/components/app/campaigns/rates-dialog";
 import { TemplateStatusBadge } from "~/components/app/campaigns/template-status";
@@ -73,11 +73,29 @@ export default function CampaignsOverviewPage() {
         </PageHeaderActions>
       </PageHeader>
 
+      <nav aria-label="Campaign tools" className="grid grid-cols-2 gap-3 md:hidden">
+        {[
+          { to: "/campaigns/broadcasts", label: "Broadcasts", description: "Reach your audience", icon: Megaphone },
+          { to: "/campaigns/templates", label: "Templates", description: "Create your messages", icon: FileText },
+          { to: "/campaigns/automations", label: "Automations", description: "Keep conversations going", icon: Workflow },
+          { to: "/campaigns/segments", label: "Segments", description: "Find the right people", icon: Users },
+        ].map(({ to, label, description, icon: Icon }) => (
+          <Link key={to} to={to} className="min-w-0 rounded-xl border border-border/60 bg-card p-4 transition-colors active:bg-muted">
+            <span className="mb-4 flex items-center justify-between">
+              <span className="flex size-9 items-center justify-center rounded-lg bg-brand/20 text-brand-strong"><Icon className="size-4" /></span>
+              <ArrowUpRight className="size-4 text-muted-foreground" />
+            </span>
+            <span className="block text-body font-semibold">{label}</span>
+            <span className="mt-1 block text-caption text-muted-foreground">{description}</span>
+          </Link>
+        ))}
+      </nav>
+
       {isError ? (
         <QueryErrorState resource="campaigns" onRetry={() => void refetch()} />
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-5 rounded-xl bg-card p-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 rounded-xl bg-card p-3 sm:gap-5 lg:grid-cols-4">
             {isLoading
               ? Array.from({ length: 4 }).map((_, i) => (
                   <div key={i} className="p-5">
@@ -86,8 +104,8 @@ export default function CampaignsOverviewPage() {
                   </div>
                 ))
               : tiles.map((t, i, all) => (
-                  <div key={t.label} className="flex items-center gap-4">
-                    <StatCard variant="inline" label={t.label} value={t.value} changeLabel={t.sub} className="flex-1" />
+                  <div key={t.label} className="flex min-w-0 items-center gap-4">
+                    <StatCard variant="inline" label={t.label} value={t.value} changeLabel={t.sub} className="min-w-0 flex-1" />
                     {i < all.length - 1 && <Separator orientation="vertical" className="hidden h-15 md:block" />}
                   </div>
                 ))}

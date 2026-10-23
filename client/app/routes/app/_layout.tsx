@@ -65,18 +65,21 @@ export default function AppLayout() {
 
   const isFullHeight = matches.some((m) => FULL_HEIGHT_ROUTE_IDS.includes(m.id));
 
+  const isMobileThread = location.pathname === "/inbox" && new URLSearchParams(location.search).has("c");
+
   const isFullWidth = matches.some((m) => FULL_WIDTH_ROUTE_IDS.includes(m.id));
 
   return (
     <AuthGuard>
       <div
         className={cn(
-          "bg-surface-sunken",
+          "app-shell bg-surface-sunken",
+          isMobileThread && "app-shell-thread",
           isFullHeight ? "flex h-dvh flex-col overflow-hidden" : "min-h-screen",
         )}
       >
         <ImpersonationBanner />
-        <Navbar />
+        <Navbar immersive={isMobileThread} />
         {/* Same container on every route except a full-width one — otherwise
             only the vertical behaviour differs. */}
         <main
@@ -84,9 +87,11 @@ export default function AppLayout() {
             // Identical padding on every route, and an identical container on
             // every route but a full-width one, so the inbox lines up with
             // Orders and Products rather than sitting flush against the navbar.
-            "mx-auto w-full px-4 py-6 lg:px-6",
+            "app-main mx-auto w-full px-4 py-4 md:py-6 lg:px-6",
             !isFullWidth && "max-w-screen-xl",
             isFullHeight && "min-h-0 flex-1 overflow-hidden",
+            isFullHeight && !isMobileThread && "app-main-contained",
+            isMobileThread && "max-md:p-0",
           )}
         >
           {redirectTo ? <Navigate to={redirectTo} replace /> : <Outlet />}

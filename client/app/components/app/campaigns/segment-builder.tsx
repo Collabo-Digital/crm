@@ -45,7 +45,7 @@ const FIELDS: Array<{ field: Field; label: string; group: string; ops: Array<[st
   },
 ];
 
-const selectClass = "h-8 rounded-lg border bg-background px-2 text-body";
+const selectClass = "h-8 min-w-0 max-w-full rounded-lg border bg-background px-2 text-body";
 const DAYS_SUFFIX: Partial<Record<Field, string>> = { last_message: "days ago", first_seen: "days ago", last_order: "days ago" };
 
 /** Toggle chips for a multi-choice rule value (VIP levels, RFM groups). */
@@ -100,7 +100,7 @@ export function SegmentBuilder({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2 text-body">
+      <div className="flex flex-wrap items-center gap-2 text-body">
         Contacts matching
         <select
           className={selectClass}

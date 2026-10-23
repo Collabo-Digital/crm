@@ -29,7 +29,7 @@ export function FloatingDock({
   children: React.ReactNode;
 }) {
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-5">
+    <div className="mobile-action-dock pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-5">
       <div
         role="group"
         aria-label="Bulk actions"

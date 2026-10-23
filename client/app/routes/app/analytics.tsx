@@ -81,12 +81,12 @@ export default function AnalyticsPage() {
             ) : null}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:w-auto">
           <Select
             value={channel}
             onValueChange={(v) => setChannel(v as AnalyticsChannelFilter)}
           >
-            <SelectTrigger className="h-8 w-[140px] rounded-lg border border-input bg-white dark:bg-gray-900 dark:text-gray-300 px-3 text-xs text-muted-foreground shadow-sm">
+            <SelectTrigger aria-label="Channel" className="h-8 w-full min-w-0 rounded-lg border border-input bg-card px-3 text-caption text-muted-foreground shadow-sm sm:w-36">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -97,7 +97,7 @@ export default function AnalyticsPage() {
             </SelectContent>
           </Select>
           <Select value={range} onValueChange={(v) => setRange(v as AnalyticsRange)}>
-            <SelectTrigger className="h-8 w-[135px] rounded-lg border border-input bg-white dark:bg-gray-900 dark:text-gray-300 px-3 text-xs text-muted-foreground shadow-sm">
+            <SelectTrigger aria-label="Period" className="h-8 w-full min-w-0 rounded-lg border border-input bg-card px-3 text-caption text-muted-foreground shadow-sm sm:w-36">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -111,10 +111,11 @@ export default function AnalyticsPage() {
             type="button"
             onClick={() => refresh.mutate({ range, channel })}
             disabled={refresh.isPending}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs font-medium text-gray-700 dark:text-gray-300 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-800/60 disabled:opacity-60"
+            aria-label="Refresh analytics"
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-input bg-card px-3 text-caption font-medium text-foreground shadow-sm hover:bg-muted disabled:opacity-60"
           >
             <RefreshCw className={`size-3.5 ${refresh.isPending ? "animate-spin" : ""}`} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </button>
         </div>
       </div>

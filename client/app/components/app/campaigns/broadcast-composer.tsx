@@ -30,7 +30,7 @@ import { COMPOSER_STEPS, ComposerSteps } from "./composer-steps";
 import { QualityDot } from "./template-status";
 import { TemplatePreview } from "./template-preview";
 
-const selectClass = "h-8 rounded-lg border bg-background px-2 text-body";
+const selectClass = "h-8 min-w-0 max-w-full rounded-lg border bg-background px-2 text-body";
 
 /** A sensible first mapping: name-like values from the contact, the rest typed in. */
 function defaultValues(params: TemplateParam[]): BroadcastVariables["values"] {
@@ -146,7 +146,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
   const r = review.data;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 pb-20 md:pb-0">
       <div className="grid gap-3 rounded-xl bg-card p-4 shadow-sm ring-1 ring-border sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="bc-name">Broadcast name</Label>
@@ -178,7 +178,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
         }
         action={update.isPending ? <span className="text-micro text-muted-foreground">Saving…</span> : undefined}
       >
-        <div className="p-5">
+        <div className="p-4 sm:p-5">
           {step === 0 && (
             <div className="grid gap-6 lg:grid-cols-2">
               <div className="space-y-4">
@@ -428,7 +428,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
 
                   <div className="space-y-2 rounded-lg border p-3">
                     <Label htmlFor="bc-test">Send a test first</Label>
-                    <div className="flex gap-2">
+                    <div className="flex flex-col gap-2 sm:flex-row">
                       <Input id="bc-test" value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="+91 98450 12345" />
                       <Button variant="outline" disabled={test.isPending || testPhone.replace(/\D/g, "").length < 8 || !!r.blockers.find((b) => /template/.test(b))} onClick={() => test.mutate(testPhone)}>
                         {test.isPending && <Loader2 className="animate-spin" />}
@@ -467,7 +467,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
             ))}
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-t px-5 py-4">
+        <div className="fixed inset-x-4 bottom-[calc(var(--mobile-nav-height)+0.5rem)] z-30 flex items-center justify-between gap-3 rounded-xl border bg-card p-3 shadow-lg md:static md:rounded-none md:border-0 md:border-t md:px-5 md:py-4 md:shadow-none">
           <Button variant="outline" size="sm" disabled={step === 0} onClick={() => go(step - 1)}>
             <ChevronLeft />
             Back

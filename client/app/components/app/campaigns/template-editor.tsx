@@ -25,7 +25,7 @@ const BUTTON_TYPES: Array<{ type: TemplateDraftButton["type"]; label: string }> 
   { type: "COPY_CODE", label: "Copy coupon code" },
 ];
 
-const selectClass = "h-8 w-full rounded-lg border bg-background px-2 text-body";
+const selectClass = "h-8 w-full min-w-0 max-w-full rounded-lg border bg-background px-2 text-body";
 
 /** Lower case, digits and underscores — what Meta accepts — as the merchant types. */
 const toTemplateName = (s: string) => s.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+/, "").slice(0, 512);
@@ -290,14 +290,14 @@ export function TemplateEditor({
           <div className="space-y-2 p-5">
             {buttons.length === 0 && <p className="text-caption text-muted-foreground">No buttons. Marketing templates usually add a “Stop promotions” quick reply.</p>}
             {buttons.map((b, i) => (
-              <div key={i} className="flex flex-wrap items-center gap-2 rounded-lg border p-2">
-                <span className="w-24 shrink-0 text-caption font-medium">{BUTTON_TYPES.find((t) => t.type === b.type)?.label}</span>
+              <div key={i} className="flex flex-wrap items-center gap-2 rounded-lg border p-3 sm:p-2">
+                <span className="w-full shrink-0 text-caption font-medium sm:w-24">{BUTTON_TYPES.find((t) => t.type === b.type)?.label}</span>
                 {b.type !== "COPY_CODE" && (
-                  <Input className="h-7 w-40" maxLength={25} value={b.text} onChange={(e) => setButton(i, { ...b, text: e.target.value })} placeholder="Label" aria-label="Button label" />
+                  <Input className="h-7 w-full sm:w-40" maxLength={25} value={b.text} onChange={(e) => setButton(i, { ...b, text: e.target.value })} placeholder="Label" aria-label="Button label" />
                 )}
                 {b.type === "URL" && (
                   <>
-                    <Input className="h-7 min-w-48 flex-1" value={b.url} onChange={(e) => setButton(i, { ...b, url: e.target.value })} placeholder="https://… (add {{1}} at the end for a per-person link)" aria-label="Link" />
+                    <Input className="h-7 min-w-0 basis-full sm:min-w-48 sm:flex-1 sm:basis-auto" value={b.url} onChange={(e) => setButton(i, { ...b, url: e.target.value })} placeholder="https://… (add {{1}} at the end for a per-person link)" aria-label="Link" />
                     {variablesIn(b.url).length > 0 && (
                       <Input className="h-7 w-32" value={b.example ?? ""} onChange={(e) => setButton(i, { ...b, example: e.target.value })} placeholder="Example" aria-label="Link example" />
                     )}

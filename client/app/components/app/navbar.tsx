@@ -39,6 +39,7 @@ import {
   DropdownMenuLabel,
 } from "~/components/ui/dropdown-menu";
 import { cn } from "~/lib/utils";
+import { MobileNavigation } from "~/components/app/mobile-navigation";
 import { BrandLogo } from "~/components/app/brand-logo";
 import { Tip } from "~/components/ui/tooltip";
 import { useAuthStore, normalizeOrganizations } from "~/stores/auth.store";
@@ -125,7 +126,7 @@ function matchNav<T extends { href: string }>(items: T[], pathname: string): T |
 }
 
 /** Top navigation bar with pill-style nav links, notification icons, and user/workspace dropdown. */
-export function Navbar() {
+export function Navbar({ immersive = false }: { immersive?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, organizations, currentOrgId, impersonatedBy, logout, refreshToken, setCurrentOrg, setTokens, setOrganizations } =
@@ -200,12 +201,13 @@ export function Navbar() {
   const currentOrg = organizations.find((membership) => membership.organization.id === currentOrgId);
 
   return (
-    <header className="sticky top-0 z-50 w-full bg-[#f1f7fa] dark:bg-gray-950">
-      <div className="mx-auto flex h-[72px] max-w-screen-xl items-center justify-between px-6">
+    <>
+    <header className={cn("app-header sticky top-0 z-40 w-full bg-surface-sunken", immersive && "hidden md:block")}>
+      <div className="mx-auto flex h-16 max-w-screen-xl items-center justify-between px-5 md:h-[72px] md:px-6">
 
         {/* ── Logo ──────────────────────────────────────────────────── */}
         <Link to={landingPath} className="flex shrink-0 items-center">
-          <BrandLogo className="h-7" />
+          <BrandLogo className="h-6 md:h-7" />
         </Link>
 
         {/* ── Nav — pill container ─────────────────────────────── */}
@@ -285,7 +287,7 @@ export function Navbar() {
         {/* ── Right: icons + user ───────────────────────────────────── */}
         <div className="flex items-center gap-3">
 
-          <button onClick={() => navigate("/settings")} className="flex size-9 items-center justify-center rounded-full bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
+          <button aria-label="Settings" onClick={() => navigate("/settings")} className="hidden md:flex size-9 items-center justify-center rounded-full bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
             <Settings className="size-4" />
           </button>
           {/* 
@@ -296,7 +298,7 @@ export function Navbar() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="flex items-center gap-2 rounded-full bg-white dark:bg-gray-900 py-1.5 pl-1.5 pr-3 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+              <button aria-label="Account and workspace" className="flex min-h-11 items-center gap-2 rounded-full bg-white dark:bg-gray-900 py-1.5 pl-1.5 pr-3 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                 <Avatar size="sm">
                   <AvatarImage src={user?.avatarUrl ?? ""} alt={user?.firstName} />
                   <AvatarFallback className="bg-[#CEF17B] text-gray-900 text-xs font-bold">
@@ -384,10 +386,10 @@ export function Navbar() {
       {/* ── Section sub-nav — only for a section that has children ─── */}
       {sectionChildren && (
         <LayoutGroup id="section-nav">
-          <div className="mx-auto hidden max-w-screen-xl px-6 pb-3 mt-3 md:block">
+          <div className="mobile-section-nav mx-auto max-w-screen-xl overflow-x-auto px-4 pb-2 md:px-6 md:pb-3 md:mt-3">
             <nav
               aria-label={`${activeTop?.label} section`}
-              className="inline-flex items-center gap-0.5 rounded-full bg-white dark:bg-gray-900 px-1.5 py-1 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700"
+              className="inline-flex min-w-max items-center gap-0.5 rounded-full bg-white dark:bg-gray-900 px-1.5 py-1 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700"
             >
               {sectionChildren.map(({ label, href, icon: Icon }) => {
                 const isActive = activeChild?.href === href;
@@ -412,7 +414,7 @@ export function Navbar() {
                     to={href}
                     aria-current={isActive ? "page" : undefined}
                     className={cn(
-                      "relative flex items-center gap-1.5 rounded-full p-2.5 text-xs select-none",
+                      "relative flex min-h-11 items-center gap-1.5 rounded-full px-4 py-2.5 text-sm md:min-h-0 md:p-2.5 md:text-xs select-none",
                       isActive
                         ? "font-semibold text-gray-900"
                         : "font-medium text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
@@ -437,5 +439,7 @@ export function Navbar() {
       )}
 
     </header>
+    {!immersive && <MobileNavigation items={navLinks.map((item) => ({ ...item, target: pillTarget(item) }))} workspace={currentOrg?.organization.name} canAccess={canAccess} lockReason={lockReason} />}
+    </>
   );
 }

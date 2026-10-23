@@ -3,6 +3,8 @@ import { Link, useParams } from "react-router";
 import { useListReturnPath } from "~/hooks/use-list-url-state";
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Loader2,
   Plus,
@@ -249,40 +251,76 @@ function OwnerOrderDetail({ id }: { id: string }) {
   // one on the detail endpoint. Neither is guaranteed.
   const phone = customer?.phone ?? order.customer?.phone ?? null;
 
+  const secondaryDetails = (
+    <>
+      {/* Tags */}
+      <RailSection label="Tags">
+        <OrderTags order={order} canEdit={canEdit} />
+      </RailSection>
+
+      {/* Metadata */}
+      <RailSection label="Metadata">
+        <div className="flex flex-col gap-1.5">
+          <MetaRow label="Shopify order" value={shopifyOrderRef} mono />
+          <MetaRow label="Invoice" value={invoice?.invoiceNumber ?? DASH} mono />
+          {/* No transactions table and no gateway column — a payment
+              reference is not stored anywhere. */}
+          <MetaRow label="Payment ref" value={DASH} mono />
+          <MetaRow label="Owner" value={ownerName ?? DASH} />
+          {/* Recorded only when it is a FACT — an operator's explicit
+              choice on an offline sale, or Shopify's own fulfilment
+              location. The invoice falls back to the default warehouse
+              itself, so a dash here does not mean the invoice has no
+              dispatch block. */}
+          <MetaRow
+            label="Dispatch warehouse"
+            value={order.dispatchWarehouse?.name ?? DASH}
+          />
+          <MetaRow label="Weight" value={weightLabel ?? DASH} />
+          {paymentMethod && <MetaRow label="Payment method" value={paymentMethod} />}
+          {order.placeOfSupplyCode && (
+            <MetaRow label="Place of supply" value={order.placeOfSupplyCode} />
+          )}
+        </div>
+      </RailSection>
+    </>
+  );
+
   return (
     <div className="space-y-5">
       {/* Breadcrumb + prev/next rail */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption">
+        <nav aria-label="Breadcrumb" className="flex w-full items-center gap-1.5 text-caption sm:w-auto">
           <Link to={ordersPath} className="text-muted-foreground hover:text-foreground">
             Orders
           </Link>
           <ChevronRight className="size-3 text-muted-foreground" />
           <span className="font-medium text-foreground">{order.name}</span>
+          {adjacent && adjacent.total > 0 && <span className="ml-auto text-muted-foreground sm:hidden">{adjacent.position} of {adjacent.total}</span>}
         </nav>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           {adjacent && adjacent.total > 0 && (
-            <span className="text-caption text-muted-foreground">
+            <span className="hidden text-caption text-muted-foreground sm:inline">
               {adjacent.position} of {adjacent.total}
             </span>
           )}
-          <Button asChild={!!prevId} variant="outline" size="sm" disabled={!prevId}>
-            {prevId ? <Link to={`/orders/${prevId}`}>Previous</Link> : <span>Previous</span>}
+          <Button asChild={!!prevId} variant="outline" size="sm" disabled={!prevId} aria-label="Previous order" className="shrink-0 px-3">
+            {prevId ? <Link to={`/orders/${prevId}`}><ChevronLeft className="sm:hidden" /><span className="hidden sm:inline">Previous</span></Link> : <><ChevronLeft className="sm:hidden" /><span className="hidden sm:inline">Previous</span></>}
           </Button>
-          <Button asChild={!!nextId} variant="outline" size="sm" disabled={!nextId}>
-            {nextId ? <Link to={`/orders/${nextId}`}>Next order</Link> : <span>Next order</span>}
+          <Button asChild={!!nextId} variant="outline" size="sm" disabled={!nextId} aria-label="Next order" className="shrink-0 px-3">
+            {nextId ? <Link to={`/orders/${nextId}`}><ChevronRight className="sm:hidden" /><span className="hidden sm:inline">Next order</span></Link> : <><ChevronRight className="sm:hidden" /><span className="hidden sm:inline">Next order</span></>}
           </Button>
           <OrderSyncButton order={order} />
           <OrderActionsMenu order={order} />
         </div>
       </div>
 
-      <div className="flex gap-4">
+      <div className="flex min-w-0 flex-col gap-4 lg:flex-row">
         {/* ── Left rail: order meta ─────────────────────────────────────── */}
         {/* Sticky like the right rail. It runs taller than short screens, so
             cap it to the viewport and let it scroll itself — otherwise its
             bottom (metadata) would be unreachable while pinned. */}
-        <aside className="flex flex-1 flex-col gap-4.5 rounded-xl bg-card p-4 lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+        <aside className="flex min-w-0 flex-1 flex-col gap-4.5 rounded-xl bg-card p-4 lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
           {/* Header */}
           <div className="flex flex-col gap-2">
             <h1 className="text-subhead text-foreground">{order.name}</h1>
@@ -332,48 +370,30 @@ function OwnerOrderDetail({ id }: { id: string }) {
             )}
           </div>
 
-          {/* Tags */}
-          <RailSection label="Tags">
-            <OrderTags order={order} canEdit={canEdit} />
-          </RailSection>
-
-          {/* Metadata */}
-          <RailSection label="Metadata">
-            <div className="flex flex-col gap-1.5">
-              <MetaRow label="Shopify order" value={shopifyOrderRef} mono />
-              <MetaRow label="Invoice" value={invoice?.invoiceNumber ?? DASH} mono />
-              {/* No transactions table and no gateway column — a payment
-                  reference is not stored anywhere. */}
-              <MetaRow label="Payment ref" value={DASH} mono />
-              <MetaRow label="Owner" value={ownerName ?? DASH} />
-              {/* Recorded only when it is a FACT — an operator's explicit
-                  choice on an offline sale, or Shopify's own fulfilment
-                  location. The invoice falls back to the default warehouse
-                  itself, so a dash here does not mean the invoice has no
-                  dispatch block. */}
-              <MetaRow
-                label="Dispatch warehouse"
-                value={order.dispatchWarehouse?.name ?? DASH}
-              />
-              <MetaRow label="Weight" value={weightLabel ?? DASH} />
-              {paymentMethod && <MetaRow label="Payment method" value={paymentMethod} />}
-              {order.placeOfSupplyCode && (
-                <MetaRow label="Place of supply" value={order.placeOfSupplyCode} />
-              )}
-            </div>
-          </RailSection>
+          <div className="order-2 lg:order-none">
+            <details className="group border-t lg:hidden">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 pt-3 text-body font-medium [&::-webkit-details-marker]:hidden">
+                Tags &amp; order details
+                <ChevronDown className="size-4 text-muted-foreground transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="space-y-4 pt-3">{secondaryDetails}</div>
+            </details>
+            <div className="hidden space-y-4.5 lg:block">{secondaryDetails}</div>
+          </div>
 
           {/* Order total */}
-          <RailSection label="Order total">
-            <p className="text-stat tabular-nums text-foreground">
-              {formatCurrency(total, currency)}
-            </p>
-            <p className="text-micro text-muted-foreground">{balanceCaption}</p>
-          </RailSection>
+          <div className="order-1 lg:order-none">
+            <RailSection label="Order total">
+              <p className="text-stat tabular-nums text-foreground">
+                {formatCurrency(total, currency)}
+              </p>
+              <p className="text-micro text-muted-foreground">{balanceCaption}</p>
+            </RailSection>
+          </div>
         </aside>
 
         {/* ── Center: line items, fulfilment, activity ───────────────────── */}
-        <div className="flex-3 space-y-5">
+        <div className="min-w-0 flex-3 space-y-5">
           <OrderItemsFulfillment
             orderId={order.id}
             items={order.lineItems}

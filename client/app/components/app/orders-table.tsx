@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router";
-import { Loader2, MoreHorizontal, Package, Receipt, UploadCloud } from "lucide-react";
+import { ChevronRight, Loader2, MoreHorizontal, Package, Receipt, UploadCloud } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { ShopifySyncCell } from "~/components/app/shopify-sync-cell";
 import ShopifyIcon from "~/assests/icon/shopifyIcon";
@@ -82,6 +82,21 @@ export function OrdersTable({ orders, currency, onViewDetail }: OrdersTableProps
   const navigate = useNavigate();
 
   return (
+    <>
+    <div className="divide-y divide-border/60 md:hidden">
+      {orders.map((order) => (
+        <button
+          key={order.id}
+          type="button"
+          onClick={() => onViewDetail ? onViewDetail(order.id) : navigate(`/orders/${order.id}`)}
+          className="flex w-full items-start gap-3 px-1 py-4 text-left active:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-strong/50"
+        >
+          <div className="min-w-0 flex-1"><OrderMobileSummary order={order} currency={currency} /></div>
+          <ChevronRight aria-hidden className="mt-1 size-4 shrink-0 text-muted-foreground/60" />
+        </button>
+      ))}
+    </div>
+    <div className="hidden md:block">
     <Table>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
@@ -144,6 +159,41 @@ export function OrdersTable({ orders, currency, onViewDetail }: OrdersTableProps
         })}
       </TableBody>
     </Table>
+    </div>
+    </>
+  );
+}
+
+export function OrderMobileSummary({ order, currency }: { order: OrderRow; currency: string }) {
+  const { name } = customerOf(order);
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground">{order.name}</p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">{name}</p>
+        </div>
+        <p className="text-sm font-semibold tabular-nums tracking-tight text-foreground">
+          {formatCurrency(order.totalPrice, order.currency || currency)}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <StatusPill className={cn("h-6 px-2.5 text-[11px]", FINANCIAL_CLASSES[order.financialStatus])}>
+          {FINANCIAL_LABELS[order.financialStatus]}
+        </StatusPill>
+        <StatusPill className={cn("h-6 px-2.5 text-[11px]", FULFILLMENT_CLASSES[order.fulfillmentStatus])}>
+          {FULFILLMENT_LABELS[order.fulfillmentStatus]}
+        </StatusPill>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+        <span>{order.itemCount} item{order.itemCount !== 1 ? "s" : ""}</span>
+        <span aria-hidden>·</span>
+        <DateCell value={order.createdAt} />
+        {order.channel && (
+          <><span aria-hidden>·</span><ChannelBadge platform={order.channel.platform as ChannelPlatform} name={orderSourceLabel(order)} /></>
+        )}
+      </div>
+    </div>
   );
 }
 

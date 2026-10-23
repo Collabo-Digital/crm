@@ -339,7 +339,7 @@ export function InboxRulesSection({ canManage, members, teams }: { canManage: bo
       </SectionCard>
 
       {canManage && (
-        <div className={cn("sticky bottom-4 flex justify-end", !dirty && "hidden")}>
+        <div className={cn("sticky bottom-[calc(var(--mobile-nav-height)+1rem)] md:bottom-4 flex justify-end", !dirty && "hidden")}>
           <div className="flex items-center gap-3 rounded-full border bg-background px-4 py-2 shadow-lg">
             <span className="text-caption text-muted-foreground">Unsaved changes</span>
             <Button variant="ghost" size="sm" onClick={() => setS((({ organizationTimeZone: _tz, ...rest }) => rest)(data))}>

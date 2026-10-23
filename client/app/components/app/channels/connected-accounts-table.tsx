@@ -79,7 +79,7 @@ export function ConnectedAccountsTable({
       title="Connected accounts"
       description="Every account this organization has linked."
     >
-      <div className="overflow-x-auto">
+      <div className="mobile-account-table overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>

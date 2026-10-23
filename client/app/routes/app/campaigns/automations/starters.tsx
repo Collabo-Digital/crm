@@ -89,8 +89,9 @@ export default function ConversationStartersPage() {
               <SectionCard title="Ice breakers" description="Up to four questions shown in a new chat, in the mobile apps.">
                 <div className="space-y-2 p-5">
                   {draft.iceBreakers.map((b, i) => (
-                    <div key={i} className="grid grid-cols-[1fr_9rem_auto] gap-1.5">
+                    <div key={i} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-lg border p-3 sm:grid-cols-[minmax(0,1fr)_9rem_auto] sm:gap-1.5 sm:rounded-none sm:border-0 sm:p-0">
                       <Input
+                        className="col-span-2 sm:col-span-1"
                         value={b.question}
                         maxLength={80}
                         disabled={readOnly}
@@ -147,7 +148,7 @@ export default function ConversationStartersPage() {
                   )}
                   {draft.persistentMenu.map((m, i) => (
                     <div key={i} className="space-y-1.5 rounded-lg border p-2.5">
-                      <div className="flex gap-1.5">
+                      <div className="flex flex-wrap gap-1.5 sm:flex-nowrap">
                         <Input
                           value={m.title}
                           maxLength={30}
@@ -162,7 +163,7 @@ export default function ConversationStartersPage() {
                           }
                         />
                         <select
-                          className="h-8 rounded-lg border bg-background px-2 text-body"
+                          className="h-8 min-w-0 rounded-lg border bg-background px-2 text-body"
                           value={m.type}
                           disabled={readOnly}
                           aria-label="Item type"
