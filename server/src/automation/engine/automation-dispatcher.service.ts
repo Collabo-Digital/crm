@@ -10,7 +10,7 @@ import { parseDefinition } from '../blocks/definition.schema';
 /** Inbound messages: what a waiting flow takes as a reply. Comments are public and never count. */
 const REPLY_EVENTS = new Set(['whatsapp.message', 'instagram.message', 'facebook.message', 'instagram.postback', 'facebook.postback']);
 /** Events where only the best-matching automation starts, so one message never gets several answers. */
-const ONE_WINNER = new Set(['whatsapp.message', 'instagram.message', 'facebook.message', 'instagram.comment', 'facebook.comment', 'instagram.postback', 'facebook.postback', 'instagram.mention']);
+const ONE_WINNER = new Set(['whatsapp.message', 'whatsapp.cart', 'instagram.message', 'facebook.message', 'instagram.comment', 'facebook.comment', 'instagram.postback', 'facebook.postback', 'instagram.mention']);
 const DAY = 24 * 3600_000;
 
 interface EventPayload {
@@ -24,6 +24,10 @@ interface EventPayload {
         depth?: number;
         automationId?: string;
         fields?: Record<string, string>;
+        /** Store events: {{order.*}} / {{checkout.*}} values. */
+        vars?: Record<string, string>;
+        /** A WhatsApp cart message. */
+        order?: { product_items?: Array<{ product_retailer_id?: string; quantity?: number; item_price?: number; currency?: string }> };
     };
 }
 
@@ -166,8 +170,11 @@ export class AutomationDispatcher {
             case 'crm.webhook':
                 return t.automationId === payload.raw?.automationId;
             case 'instagram.mention':
+            case 'whatsapp.cart':
+            case 'crm.checkout.abandoned':
                 return true;
             default:
+                if (event.eventType.startsWith('crm.order.')) return true;
                 if (config.newConversationOnly && payload.raw?.newConversation !== true) return false;
                 return keywordMatches(event.text, t.keywords, match);
         }
@@ -196,6 +203,7 @@ export class AutomationDispatcher {
             vars: {
                 trigger_text: event.text ?? '',
                 ...Object.fromEntries(Object.entries(payload.raw?.fields ?? {}).map(([k, v]) => [`webhook.${k}`, String(v)])),
+                ...(payload.raw?.vars ?? {}),
             },
             trigger: {
                 eventType: event.eventType,
@@ -203,6 +211,13 @@ export class AutomationDispatcher {
                 postId: payload.raw?.postId ?? payload.mediaExternalId ?? null,
             },
             depth: payload.raw?.depth ?? 0,
+            ...(event.eventType === 'whatsapp.cart'
+                ? {
+                    cart: (payload.raw?.order?.product_items ?? [])
+                        .filter((i) => i.product_retailer_id)
+                        .map((i) => ({ retailerId: String(i.product_retailer_id), quantity: Number(i.quantity) || 1, price: i.item_price ?? null, currency: i.currency ?? null })),
+                }
+                : {}),
         };
         const contact = await this.prisma.channelContact.findUnique({ where: { id: event.contactId! }, select: { customerId: true } });
         try {
@@ -214,7 +229,8 @@ export class AutomationDispatcher {
                     triggerId: trigger.id,
                     eventId: event.id,
                     contactId: event.contactId,
-                    customerId: contact?.customerId ?? null,
+                    customerId: event.customerId ?? contact?.customerId ?? null,
+                    orderId: event.orderId,
                     status: skip ? AutomationRunStatus.SKIPPED : AutomationRunStatus.PENDING,
                     skipReason: skip ? (once === 'perDay' ? 'once_per_day' : 'once_per_contact') : null,
                     completedAt: skip ? new Date() : null,

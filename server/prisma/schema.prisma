@@ -353,6 +353,8 @@ model Organization {
   gstFilings             GstFiling[]
   inwardSupplies         InwardSupply[]
   channelContacts        ChannelContact[]
+  checkouts              Checkout[]
+  catalogItems           CatalogItem[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -567,6 +569,8 @@ model Channel {
   contacts           ChannelContact[]
   media              ChannelMedia[]
   conversations      Conversation[]
+  checkouts          Checkout[]
+  catalogItems       CatalogItem[]
   automations        Automation[]
   automationTriggers AutomationTrigger[]
   automationEvents   AutomationEvent[]
@@ -680,6 +684,8 @@ model Product {
   channelId         String        @map("channel_id")
   externalId        String        @map("external_id") // Shopify product ID
   title             String // "Blue T-Shirt"
+  /// Shopify's URL handle: the storefront page is /products/{handle}.
+  handle            String?
   bodyHtml          String?       @map("body_html") // Product description HTML
   vendor            String? // "Nike" (built-in Shopify Vendor field)
   vendorKey         String?       @map("vendor_key") // vendor metafield value — primary vendor match key
@@ -778,6 +784,7 @@ model ProductVariant {
   lineItems           OrderLineItem[]
   draftOrderLineItems DraftOrderLineItem[]
   stockLevels         StockLevel[]
+  catalogItems        CatalogItem[]
 
   @@unique([productId, externalId])
   @@index([productId])
@@ -921,6 +928,9 @@ model Order {
   billingAddress      Json?                  @map("billing_address") @db.JsonB
   note                String?
   tags                String[]               @default([])
+  /// Shopify `payment_gateway_names`, e.g. ["Cash on Delivery (COD)"]; how a
+  /// cash-on-delivery order is told apart from a prepaid one.
+  paymentGateways     String[]               @default([]) @map("payment_gateways")
   cancelReason        OrderCancelReason?     @map("cancel_reason")
   cancelledAt         DateTime?              @map("cancelled_at")
   closedAt            DateTime?              @map("closed_at")
@@ -3057,4 +3067,67 @@ model ContactImport {
 
   @@index([organizationId, createdAt])
   @@map("contact_imports")
+}
+
+/// A Shopify checkout, from the checkouts/create and checkouts/update
+/// webhooks. One that goes quiet without completing raises a
+/// `crm.checkout.abandoned` event for recovery automations.
+model Checkout {
+  id                 String    @id @default(cuid())
+  organizationId     String    @map("organization_id")
+  /// The store channel the checkout came from.
+  channelId          String    @map("channel_id")
+  externalId         String    @map("external_id")
+  token              String?
+  /// Shopify's `abandoned_checkout_url`: reopens the checkout with its cart.
+  recoveryUrl        String?   @map("recovery_url")
+  phone              String?
+  email              String?
+  firstName          String?   @map("first_name")
+  customerExternalId String?   @map("customer_external_id")
+  currency           String?
+  total              Decimal?  @db.Decimal(12, 2)
+  /// [{ variantId, productId, title, quantity, price }]
+  items              Json      @default("[]") @db.JsonB
+  completedAt        DateTime? @map("completed_at")
+  /// When the abandoned event was raised; set once.
+  abandonedAt        DateTime? @map("abandoned_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, externalId])
+  @@index([channelId, token])
+  /// The abandonment sweep: open, not yet raised, quiet for a while.
+  @@index([completedAt, abandonedAt, updatedAt])
+  @@map("checkouts")
+}
+
+/// One product variant as pushed to a WhatsApp number's Meta catalog. The
+/// catalog item id (product_retailer_id) is the variant id, so carts and
+/// product messages map straight back to variants.
+model CatalogItem {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  /// The WhatsApp channel whose catalog holds the item.
+  channelId      String    @map("channel_id")
+  variantId      String    @map("variant_id")
+  /// SYNCED | ERROR | SKIPPED | REMOVED
+  status         String
+  error          String?
+  /// Hash of the fields last sent, so unchanged items are not re-sent.
+  contentHash    String?   @map("content_hash")
+  syncedAt       DateTime? @map("synced_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel        @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  variant      ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, variantId])
+  @@index([channelId, status])
+  @@map("catalog_items")
 }

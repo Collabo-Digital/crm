@@ -19,6 +19,8 @@ export interface RunContext {
     depth: number;
     /** Set when a reply arrived for a wait-for-reply step; the runner takes the replied branch. */
     replied?: boolean;
+    /** A WhatsApp cart: catalog item ids (our variant ids) and quantities. */
+    cart?: Array<{ retailerId: string; quantity: number; price: number | null; currency: string | null }>;
 }
 
 export function parseRunContext(raw: unknown): RunContext {
@@ -28,6 +30,7 @@ export function parseRunContext(raw: unknown): RunContext {
         trigger: { eventType: c.trigger?.eventType ?? '', commentId: c.trigger?.commentId ?? null, postId: c.trigger?.postId ?? null },
         depth: c.depth ?? 0,
         ...(c.replied ? { replied: true } : {}),
+        ...(c.cart ? { cart: c.cart } : {}),
     };
 }
 
@@ -44,6 +47,8 @@ export interface RunFacts {
     };
     customer: { firstName: string | null; lastName: string | null; ordersCount: number; tags: string[] } | null;
     conversation: { assignedUserId: string | null; windowOpen: boolean } | null;
+    /** The order a store event is about. */
+    order?: { isCod: boolean; total: number } | null;
     context: RunContext;
 }
 
@@ -121,6 +126,13 @@ export function ruleMatches(rule: ConditionRuleT, facts: RunFacts): boolean {
             const wanted = rule.value !== 'closed';
             return rule.op === 'is_not' ? open !== wanted : open === wanted;
         }
+        case 'order_payment': {
+            if (!facts.order) return false;
+            const kind = facts.order.isCod ? 'cod' : 'prepaid';
+            return rule.op === 'is_not' ? kind !== rule.value : kind === rule.value;
+        }
+        case 'order_total':
+            return facts.order ? compareText(String(facts.order.total), rule.op, rule.value) : false;
         case 'assigned': {
             const assignee = facts.conversation?.assignedUserId ?? null;
             if (rule.op === 'exists') return !!assignee;

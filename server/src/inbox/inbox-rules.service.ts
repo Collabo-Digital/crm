@@ -23,7 +23,7 @@ export interface RuleEvent {
     newConversation: boolean;
 }
 
-const MESSAGE_EVENTS = new Set(['whatsapp.message', 'instagram.message', 'facebook.message', 'instagram.postback', 'facebook.postback', 'instagram.mention']);
+const MESSAGE_EVENTS = new Set(['whatsapp.message', 'whatsapp.cart', 'instagram.message', 'facebook.message', 'instagram.postback', 'facebook.postback', 'instagram.mention']);
 const CONVERSATION_EVENTS = new Set([...MESSAGE_EVENTS, 'instagram.comment', 'facebook.comment']);
 const HOUR = 3600_000;
 

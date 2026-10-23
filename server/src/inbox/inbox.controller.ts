@@ -80,6 +80,18 @@ export class InboxController {
         return this.inbox.send(user.orgId!, await this.teams.viewer(user), id, dto);
     }
 
+    /** The product tray: the store's products, and whether this chat can get catalog messages. */
+    @Get('conversations/:id/products')
+    async products(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Query('search') search?: string) {
+        return this.inbox.products(user.orgId!, await this.teams.viewer(user), id, search?.slice(0, 100));
+    }
+
+    /** Turn a cart the customer sent into a draft order with a checkout link. */
+    @Post('conversations/:id/messages/:messageId/draft-order')
+    async draftFromCart(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Param('messageId') messageId: string) {
+        return this.inbox.draftFromCart(user.orgId!, await this.teams.viewer(user), id, messageId);
+    }
+
     @Post('conversations/:id/read')
     async read(@CurrentUser() user: SessionPayload, @Param('id') id: string) {
         return this.inbox.markRead(user.orgId!, await this.teams.viewer(user), id);

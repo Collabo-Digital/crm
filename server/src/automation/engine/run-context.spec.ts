@@ -52,3 +52,13 @@ describe('flattenResponse', () => {
         expect(flattenResponse('x', 'plain text', 201)).toEqual({ 'x.status_code': '201' });
     });
 });
+
+describe('order conditions', () => {
+    it('tell cash on delivery from prepaid, and compare totals', () => {
+        const cod = facts({ order: { isCod: true, total: 1499 } });
+        expect(conditionMatches(rule('order_payment', 'is', 'cod'), cod)).toBe(true);
+        expect(conditionMatches(rule('order_payment', 'is', 'prepaid'), cod)).toBe(false);
+        expect(conditionMatches(rule('order_total', 'gte', '1000'), cod)).toBe(true);
+        expect(conditionMatches(rule('order_payment', 'is', 'cod'), facts())).toBe(false);
+    });
+});

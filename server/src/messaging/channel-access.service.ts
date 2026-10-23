@@ -18,6 +18,8 @@ export interface ChannelAccess {
     isEnabled: boolean;
     /** Coexistence number offboarded or partner link gone. */
     sendsPaused: boolean;
+    /** WhatsApp number shared with the WhatsApp Business app (coexistence). */
+    onBusinessApp: boolean;
     /** Our address on the platform: phone number id, Page id, Instagram account id. */
     address: string;
     token: string;
@@ -76,6 +78,7 @@ export class ChannelAccessService {
             status: channel.status,
             isEnabled: channel.isEnabled,
             sendsPaused: coexistence.sendsPaused === true,
+            onBusinessApp: channel.platform === ChannelPlatform.WHATSAPP && creds.isOnBizApp === true,
             marketingMessagesApi:
                 channel.platform === ChannelPlatform.WHATSAPP &&
                 (marketing.status === 'ONBOARDED' || marketing.required === true || 'MM_LITE_TERMS_SIGNED' in accountEvents),

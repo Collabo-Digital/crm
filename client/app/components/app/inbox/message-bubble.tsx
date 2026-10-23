@@ -18,6 +18,7 @@ import { Button } from "~/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
 import { MESSAGE_STATUS_LABEL, SOURCE_LABEL, formatBubbleTime, formatBytes, formatDateTime } from "~/lib/inbox-format";
 import { cn } from "~/lib/utils";
+import { CartActions } from "./cart-actions";
 import type { InboxMessage } from "~/types/api";
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "🙏", "✅"];
@@ -82,12 +83,26 @@ function MessageMedia({ message, isOutbound }: { message: InboxMessage; isOutbou
   }
 }
 
-/** Buttons, list rows or quick replies that went out with an outbound message. */
+/** Buttons, list rows, quick replies or catalog products that went out with an outbound message. */
 function SentOptions({ payload }: { payload: Record<string, unknown> }) {
+  if (payload.type === "product" || payload.type === "product_list" || payload.type === "catalog") {
+    const count =
+      payload.type === "product_list"
+        ? ((payload.sections as Array<{ productRetailerIds?: string[] }> | undefined) ?? []).reduce((n, s) => n + (s.productRetailerIds?.length ?? 0), 0)
+        : 1;
+    return (
+      <div className="mt-2 flex flex-wrap gap-1">
+        <span className="inline-flex items-center gap-1 rounded-full border border-brand-foreground/30 px-2.5 py-0.5 text-micro font-medium">
+          <ShoppingCart className="size-3" />
+          {payload.type === "catalog" ? "Catalog" : payload.type === "product" ? "Product card" : `${count} products`}
+        </span>
+      </div>
+    );
+  }
   const titles =
     (payload.buttons as Array<{ title: string }> | undefined)?.map((b) => b.title) ??
     (payload.replies as Array<{ title: string }> | undefined)?.map((r) => r.title) ??
-    (payload.sections as Array<{ rows: Array<{ title: string }> }> | undefined)?.flatMap((s) => s.rows.map((r) => r.title));
+    (payload.sections as Array<{ rows?: Array<{ title: string }> }> | undefined)?.flatMap((s) => (s.rows ?? []).map((r) => r.title));
   if (!titles?.length) return null;
   return (
     <div className="mt-2 flex flex-wrap gap-1">
@@ -259,12 +274,14 @@ function CommentCard({
  */
 export const MessageBubble = memo(function MessageBubble({
   message,
+  conversationId,
   canReply,
   onQuote,
   onReact,
   onCommentReply,
 }: {
   message: InboxMessage;
+  conversationId: string;
   canReply: boolean;
   onQuote: (message: InboxMessage) => void;
   onReact: (message: InboxMessage, emoji: string) => void;
@@ -324,6 +341,7 @@ export const MessageBubble = memo(function MessageBubble({
           )}
           <MessageBody message={message} isOutbound={isOutbound} />
         </div>
+        {message.kind === "ORDER" && !isOutbound && canAct && <CartActions conversationId={conversationId} messageId={message.id} />}
 
         {reactions.length > 0 && (
           <div className="-mt-2 flex gap-0.5 px-2">

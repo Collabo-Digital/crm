@@ -10,7 +10,7 @@ import { Textarea } from "~/components/ui/textarea";
 import { useInstagramPosts } from "~/hooks/use-automation-queries";
 import { useCampaignUploadMutation } from "~/hooks/use-campaign-mutations";
 import { useTemplates } from "~/hooks/use-campaign-queries";
-import { BLOCKS, CHANNEL_LABEL, EVENTS, allSteps } from "~/lib/automation-blocks";
+import { BLOCKS, CHANNEL_LABEL, EVENTS, ORDER_EVENTS, STORE_EVENTS, allSteps } from "~/lib/automation-blocks";
 import { cn } from "~/lib/utils";
 import type { AutomationChannelKey, AutomationIssue, AutomationStep } from "~/types/api";
 
@@ -50,7 +50,11 @@ function variablesFor(ctx: EditorContext): string[] {
     if (s.type === "wait_for_reply" && s.config.saveAs) saved.add(`attr.${s.config.saveAs}`);
     if (s.type === "set_attribute" && s.config.key) saved.add(`attr.${s.config.key}`);
     if (s.type === "http_request" && s.config.saveAs) saved.add(`${s.config.saveAs}.status_code`);
+    if (s.type === "store_action" && s.config.action === "create_draft_order") ["draft.checkout_url", "draft.total", "draft.name"].forEach((v) => saved.add(v));
   }
+  const event = String(trigger.event ?? "");
+  if (ORDER_EVENTS.includes(event)) ["order.name", "order.total", "order.items", "order.payment", "order.status", "order.tracking_url", "order.tracking_number", "order.carrier"].forEach((v) => saved.add(v));
+  if (event === "checkout_abandoned") ["checkout.url", "checkout.total", "checkout.items"].forEach((v) => saved.add(v));
   return [
     "first_name",
     "name",
@@ -276,9 +280,10 @@ function WebhookUrl({ token, phoneField }: { token: string; phoneField: string }
 function TriggerForm({ config, set, ctx }: { config: Config; set: (p: Config) => void; ctx: EditorContext }) {
   const events = EVENTS[ctx.channel];
   const ro = ctx.readOnly;
+  const hint = events.find((e) => e.value === config.event)?.hint || undefined;
   return (
     <div className="space-y-4">
-      <Field label={`On ${CHANNEL_LABEL[ctx.channel]}`} htmlFor="t-event">
+      <Field label={`On ${CHANNEL_LABEL[ctx.channel]}`} htmlFor="t-event" hint={hint}>
         <select id="t-event" className={selectClass} value={config.event} disabled={ro} onChange={(e) => set({ event: e.target.value })}>
           {events.map((ev) => (
             <option key={ev.value} value={ev.value}>
@@ -343,6 +348,11 @@ function TriggerForm({ config, set, ctx }: { config: Config; set: (p: Config) =>
             Set them up in <Link to="/campaigns/automations/starters" className="underline">Conversation starters</Link>.
           </p>
         </>
+      )}
+      {STORE_EVENTS.includes(config.event) && (
+        <p className="rounded-lg bg-info-subtle p-2 text-micro text-info">
+          The buyer is found by the phone number on the order or checkout; a new number becomes a contact. Messages must be approved templates, since they may not have written in 24 hours.
+        </p>
       )}
       {config.event === "tag_added" && (
         <Field label="Tag" hint="Added by a person in the inbox, an import or another automation." htmlFor="t-tag">
@@ -453,7 +463,7 @@ function TemplateFields({ config, set, ctx }: { config: Config; set: (p: Config)
   return (
     <div className="space-y-3">
       <Field label="Template" hint="Approved WhatsApp templates. They can be sent even after the 24-hour window closes." htmlFor="m-template">
-        <select id="m-template" className={selectClass} value={config.templateId ?? ""} disabled={ctx.readOnly || isLoading} onChange={(e) => set({ templateId: e.target.value || undefined, templateValues: {} })}>
+        <select id="m-template" className={selectClass} value={config.templateId ?? ""} disabled={ctx.readOnly || isLoading} onChange={(e) => set({ templateId: e.target.value || undefined })}>
           <option value="">{isLoading ? "Loading…" : "Choose a template"}</option>
           {templates.map((t) => (
             <option key={t.id} value={t.id}>
@@ -541,6 +551,8 @@ const RULE_FIELDS: Array<{ field: string; label: string; ops: Array<[string, str
   { field: "orders_count", label: "Orders", ops: [["gte", "at least"], ["lte", "at most"], ["equals", "exactly"]] },
   { field: "window", label: "Reply window", ops: [["is", "is"]], values: [["open", "open"], ["closed", "closed"]] },
   { field: "assigned", label: "Conversation", ops: [["exists", "is assigned"], ["not_exists", "is unassigned"]] },
+  { field: "order_payment", label: "Order payment", ops: [["is", "is"], ["is_not", "is not"]], values: [["cod", "cash on delivery"], ["prepaid", "prepaid"]] },
+  { field: "order_total", label: "Order total", ops: [["gte", "is at least"], ["lte", "is at most"]] },
 ];
 const NO_VALUE = new Set(["exists", "not_exists"]);
 
@@ -792,7 +804,44 @@ export function StepEditor({ step, onChange, ctx }: { step: AutomationStep; onCh
       );
       break;
     case "send_invoice":
-      body = <p className="text-caption text-muted-foreground">Sending invoices from automations arrives with store automations. Remove this step to publish.</p>;
+      body = <p className="text-caption text-muted-foreground">Sending invoices from automations is not available yet. Remove this step to publish.</p>;
+      break;
+    case "store_action":
+      body = (
+        <div className="space-y-4">
+          <Field label="Action" htmlFor="sa-action">
+            <select id="sa-action" className={selectClass} value={c.action} disabled={ro} onChange={(e) => set({ action: e.target.value })}>
+              <option value="tag_order">Tag the order</option>
+              <option value="note_order">Add to the order’s note</option>
+              <option value="cancel_order">Cancel the order</option>
+              <option value="tag_customer">Tag the store customer</option>
+              <option value="create_draft_order">Make a draft order from the cart</option>
+            </select>
+          </Field>
+          {(c.action === "tag_order" || c.action === "tag_customer") && (
+            <Field label="Tag" hint={c.action === "tag_order" ? "Added in Shopify too for Shopify orders." : "Kept in Collabo; Shopify customer tags are not changed."} htmlFor="sa-value">
+              <Input id="sa-value" value={c.value ?? ""} maxLength={60} disabled={ro} placeholder="cod-confirmed" onChange={(e) => set({ value: e.target.value })} />
+            </Field>
+          )}
+          {c.action === "note_order" && (
+            <Field label="Note" htmlFor="sa-note">
+              <TextWithVariables id="sa-note" rows={2} value={c.value ?? ""} onChange={(value) => set({ value })} ctx={ctx} maxLength={500} />
+            </Field>
+          )}
+          {c.action === "cancel_order" && (
+            <>
+              <Field label="Staff note" hint="Shown in the order’s timeline. The customer is notified, items are restocked and nothing is refunded." htmlFor="sa-cancel">
+                <Input id="sa-cancel" value={c.value ?? ""} maxLength={200} disabled={ro} placeholder="Customer declined on WhatsApp" onChange={(e) => set({ value: e.target.value })} />
+              </Field>
+            </>
+          )}
+          {c.action === "create_draft_order" && (
+            <p className="text-micro text-muted-foreground">
+              The draft is mirrored to your Shopify store, and its checkout link becomes {"{{draft.checkout_url}}"} for the next steps. Without a Shopify store the draft stays in Collabo and the link is empty.
+            </p>
+          )}
+        </div>
+      );
       break;
   }
 

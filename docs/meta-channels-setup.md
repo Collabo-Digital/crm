@@ -353,6 +353,70 @@ Per-account subscription happens at connect time and is undone at disconnect:
   human-agent tag is for people only): a run whose message cannot go stops,
   and the reason shows on the automation.
 
+### Selling in chat (commerce)
+
+- **Store events for automations.** Order placed, paid, shipped, delivered and
+  cancelled — from Shopify's order webhooks and from the same actions taken in
+  Collabo — and checkout abandoned. Each is raised once per order and kind,
+  and only when an active automation listens. The buyer is found by the
+  order's (or checkout's) phone number on each listening WhatsApp number; a new
+  number becomes a contact linked to the store customer. Messages from these
+  triggers must be approved templates: the builder refuses free text there.
+  Shopify has no delivered order state; a fulfilment whose carrier
+  `shipment_status` is `delivered` counts, as does marking it delivered in
+  Collabo.
+- **Cash on delivery** is read from Shopify's `payment_gateway_names` (for
+  example "Cash on Delivery (COD)"), stored on the order from live webhooks.
+  Orders imported by the historical backfill do not carry it.
+- **Store actions** an automation can take: tag the order or add to its note
+  (Shopify `orderUpdate`), cancel it (Shopify `orderCancel` — customer
+  notified, restocked, no refund), tag the store customer (Collabo only), and
+  turn a WhatsApp cart into a draft order. Changes are recorded against the
+  automation's creator, or the organization's owner.
+- **The old order message is gone.** Shopify `orders/create` used to send
+  Meta's sample `hello_world` template to every consenting customer whenever a
+  WhatsApp number was connected; order messages now come only from
+  automations the business sets up (the Order confirmation playbook).
+- **Abandoned checkouts** come from the `checkouts/create|update|delete`
+  webhooks the app already subscribes to. A checkout with a phone number and
+  Shopify's `abandoned_checkout_url` that stays quiet for an hour without an
+  order raises one `crm.checkout.abandoned` event (a sweep every 10 minutes,
+  up to 3 days back). An order completes its checkout by `checkout_id` or
+  token, even when the checkout's last update arrives after the order. The
+  buyer's phone, name and addresses in these webhooks need Shopify's
+  **protected customer data** access for the app.
+- **WhatsApp catalog** (Campaigns → Catalog). Meta documents no API for
+  linking a catalog to a WhatsApp account: the business connects it in
+  WhatsApp Manager or Commerce Manager (one catalog per account) and pastes the
+  catalog id into Collabo, which checks it with `GET /{catalog_id}`. Products
+  are pushed with the Catalog Batch API, `POST /{catalog_id}/items_batch`
+  (`item_type: PRODUCT_ITEM`, `allow_upsert: true`, up to 1,000 records per
+  call): one item per variant, keyed by the variant's id — which is also the
+  `product_retailer_id` in product messages and carts. Each item has title,
+  description, price (with `sale_price` when a compare-at price is higher),
+  availability, condition, brand, image and the Shopify product page as link;
+  variants without an image or a product page are held back with the reason.
+  Unchanged items are not re-sent; products taken off sale are deleted.
+  Catalog visibility and the cart are `POST /{phone_number_id}/whatsapp_commerce_settings`.
+  The token is the WhatsApp business token: Meta's reference names no specific
+  permission for catalog writes ("Marketing API access level"), so whether the
+  system user needs `catalog_management` or a catalog assignment in Business
+  Settings is **not yet verified** live.
+- **Product messages** from the inbox's product tray: one product as a product
+  card, two to thirty as a product list (text header), only for items already
+  synced. Elsewhere — Instagram, Messenger, a number without a catalog, or a
+  number shared with the WhatsApp Business app (which Meta does not allow to
+  send catalog messages through the API) — products go as a message with
+  names, prices and links.
+- **Carts to orders.** A cart sent from the catalog starts “sends a cart”
+  automations; the store action makes a draft order and mirrors it to Shopify
+  (`draftOrderCreate`), whose `invoiceUrl` is the checkout link
+  (`{{draft.checkout_url}}`). The inbox shows “Create draft order” under a cart
+  for doing it by hand. Without a Shopify store the draft stays in Collabo and
+  there is no link.
+- **Not built:** sending a GST invoice from an automation (invoice PDFs are
+  only rendered in the browser today), and Shopify customer tags.
+
 ## 5. Local testing
 
 Meta will not redirect to `localhost`, so `APP_URL` must be a public tunnel

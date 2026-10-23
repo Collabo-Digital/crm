@@ -192,7 +192,8 @@ export class WhatsAppWebhookHandler {
             imported,
             initialStatus: imported && m.historyStatus ? (HISTORY_STATUS[m.historyStatus] ?? MessageStatus.DELIVERED) : undefined,
             consentPayload: button?.payload ?? null,
-            event: imported ? undefined : { type: 'whatsapp.message', extraPayload: { referral: m.referral } },
+            // A cart from the catalog starts cart automations, not message ones.
+            event: imported ? undefined : { type: m.type === 'order' ? 'whatsapp.cart' : 'whatsapp.message', extraPayload: { referral: m.referral } },
         });
     }
 

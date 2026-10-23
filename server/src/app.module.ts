@@ -49,6 +49,7 @@ import { InventoryModule } from './inventory/inventory.module';
 import { AutomationModule } from './automation/automation.module';
 import { InboxModule } from './inbox/inbox.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
+import { CommerceModule } from './commerce/commerce.module';
 
 @Module({
   imports: [
@@ -115,6 +116,7 @@ import { CampaignsModule } from './campaigns/campaigns.module';
     AutomationModule,
     InboxModule,
     CampaignsModule,
+    CommerceModule,
   ],
   controllers: [AppController],
   providers: [

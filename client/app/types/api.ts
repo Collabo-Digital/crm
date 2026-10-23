@@ -3864,6 +3864,9 @@ export type InboxSendPayload =
   | { type: "reaction"; messageId: string; emoji: string }
   | { type: "private_reply"; commentMessageId: string; text: string }
   | { type: "comment_reply"; commentMessageId: string; text: string }
+  /** WhatsApp: one product, or a list of up to 30, from the number's catalog. */
+  | { type: "products"; variantIds: string[]; header?: string; text?: string }
+  | { type: "catalog"; text: string }
   | {
       type: "template";
       name: string;
@@ -4238,7 +4241,8 @@ export type AutomationBlockType =
   | "assign"
   | "set_status"
   | "add_note"
-  | "http_request";
+  | "http_request"
+  | "store_action";
 
 /** One block of a flow. Condition (yes / no) and wait-for-reply (replied / timeout) carry branches. */
 export interface AutomationStep {
@@ -4385,4 +4389,52 @@ export interface InboxRulesSettings {
 
 export interface InboxRulesSettingsView extends InboxRulesSettings {
   organizationTimeZone: string;
+}
+
+// ─── Commerce Types ─────────────────────────────────────────────────────────
+
+/** One sellable variant, for the inbox's product tray. */
+export interface StoreProduct {
+  variantId: string;
+  productId: string;
+  title: string;
+  variantTitle: string | null;
+  price: string;
+  currency: string;
+  image: string | null;
+  url: string | null;
+  inStock: boolean;
+  /** Synced to this WhatsApp number's catalog, so it can go as a product card. */
+  inCatalog: boolean;
+}
+
+export interface StoreProductsResponse {
+  catalog: { catalogId: string; name: string | null } | null;
+  /** WhatsApp number with a catalog, not shared with the Business app. */
+  canSendProducts: boolean;
+  products: StoreProduct[];
+}
+
+export interface DraftFromCart {
+  draftId: string;
+  name: string | null;
+  total: string;
+  checkoutUrl: string | null;
+  missing: string[];
+}
+
+export interface CatalogView {
+  channelId: string;
+  onBusinessApp: boolean;
+  catalog: {
+    catalogId: string;
+    name: string | null;
+    productCount: number | null;
+    connectedAt: string;
+    lastSync?: { at: string; sent: number; removed: number; skipped: number; errors: number; handles: string[] };
+  } | null;
+  commerce: { cartEnabled: boolean; catalogVisible: boolean } | null;
+  commerceError: string | null;
+  items: Partial<Record<"SYNCED" | "ERROR" | "SKIPPED" | "REMOVED", number>>;
+  problems: Array<{ variantId: string; name: string; status: string; error: string | null }>;
 }

@@ -39,6 +39,7 @@ import { GstCalculatorService } from '../gst/gst-calculator.service';
 import { TaxResolverService } from '../gst/tax-resolver.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShopifyPushEnqueuer } from '../channel/shopify-push.enqueuer';
+import { CommerceEventsService } from '../commerce/commerce-events.service';
 import {
   ShopifyPushService,
   isStalePendingSync,
@@ -199,6 +200,8 @@ export class OrderService {
     private readonly fx: FxRateService,
     @InjectQueue(SHOPIFY_PUSH_QUEUE)
     private readonly shopifyPushQueue: Queue,
+    // Order events for automations: placed, paid, shipped, delivered, cancelled.
+    private readonly commerceEvents: CommerceEventsService,
   ) { }
 
   async findAll(orgId: string, query: QueryOrdersDto, vendorScope?: string) {
@@ -1849,6 +1852,7 @@ export class OrderService {
         ),
       );
 
+    await this.commerceEvents.order(result.order.id, result.order.financialStatus === OrderFinancialStatus.PAID ? ['created', 'paid'] : ['created']);
     return result;
   }
 
@@ -2450,6 +2454,7 @@ export class OrderService {
       }
     }
 
+    await this.commerceEvents.order(id, ['cancelled']);
     return cancelled;
   }
 
@@ -2554,6 +2559,7 @@ export class OrderService {
     // transition, so marking an order paid in the CRM never produced an
     // invoice. After the commit and non-throwing, like every other caller.
     await this.invoiceService.autoInvoiceForPaidOrder(orgId, id);
+    await this.commerceEvents.order(id, ['paid']);
     return updated;
   }
 
@@ -3301,6 +3307,7 @@ export class OrderService {
         ),
       );
     }
+    await this.commerceEvents.order(orderId, ['delivered']);
     return { id: fulfillmentId, status: 'delivered' };
   }
 
@@ -3493,6 +3500,7 @@ export class OrderService {
         );
       }
     }
+    await this.commerceEvents.order(orderId, ['delivered']);
     return { id: lineId, status: 'delivered' };
   }
 
@@ -3930,11 +3938,13 @@ export class OrderService {
         }
       });
 
-      return this.prisma.order.findUnique({ where: { id: orderId } });
+      const shipped = await this.prisma.order.findUnique({ where: { id: orderId } });
+      await this.commerceEvents.order(orderId, ['fulfilled']);
+      return shipped;
     }
 
     // ── Manual branch ──────────────────────────────────────────────────────
-    return this.prisma.$transaction(async (tx) => {
+    const recorded = await this.prisma.$transaction(async (tx) => {
       const requestedIds = dto.lineItems.map((li) => li.lineItemId);
       const lineItems = await tx.orderLineItem.findMany({
         where: { orderId, id: { in: requestedIds } },
@@ -4014,6 +4024,8 @@ export class OrderService {
 
       return fulfillment;
     });
+    await this.commerceEvents.order(orderId, ['fulfilled']);
+    return recorded;
   }
 
   /** Update tracking number/URL/carrier on an existing fulfillment. */

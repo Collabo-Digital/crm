@@ -62,6 +62,15 @@ const SendPayloadSchema = z.discriminatedUnion('type', [
     z.object({ type: z.literal('private_reply'), commentMessageId: z.string().min(1), text }),
     /** A public reply under an Instagram or Facebook comment. */
     z.object({ type: z.literal('comment_reply'), commentMessageId: z.string().min(1), text: z.string().trim().min(1).max(2000) }),
+    /** WhatsApp: one product, or a list of up to 30, from the number's catalog. */
+    z.object({
+        type: z.literal('products'),
+        variantIds: z.array(z.string().min(1).max(40)).min(1).max(30),
+        header: z.string().trim().max(60).optional(),
+        text: z.string().trim().max(1024).optional(),
+    }),
+    /** WhatsApp: a button that opens the whole catalog. */
+    z.object({ type: z.literal('catalog'), text: z.string().trim().min(1).max(1024) }),
 ]);
 
 export type SendPayloadInput = z.infer<typeof SendPayloadSchema>;
@@ -76,6 +85,6 @@ export function parseSendPayload(raw: unknown): SendPayloadInput {
 }
 
 /** The payload types that pass straight through to the send service. */
-export function asOutbound(input: Exclude<SendPayloadInput, { type: 'reaction' | 'private_reply' | 'comment_reply' }>): OutboundPayload {
+export function asOutbound(input: Exclude<SendPayloadInput, { type: 'reaction' | 'private_reply' | 'comment_reply' | 'products' }>): OutboundPayload {
     return input as OutboundPayload;
 }

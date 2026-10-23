@@ -18,7 +18,9 @@ export type InboundEventType =
     /** A tag was added to a contact, by a person, an import or an automation. */
     | 'crm.contact.tag_added'
     /** Another system called an automation's webhook URL. */
-    | 'crm.webhook';
+    | 'crm.webhook'
+    /** A cart sent from the WhatsApp catalog. */
+    | 'whatsapp.cart';
 
 /** Tags added by automations can start automations that add tags; stop after this many hops. */
 export const MAX_TAG_DEPTH = 3;

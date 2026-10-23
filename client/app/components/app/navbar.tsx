@@ -24,6 +24,7 @@ import {
   LayoutTemplate,
   Filter,
   Workflow,
+  ShoppingBag,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
@@ -87,6 +88,7 @@ const CAMPAIGNS_CHILDREN: NavChild[] = [
   { label: "Templates", href: "/campaigns/templates", icon: LayoutTemplate },
   { label: "Segments", href: "/campaigns/segments", icon: Filter },
   { label: "Automations", href: "/campaigns/automations", icon: Workflow },
+  { label: "Catalog", href: "/campaigns/catalog", icon: ShoppingBag },
 ];
 
 const NAV_LINKS: NavItem[] = [

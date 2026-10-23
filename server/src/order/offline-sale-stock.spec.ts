@@ -130,7 +130,7 @@ function build({
     { recomputeForCustomer: jest.fn().mockResolvedValue(undefined) } as any,
     ledger as any,
     fx as any,
-    shopifyPushQueue as any,
+    shopifyPushQueue as any, { order: jest.fn() } as any /* commerceEvents */,
   );
   // `markPendingSync` writes through prisma.order.update, which this harness
   // does not stub — the push path is what is under test, not that write.

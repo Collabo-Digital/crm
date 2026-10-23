@@ -14,9 +14,11 @@ import type {
   InboxSendPayload,
   InboxUpload,
   QuickReply,
+  StoreProduct,
 } from "~/types/api";
 
 import type { CommentReplyMode } from "./message-bubble";
+import { MAX_PRODUCTS, ProductPickerButton, ProductTray, productsPayload } from "./product-picker";
 import { QuickReplyPicker, matchQuickReplies } from "./quick-reply-picker";
 import { ReplyWindowHint } from "./reply-window";
 
@@ -82,6 +84,8 @@ export function MessageComposer({
   const [options, setOptions] = useState<string[]>([]);
   const [pickerIndex, setPickerIndex] = useState(0);
   const [pickerDismissed, setPickerDismissed] = useState(false);
+  const [products, setProducts] = useState<StoreProduct[]>([]);
+  const [productsAsCards, setProductsAsCards] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -118,7 +122,7 @@ export function MessageComposer({
   const canSubmit =
     !isSending &&
     !uploading &&
-    (isNoteMode ? trimmed.length > 0 : !replyLocked && (trimmed.length > 0 || (!!staged && !commentMode)));
+    (isNoteMode ? trimmed.length > 0 : !replyLocked && (trimmed.length > 0 || (!!staged && !commentMode) || (products.length > 0 && !commentMode)));
 
   function pickQuickReply(reply: QuickReply) {
     setDraft(fillQuickReply(reply.body, { name: contact.name, agent: agentName }));
@@ -150,6 +154,7 @@ export function MessageComposer({
         text: trimmed,
       };
     }
+    if (products.length) return productsPayload(products, trimmed, productsAsCards);
     if (staged) {
       return {
         type: "media",
@@ -180,6 +185,7 @@ export function MessageComposer({
     setDraft("");
     setStaged(null);
     setOptions([]);
+    setProducts([]);
     onClearQuote();
     onClearCommentTarget();
   }
@@ -265,6 +271,10 @@ export function MessageComposer({
             <X />
           </Button>
         </div>
+      )}
+
+      {!isNoteMode && !commentMode && (
+        <ProductTray items={products} asCards={productsAsCards} onRemove={(id) => setProducts((list) => list.filter((p) => p.variantId !== id))} />
       )}
 
       {options.length > 0 && !isNoteMode && !commentMode && !staged && (
@@ -356,6 +366,20 @@ export function MessageComposer({
         >
           <ListPlus className="size-3.5" />
         </Button>
+
+        <ProductPickerButton
+          conversationId={conversation.id}
+          selected={products}
+          disabled={replyLocked || isNoteMode || commentMode || !!staged || options.length > 0}
+          onToggle={(product, asCards) => {
+            setProductsAsCards(asCards);
+            setProducts((list) =>
+              list.some((p) => p.variantId === product.variantId)
+                ? list.filter((p) => p.variantId !== product.variantId)
+                : [...list, product].slice(0, MAX_PRODUCTS),
+            );
+          }}
+        />
 
         {onOpenTemplates && canReply && !contact.blockedAt && (
           <Button

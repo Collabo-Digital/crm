@@ -9,7 +9,7 @@ import { Public } from '../auth/decorators/public.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { EncryptionService } from './encryption.service';
 import { ShopifySyncService } from './shopify-sync.service';
-import { WhatsAppTriggerService } from './whatsapp-trigger.service';
+import { CheckoutService } from '../commerce/checkout.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 
 /**
@@ -31,7 +31,7 @@ export class ShopifyWebhookController {
         private readonly prisma: PrismaService,
         private readonly encryption: EncryptionService,
         private readonly syncService: ShopifySyncService,
-        private readonly whatsappTrigger: WhatsAppTriggerService,
+        private readonly checkouts: CheckoutService,
         private readonly config: ConfigService,
         private readonly inventoryLedger: InventoryLedgerService,
     ) { }
@@ -217,25 +217,11 @@ export class ShopifyWebhookController {
                         body,
                         { live: true },
                     );
-                    // Fire WhatsApp trigger only on NEW orders. Wrapped in
-                    // try/catch so a messaging failure never bubbles up as a 5xx
-                    // (which would make Shopify retry the whole webhook and
-                    // potentially duplicate work).
+                    // Order messages now come from automations: upsertOrder
+                    // raises the store events they listen for. An order also
+                    // completes its checkout, so it is never "recovered".
                     if (topic === 'orders/create') {
-                        try {
-                            // NB: never log `body` here. It is the full Shopify
-                            // order payload — name, email, phone, both addresses —
-                            // and this runs on every single orders/create.
-                            await this.whatsappTrigger.onOrderPlaced(
-                                channel.organizationId,
-                                channel.id,
-                                body,
-                            );
-                        } catch (err) {
-                            this.logger.warn(
-                                `WhatsApp trigger failed (non-fatal): ${err instanceof Error ? err.message : err}`,
-                            );
-                        }
+                        await this.checkouts.markCompleted(channel, body);
                         // Also record the order as an analytics event so
                         // the cart aggregator can compute
                         // checkout→order conversion using consistent
@@ -307,11 +293,21 @@ export class ShopifyWebhookController {
                 // of times for a single shopper session, so we want the
                 // aggregator to dedupe instead of doing read-modify-write
                 // on every event.
-                case 'carts/create':
-                case 'carts/update':
                 case 'checkouts/create':
                 case 'checkouts/update':
                 case 'checkouts/delete':
+                    // Also kept as a checkout for abandoned-cart recovery.
+                    if (topic === 'checkouts/delete') await this.checkouts.remove(channel.id, body);
+                    else await this.checkouts.upsertFromWebhook(channel, body);
+                    await this.recordAnalyticsEvent(
+                        channel.id,
+                        channel.organizationId,
+                        topic,
+                        body,
+                    );
+                    break;
+                case 'carts/create':
+                case 'carts/update':
                     await this.recordAnalyticsEvent(
                         channel.id,
                         channel.organizationId,

@@ -1,5 +1,6 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { automationsService } from "~/services/automations.service";
+import { inboxService } from "~/services/inbox.service";
 import { pollWhile } from "~/lib/poll-while";
 import type { AutomationPlatform, AutomationRunStatus, AutomationStats, AutomationStatus } from "~/types/api";
 
@@ -13,6 +14,8 @@ export const automationKeys = {
   posts: (channelId: string) => [...automationKeys.all, "posts", channelId] as const,
   starters: (channelId: string) => [...automationKeys.all, "starters", channelId] as const,
   inboxRules: () => ["inbox", "rules"] as const,
+  catalog: (channelId: string) => ["commerce", "catalog", channelId] as const,
+  products: (conversationId: string, search: string) => ["commerce", "products", conversationId, search] as const,
 };
 
 // Module-level on purpose (see poll-while.ts): runs keep moving while people reply or waits run out.
@@ -58,4 +61,19 @@ export function useConversationStarters(channelId: string | undefined) {
 
 export function useInboxRules(enabled = true) {
   return useQuery({ queryKey: automationKeys.inboxRules(), queryFn: () => automationsService.inboxRules(), enabled });
+}
+
+export function useCatalog(channelId: string | undefined) {
+  return useQuery({ queryKey: automationKeys.catalog(channelId ?? ""), queryFn: () => automationsService.catalog(channelId!), enabled: !!channelId });
+}
+
+/** The product tray's list, for one conversation's channel. */
+export function useInboxProducts(conversationId: string, search: string, enabled: boolean) {
+  return useQuery({
+    queryKey: automationKeys.products(conversationId, search),
+    queryFn: () => inboxService.products(conversationId, search || undefined),
+    enabled,
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+  });
 }

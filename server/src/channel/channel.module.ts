@@ -9,7 +9,6 @@ import { InstagramTokenScheduler } from './instagram-token.scheduler';
 import { WhatsAppOAuthService } from './whatsapp-oauth.service';
 import { WhatsAppMessagingService } from './whatsapp-messaging.service';
 import { WhatsAppMessagingProcessor } from './whatsapp.processor';
-import { WhatsAppTriggerService } from './whatsapp-trigger.service';
 import { ShopifySyncService } from './shopify-sync.service';
 import { ShopifyLocationSyncService } from './shopify-location-sync.service';
 import { ShopifyAnalyticsService } from './shopify-analytics.service';
@@ -34,6 +33,7 @@ import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { OrganizationSettingsModule } from '../organization-settings/organization-settings.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { InvoiceModule } from '../invoice/invoice.module';
+import { CommerceEventsModule } from '../commerce/commerce-events.module';
 
 @Module({
   imports: [
@@ -57,11 +57,14 @@ import { InvoiceModule } from '../invoice/invoice.module';
     // paid. No cycle: InvoiceModule imports only GstModule, and nothing in the
     // invoice module reaches back into channels.
     InvoiceModule,
+    // Order and checkout events for automations. Depends only on Prisma and
+    // the automation queue, so no cycle with the messaging stack.
+    CommerceEventsModule,
   ],
   controllers: [ChannelController, ShopifyWebhookController],
   providers: [
     ChannelService, ShopifyOAuthService, InstagramOAuthService, InstagramTokenScheduler, WhatsAppOAuthService,
-    WhatsAppMessagingService, WhatsAppMessagingProcessor, WhatsAppTriggerService,
+    WhatsAppMessagingService, WhatsAppMessagingProcessor,
     WhatsAppAccountService, WhatsAppOnboardingProcessor, MetaPagesOAuthService, WhatsAppHealthScheduler,
     ShopifySyncService, ShopifyLocationSyncService, ShopifyAnalyticsService, SyncProcessor, EncryptionService,
     ShopifyPushService, ShopifyPushProcessor, ShopifyPushEnqueuer,
@@ -69,7 +72,7 @@ import { InvoiceModule } from '../invoice/invoice.module';
   ],
   exports: [
     ChannelService, ShopifyOAuthService, InstagramOAuthService, WhatsAppOAuthService,
-    WhatsAppMessagingService, WhatsAppTriggerService, WhatsAppAccountService,
+    WhatsAppMessagingService, WhatsAppAccountService,
     ShopifySyncService, ShopifyLocationSyncService, ShopifyAnalyticsService, EncryptionService,
     ShopifyPushService, ShopifyPushEnqueuer,
     ShopifyGraphqlClient, MetaGraphClient,

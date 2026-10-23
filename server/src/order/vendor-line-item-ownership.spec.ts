@@ -65,7 +65,7 @@ function build() {
   const service = new OrderService(
     prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
     {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-    {} as any,
+    {} as any, { order: jest.fn() } as any /* commerceEvents */,
   );
   return { service, prisma, tx };
 }

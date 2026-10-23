@@ -40,9 +40,15 @@ const TriggerConfig = z.object({
      * comment — on a post (Instagram, Facebook) · message — any message, or one
      * with a keyword · mention — an Instagram story mention · postback — an ice
      * breaker, menu item or button tap · tag_added — a contact got a tag ·
-     * webhook — another system called this automation's URL.
+     * webhook — another system called this automation's URL · order_* — a
+     * store order was placed, paid, shipped, delivered or cancelled ·
+     * checkout_abandoned — a store checkout was left unfinished · cart — a
+     * WhatsApp cart sent from the catalog.
      */
-    event: z.enum(['comment', 'message', 'mention', 'postback', 'tag_added', 'webhook']),
+    event: z.enum([
+        'comment', 'message', 'mention', 'postback', 'tag_added', 'webhook',
+        'order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled', 'checkout_abandoned', 'cart',
+    ]),
     /** Comment: the post or reel id; empty for every post. */
     post: z.string().max(64).default(''),
     match: z.enum(['contains', 'exact', 'any']).default('contains'),
@@ -90,6 +96,16 @@ const ReplyCommentConfig = z.object({
     message: z.string().max(2000).default(''),
 });
 
+const StoreActionConfig = z.object({
+    /**
+     * tag_order / note_order / cancel_order — the order the trigger is about ·
+     * tag_customer — the contact's store customer · create_draft_order — a
+     * draft order from the cart, with Shopify's checkout link as {{draft.checkout_url}}.
+     */
+    action: z.enum(['tag_order', 'note_order', 'cancel_order', 'tag_customer', 'create_draft_order']).default('tag_order'),
+    value: z.string().max(500).default(''),
+});
+
 const SendInvoiceConfig = z.object({
     template: z.string().max(64).default('gst_invoice'),
     delivery: z.enum(['whatsapp']).default('whatsapp'),
@@ -109,7 +125,7 @@ const WaitForReplyConfig = z.object({
 });
 
 const ConditionRule = z.object({
-    field: z.enum(['last_reply', 'trigger_text', 'tag', 'attribute', 'consent', 'customer', 'orders_count', 'window', 'assigned']),
+    field: z.enum(['last_reply', 'trigger_text', 'tag', 'attribute', 'consent', 'customer', 'orders_count', 'window', 'assigned', 'order_payment', 'order_total']),
     op: z.enum(['contains', 'equals', 'is_any_of', 'has', 'not_has', 'exists', 'not_exists', 'gte', 'lte', 'is', 'is_not']),
     /** The attribute name, for `attribute`. */
     key: z.string().max(60).default(''),
@@ -165,6 +181,7 @@ const BLOCK_SCHEMAS = {
     set_status: SetStatusConfig,
     add_note: AddNoteConfig,
     http_request: HttpRequestConfig,
+    store_action: StoreActionConfig,
 } as const;
 
 /** Each branching block and the branches it has. */
@@ -264,10 +281,13 @@ export function parseDefinition(input: unknown): StepDef[] {
 // ─── Issues (publish, and GET /issues) ─────────────────────────────────────
 
 /** What a trigger can listen to on each channel. */
+const ORDER_EVENTS = ['order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled'];
+/** Store events reach people who may not have written in 24 hours: WhatsApp templates only. */
+const STORE_EVENTS = [...ORDER_EVENTS, 'checkout_abandoned'];
 const EVENTS_BY_CHANNEL: Record<z.infer<typeof Channel>, string[]> = {
     instagram: ['comment', 'message', 'mention', 'postback', 'tag_added', 'webhook'],
     facebook: ['comment', 'message', 'postback', 'tag_added', 'webhook'],
-    whatsapp: ['message', 'tag_added', 'webhook'],
+    whatsapp: ['message', 'tag_added', 'webhook', ...STORE_EVENTS, 'cart'],
 };
 
 export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
@@ -301,8 +321,10 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
 
     // Variables a step may use: the base set, contact attributes, and what earlier steps saved.
     const saved = new Set<string>();
-    // A webhook's JSON fields arrive as {{webhook.<field>}}.
+    // A webhook's JSON fields arrive as {{webhook.<field>}}; store events bring their order or checkout.
     if (t.event === 'webhook') saved.add('webhook');
+    if (ORDER_EVENTS.includes(t.event)) saved.add('order');
+    if (t.event === 'checkout_abandoned') saved.add('checkout');
     let privateReplies = 0;
     for (const { step, path } of actions) {
         const c = step.config;
@@ -339,6 +361,10 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                     push(step.id, 'message_too_long', 'Message too long', `Instagram messages must be under ${IG_MESSAGE_MAX_BYTES} bytes.`);
                 }
                 if (m.product && !m.link) push(step.id, 'link_missing', 'Product link missing', 'Add the link customers should tap to buy this product.');
+                if (STORE_EVENTS.includes(t.event) && channel === 'whatsapp' && !insideReply) {
+                    push(step.id, 'template_needed', 'Use an approved template',
+                        'A store message may reach someone who has not written in 24 hours, and WhatsApp then accepts templates only. Send a template, or put this after “Wait for a reply”.');
+                }
                 if (t.event === 'comment' && channel !== 'whatsapp' && !insideReply) {
                     push(step.id, 'needs_reply_first', 'Send a private reply first',
                         'Someone who only commented has not messaged you yet. Reply privately to the comment, then wait for their reply before sending more.');
@@ -397,6 +423,21 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 if (!(c as z.infer<typeof AddNoteConfig>).text.trim()) push(step.id, 'note_missing', 'Note is empty', 'Write the note.');
                 checkText((c as z.infer<typeof AddNoteConfig>).text);
                 break;
+            case 'store_action': {
+                const a = c as z.infer<typeof StoreActionConfig>;
+                if (['tag_order', 'note_order', 'cancel_order'].includes(a.action) && !ORDER_EVENTS.includes(t.event)) {
+                    push(step.id, 'needs_order', 'Needs an order', 'Order actions work when the trigger is an order event.');
+                }
+                if (a.action === 'create_draft_order' && t.event !== 'cart') {
+                    push(step.id, 'needs_cart', 'Needs a cart', 'A draft order is made from a cart: use the “sends a cart” trigger.');
+                }
+                if (['tag_order', 'tag_customer', 'note_order'].includes(a.action) && !a.value.trim()) {
+                    push(step.id, 'value_missing', a.action === 'note_order' ? 'Note is empty' : 'Tag missing', a.action === 'note_order' ? 'Write the note.' : 'Name the tag.');
+                }
+                checkText(a.value);
+                if (a.action === 'create_draft_order') saved.add('draft');
+                break;
+            }
             case 'http_request': {
                 const h = c as z.infer<typeof HttpRequestConfig>;
                 if (!/^https?:\/\//i.test(h.url)) push(step.id, 'url_missing', 'Add the URL', 'Requests go to a full https:// address.');
@@ -416,7 +457,7 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
 export function keywordsFor(trigger: StepDef): string[] {
     const c = trigger.config as TriggerConfigT;
     if (c.event === 'tag_added') return c.tag ? [c.tag] : [];
-    if (c.match === 'any') return [];
+    if (c.match === 'any' || (c.event !== 'comment' && c.event !== 'message' && c.event !== 'postback')) return [];
     const parts = c.keyword.split(',').map((k) => k.trim()).filter(Boolean);
     return [...new Set(c.event === 'postback' ? parts : parts.map((k) => k.toLowerCase()))];
 }
@@ -426,6 +467,9 @@ export function triggerTypeFor(trigger: StepDef): string {
     const c = trigger.config as TriggerConfigT;
     if (c.event === 'tag_added') return 'crm.contact.tag_added';
     if (c.event === 'webhook') return 'crm.webhook';
+    if (c.event.startsWith('order_')) return `crm.order.${c.event.slice('order_'.length)}`;
+    if (c.event === 'checkout_abandoned') return 'crm.checkout.abandoned';
+    if (c.event === 'cart') return 'whatsapp.cart';
     if (c.event === 'mention') return 'instagram.mention';
     return `${c.channel}.${c.event}`;
 }

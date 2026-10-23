@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MessagingModule } from '../messaging/messaging.module';
 import { CampaignsModule } from '../campaigns/campaigns.module';
+import { CommerceModule } from '../commerce/commerce.module';
 import { InboxController } from './inbox.controller';
 import { InboxContactsController } from './inbox-contacts.controller';
 import { InboxWorkspaceController } from './inbox-workspace.controller';
@@ -16,7 +17,7 @@ import { InboxSettingsService } from './inbox-settings.service';
 import { InboxRulesService } from './inbox-rules.service';
 
 @Module({
-    imports: [MessagingModule, CampaignsModule],
+    imports: [MessagingModule, CampaignsModule, CommerceModule],
     controllers: [InboxController, InboxContactsController, InboxWorkspaceController, InboxMediaController],
     providers: [
         InboxService, InboxContactsService, ContactImportService, InboxTeamService, InboxViewService, QuickReplyService, InboxMaintenance,

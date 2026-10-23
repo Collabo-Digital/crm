@@ -109,6 +109,19 @@ export function simulate(
             case 'http_request':
                 push('done', `Calls ${c.method} ${interpolate(String(c.url ?? ''), vars)} (not called in a test).`);
                 break;
+            case 'store_action': {
+                const value = interpolate(String(c.value ?? ''), vars);
+                const said: Record<string, string> = {
+                    tag_order: `Tags the order “${value}”.`,
+                    note_order: `Adds to the order’s note: ${value}`,
+                    cancel_order: 'Cancels the order in the store.',
+                    tag_customer: `Tags the store customer “${value}”.`,
+                    create_draft_order: 'Creates a draft order from the cart, with its checkout link as {{draft.checkout_url}}.',
+                };
+                if (c.action === 'create_draft_order') f.context.vars['draft.checkout_url'] = 'https://your-store.example/checkout/…';
+                push('done', said[String(c.action)] ?? 'Runs a store action.');
+                break;
+            }
             default:
                 push('error', `Unknown block "${step.type}".`);
                 return trace;

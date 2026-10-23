@@ -28,6 +28,8 @@ import {
     gstTypeForSupply,
     type SellerRegistrations,
 } from '../gst/seller-registration.util';
+import { CommerceEventsService } from '../commerce/commerce-events.service';
+import type { StoreEventKind } from '../commerce/order-vars';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import {
@@ -241,6 +243,9 @@ export class ShopifySyncService {
         private readonly fx: FxRateService,
         @InjectQueue(DRAFT_MIRROR_QUEUE)
         private readonly draftMirrorQueue: Queue<DraftMirrorJobData>,
+        // Order events for automations (order messages, COD confirmation),
+        // raised on the live-webhook path only.
+        private readonly commerceEvents: CommerceEventsService,
     ) { }
 
     /**
@@ -690,6 +695,7 @@ export class ShopifySyncService {
         return {
             id: ShopifyGraphqlClient.extractId(node.id),
             title: node.title,
+            handle: node.handle,
             body_html: node.descriptionHtml,
             vendor: node.vendor,
             product_type: node.productType,
@@ -1412,7 +1418,7 @@ export class ShopifySyncService {
             where: { channelId_externalId: { channelId, externalId } },
             create: {
                 organizationId: orgId, channelId, externalId,
-                title: sp.title, bodyHtml: sp.body_html, vendor: sp.vendor, vendorKey: vendorKey ?? null,
+                title: sp.title, handle: sp.handle ?? null, bodyHtml: sp.body_html, vendor: sp.vendor, vendorKey: vendorKey ?? null,
                 productType: sp.product_type, status: this.mapProductStatus(sp.status),
                 tags, options: normalizedOptions,
                 publishedAt: sp.published_at ? new Date(sp.published_at) : null,
@@ -1420,7 +1426,7 @@ export class ShopifySyncService {
                 externalUpdatedAt: sp.updated_at ? new Date(sp.updated_at) : null,
             },
             update: {
-                title: sp.title, bodyHtml: sp.body_html, vendor: sp.vendor, ...vendorKeyUpdate,
+                title: sp.title, ...(sp.handle ? { handle: sp.handle } : {}), bodyHtml: sp.body_html, vendor: sp.vendor, ...vendorKeyUpdate,
                 productType: sp.product_type, status: this.mapProductStatus(sp.status),
                 tags, options: normalizedOptions,
                 publishedAt: sp.published_at ? new Date(sp.published_at) : null,
@@ -2093,6 +2099,7 @@ export class ShopifySyncService {
             subtotalPrice: so.subtotal_price ?? undefined,
             currency: so.currency ?? undefined,
             note: so.note, tags,
+            ...(Array.isArray(so.payment_gateway_names) ? { paymentGateways: so.payment_gateway_names.map(String) } : {}),
             cancelReason: this.mapCancelReason(so.cancel_reason),
             cancelledAt: so.cancelled_at ? new Date(so.cancelled_at) : null,
             closedAt: so.closed_at ? new Date(so.closed_at) : null,
@@ -2129,6 +2136,9 @@ export class ShopifySyncService {
         // header, line items, fulfillments and refunds were four independent
         // commits, so a failure part-way left a half-written order that the
         // Shopify retry then landed on top of.
+        // Store events this write produced, raised after the commit (live webhooks only).
+        const storeEvents: StoreEventKind[] = [];
+        let eventOrderId: string | null = null;
         await this.prisma.$transaction(async (tx) => {
             let orderId: string;
 
@@ -2148,6 +2158,7 @@ export class ShopifySyncService {
                         totalDiscounts: so.total_discounts || '0', totalShippingPrice: shippingPrice,
                         shippingAddress: so.shipping_address || null, billingAddress: so.billing_address || null,
                         note: so.note, tags,
+                        paymentGateways: Array.isArray(so.payment_gateway_names) ? so.payment_gateway_names.map(String) : [],
                         cancelReason: this.mapCancelReason(so.cancel_reason),
                         cancelledAt: so.cancelled_at ? new Date(so.cancelled_at) : null,
                         closedAt: so.closed_at ? new Date(so.closed_at) : null,
@@ -2182,7 +2193,11 @@ export class ShopifySyncService {
                     // already paid IS the transition.
                     if (becamePaid(null, this.mapFinancialStatus(so.financial_status))) {
                         becamePaidOrderId = orderId;
+                        storeEvents.push('paid');
                     }
+                    storeEvents.unshift('created');
+                    if (so.cancelled_at) storeEvents.push('cancelled');
+                    if (this.mapFulfillmentStatus(so.fulfillment_status) === OrderFulfillmentStatus.FULFILLED) storeEvents.push('fulfilled');
 
                     // One 'created' entry, dated to Shopify's own created_at so
                     // a backfill of an existing store does not date every
@@ -2265,6 +2280,9 @@ export class ShopifySyncService {
                     },
                     incomingUpdatedAt ?? new Date(),
                 );
+                for (const e of timelineEvents) {
+                    if (e.action === 'paid' || e.action === 'fulfilled' || e.action === 'cancelled') storeEvents.push(e.action);
+                }
                 if (timelineEvents.length > 0) {
                     await tx.orderTimelineEvent.createMany({
                         data: timelineEvents.map((e) => ({
@@ -2279,6 +2297,7 @@ export class ShopifySyncService {
                 }
             }
 
+            eventOrderId = orderId;
             await this.writeOrderChildren(tx, orderId, so, payloadLines, {
                 variantByExternalId,
                 productByExternalId,
@@ -2310,6 +2329,14 @@ export class ShopifySyncService {
             // document without a dispatch block for ever.
             await this.ensureDispatchWarehouseFromShopify(orgId, becamePaidOrderId);
             await this.maybeAutoInvoice(orgId, becamePaidOrderId);
+        }
+
+        // Shopify has no delivered order state, but a fulfilment's carrier
+        // tracking can say so. Each kind is raised once per order, however
+        // often Shopify redelivers.
+        if (opts.live && eventOrderId) {
+            if ((so.fulfillments ?? []).some((f: any) => f?.shipment_status === 'delivered')) storeEvents.push('delivered');
+            await this.commerceEvents.order(eventOrderId, storeEvents);
         }
 
         // Learn the shop's currency from the order that just landed. Product

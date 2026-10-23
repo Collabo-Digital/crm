@@ -160,7 +160,8 @@ function StepList({ list, parentId, branch, depth, props }: { list: AutomationSt
           {step.branches && (
             <div className="mt-0 flex w-full flex-col items-center">
               <Connector />
-              <div className="grid w-full gap-3 rounded-xl border border-dashed p-2 sm:grid-cols-2">
+              {/* Columns keep a readable width; deep nesting scrolls sideways rather than squeezing. */}
+              <div className="grid w-full gap-3 rounded-xl border border-dashed p-2 sm:grid-cols-[repeat(2,minmax(15rem,1fr))]">
                 {Object.keys(BRANCH_LABEL[step.type] ?? step.branches).map((name) => (
                   <div key={name} className="flex min-w-0 flex-col items-center rounded-lg bg-muted/40 p-2">
                     <span className="rounded-full bg-background px-2 py-0.5 text-micro font-semibold text-muted-foreground shadow-xs">
@@ -186,7 +187,7 @@ function StepList({ list, parentId, branch, depth, props }: { list: AutomationSt
  */
 export function FlowCanvas(props: CanvasProps) {
   return (
-    <div className="flex flex-col items-center px-2 pb-6 pt-2 sm:px-10">
+    <div className="mx-auto flex w-full flex-col items-center px-2 pb-6 pt-2 sm:w-max sm:min-w-full sm:px-10">
       <StepList list={props.steps} parentId={null} branch={null} depth={0} props={props} />
       <span className="rounded-full bg-muted px-3 py-1 text-micro font-medium text-muted-foreground">End</span>
     </div>

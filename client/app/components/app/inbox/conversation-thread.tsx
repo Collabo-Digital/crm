@@ -119,6 +119,7 @@ export function ConversationThread({
                 <MessageBubble
                   key={item.message.id}
                   message={item.message}
+                  conversationId={conversationId}
                   canReply={canReply}
                   onQuote={onQuote}
                   onReact={onReact}

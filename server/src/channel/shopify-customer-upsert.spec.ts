@@ -63,10 +63,10 @@ function build(opts: {
   const loyalty = { recomputeForCustomer: jest.fn().mockResolvedValue(undefined) };
 
   // prisma, shopifyOAuth, loyalty, graphql, pushEnqueuer, inventoryLedger,
-  // locationSync, config, invoiceService, orgSettings, fx, draftMirrorQueue
+  // locationSync, config, invoiceService, orgSettings, fx, draftMirrorQueue, commerceEvents
   const service = new ShopifySyncService(
     prisma as any, {} as any, loyalty as any, {} as any, {} as any, {} as any,
-    {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+    {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
   );
   const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
   jest.spyOn((service as any).logger, 'log').mockImplementation(() => undefined);

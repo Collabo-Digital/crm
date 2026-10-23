@@ -2,6 +2,8 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { ConfigService } from '@nestjs/config';
 import { ConversationStatus, MessageDirection, MessageKind, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CatalogService } from '../commerce/catalog.service';
+import { StoreActionsService } from '../commerce/store-actions.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
 import { MessagingSendService, SendOutcome } from '../messaging/send/messaging-send.service';
 import { MessagingMediaStorage } from '../messaging/media/messaging-media.storage';
@@ -88,6 +90,8 @@ export class InboxService {
         private readonly teams: InboxTeamService,
         private readonly contacts: InboxContactsService,
         private readonly views: InboxViewService,
+        private readonly catalog: CatalogService,
+        private readonly storeActions: StoreActionsService,
         config: ConfigService,
     ) {
         this.linkSecret = config.get<string>('messaging.linkSecret')!;
@@ -291,7 +295,39 @@ export class InboxService {
                     : { type: input.type, commentId: target.externalId, text: input.text };
             return this.sender.send({ ...base, payload, replyToMessageId: null });
         }
+        if (input.type === 'products') {
+            return this.sender.send({ ...base, payload: await this.catalog.productPayload(orgId, conversation.channelId, input) });
+        }
         return this.sender.send({ ...base, payload: asOutbound(input) });
+    }
+
+    /** The store's products for the composer's product tray, with what this conversation's channel can send. */
+    async products(orgId: string, viewer: InboxViewer, id: string, search: string | undefined) {
+        const conversation = await this.loadConversation(orgId, viewer, id);
+        return this.catalog.products(orgId, conversation.channelId, search);
+    }
+
+    /** A draft order from a cart the customer sent, with Shopify's checkout link when a store is connected. */
+    async draftFromCart(orgId: string, viewer: InboxViewer, id: string, messageId: string) {
+        if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot create orders.');
+        const conversation = await this.loadConversation(orgId, viewer, id);
+        const message = await this.prisma.message.findFirst({
+            where: { id: messageId, conversationId: conversation.id, kind: MessageKind.ORDER },
+            select: { body: true },
+        });
+        if (!message) throw new NotFoundException('Cart not found');
+        const items = ((message.body as { order?: { product_items?: Array<{ product_retailer_id?: string; quantity?: number }> } } | null)?.order?.product_items ?? [])
+            .filter((i) => i.product_retailer_id)
+            .map((i) => ({ retailerId: String(i.product_retailer_id), quantity: Number(i.quantity) || 1 }));
+        if (!items.length) throw new BadRequestException('This cart has no items.');
+        const name = contactName(conversation.contact).replace(/^@/, '');
+        return this.storeActions.draftFromCart(orgId, viewer.userId, {
+            lines: items,
+            customerId: conversation.customerId,
+            phone: conversation.contact.phone,
+            firstName: /\p{L}/u.test(name) ? name.split(/\s+/)[0] : null,
+            note: 'Cart sent on WhatsApp',
+        });
     }
 
     async markRead(orgId: string, viewer: InboxViewer, id: string) {

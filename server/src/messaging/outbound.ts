@@ -67,7 +67,20 @@ export type OutboundPayload =
     /** One private reply to an Instagram or Facebook comment. */
     | { type: 'private_reply'; commentId: string; text: string }
     /** A public reply under an Instagram or Facebook comment. */
-    | { type: 'comment_reply'; commentId: string; text: string };
+    | { type: 'comment_reply'; commentId: string; text: string }
+    /** WhatsApp: one product from the number's catalog. `name` is for the thread only. */
+    | { type: 'product'; catalogId: string; productRetailerId: string; text?: string; footer?: string; name?: string }
+    /** WhatsApp: up to 30 products in sections, with a text header. */
+    | {
+        type: 'product_list';
+        catalogId: string;
+        header: string;
+        text: string;
+        footer?: string;
+        sections: Array<{ title: string; productRetailerIds: string[] }>;
+    }
+    /** WhatsApp: a button that opens the whole catalog. */
+    | { type: 'catalog'; text: string; footer?: string; thumbnailRetailerId?: string };
 
 export type SendOrigin = 'agent' | 'automation' | 'broadcast' | 'system';
 
@@ -75,7 +88,8 @@ export interface GateInput {
     platform: ChannelPlatform;
     payload: OutboundPayload;
     origin: SendOrigin;
-    channel: { status: ChannelStatus; isEnabled: boolean; sendsPaused: boolean };
+    /** onBusinessApp: a coexistence number, which cannot send catalog messages through the API. */
+    channel: { status: ChannelStatus; isEnabled: boolean; sendsPaused: boolean; onBusinessApp?: boolean };
     contact: { blockedAt: Date | null; optedOutAt: Date | null };
     window: ReplyWindow;
     now?: Date;
@@ -116,6 +130,9 @@ export function checkSend(input: GateInput): GateResult {
 
     const shape = checkShape(platform, payload);
     if (shape) return shape;
+    if (channel.onBusinessApp && (payload.type === 'product' || payload.type === 'product_list' || payload.type === 'catalog')) {
+        return refuse('unsupported_on_platform', 'Products cannot be sent from a number shared with the WhatsApp Business app. Share a link instead.');
+    }
 
     if (payload.type === 'template') {
         if (payload.category === 'MARKETING' && contact.optedOutAt) {
@@ -181,6 +198,19 @@ function checkShape(platform: ChannelPlatform, payload: OutboundPayload): GateRe
         case 'private_reply':
         case 'comment_reply':
             return wa ? refuse('unsupported_on_platform', 'Comment replies are for Instagram and Facebook comments.') : null;
+        case 'product':
+            return wa ? null : refuse('unsupported_on_platform', 'Products from the catalog can be sent on WhatsApp only.');
+        case 'product_list': {
+            if (!wa) return refuse('unsupported_on_platform', 'Products from the catalog can be sent on WhatsApp only.');
+            const count = payload.sections.reduce((n, sec) => n + sec.productRetailerIds.length, 0);
+            if (count < 1 || count > 30) return refuse('invalid_payload', 'Choose between 1 and 30 products.');
+            if (!payload.header.trim() || !payload.text.trim()) return refuse('invalid_payload', 'A product list needs a header and a message.');
+            return null;
+        }
+        case 'catalog':
+            if (!wa) return refuse('unsupported_on_platform', 'The catalog can be sent on WhatsApp only.');
+            if (!payload.text.trim() || payload.text.length > 1024) return refuse('invalid_payload', 'Write a message of up to 1,024 characters.');
+            return null;
         default:
             return null;
     }
@@ -261,6 +291,49 @@ export function buildWhatsAppBody(
             };
         case 'reaction':
             return { ...base, type: 'reaction', reaction: { message_id: payload.targetExternalId, emoji: payload.emoji } };
+        case 'product':
+            return {
+                ...base,
+                type: 'interactive',
+                interactive: {
+                    type: 'product',
+                    ...(payload.text ? { body: { text: payload.text } } : {}),
+                    ...(payload.footer ? { footer: { text: payload.footer } } : {}),
+                    action: { catalog_id: payload.catalogId, product_retailer_id: payload.productRetailerId },
+                },
+            };
+        case 'product_list':
+            return {
+                ...base,
+                type: 'interactive',
+                interactive: {
+                    type: 'product_list',
+                    header: { type: 'text', text: payload.header },
+                    body: { text: payload.text },
+                    ...(payload.footer ? { footer: { text: payload.footer } } : {}),
+                    action: {
+                        catalog_id: payload.catalogId,
+                        sections: payload.sections.map((sec) => ({
+                            title: sec.title,
+                            product_items: sec.productRetailerIds.map((id) => ({ product_retailer_id: id })),
+                        })),
+                    },
+                },
+            };
+        case 'catalog':
+            return {
+                ...base,
+                type: 'interactive',
+                interactive: {
+                    type: 'catalog_message',
+                    body: { text: payload.text },
+                    ...(payload.footer ? { footer: { text: payload.footer } } : {}),
+                    action: {
+                        name: 'catalog_message',
+                        ...(payload.thumbnailRetailerId ? { parameters: { thumbnail_product_retailer_id: payload.thumbnailRetailerId } } : {}),
+                    },
+                },
+            };
         default:
             throw new Error(`${payload.type} cannot be sent on WhatsApp`);
     }
@@ -345,5 +418,11 @@ export function outboundText(payload: OutboundPayload): string | null {
             return payload.name ?? payload.address ?? `${payload.latitude}, ${payload.longitude}`;
         case 'reaction':
             return payload.emoji;
+        case 'product':
+            return payload.text || (payload.name ? `Product: ${payload.name}` : 'Product');
+        case 'product_list':
+            return `${payload.header}\n${payload.text}`;
+        case 'catalog':
+            return payload.text;
     }
 }

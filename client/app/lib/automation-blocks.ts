@@ -7,6 +7,7 @@ import {
   MessageCircleReply,
   MessageSquare,
   PenLine,
+  ShoppingBag,
   StickyNote,
   Tag,
   Tags,
@@ -30,7 +31,7 @@ export interface BlockSpec {
   label: string;
   icon: LucideIcon;
   hint: string;
-  group: "Messages" | "Flow" | "Contact" | "Conversation" | "Connect";
+  group: "Messages" | "Flow" | "Contact" | "Conversation" | "Store" | "Connect";
   /** Channels it works on; every channel when absent. */
   channels?: AutomationChannelKey[];
   /** Comment triggers only. */
@@ -54,9 +55,14 @@ export const BLOCKS: Record<AutomationBlockType, BlockSpec> = {
   set_status: { label: "Open, close or snooze", icon: CircleCheck, hint: "Change the conversation’s status.", group: "Conversation" },
   add_note: { label: "Add a note", icon: StickyNote, hint: "A private note for the team.", group: "Conversation" },
   http_request: { label: "Call a URL", icon: Webhook, hint: "Send data to another system and use its answer.", group: "Connect" },
+  store_action: { label: "Store action", icon: ShoppingBag, hint: "Tag, note or cancel the order, or turn a cart into a draft order.", group: "Store", channels: ["whatsapp"] },
 };
 
-export const BLOCK_GROUPS: Array<BlockSpec["group"]> = ["Messages", "Flow", "Contact", "Conversation", "Connect"];
+export const BLOCK_GROUPS: Array<BlockSpec["group"]> = ["Messages", "Flow", "Contact", "Conversation", "Store", "Connect"];
+
+/** Store triggers: the order or checkout they are about gives {{order.*}} or {{checkout.*}}. */
+export const ORDER_EVENTS = ["order_created", "order_paid", "order_fulfilled", "order_delivered", "order_cancelled"];
+export const STORE_EVENTS = [...ORDER_EVENTS, "checkout_abandoned"];
 
 export const BRANCH_LABEL: Partial<Record<AutomationBlockType, Record<string, string>>> = {
   condition: { yes: "Yes", no: "No" },
@@ -90,6 +96,13 @@ export const EVENTS: Record<AutomationChannelKey, Array<{ value: string; label: 
   ],
   whatsapp: [
     { value: "message", label: "Someone sends a message", hint: "Any message, or one with a keyword." },
+    { value: "cart", label: "Someone sends a cart from your catalog", hint: "Turn it into a draft order with a checkout link." },
+    { value: "order_created", label: "An order is placed", hint: "In Shopify or in Collabo." },
+    { value: "order_paid", label: "An order is paid", hint: "" },
+    { value: "order_fulfilled", label: "An order ships", hint: "Tracking details are in {{order.tracking_url}}." },
+    { value: "order_delivered", label: "An order is delivered", hint: "When the carrier or your team marks it delivered." },
+    { value: "order_cancelled", label: "An order is cancelled", hint: "" },
+    { value: "checkout_abandoned", label: "A checkout is left unfinished", hint: "An hour after a Shopify checkout with a phone number goes quiet." },
     { value: "tag_added", label: "A contact gets a tag", hint: "" },
     { value: "webhook", label: "Another app calls a URL", hint: "For example your order tool, with the customer’s phone number." },
   ],
@@ -130,6 +143,8 @@ export function newStep(type: AutomationBlockType, channel: AutomationChannelKey
       return { id, type, config: { method: "POST", url: "", body: "", saveAs: "" } };
     case "send_invoice":
       return { id, type, config: { template: "gst_invoice", delivery: "whatsapp" } };
+    case "store_action":
+      return { id, type, config: { action: "tag_order", value: "" } };
     default:
       return { id, type: "trigger", config: { channel, event: channel === "whatsapp" ? "message" : "comment", match: "contains", keyword: "", post: "" } };
   }
@@ -235,6 +250,20 @@ export function triggerSummary(config: AutomationStep["config"]): string {
       return config.tag ? `The tag “${config.tag}” is added` : "A tag is added";
     case "webhook":
       return "A call to this automation’s URL";
+    case "cart":
+      return "A cart from the catalog";
+    case "checkout_abandoned":
+      return "An unfinished checkout";
+    case "order_created":
+      return "A new order";
+    case "order_paid":
+      return "An order is paid";
+    case "order_fulfilled":
+      return "An order ships";
+    case "order_delivered":
+      return "An order is delivered";
+    case "order_cancelled":
+      return "An order is cancelled";
     default:
       return "Choose what starts it";
   }
@@ -273,6 +302,16 @@ export function stepSummary(step: AutomationStep, templateName?: (id: string) =>
       return c.text ? clip(c.text) : "Write the note";
     case "http_request":
       return c.url ? `${c.method} ${clip(c.url, 60)}` : "Add the URL";
+    case "store_action":
+      return (
+        {
+          tag_order: c.value ? `Tag the order “${c.value}”` : "Tag the order",
+          note_order: c.value ? `Note on the order: ${clip(c.value, 50)}` : "Add a note to the order",
+          cancel_order: "Cancel the order",
+          tag_customer: c.value ? `Tag the customer “${c.value}”` : "Tag the customer",
+          create_draft_order: "Make a draft order with a checkout link",
+        } as Record<string, string>
+      )[c.action] ?? "Store action";
     default:
       return BLOCKS[step.type]?.hint ?? "";
   }
@@ -426,6 +465,92 @@ export const PLAYBOOKS: Playbook[] = [
       s("set_attribute", { key: "tier", value: "vip" }),
       s("assign", { mode: "round_robin", userId: "", teamId: "" }),
       s("add_note", { text: "{{first_name}} is now VIP — give them priority." }),
+    ],
+  },
+  {
+    key: "order_confirmation",
+    name: "Order confirmation",
+    description: "Thank the customer on WhatsApp the moment an order is placed, with its number and total.",
+    channels: ["whatsapp"],
+    steps: (channel) => [
+      t(channel, { event: "order_created" }),
+      s("send_message", { kind: "template", templateValues: { "body.1": "{{first_name}}", "body.2": "{{order.name}}" }, options: [] }),
+    ],
+  },
+  {
+    key: "shipping_update",
+    name: "Shipping update",
+    description: "Tell customers their order is on the way, with the tracking link.",
+    channels: ["whatsapp"],
+    steps: (channel) => [
+      t(channel, { event: "order_fulfilled" }),
+      s("send_message", { kind: "template", templateValues: { "body.1": "{{order.name}}", "body.2": "{{order.tracking_url}}" }, options: [] }),
+    ],
+  },
+  {
+    key: "cod_confirmation",
+    name: "Confirm cash-on-delivery orders",
+    description: "Ask COD buyers to confirm with a button; tag confirmed orders and cancel the ones they reject.",
+    channels: ["whatsapp"],
+    steps: (channel) => [
+      t(channel, { event: "order_created" }),
+      s("condition", { match: "all", rules: [{ field: "order_payment", op: "is", key: "", value: "cod" }] }, {
+        yes: [
+          s("send_message", { kind: "template", templateValues: { "body.1": "{{first_name}}", "body.2": "{{order.name}}", "body.3": "{{order.total}}" }, options: [] }),
+          s("wait_for_reply", { amount: 24, unit: "hours", saveAs: "" }, {
+            replied: [
+              s("condition", { match: "all", rules: [{ field: "last_reply", op: "contains", key: "", value: "confirm, yes" }] }, {
+                yes: [s("store_action", { action: "tag_order", value: "cod-confirmed" })],
+                no: [s("store_action", { action: "cancel_order", value: "Customer declined on WhatsApp" }), s("add_note", { text: "{{first_name}} cancelled {{order.name}} on WhatsApp" })],
+              }),
+            ],
+            timeout: [s("store_action", { action: "tag_order", value: "cod-unconfirmed" })],
+          }),
+        ],
+        no: [],
+      }),
+    ],
+  },
+  {
+    key: "cart_recovery",
+    name: "Recover unfinished checkouts",
+    description: "Remind shoppers who left a checkout, with Shopify’s link back to their cart.",
+    channels: ["whatsapp"],
+    steps: (channel) => [
+      t(channel, { event: "checkout_abandoned" }),
+      s("send_message", { kind: "template", templateValues: { "body.1": "{{first_name}}", "button.0": "{{checkout.url}}" }, options: [] }),
+      s("add_tag", { tags: ["abandoned-checkout"] }),
+    ],
+  },
+  {
+    key: "review_request",
+    name: "Ask for a review after delivery",
+    description: "Two days after delivery, ask how it went and tag happy customers.",
+    channels: ["whatsapp"],
+    steps: (channel) => [
+      t(channel, { event: "order_delivered" }),
+      s("wait", { amount: 2, unit: "days" }),
+      s("send_message", { kind: "template", templateValues: { "body.1": "{{first_name}}" }, options: [] }),
+      s("wait_for_reply", { amount: 3, unit: "days", saveAs: "review" }, {
+        replied: [
+          s("condition", { match: "any", rules: [{ field: "last_reply", op: "contains", key: "", value: "love, great, good, 5" }] }, {
+            yes: [s("add_tag", { tags: ["happy-customer"] })],
+            no: [s("assign", { mode: "round_robin", userId: "", teamId: "" }), s("add_note", { text: "Unhappy after delivery: {{last_reply}}" })],
+          }),
+        ],
+        timeout: [],
+      }),
+    ],
+  },
+  {
+    key: "cart_to_checkout",
+    name: "Cart to checkout",
+    description: "When someone sends a cart from your WhatsApp catalog, make a draft order and reply with the checkout link.",
+    channels: ["whatsapp"],
+    steps: (channel) => [
+      t(channel, { event: "cart" }),
+      s("store_action", { action: "create_draft_order", value: "" }),
+      s("send_message", { kind: "text", message: "Thanks {{first_name}}! Your order comes to {{draft.total}}. Complete it here: {{draft.checkout_url}}", options: [], templateValues: {} }),
     ],
   },
   {

@@ -56,6 +56,10 @@ function kindOf(payload: OutboundPayload): MessageKind {
             return MessageKind.PRIVATE_REPLY;
         case 'comment_reply':
             return MessageKind.COMMENT;
+        case 'product':
+        case 'product_list':
+        case 'catalog':
+            return MessageKind.PRODUCT;
         default:
             return MessageKind.INTERACTIVE;
     }
@@ -108,7 +112,7 @@ export class MessagingSendService {
             platform: conversation.platform,
             payload: input.payload,
             origin: input.origin,
-            channel: { status: channel.status, isEnabled: channel.isEnabled, sendsPaused: channel.sendsPaused },
+            channel: { status: channel.status, isEnabled: channel.isEnabled, sendsPaused: channel.sendsPaused, onBusinessApp: channel.onBusinessApp },
             contact: { blockedAt: conversation.contact.blockedAt, optedOutAt: conversation.contact.optedOutAt },
             window: replyWindow(conversation.platform, conversation.lastInboundAt),
         });

@@ -109,3 +109,36 @@ describe('trigger helpers', () => {
         expect(copy[1].branches!.yes[0].id).not.toBe('y');
     });
 });
+
+describe('store triggers', () => {
+    const wa = (event: string, steps: unknown[]) =>
+        codes([{ id: 't', type: 'trigger', config: { channel: 'whatsapp', event, keyword: 'stale words' } }, ...steps], 'WHATSAPP');
+
+    it('map to store event types and ignore leftover keywords', () => {
+        const [t] = parseDefinition({ steps: [{ id: 't', type: 'trigger', config: { channel: 'whatsapp', event: 'order_paid', keyword: 'price' } }] });
+        expect([triggerTypeFor(t), keywordsFor(t)]).toEqual(['crm.order.paid', []]);
+        const [c] = parseDefinition({ steps: [{ id: 't', type: 'trigger', config: { channel: 'whatsapp', event: 'checkout_abandoned' } }] });
+        expect(triggerTypeFor(c)).toBe('crm.checkout.abandoned');
+        const [cart] = parseDefinition({ steps: [{ id: 't', type: 'trigger', config: { channel: 'whatsapp', event: 'cart' } }] });
+        expect(triggerTypeFor(cart)).toBe('whatsapp.cart');
+    });
+
+    it('need templates, and know {{order.*}} and {{draft.*}}', () => {
+        expect(wa('order_created', [{ id: 'm', type: 'send_message', config: { message: 'Thanks for {{order.name}}' } }])).toContain('template_needed');
+        expect(wa('order_created', [{ id: 'n', type: 'add_note', config: { text: 'COD {{order.total}}' } }])).toEqual([]);
+        expect(
+            wa('cart', [
+                { id: 'd', type: 'store_action', config: { action: 'create_draft_order' } },
+                { id: 'm', type: 'send_message', config: { message: 'Pay here: {{draft.checkout_url}}' } },
+            ]),
+        ).toEqual([]);
+    });
+
+    it('check store actions fit the trigger', () => {
+        expect(wa('cart', [{ id: 'a', type: 'store_action', config: { action: 'tag_order', value: 'x' } }])).toContain('needs_order');
+        expect(wa('order_created', [{ id: 'a', type: 'store_action', config: { action: 'create_draft_order' } }])).toContain('needs_cart');
+        expect(wa('order_created', [{ id: 'a', type: 'store_action', config: { action: 'tag_order' } }])).toContain('value_missing');
+        expect(codes([trigger({ keyword: 'x' })].concat([{ id: 'n', type: 'add_note', config: { text: 'x' } }] as never), 'INSTAGRAM')).not.toContain('event_unavailable');
+        expect(codes([{ id: 't', type: 'trigger', config: { channel: 'instagram', event: 'order_paid' } }, { id: 'n', type: 'add_note', config: { text: 'x' } }])).toContain('event_unavailable');
+    });
+});

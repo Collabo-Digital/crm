@@ -51,7 +51,7 @@ function build(order: ReturnType<typeof manualOrder>, opts: { enqueued?: boolean
     // ledger, shopifyPushQueue
     { isWarehousingEnabled: jest.fn().mockResolvedValue(false) } as any,
     { getRate: jest.fn().mockResolvedValue(1) } as any,
-    { add: jest.fn().mockResolvedValue(undefined) } as any,
+    { add: jest.fn().mockResolvedValue(undefined) } as any, { order: jest.fn() } as any /* commerceEvents */,
   );
   return { service, prisma, enqueuer, pushService };
 }
@@ -191,7 +191,7 @@ describe('OrderService.setVendorItemsStatus (released)', () => {
       {} as any, {} as any, {} as any, {} as any, {} as any,
       { isWarehousingEnabled: jest.fn().mockResolvedValue(false) } as any,
       { getRate: jest.fn().mockResolvedValue(1) } as any,
-      { add: jest.fn().mockResolvedValue(undefined) } as any,
+      { add: jest.fn().mockResolvedValue(undefined) } as any, { order: jest.fn() } as any /* commerceEvents */,
     );
     return { service, tx, updated };
   }
@@ -233,7 +233,7 @@ describe('OrderService.computeFulfillmentStatus', () => {
   const compute = (items: any[]) =>
     (new OrderService(
       {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, { order: jest.fn() } as any /* commerceEvents */,
     ) as any).computeFulfillmentStatus(items);
 
   it('is UNFULFILLED when no unit has shipped', () => {
@@ -293,7 +293,7 @@ describe('OrderService.findOne invoice', () => {
     };
     const service = new OrderService(
       prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, { order: jest.fn() } as any /* commerceEvents */,
     );
     return service;
   }
@@ -332,7 +332,7 @@ describe('OrderService.findAll date range', () => {
     };
     const service = new OrderService(
       prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, { order: jest.fn() } as any /* commerceEvents */,
     );
     return { service, prisma };
   }

@@ -11,6 +11,7 @@ import type {
   AutomationStatus,
   AutomationStep,
   AutomationTestResult,
+  CatalogView,
   ConversationStarters,
   InboxRulesSettings,
   InboxRulesSettingsView,
@@ -50,6 +51,16 @@ export const automationsService = {
   starters: (channelId: string) => apiClient.get<ConversationStarters>(`/automations/starters/${channelId}`).then((r) => r.data),
   saveStarters: (channelId: string, starters: Omit<ConversationStarters, "platform" | "pushedAt">) =>
     apiClient.put<ConversationStarters>(`/automations/starters/${channelId}`, { starters }).then((r) => r.data),
+
+  catalog: (channelId: string) => apiClient.get<CatalogView>(`/commerce/catalog/${channelId}`).then((r) => r.data),
+  connectCatalog: (channelId: string, catalogId: string) => apiClient.put<CatalogView>(`/commerce/catalog/${channelId}`, { catalogId }).then((r) => r.data),
+  disconnectCatalog: (channelId: string) => apiClient.delete<CatalogView>(`/commerce/catalog/${channelId}`).then((r) => r.data),
+  catalogSettings: (channelId: string, data: { catalogVisible?: boolean; cartEnabled?: boolean }) =>
+    apiClient.patch<CatalogView>(`/commerce/catalog/${channelId}/settings`, data).then((r) => r.data),
+  syncCatalog: (channelId: string) =>
+    apiClient
+      .post<{ at: string; sent: number; removed: number; skipped: number; errors: number; view: CatalogView }>(`/commerce/catalog/${channelId}/sync`, undefined, { timeout: 180_000 })
+      .then((r) => r.data),
 
   inboxRules: () => apiClient.get<InboxRulesSettingsView>("/inbox/settings").then((r) => r.data),
   saveInboxRules: (settings: InboxRulesSettings) => apiClient.put<InboxRulesSettingsView>("/inbox/settings", { settings }).then((r) => r.data),

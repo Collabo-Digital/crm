@@ -149,3 +149,47 @@ describe('buildMessengerBody', () => {
         });
     });
 });
+
+describe('catalog messages', () => {
+    const list = {
+        type: 'product_list' as const,
+        catalogId: 'CAT1',
+        header: 'New arrivals',
+        text: 'Pick your favourites',
+        sections: [{ title: 'Shirts', productRetailerIds: ['v1', 'v2'] }],
+    };
+
+    it('are WhatsApp only, at most 30 products, and never from a number shared with the Business app', () => {
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: list }).ok).toBe(true);
+        expect(gate({ platform: ChannelPlatform.INSTAGRAM, payload: list })).toMatchObject({ ok: false, code: 'unsupported_on_platform' });
+        const many = { ...list, sections: [{ title: 'All', productRetailerIds: Array.from({ length: 31 }, (_, i) => `v${i}`) }] };
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: many })).toMatchObject({ ok: false, code: 'invalid_payload' });
+        expect(
+            gate({
+                platform: ChannelPlatform.WHATSAPP,
+                payload: { type: 'product', catalogId: 'CAT1', productRetailerId: 'v1' },
+                channel: { status: ChannelStatus.CONNECTED, isEnabled: true, sendsPaused: false, onBusinessApp: true },
+            }),
+        ).toMatchObject({ ok: false, code: 'unsupported_on_platform' });
+    });
+
+    it('build Meta’s interactive product shapes', () => {
+        const to = { waId: '919800000001', userId: null };
+        expect(buildWhatsAppBody({ type: 'product', catalogId: 'CAT1', productRetailerId: 'v1', text: 'Here it is' }, to).interactive).toEqual({
+            type: 'product',
+            body: { text: 'Here it is' },
+            action: { catalog_id: 'CAT1', product_retailer_id: 'v1' },
+        });
+        expect(buildWhatsAppBody(list, to).interactive).toEqual({
+            type: 'product_list',
+            header: { type: 'text', text: 'New arrivals' },
+            body: { text: 'Pick your favourites' },
+            action: { catalog_id: 'CAT1', sections: [{ title: 'Shirts', product_items: [{ product_retailer_id: 'v1' }, { product_retailer_id: 'v2' }] }] },
+        });
+        expect(buildWhatsAppBody({ type: 'catalog', text: 'Browse', thumbnailRetailerId: 'v2' }, to).interactive).toEqual({
+            type: 'catalog_message',
+            body: { text: 'Browse' },
+            action: { name: 'catalog_message', parameters: { thumbnail_product_retailer_id: 'v2' } },
+        });
+    });
+});

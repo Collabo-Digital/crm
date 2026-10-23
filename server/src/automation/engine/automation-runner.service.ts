@@ -11,6 +11,8 @@ import { contactName } from '../../messaging/contact-name';
 import { InboxRulesService } from '../../inbox/inbox-rules.service';
 import { InboxSettingsService } from '../../inbox/inbox-settings.service';
 import { ASSIGNABLE_ROLES } from '../../inbox/inbox-team.service';
+import { StoreActionsService } from '../../commerce/store-actions.service';
+import { isCashOnDelivery } from '../../commerce/order-vars';
 import { ParamValue, renderTemplate, sendComponents, templateParams } from '../../campaigns/templates/template-components';
 import { SendMessageConfigT, StepDef, parseDefinition } from '../blocks/definition.schema';
 import { Flow, FlowStep, FlowVariables, interpolate, toMinutes } from './flow';
@@ -29,7 +31,7 @@ const MAX_HOPS = 60;
 
 const runInclude = {
     version: { select: { definition: true } },
-    automation: { select: { id: true, status: true } },
+    automation: { select: { id: true, status: true, ownerUserId: true } },
 } satisfies Prisma.AutomationRunInclude;
 type LoadedRun = Prisma.AutomationRunGetPayload<{ include: typeof runInclude }>;
 
@@ -65,6 +67,7 @@ export class AutomationRunner {
         private readonly inboxEvents: InboxEventsService,
         private readonly rules: InboxRulesService,
         private readonly inboxSettings: InboxSettingsService,
+        private readonly store: StoreActionsService,
         config: ConfigService,
     ) {
         this.allowPrivate = config.get<string>('AUTOMATION_HTTP_ALLOW_PRIVATE') === 'true';
@@ -235,6 +238,8 @@ export class AutomationRunner {
             }
             case 'http_request':
                 return this.httpRequest(s, c as { method: 'GET' | 'POST'; url: string; body: string; saveAs: string });
+            case 'store_action':
+                return this.storeAction(s, c as { action: string; value: string });
             default:
                 return fail(`Unknown block "${step.type}".`);
         }
@@ -402,6 +407,47 @@ export class AutomationRunner {
         }
     }
 
+    private async storeAction(s: StepState, c: { action: string; value: string }): Promise<Outcome> {
+        const orgId = s.run.organizationId;
+        const actor = await this.store.actorFor(orgId, s.run.automation.ownerUserId);
+        const value = interpolate(c.value ?? '', s.vars).trim();
+        const orderId = s.run.orderId;
+        switch (c.action) {
+            case 'tag_order':
+                if (!orderId) return fail('This run is not about an order.');
+                return { kind: 'next', output: await this.store.tagOrder(orgId, orderId, value, actor) };
+            case 'note_order':
+                if (!orderId) return fail('This run is not about an order.');
+                await this.store.noteOrder(orgId, orderId, value, actor);
+                return { kind: 'next', output: { note: value } };
+            case 'cancel_order':
+                if (!orderId) return fail('This run is not about an order.');
+                await this.store.cancelOrder(orgId, orderId, actor, value || 'Cancelled by an automation after the customer’s reply.');
+                return { kind: 'next', output: { cancelled: true } };
+            case 'tag_customer':
+                if (!s.contact.customerId) return fail('This contact is not linked to a store customer.');
+                return { kind: 'next', output: await this.store.tagCustomer(orgId, s.contact.customerId, value) };
+            case 'create_draft_order': {
+                if (!s.ctx.cart?.length) return fail('This run did not start from a cart.');
+                const draft = await this.store.draftFromCart(orgId, actor, {
+                    lines: s.ctx.cart,
+                    customerId: s.contact.customerId,
+                    phone: s.contact.phone,
+                    firstName: typeof s.vars.first_name === 'string' ? s.vars.first_name : null,
+                    note: 'Cart sent on WhatsApp',
+                });
+                Object.assign(s.ctx.vars, {
+                    'draft.checkout_url': draft.checkoutUrl ?? '',
+                    'draft.name': draft.name ?? '',
+                    'draft.total': draft.total,
+                });
+                return { kind: 'next', output: { ...draft } };
+            }
+            default:
+                return fail(`Unknown store action "${c.action}".`);
+        }
+    }
+
     // ─── State ────────────────────────────────────────────────────────
 
     private load(runId: string) {
@@ -426,7 +472,11 @@ export class AutomationRunner {
             where: { channelId_contactId: { channelId: contact.channelId, contactId: contact.id } },
             select: { id: true, assignedUserId: true, platform: true, lastInboundAt: true },
         });
+        const order = run.orderId
+            ? await this.prisma.order.findUnique({ where: { id: run.orderId }, select: { paymentGateways: true, totalPrice: true } })
+            : null;
         const facts: RunFacts = {
+            order: order ? { isCod: isCashOnDelivery(order.paymentGateways), total: Number(order.totalPrice) } : null,
             contact: {
                 name: contactName(contact),
                 username: contact.username,

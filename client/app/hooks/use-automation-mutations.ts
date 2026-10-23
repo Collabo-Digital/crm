@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { automationKeys } from "~/hooks/use-automation-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { automationsService } from "~/services/automations.service";
+import { inboxService } from "~/services/inbox.service";
 import type { AutomationDetail, AutomationPlatform, AutomationSettings, AutomationStep, ConversationStarters, InboxRulesSettings } from "~/types/api";
 
 function useRefresh() {
@@ -115,5 +116,42 @@ export function useSaveInboxRulesMutation() {
       toast.success("Inbox rules saved.");
     },
     onError: (error) => handleMutationError(error, "The inbox rules were not saved."),
+  });
+}
+
+/** Connect, disconnect, change settings of, or sync a WhatsApp number's catalog. */
+export function useCatalogMutation(channelId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (action: { kind: "connect"; catalogId: string } | { kind: "disconnect" } | { kind: "settings"; catalogVisible?: boolean; cartEnabled?: boolean } | { kind: "sync" }) => {
+      switch (action.kind) {
+        case "connect":
+          return { view: await automationsService.connectCatalog(channelId, action.catalogId) };
+        case "disconnect":
+          return { view: await automationsService.disconnectCatalog(channelId) };
+        case "settings":
+          return { view: await automationsService.catalogSettings(channelId, { catalogVisible: action.catalogVisible, cartEnabled: action.cartEnabled }) };
+        case "sync": {
+          const r = await automationsService.syncCatalog(channelId);
+          return { view: r.view, sync: r };
+        }
+      }
+    },
+    onSuccess: (result, action) => {
+      queryClient.setQueryData(automationKeys.catalog(channelId), result.view);
+      if (action.kind === "sync" && "sync" in result && result.sync) {
+        const r = result.sync;
+        toast.success(`Catalog updated: ${r.sent} sent, ${r.removed} removed${r.skipped ? `, ${r.skipped} need attention` : ""}${r.errors ? `, ${r.errors} refused by Meta` : ""}.`);
+      } else if (action.kind === "connect") toast.success("Catalog connected.");
+      void queryClient.invalidateQueries({ queryKey: ["commerce", "products"] });
+    },
+    onError: (error) => handleMutationError(error, "The catalog was not updated."),
+  });
+}
+
+export function useDraftFromCartMutation(conversationId: string) {
+  return useMutation({
+    mutationFn: (messageId: string) => inboxService.draftFromCart(conversationId, messageId),
+    onError: (error) => handleMutationError(error, "The draft order was not created."),
   });
 }
