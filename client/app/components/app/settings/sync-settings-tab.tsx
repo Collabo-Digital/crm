@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { Link } from "react-router";
+import { PaymentsCard } from "~/components/app/settings/payments-card";
 import {
   useOrganizationSettings,
 } from "~/hooks/use-settings-queries";
@@ -298,6 +299,8 @@ export function OrderSettingsTab() {
           }
         />
       </SettingsCard>
+
+      <PaymentsCard />
 
       <p className="text-xs text-muted-foreground">
         To send every customer their invoice as a PDF on WhatsApp once it is issued, start the “Send the GST invoice” playbook in{" "}

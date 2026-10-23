@@ -13,7 +13,8 @@ const phoneOf = (address: unknown): string | null => {
 
 /**
  * Store events for automations: an order was placed, paid, shipped,
- * delivered or cancelled, or a checkout was abandoned. Raised only when an
+ * delivered or cancelled, a checkout was abandoned, an invoice was issued or
+ * a payment link was paid. Raised only when an
  * active automation listens, once per order and kind, for the buyer's
  * contact on each listening channel — on WhatsApp the contact is created
  * from the order's phone number if new. Never throws: a store write must
@@ -84,6 +85,43 @@ export class CommerceEventsService {
         }
     }
 
+    /**
+     * A payment link was paid. Reaches the contact the link was sent to when
+     * there is one, else the order's buyer. Carries {{payment.*}}, and
+     * {{order.*}} when the link was for an order.
+     */
+    async paymentReceived(input: {
+        organizationId: string;
+        linkId: string;
+        orderId: string | null;
+        customerId: string | null;
+        contactId: string | null;
+        vars: Record<string, string>;
+    }): Promise<void> {
+        try {
+            const buyer = input.orderId ? await this.buyerOf(input.orderId) : null;
+            const contact = input.contactId
+                ? await this.prisma.channelContact.findFirst({ where: { id: input.contactId, organizationId: input.organizationId }, select: { id: true, channelId: true, externalId: true, phone: true } })
+                : null;
+            const customer = !buyer && !contact && input.customerId
+                ? await this.prisma.customer.findUnique({ where: { id: input.customerId }, select: { phone: true } })
+                : null;
+            await this.raise({
+                organizationId: input.organizationId,
+                eventType: 'crm.payment.received',
+                externalId: `${input.linkId}:paid`,
+                e164: buyer?.e164 ?? normalizePhone(contact?.phone ?? customer?.phone ?? null),
+                customerId: buyer?.order.customerId ?? input.customerId,
+                orderId: input.orderId,
+                vars: { ...(buyer?.vars ?? {}), ...input.vars },
+                extra: { paymentLinkId: input.linkId },
+                contact,
+            });
+        } catch (err) {
+            this.logger.warn(`Payment event for ${input.linkId} not raised: ${err instanceof Error ? err.message : err}`);
+        }
+    }
+
     /** The order, the buyer's number from its addresses (or the customer), and its {{order.*}} values. */
     private async buyerOf(orderId: string) {
         const order = await this.prisma.order.findUnique({
@@ -141,6 +179,8 @@ export class CommerceEventsService {
         orderId: string | null;
         vars: Record<string, string>;
         extra?: Record<string, unknown>;
+        /** The contact to use on its own channel, instead of finding one by number. */
+        contact?: { id: string; channelId: string; externalId: string } | null;
     }): Promise<number> {
         const listening = await this.prisma.automationTrigger.findMany({
             where: {
@@ -155,7 +195,9 @@ export class CommerceEventsService {
         const channels = [...new Map(listening.filter((t) => t.channel).map((t) => [t.channel!.id, t.channel!])).values()];
         let raised = 0;
         for (const channel of channels) {
-            const contact = await this.contactOn(channel, input.organizationId, input.e164, input.customerId);
+            const contact = input.contact?.channelId === channel.id
+                ? input.contact
+                : await this.contactOn(channel, input.organizationId, input.e164, input.customerId);
             if (!contact) continue;
             try {
                 const event = await this.prisma.automationEvent.create({

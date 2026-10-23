@@ -33,6 +33,8 @@ export interface IssueContext {
      * when not loaded (the test route): those checks are then skipped.
      */
     templates?: Map<string, { name: string; params: Array<{ key: string; name: string; kind: string }> }>;
+    /** Whether the organization has its own Razorpay account connected. Absent when not loaded. */
+    paymentsConnected?: boolean;
 }
 
 const StepId = z.string().min(1).max(64);
@@ -49,12 +51,12 @@ const TriggerConfig = z.object({
      * store order was placed, paid, shipped, delivered or cancelled ·
      * checkout_abandoned — a store checkout was left unfinished · cart — a
      * WhatsApp cart sent from the catalog · invoice_issued — a GST invoice was
-     * issued for an order.
+     * issued for an order · payment_received — a payment link was paid.
      */
     event: z.enum([
         'comment', 'message', 'mention', 'postback', 'tag_added', 'webhook',
         'order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled', 'checkout_abandoned', 'cart',
-        'invoice_issued',
+        'invoice_issued', 'payment_received',
     ]),
     /** Comment: the post or reel id; empty for every post. */
     post: z.string().max(64).default(''),
@@ -119,6 +121,21 @@ const SendInvoiceConfig = z.object({
     templateValues: z.record(z.string(), z.string().max(1024)).default({}),
 });
 
+/**
+ * A payment link from the organization's own Razorpay account, for the order
+ * the trigger is about or the draft an earlier step made from a cart, sent as
+ * a template (whose URL button is https://rzp.io/{{1}}) or as text.
+ */
+const SendPaymentLinkConfig = z.object({
+    kind: z.enum(['template', 'text']).default('template'),
+    message: z.string().max(4096).default(''),
+    templateId: z.string().max(64).optional(),
+    templateValues: z.record(z.string(), z.string().max(1024)).default({}),
+    expiresInHours: z.coerce.number().int().min(1).max(720).default(48),
+    /** Added to the order once it is paid, e.g. "cod-to-prepaid". */
+    tagOnPaid: z.string().max(60).default(''),
+});
+
 const WaitConfig = z.object({
     amount: z.coerce.number().int().min(1).max(10_000),
     unit: Unit,
@@ -179,6 +196,7 @@ const BLOCK_SCHEMAS = {
     send_message: SendMessageConfig,
     reply_comment: ReplyCommentConfig,
     send_invoice: SendInvoiceConfig,
+    send_payment_link: SendPaymentLinkConfig,
     wait: WaitConfig,
     wait_for_reply: WaitForReplyConfig,
     condition: ConditionConfig,
@@ -290,8 +308,8 @@ export function parseDefinition(input: unknown): StepDef[] {
 
 /** What a trigger can listen to on each channel. */
 const ORDER_EVENTS = ['order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled'];
-/** Events about one order: its actions and its invoice are available. */
-const ORDER_CONTEXT = [...ORDER_EVENTS, 'invoice_issued'];
+/** Events about one order: its actions and its invoice are available. A paid link is about its order, when it had one. */
+const ORDER_CONTEXT = [...ORDER_EVENTS, 'invoice_issued', 'payment_received'];
 /** Store events reach people who may not have written in 24 hours: WhatsApp templates only. */
 const STORE_EVENTS = [...ORDER_CONTEXT, 'checkout_abandoned'];
 const EVENTS_BY_CHANNEL: Record<z.infer<typeof Channel>, string[]> = {
@@ -337,6 +355,7 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
     // {{invoice.*}} comes with the invoice event, and "Send the invoice" fills it on order events.
     if (ORDER_CONTEXT.includes(t.event)) saved.add('invoice');
     if (t.event === 'checkout_abandoned') saved.add('checkout');
+    if (t.event === 'payment_received') saved.add('payment');
     let privateReplies = 0;
     for (const { step, path } of actions) {
         const c = step.config;
@@ -422,6 +441,43 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                     }
                 }
                 Object.values(v.templateValues).forEach(checkText);
+                break;
+            }
+            case 'send_payment_link': {
+                const v = c as z.infer<typeof SendPaymentLinkConfig>;
+                // {{payment.*}} is this step's own link, so its message may use it.
+                saved.add('payment');
+                if (t.channel !== 'whatsapp') push(step.id, 'payment_needs_whatsapp', 'Payment links go on WhatsApp', 'Use a WhatsApp automation to send payment links.');
+                if (!ORDER_CONTEXT.includes(t.event) && !saved.has('draft')) {
+                    push(step.id, 'payment_needs_order', 'Needs an order', 'A payment link is for the order the trigger is about, or the draft order an earlier “Create draft order” step made from a cart.');
+                }
+                if (t.event === 'payment_received') push(step.id, 'payment_already_paid', 'Already paid', 'This automation starts when a payment is made; there is nothing left to collect.');
+                if (ctx.paymentsConnected === false) push(step.id, 'payments_not_connected', 'Connect Razorpay', 'Connect your Razorpay account in Settings → Orders → Payments first, so customers pay you directly.');
+                const usesLink = (text: string) => /\{\{\s*payment\.link(_path)?\s*\}\}/.test(text);
+                if (v.kind === 'template') {
+                    if (!v.templateId) push(step.id, 'template_missing', 'Choose a template', 'Pick an approved WhatsApp template.');
+                    const chosen = v.templateId ? ctx.templates?.get(v.templateId) : undefined;
+                    if (v.templateId && ctx.templates && !chosen) push(step.id, 'template_not_found', 'Template not found', 'The chosen template was deleted. Pick another one.');
+                    for (const p of chosen?.params ?? []) {
+                        if (p.kind !== 'text' && p.kind !== 'coupon_code') {
+                            push(step.id, 'template_header_unsupported', 'Pick a template without a media header', `“${chosen!.name}” needs a header file, which this step does not send.`);
+                        } else if (!(v.templateValues[p.key] ?? '').trim()) {
+                            push(step.id, 'template_value_missing', 'Fill in the template', `“${p.name}” in “${chosen!.name}” has no value.`);
+                        }
+                    }
+                    if (chosen && !Object.values(v.templateValues).some(usesLink)) {
+                        push(step.id, 'payment_link_unused', 'The link is not in the message', 'Put {{payment.link_path}} in the button of a template whose button URL is https://rzp.io/{{1}}, or {{payment.link}} in its text.');
+                    }
+                    Object.values(v.templateValues).forEach(checkText);
+                } else {
+                    if (!v.message.trim()) push(step.id, 'message_missing', 'Message is incomplete', 'Write the message before publishing.');
+                    else if (!usesLink(v.message)) push(step.id, 'payment_link_unused', 'The link is not in the message', 'Put {{payment.link}} where the link should go.');
+                    if (STORE_EVENTS.includes(t.event) && !insideReply) {
+                        push(step.id, 'template_needed', 'Use an approved template',
+                            'A store message may reach someone who has not written in 24 hours, and WhatsApp then accepts templates only. Send a template, or put this after “Wait for a reply”.');
+                    }
+                    checkText(v.message);
+                }
                 break;
             }
             case 'wait': {
@@ -510,6 +566,7 @@ export function triggerTypeFor(trigger: StepDef): string {
     if (c.event.startsWith('order_')) return `crm.order.${c.event.slice('order_'.length)}`;
     if (c.event === 'checkout_abandoned') return 'crm.checkout.abandoned';
     if (c.event === 'invoice_issued') return 'crm.invoice.issued';
+    if (c.event === 'payment_received') return 'crm.payment.received';
     if (c.event === 'cart') return 'whatsapp.cart';
     if (c.event === 'mention') return 'instagram.mention';
     return `${c.channel}.${c.event}`;

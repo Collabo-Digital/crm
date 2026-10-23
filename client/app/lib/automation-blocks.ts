@@ -1,6 +1,7 @@
 import {
   CircleCheck,
   Clock,
+  CreditCard,
   FileText,
   GitBranch,
   Hourglass,
@@ -45,6 +46,7 @@ export const BLOCKS: Record<AutomationBlockType, BlockSpec> = {
   send_message: { label: "Send a message", icon: MessageSquare, hint: "Text, a file, buttons, a list or a WhatsApp template.", group: "Messages" },
   reply_comment: { label: "Reply to the comment", icon: MessageCircleReply, hint: "A private DM to the commenter, or a public reply.", group: "Messages", commentsOnly: true },
   send_invoice: { label: "Send the invoice", icon: FileText, hint: "The order’s GST invoice as a PDF on WhatsApp.", group: "Store", channels: ["whatsapp"] },
+  send_payment_link: { label: "Send a payment link", icon: CreditCard, hint: "A Razorpay link for the order or cart, paid into your own account.", group: "Store", channels: ["whatsapp"] },
   wait: { label: "Wait", icon: Clock, hint: "Pause for minutes, hours or days.", group: "Flow" },
   wait_for_reply: { label: "Wait for a reply", icon: Hourglass, hint: "Go on when they answer, or another way if they don’t.", group: "Flow" },
   condition: { label: "Check a condition", icon: GitBranch, hint: "Split into yes and no.", group: "Flow" },
@@ -61,7 +63,7 @@ export const BLOCKS: Record<AutomationBlockType, BlockSpec> = {
 export const BLOCK_GROUPS: Array<BlockSpec["group"]> = ["Messages", "Flow", "Contact", "Conversation", "Store", "Connect"];
 
 /** Store triggers: the order or checkout they are about gives {{order.*}} or {{checkout.*}}. */
-export const ORDER_EVENTS = ["order_created", "order_paid", "order_fulfilled", "order_delivered", "order_cancelled", "invoice_issued"];
+export const ORDER_EVENTS = ["order_created", "order_paid", "order_fulfilled", "order_delivered", "order_cancelled", "invoice_issued", "payment_received"];
 export const STORE_EVENTS = [...ORDER_EVENTS, "checkout_abandoned"];
 
 export const BRANCH_LABEL: Partial<Record<AutomationBlockType, Record<string, string>>> = {
@@ -100,6 +102,7 @@ export const EVENTS: Record<AutomationChannelKey, Array<{ value: string; label: 
     { value: "order_created", label: "An order is placed", hint: "In Shopify or in Collabo." },
     { value: "order_paid", label: "An order is paid", hint: "" },
     { value: "invoice_issued", label: "A GST invoice is issued", hint: "On payment or when a cash-on-delivery order ships (with automatic invoices on), by hand, in bulk, or with an offline sale. Send it with “Send the invoice”." },
+    { value: "payment_received", label: "A payment link is paid", hint: "A Razorpay link sent in chat, by your team or by “Send a payment link”. The amount is in {{payment.amount}}." },
     { value: "order_fulfilled", label: "An order ships", hint: "Tracking details are in {{order.tracking_url}}." },
     { value: "order_delivered", label: "An order is delivered", hint: "When the carrier or your team marks it delivered." },
     { value: "order_cancelled", label: "An order is cancelled", hint: "" },
@@ -144,6 +147,8 @@ export function newStep(type: AutomationBlockType, channel: AutomationChannelKey
       return { id, type, config: { method: "POST", url: "", body: "", saveAs: "" } };
     case "send_invoice":
       return { id, type, config: { templateValues: {} } };
+    case "send_payment_link":
+      return { id, type, config: { kind: "template", message: "", templateValues: {}, expiresInHours: 48, tagOnPaid: "" } };
     case "store_action":
       return { id, type, config: { action: "tag_order", value: "" } };
     default:
@@ -261,6 +266,8 @@ export function triggerSummary(config: AutomationStep["config"]): string {
       return "An order is paid";
     case "invoice_issued":
       return "A GST invoice is issued";
+    case "payment_received":
+      return "A payment link is paid";
     case "order_fulfilled":
       return "An order ships";
     case "order_delivered":
@@ -307,6 +314,9 @@ export function stepSummary(step: AutomationStep, templateName?: (id: string) =>
       return c.url ? `${c.method} ${clip(c.url, 60)}` : "Add the URL";
     case "send_invoice":
       return c.templateId ? `The invoice PDF with “${templateName?.(c.templateId) ?? "a template"}”` : "Choose the template";
+    case "send_payment_link":
+      if (c.kind === "text") return c.message ? clip(c.message) : "Write the message";
+      return c.templateId ? `A payment link with “${templateName?.(c.templateId) ?? "a template"}”` : "Choose a template";
     case "store_action":
       return (
         {
@@ -550,6 +560,39 @@ export const PLAYBOOKS: Playbook[] = [
     ],
   },
   {
+    key: "cod_to_prepaid",
+    name: "Turn COD orders into prepaid",
+    description: "Offer cash-on-delivery buyers a Razorpay link to pay online now. A paid order is marked paid, in Shopify too, and tagged cod-to-prepaid.",
+    channels: ["whatsapp"],
+    steps: (channel) => [
+      t(channel, { event: "order_created" }),
+      s("condition", { match: "all", rules: [{ field: "order_payment", op: "is", key: "", value: "cod" }] }, {
+        yes: [
+          // As the "Pay online instead of cash" starter: the link's path goes after https://rzp.io/ in the button.
+          s("send_payment_link", {
+            kind: "template",
+            message: "",
+            templateValues: { ...prefill({ first_name: "{{first_name}}", order_number: "{{order.name}}", order_total: "{{order.total}}" }), "button.0": "{{payment.link_path}}" },
+            expiresInHours: 48,
+            tagOnPaid: "cod-to-prepaid",
+          }),
+        ],
+        no: [],
+      }),
+    ],
+  },
+  {
+    key: "payment_thanks",
+    name: "Thank buyers when they pay",
+    description: "When a payment link is paid, note it for the team and thank the buyer.",
+    channels: ["whatsapp"],
+    steps: (channel) => [
+      t(channel, { event: "payment_received" }),
+      s("add_note", { text: "{{first_name}} paid {{payment.amount}} by {{payment.method}} for {{payment.description}}" }),
+      s("send_message", { kind: "template", templateValues: prefill({ first_name: "{{first_name}}", order_number: "{{order.name}}" }), options: [] }),
+    ],
+  },
+  {
     key: "cart_recovery",
     name: "Recover unfinished checkouts",
     description: "Remind shoppers who left a checkout, with Shopify’s link back to their cart.",
@@ -590,6 +633,17 @@ export const PLAYBOOKS: Playbook[] = [
       t(channel, { event: "cart" }),
       s("store_action", { action: "create_draft_order", value: "" }),
       s("send_message", { kind: "text", message: "Thanks {{first_name}}! Your order comes to {{draft.total}}. Complete it here: {{draft.checkout_url}}", options: [], templateValues: {} }),
+    ],
+  },
+  {
+    key: "cart_to_payment",
+    name: "Cart to payment",
+    description: "When someone sends a cart from your WhatsApp catalog, make a draft order and reply with a Razorpay payment link. Paying it turns the draft into an order.",
+    channels: ["whatsapp"],
+    steps: (channel) => [
+      t(channel, { event: "cart" }),
+      s("store_action", { action: "create_draft_order", value: "" }),
+      s("send_payment_link", { kind: "text", message: "Thanks {{first_name}}! Your order comes to {{payment.amount}}. Pay securely here: {{payment.link}}", templateValues: {}, expiresInHours: 24, tagOnPaid: "" }),
     ],
   },
   {

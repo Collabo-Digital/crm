@@ -4,6 +4,7 @@ import { ConversationStatus, MessageDirection, MessageKind, Prisma } from '@pris
 import { PrismaService } from '../prisma/prisma.service';
 import { CatalogService } from '../commerce/catalog.service';
 import { StoreActionsService } from '../commerce/store-actions.service';
+import { PaymentLinksService } from '../payments/payment-links.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
 import { MessagingSendService, SendOutcome } from '../messaging/send/messaging-send.service';
 import { MessagingMediaStorage } from '../messaging/media/messaging-media.storage';
@@ -92,6 +93,7 @@ export class InboxService {
         private readonly views: InboxViewService,
         private readonly catalog: CatalogService,
         private readonly storeActions: StoreActionsService,
+        private readonly paymentLinks: PaymentLinksService,
         config: ConfigService,
     ) {
         this.linkSecret = config.get<string>('messaging.linkSecret')!;
@@ -329,6 +331,56 @@ export class InboxService {
             note: 'Cart sent on WhatsApp',
             sourceMessageId: messageId,
         });
+    }
+
+    /**
+     * A payment link for this chat's customer: for one of their orders, the
+     * draft made from their cart, or an amount. The link is returned for the
+     * teammate to send, so the usual reply-window rules apply to the message.
+     */
+    async createPaymentLink(orgId: string, viewer: InboxViewer, id: string, input: { orderId?: string; draftOrderId?: string; amount?: number; description?: string; expiresInHours?: number }) {
+        if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot request payments.');
+        const conversation = await this.loadConversation(orgId, viewer, id);
+        const opts = { userId: viewer.userId, contactId: conversation.contactId, conversationId: conversation.id, expiresInHours: input.expiresInHours };
+        if (input.orderId) {
+            await this.ownOrder(orgId, conversation, input.orderId);
+            return this.paymentLinks.forOrder(orgId, input.orderId, opts);
+        }
+        if (input.draftOrderId) {
+            const draft = await this.prisma.draftOrder.findFirst({ where: { id: input.draftOrderId, organizationId: orgId }, select: { customerId: true, metadata: true } });
+            const fromThisChat = await this.prisma.message.count({ where: { conversationId: conversation.id, id: (draft?.metadata as { sourceMessageId?: string } | null)?.sourceMessageId ?? '' } });
+            if (!draft || (draft.customerId !== conversation.customerId && !fromThisChat)) throw new NotFoundException('Draft order not found');
+            return this.paymentLinks.forDraft(orgId, input.draftOrderId, opts);
+        }
+        if (input.amount === undefined || !input.description?.trim()) throw new BadRequestException('Enter the amount and what the payment is for.');
+        return this.paymentLinks.forAmount(orgId, {
+            amount: input.amount,
+            description: input.description.trim(),
+            customerId: conversation.customerId,
+            phone: conversation.contact.phone,
+            name: contactName(conversation.contact).replace(/^@/, '') || null,
+        }, opts);
+    }
+
+    /** This chat's links, newest first, and the customer's unpaid orders to request payment for. */
+    async paymentLinksFor(orgId: string, viewer: InboxViewer, id: string) {
+        const conversation = await this.loadConversation(orgId, viewer, id);
+        const links = await this.paymentLinks.list(orgId, { conversationId: conversation.id });
+        const unpaid = conversation.customerId
+            ? await this.prisma.order.findMany({
+                where: { organizationId: orgId, customerId: conversation.customerId, deletedAt: null, cancelledAt: null, financialStatus: { in: ['PENDING', 'AUTHORIZED'] } },
+                orderBy: { createdAt: 'desc' },
+                take: 10,
+                select: { id: true, name: true, totalPrice: true, currency: true, paymentGateways: true, createdAt: true },
+            })
+            : [];
+        return { links, unpaidOrders: unpaid.map((o) => ({ ...o, totalPrice: o.totalPrice.toString() })) };
+    }
+
+    private async ownOrder(orgId: string, conversation: ConversationRow, orderId: string) {
+        const order = await this.prisma.order.findFirst({ where: { id: orderId, organizationId: orgId }, select: { customerId: true } });
+        // Only this customer's orders, so a link in one chat cannot collect for someone else's order.
+        if (!order || !conversation.customerId || order.customerId !== conversation.customerId) throw new NotFoundException('Order not found');
     }
 
     async markRead(orgId: string, viewer: InboxViewer, id: string) {

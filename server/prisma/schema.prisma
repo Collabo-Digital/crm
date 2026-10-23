@@ -355,6 +355,8 @@ model Organization {
   channelContacts        ChannelContact[]
   checkouts              Checkout[]
   catalogItems           CatalogItem[]
+  paymentAccounts        PaymentAccount[]
+  paymentLinks           PaymentLink[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -996,6 +998,8 @@ model Order {
   /// draft <name>" in the UI.
   draftOrderOrigin  DraftOrder?          @relation("DraftOrderCompletedOrder")
 
+  paymentLinks PaymentLink[]
+
   @@unique([channelId, externalId])
   // NOTE (not expressible in Prisma): a PARTIAL unique index
   //   orders_channel_id_order_number_manual_key
@@ -1173,6 +1177,8 @@ model DraftOrder {
   customer       Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
   lineItems      DraftOrderLineItem[]
   completedOrder Order?               @relation("DraftOrderCompletedOrder", fields: [completedOrderId], references: [id])
+
+  paymentLinks PaymentLink[]
 
   @@unique([channelId, externalId])
   @@index([organizationId])
@@ -3137,4 +3143,101 @@ model CatalogItem {
   @@unique([channelId, variantId])
   @@index([channelId, status])
   @@map("catalog_items")
+}
+
+// ─── Payments: the merchant's own gateway account ──────────────────────────
+
+enum PaymentProvider {
+  RAZORPAY
+}
+
+enum PaymentLinkStatus {
+  CREATED
+  PARTIALLY_PAID
+  PAID
+  EXPIRED
+  CANCELLED
+}
+
+/// A merchant's own payment gateway account, so payments made in chat land
+/// in the merchant's account. Never Collabo's subscription billing account,
+/// which lives in env and BillingService.
+model PaymentAccount {
+  id             String          @id @default(cuid())
+  organizationId String          @map("organization_id")
+  provider       PaymentProvider
+  /// Razorpay key id (`rzp_live_…` / `rzp_test_…`); not secret, shown to the merchant.
+  keyId          String          @map("key_id")
+  /// EncryptionService ciphertext of { keySecret, webhookSecret }; null once disconnected.
+  credentials    String?
+  /// The secret path segment of this account's webhook URL. 24 random bytes.
+  webhookToken   String          @unique @map("webhook_token")
+  /// Whether the key is a live or a test key.
+  livemode       Boolean         @default(false)
+  connectedById  String?         @map("connected_by_id")
+  lastWebhookAt  DateTime?       @map("last_webhook_at")
+  /// Set on disconnect, with the secrets cleared. The row stays so its links keep their history.
+  disconnectedAt DateTime?       @map("disconnected_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  links        PaymentLink[]
+
+  @@unique([organizationId, provider])
+  @@map("payment_accounts")
+}
+
+/// A payment link sent in chat: for an order (cash on delivery turned
+/// prepaid, or an unpaid order), for a draft order made from a cart, or for
+/// an amount typed in the inbox.
+model PaymentLink {
+  id              String            @id @default(cuid())
+  organizationId  String            @map("organization_id")
+  accountId       String            @map("account_id")
+  provider        PaymentProvider
+  /// The gateway's id (`plink_…`).
+  externalId      String            @map("external_id")
+  shortUrl        String            @map("short_url")
+  /// Sent as the gateway's reference_id; unique per gateway account.
+  referenceId     String            @unique @map("reference_id")
+  amount          Decimal           @db.Decimal(12, 2)
+  amountPaid      Decimal           @default(0) @map("amount_paid") @db.Decimal(12, 2)
+  currency        String            @default("INR")
+  description     String
+  status          PaymentLinkStatus @default(CREATED)
+  orderId         String?           @map("order_id")
+  draftOrderId    String?           @map("draft_order_id")
+  customerId      String?           @map("customer_id")
+  contactId       String?           @map("contact_id")
+  conversationId  String?           @map("conversation_id")
+  automationRunId String?           @map("automation_run_id")
+  createdById     String?           @map("created_by_id")
+  /// Added to the order when it is paid, e.g. "cod-to-prepaid".
+  tagOnPaid       String?           @map("tag_on_paid")
+  expiresAt       DateTime          @map("expires_at")
+  paidAt          DateTime?         @map("paid_at")
+  paymentId       String?           @map("payment_id")
+  paymentMethod   String?           @map("payment_method")
+  /// Why the paid order or draft could not be updated; the payment itself stands.
+  followUpError   String?           @map("follow_up_error")
+  /// When the order or draft was updated after payment (or the attempt recorded). Null on a
+  /// paid link means the follow-up never finished, and the sweep runs it again.
+  followedUpAt    DateTime?         @map("followed_up_at")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  account      PaymentAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  order        Order?         @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  draftOrder   DraftOrder?    @relation(fields: [draftOrderId], references: [id], onDelete: SetNull)
+
+  @@unique([accountId, externalId])
+  @@index([organizationId, createdAt])
+  @@index([orderId])
+  @@index([draftOrderId])
+  @@index([conversationId])
+  /// The status sweep for links whose webhook never came.
+  @@index([status, expiresAt])
+  @@map("payment_links")
 }

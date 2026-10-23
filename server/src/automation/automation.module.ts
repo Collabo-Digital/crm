@@ -16,6 +16,7 @@ import { WhatsAppWebhookHandler } from './platforms/whatsapp/whatsapp-webhook.ha
 import { MessengerWebhookHandler } from './platforms/messenger/messenger-webhook.handler';
 import { InboxModule } from '../inbox/inbox.module';
 import { CommerceModule } from '../commerce/commerce.module';
+import { PaymentsModule } from '../payments/payments.module';
 import { AUTOMATION_QUEUE } from '../messaging/automation-jobs';
 import { AutomationDispatcher } from './engine/automation-dispatcher.service';
 import { AutomationRunner } from './engine/automation-runner.service';
@@ -27,7 +28,7 @@ import { ConversationStartersService } from './conversation-starters.service';
 
 @Module({
   imports: [
-    ChannelModule, MessagingModule, CampaignsModule, InboxModule, CommerceModule,
+    ChannelModule, MessagingModule, CampaignsModule, InboxModule, CommerceModule, PaymentsModule,
     BullModule.registerQueue({ name: META_INBOUND_QUEUE }),
     BullModule.registerQueue({ name: AUTOMATION_QUEUE }),
   ],

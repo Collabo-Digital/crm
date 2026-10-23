@@ -192,3 +192,49 @@ describe('sending the invoice', () => {
         expect(check(steps('cart', { templateId: 'tpl_doc', templateValues: { 'body.invoice_number': 'x' } }))).toEqual(['invoice_needs_order']);
     });
 });
+
+describe('sending a payment link', () => {
+    const templates = new Map([
+        ['tpl_pay', { name: 'cod_pay_online', params: [{ key: 'body.first_name', name: 'first_name', kind: 'text' }, { key: 'button.0', name: '0', kind: 'text' }] }],
+        ['tpl_img', { name: 'sale_photo', params: [{ key: 'header', name: 'media', kind: 'image' }] }],
+    ]);
+    const filled = { templateId: 'tpl_pay', templateValues: { 'body.first_name': '{{first_name}}', 'button.0': '{{payment.link_path}}' } };
+    const check = (s: unknown[], paymentsConnected = true) =>
+        collectIssues(parseDefinition({ steps: s }), { platform: 'WHATSAPP', knownMediaIds: null, templates, paymentsConnected }).map((i) => i.code);
+    const onOrder = (config: Record<string, unknown>, event = 'order_created') => [
+        { id: 't', type: 'trigger', config: { channel: 'whatsapp', event } },
+        { id: 'p', type: 'send_payment_link', config },
+    ];
+
+    it('collects for the order the trigger is about, with the link in a template button', () => {
+        expect(check(onOrder(filled))).toEqual([]);
+        expect(check(onOrder({ ...filled, templateValues: { 'body.first_name': 'x', 'button.0': 'fixed' } }))).toEqual(['payment_link_unused']);
+        expect(check(onOrder({ templateId: 'tpl_img' }))).toEqual(['template_header_unsupported', 'payment_link_unused']);
+        expect(check(onOrder(filled), false)).toEqual(['payments_not_connected']);
+        expect(check(onOrder(filled, 'payment_received'))).toEqual(['payment_already_paid']);
+    });
+
+    it('collects for a cart once a draft order was made from it, and text is fine after a cart', () => {
+        const cart = (draftFirst: boolean) => [
+            { id: 't', type: 'trigger', config: { channel: 'whatsapp', event: 'cart' } },
+            ...(draftFirst ? [{ id: 'd', type: 'store_action', config: { action: 'create_draft_order' } }] : []),
+            { id: 'p', type: 'send_payment_link', config: { kind: 'text', message: 'Pay {{payment.amount}} here: {{payment.link}}' } },
+        ];
+        expect(check(cart(true))).toEqual([]);
+        expect(check(cart(false))).toEqual(['payment_needs_order']);
+    });
+
+    it('needs a template on store events, like any message there, and the link in the text', () => {
+        expect(check(onOrder({ kind: 'text', message: 'Pay here: {{payment.link}}' }))).toEqual(['template_needed']);
+        expect(check(onOrder({ kind: 'text', message: 'Pay soon' }))).toEqual(['payment_link_unused', 'template_needed']);
+    });
+
+    it('starts on a paid link, with {{payment.*}} and the order available', () => {
+        const steps = [
+            { id: 't', type: 'trigger', config: { channel: 'whatsapp', event: 'payment_received' } },
+            { id: 'n', type: 'add_note', config: { text: 'Paid {{payment.amount}} by {{payment.method}} for {{order.name}}' } },
+        ];
+        expect(triggerTypeFor(parseDefinition({ steps })[0])).toBe('crm.payment.received');
+        expect(check(steps)).toEqual([]);
+    });
+});

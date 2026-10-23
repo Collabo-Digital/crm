@@ -2519,8 +2519,11 @@ export class OrderService {
     });
   }
 
-  /** Mark an outstanding order as paid (e.g. cash-on-delivery, wire, COD). */
-  async markPaid(id: string, orgId: string, userId: string) {
+  /**
+   * Mark an outstanding order as paid (e.g. cash-on-delivery, wire, COD).
+   * `message` replaces the timeline line, e.g. for a payment link paid online.
+   */
+  async markPaid(id: string, orgId: string, userId: string, message = 'Order marked as paid') {
     const order = await this.loadOrderWithChannel(id, orgId);
     if (order.financialStatus === OrderFinancialStatus.PAID) {
       throw new BadRequestException('Order is already paid');
@@ -2549,7 +2552,7 @@ export class OrderService {
         data: { financialStatus: OrderFinancialStatus.PAID },
       });
       await tx.orderTimelineEvent.create({
-        data: { orderId: id, actorId: userId, action: 'paid', message: 'Order marked as paid' },
+        data: { orderId: id, actorId: userId, action: 'paid', message },
       });
       return row;
     });

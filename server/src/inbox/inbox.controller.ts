@@ -28,6 +28,7 @@ import { QueryMessagesDto } from './dto/query-messages.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { UpdateConversationDto } from './dto/update-conversation.dto';
 import { CreateNoteDto } from './dto/create-note.dto';
+import { CreatePaymentLinkDto } from '../payments/dto/payments.dto';
 import { BulkConversationsDto } from './dto/bulk-conversations.dto';
 
 export const INBOX_ROLES = [UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.AGENT, UserRole.VIEWER];
@@ -84,6 +85,18 @@ export class InboxController {
     @Get('conversations/:id/products')
     async products(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Query('search') search?: string) {
         return this.inbox.products(user.orgId!, await this.teams.viewer(user), id, search?.slice(0, 100));
+    }
+
+    /** Payment links sent in this chat, and the customer's unpaid orders. */
+    @Get('conversations/:id/payment-links')
+    async paymentLinks(@CurrentUser() user: SessionPayload, @Param('id') id: string) {
+        return this.inbox.paymentLinksFor(user.orgId!, await this.teams.viewer(user), id);
+    }
+
+    /** A payment link from the organization's own Razorpay account, for the teammate to send. */
+    @Post('conversations/:id/payment-links')
+    async createPaymentLink(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Body() dto: CreatePaymentLinkDto) {
+        return this.inbox.createPaymentLink(user.orgId!, await this.teams.viewer(user), id, dto);
     }
 
     /** Turn a cart the customer sent into a draft order with a checkout link. */

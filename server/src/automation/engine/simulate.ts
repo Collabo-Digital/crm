@@ -59,6 +59,11 @@ export function simulate(
             case 'send_invoice':
                 push('done', `Sends the order's GST invoice as a PDF with the template "${opts.templateNames?.[String(c.templateId ?? '')] ?? 'not chosen'}".`);
                 break;
+            case 'send_payment_link':
+                push('done', c.kind === 'text'
+                    ? `Sends a Razorpay payment link: ${interpolate(String(c.message ?? ''), { ...vars, 'payment.link': 'https://rzp.io/rzp/example' })}`
+                    : `Sends a Razorpay payment link with the template "${opts.templateNames?.[String(c.templateId ?? '')] ?? 'not chosen'}".`);
+                break;
             case 'wait':
                 push('waits', `Waits ${unitLabel(Number(c.amount), String(c.unit))}.`);
                 break;

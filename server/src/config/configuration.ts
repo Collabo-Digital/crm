@@ -23,6 +23,11 @@ export default () => ({
         fromName: process.env.FROM_NAME || 'YourCRM',
         replyTo: process.env.REPLY_TO_EMAIL || undefined,
     },
+    // Merchants' own gateway accounts, for payment links sent in chat. Not
+    // Collabo's subscription billing (RAZORPAY_KEY_* / BillingService).
+    payments: {
+        razorpayApiBase: process.env.RAZORPAY_MERCHANT_API_BASE || 'https://api.razorpay.com',
+    },
     shopify: {
         clientId: process.env.SHOPIFY_CLIENT_ID,
         clientSecret: process.env.SHOPIFY_CLIENT_SECRET,

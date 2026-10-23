@@ -4238,6 +4238,7 @@ export type AutomationBlockType =
   | "send_message"
   | "reply_comment"
   | "send_invoice"
+  | "send_payment_link"
   | "wait"
   | "wait_for_reply"
   | "condition"
@@ -4429,6 +4430,59 @@ export interface DraftFromCart {
   missing: string[];
   /** The cart had a draft order already; this is that one. */
   existing: boolean;
+}
+
+// ─── Payments (the organization's own Razorpay account) ────────────────────
+
+export interface PaymentAccount {
+  connected: boolean;
+  provider: "RAZORPAY";
+  keyId: string | null;
+  livemode: boolean;
+  /** The webhook URL's secret path segment; owners and admins only. */
+  webhookToken: string | null;
+  webhookEvents: string[];
+  lastWebhookAt: string | null;
+  connectedAt: string | null;
+}
+
+/** Returned once, on connect: the secret to paste into Razorpay's webhook form. */
+export interface PaymentAccountConnected extends PaymentAccount {
+  webhookSecret: string;
+}
+
+export type PaymentLinkStatus = "CREATED" | "PARTIALLY_PAID" | "PAID" | "EXPIRED" | "CANCELLED";
+
+export interface PaymentLink {
+  id: string;
+  shortUrl: string;
+  amount: string;
+  currency: string;
+  description: string;
+  status: PaymentLinkStatus;
+  orderId: string | null;
+  draftOrderId: string | null;
+  expiresAt: string;
+  paidAt: string | null;
+  paymentMethod: string | null;
+  /** Paid, but the order or draft could not be updated; the payment stands. */
+  followUpError: string | null;
+  createdAt: string;
+  /** An open link for the same order or draft was reused. */
+  existing?: boolean;
+}
+
+export interface ConversationPayments {
+  links: PaymentLink[];
+  unpaidOrders: Array<{ id: string; name: string; totalPrice: string; currency: string; paymentGateways: string[]; createdAt: string }>;
+}
+
+export interface CreatePaymentLinkRequest {
+  orderId?: string;
+  draftOrderId?: string;
+  amount?: number;
+  description?: string;
+  expiresInHours?: number;
 }
 
 export interface CatalogView {

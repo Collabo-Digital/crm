@@ -143,7 +143,10 @@ export class AutomationService {
             params: templateParams(r.components as Record<string, unknown>[], r.parameterFormat === 'NAMED' ? 'NAMED' : 'POSITIONAL')
                 .map((p) => ({ key: p.key, name: p.name, kind: p.kind })),
         }]));
-        return { platform: row.platform, knownMediaIds, templates };
+        const paymentsConnected = new Flow(steps).all().some(({ step }) => step.type === 'send_payment_link')
+            ? !!(await this.prisma.paymentAccount.findFirst({ where: { organizationId: row.organizationId, disconnectedAt: null, credentials: { not: null } }, select: { id: true } }))
+            : undefined;
+        return { platform: row.platform, knownMediaIds, templates, paymentsConnected };
     }
 
 

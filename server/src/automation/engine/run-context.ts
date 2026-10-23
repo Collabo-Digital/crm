@@ -23,6 +23,8 @@ export interface RunContext {
     replyEventIds?: string[];
     /** A WhatsApp cart: catalog item ids (our variant ids) and quantities. */
     cart?: Array<{ retailerId: string; quantity: number; price: number | null; currency: string | null }>;
+    /** The draft order a "Create draft order" step made, for a later payment link. */
+    draftId?: string;
 }
 
 export function parseRunContext(raw: unknown): RunContext {
@@ -34,6 +36,7 @@ export function parseRunContext(raw: unknown): RunContext {
         ...(c.replied ? { replied: true } : {}),
         ...(Array.isArray(c.replyEventIds) && c.replyEventIds.length ? { replyEventIds: c.replyEventIds } : {}),
         ...(c.cart ? { cart: c.cart } : {}),
+        ...(typeof c.draftId === 'string' ? { draftId: c.draftId } : {}),
     };
 }
 

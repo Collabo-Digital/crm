@@ -4,18 +4,35 @@ import { Check, Copy, Loader2, ReceiptText, Send } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { useDraftFromCartMutation } from "~/hooks/use-automation-mutations";
 import { useSendMessageMutation } from "~/hooks/use-inbox-mutations";
+import { useCreatePaymentLinkMutation, usePaymentAccount } from "~/hooks/use-payments";
 import type { DraftFromCart } from "~/types/api";
+
+import { paymentLinkMessage } from "./payments-section";
 
 /**
  * Under a cart the customer sent: make it a draft order, then send them
- * Shopify's checkout link. Without a connected Shopify store the draft stays
- * in Collabo and there is no link to send.
+ * Shopify's checkout link, or a payment link from the organization's own
+ * Razorpay account (paying it turns the draft into an order). Without a
+ * connected Shopify store there is no checkout link, but a payment link still works.
  */
 export function CartActions({ conversationId, messageId }: { conversationId: string; messageId: string }) {
   const create = useDraftFromCartMutation(conversationId);
   const send = useSendMessageMutation(conversationId);
+  const { data: payments } = usePaymentAccount();
+  const payLink = useCreatePaymentLinkMutation(conversationId);
   const [draft, setDraft] = useState<DraftFromCart | null>(null);
   const [sent, setSent] = useState(false);
+  const [paySent, setPaySent] = useState(false);
+  const sendPaymentLink = () =>
+    payLink.mutate({ draftOrderId: draft!.draftId }, {
+      onSuccess: (link) => send.mutate({ payload: { type: "text", text: paymentLinkMessage(link) } }, { onSuccess: (o) => o.ok && setPaySent(true) }),
+    });
+  const payButton = payments?.connected ? (
+    <Button size="xs" variant={draft?.checkoutUrl ? "outline" : "accent"} disabled={payLink.isPending || send.isPending || paySent} onClick={sendPaymentLink}>
+      {paySent ? <Check /> : payLink.isPending ? <Loader2 className="animate-spin" /> : <Send />}
+      {paySent ? "Payment link sent" : "Send payment link"}
+    </Button>
+  ) : null;
 
   if (!draft) {
     return (
@@ -52,9 +69,12 @@ export function CartActions({ conversationId, messageId }: { conversationId: str
             <Copy />
             Copy link
           </Button>
+          {payButton}
         </div>
+      ) : payButton ? (
+        <div className="flex flex-wrap gap-1.5">{payButton}</div>
       ) : (
-        <p className="text-micro text-muted-foreground">Saved in Draft orders. Connect a Shopify store to get a checkout link.</p>
+        <p className="text-micro text-muted-foreground">Saved in Draft orders. Connect a Shopify store to get a checkout link, or Razorpay to send a payment link.</p>
       )}
     </div>
   );

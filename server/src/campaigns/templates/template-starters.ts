@@ -116,6 +116,39 @@ export const TEMPLATE_STARTERS: TemplateStarter[] = [
         },
     },
     {
+        key: 'payment_link',
+        useCase: 'payments',
+        title: 'Pay for your order',
+        description: 'Sends a Razorpay payment link for an order or a cart, from your own Razorpay account.',
+        draft: {
+            name: 'order_payment_link',
+            category: 'UTILITY',
+            parameterFormat: 'NAMED',
+            body: {
+                text: 'Hi {{first_name}}, your order {{order_number}} for {{order_total}} is ready. Pay securely online with the button below.',
+                examples: { first_name: 'Ananya', order_number: '#1042', order_total: '₹2,499' },
+            },
+            // Meta lets only the end of a button URL vary; the payment link's path goes there.
+            buttons: [{ type: 'URL', text: 'Pay now', url: 'https://rzp.io/{{1}}', example: 'rzp/aBcD1234' }],
+        },
+    },
+    {
+        key: 'cod_to_prepaid',
+        useCase: 'payments',
+        title: 'Pay online instead of cash',
+        description: 'Offers a cash-on-delivery buyer to pay online now, with a Razorpay payment link.',
+        draft: {
+            name: 'cod_pay_online',
+            category: 'UTILITY',
+            parameterFormat: 'NAMED',
+            body: {
+                text: 'Hi {{first_name}}, your order {{order_number}} for {{order_total}} is set for cash on delivery. Prefer to pay online now? Use the button below and skip paying cash at the door.',
+                examples: { first_name: 'Ananya', order_number: '#1042', order_total: '₹2,499' },
+            },
+            buttons: [{ type: 'URL', text: 'Pay online', url: 'https://rzp.io/{{1}}', example: 'rzp/aBcD1234' }],
+        },
+    },
+    {
         key: 'cart_reminder',
         useCase: 'recovery',
         title: 'Items left in cart',

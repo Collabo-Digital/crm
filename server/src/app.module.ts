@@ -50,6 +50,7 @@ import { AutomationModule } from './automation/automation.module';
 import { InboxModule } from './inbox/inbox.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
 import { CommerceModule } from './commerce/commerce.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -117,6 +118,7 @@ import { CommerceModule } from './commerce/commerce.module';
     InboxModule,
     CampaignsModule,
     CommerceModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [

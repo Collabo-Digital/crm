@@ -61,6 +61,9 @@ function variablesFor(ctx: EditorContext): string[] {
     ["invoice.number", "invoice.date", "invoice.total"].forEach((v) => saved.add(v));
   }
   if (event === "checkout_abandoned") ["checkout.url", "checkout.url_path", "checkout.total", "checkout.items"].forEach((v) => saved.add(v));
+  // A paid link carries {{payment.*}}; "Send a payment link" fills it for its own message and later steps.
+  if (event === "payment_received") ["payment.amount", "payment.method", "payment.description"].forEach((v) => saved.add(v));
+  if (allSteps(ctx.steps).some((s) => s.type === "send_payment_link")) ["payment.link", "payment.link_path", "payment.amount", "payment.expires"].forEach((v) => saved.add(v));
   return [
     "first_name",
     "name",
@@ -468,17 +471,30 @@ function FileField({ media, onChange, readOnly, label }: { media: Config["media"
   );
 }
 
-/** `invoice`: only templates with a document header, which carries the invoice PDF. */
-function TemplateFields({ config, set, ctx, invoice = false }: { config: Config; set: (p: Config) => void; ctx: EditorContext; invoice?: boolean }) {
+/**
+ * `invoice`: only templates with a document header, which carries the invoice PDF.
+ * `payment`: only templates without a media header; the link goes in a button or the text.
+ */
+function TemplateFields({ config, set, ctx, invoice = false, payment = false }: { config: Config; set: (p: Config) => void; ctx: EditorContext; invoice?: boolean; payment?: boolean }) {
   const { data: all = [], isLoading } = useTemplates({ status: "APPROVED" });
-  const templates = invoice ? all.filter((t) => t.params.some((p) => p.component === "header" && p.kind === "document")) : all;
+  const templates = invoice
+    ? all.filter((t) => t.params.some((p) => p.component === "header" && p.kind === "document"))
+    : payment
+      ? all.filter((t) => !t.params.some((p) => p.component === "header" && p.kind !== "text"))
+      : all;
   const template = templates.find((t) => t.id === config.templateId);
   const values: Record<string, string> = config.templateValues ?? {};
   return (
     <div className="space-y-3">
       <Field
         label="Template"
-        hint={invoice ? "Approved WhatsApp templates with a document header. Start from the “GST invoice” template if you have none." : "Approved WhatsApp templates. They can be sent even after the 24-hour window closes."}
+        hint={
+          invoice
+            ? "Approved WhatsApp templates with a document header. Start from the “GST invoice” template if you have none."
+            : payment
+              ? "Approved WhatsApp templates without a media header. Start from “Pay for your order” or “Pay online instead of cash” if you have none."
+              : "Approved WhatsApp templates. They can be sent even after the 24-hour window closes."
+        }
         htmlFor="m-template"
       >
         <select id="m-template" className={selectClass} value={config.templateId ?? ""} disabled={ctx.readOnly || isLoading} onChange={(e) => set({ templateId: e.target.value || undefined })}>
@@ -516,7 +532,9 @@ function TemplateFields({ config, set, ctx, invoice = false }: { config: Config;
             <p className="text-micro text-muted-foreground">
               {invoice
                 ? <>Use {"{{first_name}}"}, {"{{order.name}}"}, {"{{invoice.number}}"} or {"{{invoice.total}}"} for values that change per order.</>
-                : <>Use {"{{first_name}}"}, {"{{attr.field}}"} or {"{{webhook.field}}"} for values that change per person.</>}
+                : payment
+                  ? <>Put {"{{payment.link_path}}"} in a button whose URL is https://rzp.io/{"{{1}}"}, or {"{{payment.link}}"} in the text. {"{{order.total}}"} and {"{{payment.amount}}"} give the amount.</>
+                  : <>Use {"{{first_name}}"}, {"{{attr.field}}"} or {"{{webhook.field}}"} for values that change per person.</>}
             </p>
           )}
         </>
@@ -836,6 +854,36 @@ export function StepEditor({ step, onChange, ctx }: { step: AutomationStep; onCh
             Sends the GST invoice of the order this automation is about. The order needs an invoice: turn on automatic invoices in Settings → Orders, or issue it by hand.
           </p>
           <TemplateFields config={c} set={set} ctx={ctx} invoice />
+        </div>
+      );
+      break;
+    case "send_payment_link":
+      body = (
+        <div className="space-y-3">
+          <p className="text-caption text-muted-foreground">
+            Makes a payment link in your own Razorpay account for the order this automation is about, or for the draft order an earlier step made from a cart. Paying it marks the order paid, in Shopify too, or turns the draft into an order.
+          </p>
+          <Field label="Send it as" htmlFor="pl-kind">
+            <select id="pl-kind" className={selectClass} value={c.kind ?? "template"} disabled={ro} onChange={(e) => set({ kind: e.target.value })}>
+              <option value="template">A WhatsApp template (works any time)</option>
+              <option value="text">A message (only within 24 hours of their last message, e.g. right after a cart)</option>
+            </select>
+          </Field>
+          {c.kind === "text" ? (
+            <Field label="Message" hint="Put {{payment.link}} where the link should go." htmlFor="pl-text">
+              <TextWithVariables id="pl-text" value={c.message ?? ""} onChange={(message) => set({ message })} ctx={ctx} maxLength={4096} placeholder="Pay {{payment.amount}} here: {{payment.link}}" />
+            </Field>
+          ) : (
+            <TemplateFields config={c} set={set} ctx={ctx} payment />
+          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Link expires after (hours)" htmlFor="pl-expiry">
+              <Input id="pl-expiry" type="number" min={1} max={720} value={c.expiresInHours ?? 48} disabled={ro} onChange={(e) => set({ expiresInHours: Math.min(720, Math.max(1, Number(e.target.value) || 1)) })} />
+            </Field>
+            <Field label="When paid, tag the order" hint="Optional, e.g. cod-to-prepaid." htmlFor="pl-tag">
+              <Input id="pl-tag" value={c.tagOnPaid ?? ""} disabled={ro} maxLength={60} onChange={(e) => set({ tagOnPaid: e.target.value })} />
+            </Field>
+          </div>
         </div>
       );
       break;

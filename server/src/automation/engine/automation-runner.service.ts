@@ -12,6 +12,8 @@ import { InboxRulesService } from '../../inbox/inbox-rules.service';
 import { InboxSettingsService } from '../../inbox/inbox-settings.service';
 import { ASSIGNABLE_ROLES } from '../../inbox/inbox-team.service';
 import { StoreActionsService } from '../../commerce/store-actions.service';
+import { PaymentLinksService } from '../../payments/payment-links.service';
+import { paymentVars } from '../../payments/payment-link.util';
 import { isCashOnDelivery } from '../../commerce/order-vars';
 import { ParamValue, renderTemplate, sendComponents, templateParams } from '../../campaigns/templates/template-components';
 import { SendMessageConfigT, StepDef, parseDefinition } from '../blocks/definition.schema';
@@ -68,6 +70,7 @@ export class AutomationRunner {
         private readonly rules: InboxRulesService,
         private readonly inboxSettings: InboxSettingsService,
         private readonly store: StoreActionsService,
+        private readonly paymentLinks: PaymentLinksService,
         config: ConfigService,
     ) {
         this.allowPrivate = config.get<string>('AUTOMATION_HTTP_ALLOW_PRIVATE') === 'true';
@@ -196,6 +199,8 @@ export class AutomationRunner {
             }
             case 'send_invoice':
                 return this.sendInvoice(s, step);
+            case 'send_payment_link':
+                return this.sendPaymentLink(s, step);
             case 'wait': {
                 const resumeAt = new Date(Date.now() + toMinutes(Number(c.amount), c.unit as 'minutes') * 60_000);
                 return { kind: 'wait', resumeAt, forReply: false, output: { resumeAt: resumeAt.toISOString() } };
@@ -338,6 +343,37 @@ export class AutomationRunner {
         return this.deliver(s, step, payload);
     }
 
+    /**
+     * A payment link for the run's order, or for the draft an earlier step
+     * made from a cart. A retried step finds the link it made the first time.
+     */
+    private async sendPaymentLink(s: StepState, step: FlowStep): Promise<Outcome> {
+        const c = step.config as { kind?: string; message?: string; templateId?: string; templateValues?: Record<string, string>; expiresInHours?: number; tagOnPaid?: string };
+        const opts = {
+            contactId: s.contact.id,
+            conversationId: await this.conversationId(s),
+            automationRunId: s.run.id,
+            userId: s.run.automation?.ownerUserId ?? null,
+            expiresInHours: c.expiresInHours,
+            tagOnPaid: c.tagOnPaid ? interpolate(c.tagOnPaid, s.vars) : null,
+        };
+        let link;
+        try {
+            if (s.run.orderId) link = await this.paymentLinks.forOrder(s.run.organizationId, s.run.orderId, opts);
+            else if (s.ctx.draftId) link = await this.paymentLinks.forDraft(s.run.organizationId, s.ctx.draftId, opts);
+            else return fail('This run has no order or draft order to collect payment for.');
+        } catch (err) {
+            return fail(err instanceof Error ? err.message : String(err));
+        }
+        const vars = paymentVars({ shortUrl: link.shortUrl, amount: link.amount, currency: link.currency, expiresAt: new Date(link.expiresAt) });
+        Object.assign(s.ctx.vars, vars);
+        Object.assign(s.vars, vars);
+        if (c.kind === 'text') return this.deliver(s, step, { type: 'text', text: interpolate(c.message ?? '', s.vars) });
+        const payload = await this.templatePayload(s, { kind: 'template', templateId: c.templateId, templateValues: c.templateValues ?? {} } as SendMessageConfigT);
+        if (typeof payload === 'string') return fail(payload);
+        return this.deliver(s, step, payload);
+    }
+
     private async deliver(s: StepState, step: FlowStep, payload: OutboundPayload): Promise<Outcome> {
         const conversationId = await this.conversationId(s);
         const outcome = await this.sender.send({
@@ -470,6 +506,8 @@ export class AutomationRunner {
                     note: 'Cart sent on WhatsApp',
                     sourceMessageId: cartMessage,
                 });
+                // A later "Send payment link" collects for this draft.
+                s.ctx.draftId = draft.draftId;
                 Object.assign(s.ctx.vars, {
                     'draft.checkout_url': draft.checkoutUrl ?? '',
                     'draft.name': draft.name ?? '',

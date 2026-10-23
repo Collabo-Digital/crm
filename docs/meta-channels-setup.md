@@ -127,6 +127,8 @@ ENCRYPTION_KEY=                     # exactly 32 chars; encrypts stored tokens
 AUTOMATION_HTTP_ALLOW_PRIVATE=      # leave unset in production; "true" lets an
                                     # automation's "Call a URL" step reach
                                     # localhost and private networks (local tests)
+RAZORPAY_MERCHANT_API_BASE=         # leave unset in production (https://api.razorpay.com);
+                                    # local tests point it at the Razorpay stand-in
 ```
 
 Client (`client/.env`):
@@ -475,6 +477,55 @@ Per-account subscription happens at connect time and is undone at disconnect:
   finds the invoice and issues nothing more. Both need GST enabled with a
   registered GSTIN, and a failure is recorded on the order instead of blocking
   it.
+
+### Payments in chat (each merchant's own Razorpay)
+
+Payment links are made in the **merchant's own Razorpay account**, connected
+under Settings → Orders → "Payments with your Razorpay account" by an owner
+or admin. That is a different account from Collabo's own subscription billing
+(`RAZORPAY_KEY_*`, `/webhooks/razorpay`), which this never uses.
+
+- **Connecting.** The merchant pastes a key id and key secret from Razorpay →
+  Account & Settings → API keys (test keys work for trying it). Collabo checks
+  them with Razorpay, stores them AES-encrypted, and shows a webhook URL
+  (`/api/v1/webhooks/razorpay/merchant/<token>`, a per-account secret path) and
+  a webhook secret, shown once. In Razorpay → Webhooks the merchant adds that
+  URL and secret with the events `payment_link.paid`,
+  `payment_link.partially_paid`, `payment_link.expired` and
+  `payment_link.cancelled`. Every webhook must be signed with that account's
+  secret (HMAC-SHA256 of the raw body, `X-Razorpay-Signature`), and touches
+  only that account's links. Without the webhook, open links are checked with
+  Razorpay every 10 minutes and on "Check status". Disconnecting clears the
+  keys and keeps the links' history; links already sent stay payable in
+  Razorpay, but Collabo no longer sees those payments.
+- **Sending a link.** In the inbox, the contact panel's Payments section lists
+  the customer's unpaid orders ("Request ₹2,398 for #1101") and takes any other
+  amount. Under a cart, "Send payment link" pays the draft order. Automations
+  have a **Send a payment link** step (a template whose button is
+  `https://rzp.io/{{1}}` with `{{payment.link_path}}`, or a text with
+  `{{payment.link}}` inside the 24-hour window), and a **"A payment link is
+  paid"** trigger with `{{payment.amount}}`, `{{payment.method}}` and the
+  order. Starters: "Pay for your order" and "Pay online instead of cash";
+  playbooks: "Turn COD orders into prepaid", "Cart to payment", "Thank buyers
+  when they pay". Links are in rupees, at least ₹1, and expire after 48 hours
+  by default (1 to 720). An open link for the same order is reused rather than
+  made twice.
+- **When it is paid.** The link is marked paid once, whichever of webhook or
+  sweep sees it first, and only when the amount paid equals the link's amount.
+  An order is marked paid (`orderMarkAsPaid` in Shopify), tagged if the step
+  says so (cod-to-prepaid), invoiced if invoicing on payment is on, and the
+  invoice automation sends the GST invoice. A cart's draft is completed into a
+  paid order (Shopify `draftOrderComplete`, or a local order with an invoice).
+  If the order or draft cannot follow, the payment is kept and the reason is
+  shown on the link.
+- **Not built, and why.** A discount for paying online would change the
+  order's total, which needs Shopify's `write_order_edits` scope; adding it to
+  the app's access scopes makes every connected store re-approve the app. So
+  "Turn COD orders into prepaid" collects the full amount. WhatsApp's own
+  payment card (Enhanced Payment Links) and payment links inside
+  `order_details` are allowlist-only at Meta; plain links work for everyone.
+  Razorpay's partner OAuth ("Connect with Razorpay" without copying keys)
+  needs Collabo registered as a Razorpay technology partner.
 
 ### Messaging analytics (Analytics → Messaging)
 

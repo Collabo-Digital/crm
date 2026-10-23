@@ -23,6 +23,7 @@ import { FINANCIAL_CLASSES, FINANCIAL_LABELS, FULFILLMENT_LABELS } from "~/lib/o
 import { cn, formatCurrency } from "~/lib/utils";
 import type { InboxContactDetail, InboxCustomerMatch, InboxMember, InboxNote, InboxTeamRef } from "~/types/api";
 
+import { PaymentsSection } from "./payments-section";
 import { TagChip } from "./tag-chip";
 
 const NONE = "none";
@@ -366,6 +367,10 @@ export function ContactPanel({
         ) : (
           <p className="text-caption text-muted-foreground">Not linked to a store customer.</p>
         )}
+      </PanelSection>
+
+      <PanelSection title="Payments">
+        <PaymentsSection conversationId={conversationId} canEdit={canEdit} />
       </PanelSection>
 
       {otherConversations.length > 0 && (
