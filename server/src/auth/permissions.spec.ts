@@ -78,6 +78,11 @@ describe('hasPermission', () => {
 });
 
 describe('extractGrants', () => {
+    it('accepts the inbox and campaign-action keys', () => {
+        const grants = ['chat.view_all', 'chat.view_unassigned', 'chat.assign', 'broadcasts.send', 'templates.manage'];
+        expect(extractGrants({ grants })).toEqual(grants);
+    });
+
     it('accepts the campaign keys now that they are real', () => {
         expect(extractGrants({ grants: ['campaigns.view', 'campaigns.manage'] })).toEqual([
             'campaigns.view',

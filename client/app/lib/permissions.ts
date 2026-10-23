@@ -18,7 +18,12 @@ export type PermissionKey =
   | "inventory.reports"
   | "reports.finance"
   | "campaigns.view"
-  | "campaigns.manage";
+  | "campaigns.manage"
+  | "chat.view_all"
+  | "chat.view_unassigned"
+  | "chat.assign"
+  | "broadcasts.send"
+  | "templates.manage";
 
 /** Roles that implicitly hold every key. Mirrors IMPLICIT_ALL_ROLES. */
 const IMPLICIT_ALL_ROLES: UserRole[] = ["OWNER", "ADMIN", "MANAGER"];

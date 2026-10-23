@@ -59,6 +59,22 @@ export const PERMISSION_KEYS = [
    */
   'campaigns.view',
   'campaigns.manage',
+  /**
+   * Inbox (the Chat section). An AGENT / VIEWER without `chat.view_all` sees
+   * the conversations assigned to them or to their teams, plus the unassigned
+   * queue when they hold `chat.view_unassigned`. `chat.assign` lets them hand a
+   * conversation to someone else; taking an unassigned one needs no grant.
+   */
+  'chat.view_all',
+  'chat.view_unassigned',
+  'chat.assign',
+  /**
+   * The two campaign actions with consequences outside the CRM — a broadcast
+   * reaches customers and is billed by Meta, a template goes to Meta's review —
+   * so they are granted apart from `campaigns.manage`.
+   */
+  'broadcasts.send',
+  'templates.manage',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
