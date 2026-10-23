@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
-import { Observable } from 'rxjs';
+import { Observable, ReplaySubject } from 'rxjs';
 
 /** What changed, so an open inbox knows what to refetch. Ids only, never content. */
 export type InboxEvent =
@@ -22,6 +22,12 @@ export class InboxEventsService implements OnModuleDestroy {
     private readonly logger = new Logger(InboxEventsService.name);
     private readonly url: string;
     private publisher: Redis | null = null;
+    private readonly closing = new ReplaySubject<void>(1);
+    /**
+     * Emits on shutdown. An open stream holds its HTTP response open, and the
+     * server cannot close (nor the process exit) until every stream ends on it.
+     */
+    readonly closing$ = this.closing.asObservable();
 
     constructor(config: ConfigService) {
         this.url = config.get<string>('redis.url')!;
@@ -58,6 +64,7 @@ export class InboxEventsService implements OnModuleDestroy {
     }
 
     async onModuleDestroy() {
+        this.closing.next();
         this.publisher?.disconnect();
     }
 }

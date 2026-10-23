@@ -14,7 +14,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { SkipThrottle } from '@nestjs/throttler';
 import { UserRole } from '@prisma/client';
-import { Observable, interval, map, merge, tap } from 'rxjs';
+import { Observable, interval, map, merge, takeUntil, tap } from 'rxjs';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RequireSection } from '../auth/decorators/require-section.decorator';
@@ -151,6 +151,6 @@ export class InboxController {
                 tap(present),
                 map(() => ({ type: 'ping', data: {} }) as MessageEvent),
             ),
-        );
+        ).pipe(takeUntil(this.events.closing$));
     }
 }
