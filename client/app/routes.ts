@@ -87,6 +87,7 @@ export default [
     route("logistics/*", "routes/app/legacy-redirect.tsx", { id: "removed-logistics" }),
     // A visual preview with no backend yet.
     route("analytics", "routes/app/analytics.tsx"),
+    route("analytics/messaging", "routes/app/analytics/messaging.tsx"),
     route("profile", "routes/app/profile.tsx"),
     route("settings", "routes/app/settings.tsx"),
     route("settings/:tab", "routes/app/settings.tsx", { id: "settings-tab" }),

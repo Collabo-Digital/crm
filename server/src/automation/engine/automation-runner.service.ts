@@ -371,12 +371,13 @@ export class AutomationRunner {
     private async setStatus(s: StepState, c: { status: string; hours: number }): Promise<Outcome> {
         const conversationId = await this.conversationId(s);
         const now = new Date();
+        const prior = await this.prisma.conversation.findUnique({ where: { id: conversationId }, select: { status: true } });
         const data: Prisma.ConversationUncheckedUpdateInput =
             c.status === 'closed'
                 ? { status: ConversationStatus.CLOSED, closedAt: now, closedById: null, snoozedUntil: null }
                 : c.status === 'snoozed'
                     ? { status: ConversationStatus.SNOOZED, snoozedUntil: new Date(now.getTime() + c.hours * 3600_000) }
-                    : { status: ConversationStatus.OPEN, closedAt: null, closedById: null, snoozedUntil: null };
+                    : { status: ConversationStatus.OPEN, closedAt: null, closedById: null, snoozedUntil: null, ...(prior?.status === ConversationStatus.CLOSED ? { openedAt: now } : {}) };
         await this.prisma.conversation.update({ where: { id: conversationId }, data });
         this.inboxEvents.publish(s.run.organizationId, { type: 'conversation.updated', conversationId });
         return { kind: 'next', output: { status: c.status } };

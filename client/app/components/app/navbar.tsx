@@ -24,6 +24,7 @@ import {
   LayoutTemplate,
   Filter,
   Workflow,
+  MessagesSquare,
   ShoppingBag,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
@@ -91,13 +92,19 @@ const CAMPAIGNS_CHILDREN: NavChild[] = [
   { label: "Catalog", href: "/campaigns/catalog", icon: ShoppingBag },
 ];
 
+/** Sub-nav for Analytics: the storefront, and chats. */
+const ANALYTICS_CHILDREN: NavChild[] = [
+  { label: "Store", href: "/analytics", icon: BarChart3 },
+  { label: "Messaging", href: "/analytics/messaging", icon: MessagesSquare },
+];
+
 const NAV_LINKS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Orders", href: "/orders", icon: ShoppingCart, children: ORDERS_CHILDREN },
   { label: "Products", href: "/products", icon: Package, children: PRODUCTS_CHILDREN },
   { label: "Inbox", href: "/inbox", icon: MessageSquare, children: INBOX_CHILDREN },
   { label: "Campaigns", href: "/campaigns", icon: Megaphone, children: CAMPAIGNS_CHILDREN },
-  { label: "Analytics", href: "/analytics", icon: BarChart3 },
+  { label: "Analytics", href: "/analytics", icon: BarChart3, children: ANALYTICS_CHILDREN },
 ];
 
 /**

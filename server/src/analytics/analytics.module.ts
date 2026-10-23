@@ -8,10 +8,12 @@ import { PixelEventsAggregator } from './pixel-events-aggregator.service';
 import { PixelIngestController } from './pixel-ingest.controller';
 import { PixelIngestService } from './pixel-ingest.service';
 import { ChannelModule } from '../channel/channel.module';
+import { MessagingAnalyticsController } from './messaging/messaging-analytics.controller';
+import { MessagingAnalyticsService } from './messaging/messaging-analytics.service';
 
 @Module({
   imports: [ChannelModule],
-  controllers: [AnalyticsController, PixelIngestController],
+  controllers: [MessagingAnalyticsController, AnalyticsController, PixelIngestController],
   providers: [
     AnalyticsService,
     AnalyticsDashboardService,
@@ -19,6 +21,7 @@ import { ChannelModule } from '../channel/channel.module';
     CartEventsAggregator,
     PixelIngestService,
     PixelEventsAggregator,
+    MessagingAnalyticsService,
   ],
   exports: [AnalyticsService, CartEventsAggregator],
 })

@@ -2442,6 +2442,10 @@ model Conversation {
   teamId             String?            @map("team_id")
   /// SNOOZED conversations reopen at this time, or at the next inbound message.
   snoozedUntil       DateTime?          @map("snoozed_until")
+  /// When the current open spell began: created by a customer's message, or
+  /// reopened. With closedAt it gives resolution time. Null on rows from
+  /// before it was recorded.
+  openedAt           DateTime?          @map("opened_at")
   closedAt           DateTime?          @map("closed_at")
   closedById         String?            @map("closed_by_id")
   /// First reply by a person or automation after the conversation opened;

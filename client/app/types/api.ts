@@ -4438,3 +4438,70 @@ export interface CatalogView {
   items: Partial<Record<"SYNCED" | "ERROR" | "SKIPPED" | "REMOVED", number>>;
   problems: Array<{ variantId: string; name: string; status: string; error: string | null }>;
 }
+
+// ─── Messaging Analytics Types ──────────────────────────────────────────────
+
+export interface MessagingAnalytics {
+  period: { from: string; to: string; timeZone: string; days: number; channelId: string | null };
+  volume: {
+    inbound: number;
+    outbound: number;
+    outboundBySource: Partial<Record<"AGENT" | "AUTOMATION" | "BROADCAST" | "SYSTEM" | "BUSINESS_APP" | "OTHER_APP", number>>;
+    comments: number;
+    activeConversations: number;
+    newPeople: number;
+    byPlatform: Array<{ platform: string; inbound: number; outbound: number }>;
+    daily: Array<{ day: string; inbound: number; outbound: number }>;
+  };
+  responses: {
+    asked: number;
+    answeredByPerson: number;
+    firstAnswerByAutomation: number;
+    unanswered: number;
+    medianFirstReplySec: number | null;
+    p90FirstReplySec: number | null;
+    within1h: number;
+  };
+  resolution: { closed: number; timed: number; medianSec: number | null; p90Sec: number | null };
+  agents: Array<{
+    userId: string;
+    name: string;
+    role: string;
+    replies: number;
+    conversations: number;
+    firstReplies: number;
+    medianFirstReplySec: number | null;
+    closed: number;
+    openNow: number;
+  }>;
+  broadcasts: {
+    count: number;
+    recipients: number;
+    sent: number;
+    delivered: number;
+    read: number;
+    replied: number;
+    clicked: number;
+    failed: number;
+    skipped: number;
+    items: Array<{ id: string; name: string; recipients: number; sent: number; delivered: number; read: number; replied: number; clicked: number; failed: number }>;
+  };
+  automations: Array<{ id: string; name: string; started: number; completed: number; failed: number; waiting: number; skipped: number; messagesSent: number; messagesRead: number }>;
+  revenue: {
+    windowDays: number;
+    currency: string;
+    ordersInPeriod: number;
+    revenueInPeriod: number;
+    orders: number;
+    revenue: number;
+    bySource: { broadcast: { orders: number; revenue: number }; automation: { orders: number; revenue: number } };
+    top: Array<{ source: "broadcast" | "automation"; refId: string | null; name: string; orders: number; revenue: number }>;
+  };
+  cost: {
+    categories: Array<{ category: string; billable: number; free: number; unpriced: number; amounts: Array<{ currency: string; amount: number }> }>;
+    totals: Array<{ currency: string; amount: number }>;
+    billable: number;
+    free: number;
+    unpriced: number;
+  };
+}

@@ -557,6 +557,7 @@ export class MessageIngestService {
                         ...(!opts.inbound && opts.live ? { lastOutboundAt: opts.at } : {}),
                         // A thread that only exists as imported history starts closed.
                         status: opts.live ? ConversationStatus.OPEN : ConversationStatus.CLOSED,
+                        ...(opts.live && opts.inbound ? { openedAt: opts.at } : {}),
                     },
                 });
                 return Object.assign(created, { started: opts.live && opts.inbound });
@@ -582,7 +583,9 @@ export class MessageIngestService {
                 ...(opts.businessReply
                     ? { awaitingReplySince: null, ...(existing.firstResponseAt ? {} : { firstResponseAt: opts.at }) }
                     : {}),
-                ...(reopen ? { status: ConversationStatus.OPEN, snoozedUntil: null, closedAt: null, closedById: null } : {}),
+                ...(reopen
+                    ? { status: ConversationStatus.OPEN, snoozedUntil: null, closedAt: null, closedById: null, ...(existing.status === ConversationStatus.CLOSED ? { openedAt: opts.at } : {}) }
+                    : {}),
             },
         });
         return Object.assign(updated, { started: reopen });

@@ -417,6 +417,30 @@ Per-account subscription happens at connect time and is undone at disconnect:
 - **Not built:** sending a GST invoice from an automation (invoice PDFs are
   only rendered in the browser today), and Shopify customer tags.
 
+### Messaging analytics (Analytics → Messaging)
+
+For owners, admins and managers; days are counted in the organization's time
+zone. How each figure is worked out:
+
+- **Messages in / out:** live messages in the period, not imported history.
+  Comments, platform notices and reactions are counted apart.
+- **First reply by a person:** each time a customer writes after a business
+  message (or opens the conversation), until the next reply sent from the
+  inbox or the WhatsApp Business app. Automation and welcome/away replies are
+  shown separately (“Who answered first”). Clock time, not business hours.
+- **Time to close:** from when a conversation was opened (a customer's message,
+  or a reopen) to when it was closed. Conversations opened before this release
+  have no open time and are counted but not timed.
+- **Revenue after messages:** store orders (not cancelled) by a customer who
+  got a broadcast or automation message in the 7 days before, credited to the
+  latest one. Revenue is in the organization's currency at each order's booked
+  rate. Customers never linked to a chat contact cannot be credited.
+- **Meta charges (estimate):** Meta's `pricing` (category, billable) on each
+  WhatsApp status webhook, priced by recipient country from the rates in
+  Campaigns → Message rates. Meta bills from its own records.
+- **CSV:** the team table and daily volume download as UTF-8 CSV; cells that
+  would start a spreadsheet formula are quoted.
+
 ## 5. Local testing
 
 Meta will not redirect to `localhost`, so `APP_URL` must be a public tunnel

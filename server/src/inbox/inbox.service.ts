@@ -515,7 +515,13 @@ export class InboxService {
             } else if (change.status === 'CLOSED') {
                 Object.assign(data, { status: ConversationStatus.CLOSED, closedAt: new Date(), closedById: viewer.userId, snoozedUntil: null });
             } else {
-                Object.assign(data, { status: ConversationStatus.OPEN, snoozedUntil: null, closedAt: null, closedById: null });
+                Object.assign(data, {
+                    status: ConversationStatus.OPEN,
+                    snoozedUntil: null,
+                    closedAt: null,
+                    closedById: null,
+                    ...(conversation.status === ConversationStatus.CLOSED ? { openedAt: new Date() } : {}),
+                });
             }
         }
         return Object.keys(data).length ? data : null;
