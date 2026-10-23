@@ -205,7 +205,7 @@ export function DevelopersTab() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-base font-bold text-gray-900 dark:text-gray-100">Developers</h2>
+        <h2 className="text-base font-bold text-gray-900 dark:text-gray-100">API and webhooks</h2>
         <p className="mt-1 text-xs text-muted-foreground">Connect Collabo to other systems: send WhatsApp messages and add contacts from them, and hear about messages, orders and payments as they happen.</p>
       </div>
       {!allowed ? (

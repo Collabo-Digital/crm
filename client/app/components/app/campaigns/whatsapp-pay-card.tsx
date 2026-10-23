@@ -92,7 +92,7 @@ export function WhatsAppPayCard({ channelId, className }: { channelId: string; c
                   act.mutate({ kind: "create", name: name.trim(), provider }, { onSuccess: (r) => { openLink(r); setName(""); } });
                 }}
               >
-                <div className="space-y-1.5">
+                <div className="w-full space-y-1.5 sm:w-auto">
                   <Label htmlFor="wp-name">New configuration</Label>
                   <Input id="wp-name" placeholder="acme-razorpay" value={name} maxLength={60} onChange={(e) => setName(e.target.value.replace(/[^A-Za-z0-9_-]/g, "-"))} />
                 </div>

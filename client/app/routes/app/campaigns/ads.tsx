@@ -30,6 +30,15 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
+function AdFigure({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-micro text-muted-foreground">{label}</dt>
+      <dd className="truncate font-medium tabular-nums">{value}</dd>
+    </div>
+  );
+}
+
 function AdAccountCard({ report, canManage }: { report: AdsReport; canManage: boolean }) {
   const act = useAdAccountMutation();
   const [launching, setLaunching] = useState(false);
@@ -166,7 +175,7 @@ export default function AdsPage() {
         <Skeleton className="h-72 w-full rounded-xl" />
       ) : (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Stat label="Chats from ads" value={data.totals.chats.toLocaleString("en-IN")} hint="People, counted once per ad" />
             <Stat label="Orders" value={data.totals.orders.toLocaleString("en-IN")} hint="Within 7 days of the chat" />
             <Stat label="Revenue" value={money(data.totals.revenue)} />
@@ -177,42 +186,69 @@ export default function AdsPage() {
             {data.ads.length === 0 ? (
               <p className="p-5 text-caption text-muted-foreground">No chats from ads in this period yet. They appear here as soon as someone taps a click-to-message ad.</p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-caption">
-                  <thead className="text-left text-muted-foreground">
-                    <tr className="border-b">
-                      <th className="px-4 py-2 font-medium">Ad</th>
-                      <th className="px-3 py-2 text-right font-medium">Chats</th>
-                      <th className="px-3 py-2 text-right font-medium">Orders</th>
-                      <th className="px-3 py-2 text-right font-medium">Revenue</th>
-                      <th className="px-3 py-2 text-right font-medium">Spend</th>
-                      <th className="px-3 py-2 text-right font-medium" title="Meta's “Messaging conversations started”">Meta conversations</th>
-                      <th className="px-3 py-2 text-right font-medium">Cost per chat</th>
-                      <th className="px-4 py-2 text-right font-medium">Return</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.ads.map((a) => (
-                      <tr key={a.adId} className="border-b last:border-0">
-                        <td className="max-w-xs px-4 py-2.5">
-                          <div className="flex items-center gap-1.5">
-                            {a.platform && <ChannelBadge platform={a.platform} size={11} />}
-                            <span className="truncate font-medium">{a.name ?? a.headline ?? `Ad ${a.adId}`}</span>
-                          </div>
-                          <p className="truncate text-micro text-muted-foreground">{[a.campaign, a.name && a.headline ? a.headline : null, a.adId].filter(Boolean).join(" · ")}</p>
-                        </td>
-                        <td className="px-3 py-2.5 text-right tabular-nums">{a.chats.toLocaleString("en-IN")}</td>
-                        <td className="px-3 py-2.5 text-right tabular-nums">{a.orders.toLocaleString("en-IN")}</td>
-                        <td className="px-3 py-2.5 text-right tabular-nums">{money(a.revenue)}</td>
-                        <td className="px-3 py-2.5 text-right tabular-nums">{money(a.spend)}</td>
-                        <td className="px-3 py-2.5 text-right tabular-nums">{a.conversationsStarted === null ? "—" : a.conversationsStarted.toLocaleString("en-IN")}</td>
-                        <td className="px-3 py-2.5 text-right tabular-nums">{a.spend && a.chats ? money(a.spend / a.chats) : "—"}</td>
-                        <td className={cn("px-4 py-2.5 text-right tabular-nums", a.spend && a.revenue >= a.spend ? "text-success" : "")}>{a.spend ? `${(a.revenue / a.spend).toFixed(1)}×` : "—"}</td>
+              <>
+                <ul className="divide-y md:hidden">
+                  {data.ads.map((a) => (
+                    <li key={a.adId} className="space-y-2 px-5 py-3 text-caption">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          {a.platform && <ChannelBadge platform={a.platform} size={11} />}
+                          <span className="truncate font-medium">{a.name ?? a.headline ?? `Ad ${a.adId}`}</span>
+                        </div>
+                        <p className="truncate text-micro text-muted-foreground">{[a.campaign, a.name && a.headline ? a.headline : null, a.adId].filter(Boolean).join(" · ")}</p>
+                      </div>
+                      <dl className="grid grid-cols-3 gap-x-3 gap-y-2">
+                        <AdFigure label="Chats" value={a.chats.toLocaleString("en-IN")} />
+                        <AdFigure label="Orders" value={a.orders.toLocaleString("en-IN")} />
+                        <AdFigure label="Revenue" value={money(a.revenue)} />
+                        {a.spend !== null && (
+                          <>
+                            <AdFigure label="Spend" value={money(a.spend)} />
+                            <AdFigure label="Cost per chat" value={a.spend && a.chats ? money(a.spend / a.chats) : "—"} />
+                            <AdFigure label="Return" value={a.spend ? `${(a.revenue / a.spend).toFixed(1)}×` : "—"} />
+                          </>
+                        )}
+                      </dl>
+                    </li>
+                  ))}
+                </ul>
+                <div className="hidden overflow-x-auto md:block">
+                  <table className="w-full text-caption">
+                    <thead className="text-left text-muted-foreground">
+                      <tr className="border-b">
+                        <th className="px-4 py-2 font-medium">Ad</th>
+                        <th className="px-3 py-2 text-right font-medium">Chats</th>
+                        <th className="px-3 py-2 text-right font-medium">Orders</th>
+                        <th className="px-3 py-2 text-right font-medium">Revenue</th>
+                        <th className="px-3 py-2 text-right font-medium">Spend</th>
+                        <th className="px-3 py-2 text-right font-medium" title="Meta's “Messaging conversations started”">Meta conversations</th>
+                        <th className="px-3 py-2 text-right font-medium">Cost per chat</th>
+                        <th className="px-4 py-2 text-right font-medium">Return</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {data.ads.map((a) => (
+                        <tr key={a.adId} className="border-b last:border-0">
+                          <td className="max-w-xs px-4 py-2.5">
+                            <div className="flex items-center gap-1.5">
+                              {a.platform && <ChannelBadge platform={a.platform} size={11} />}
+                              <span className="truncate font-medium">{a.name ?? a.headline ?? `Ad ${a.adId}`}</span>
+                            </div>
+                            <p className="truncate text-micro text-muted-foreground">{[a.campaign, a.name && a.headline ? a.headline : null, a.adId].filter(Boolean).join(" · ")}</p>
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">{a.chats.toLocaleString("en-IN")}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">{a.orders.toLocaleString("en-IN")}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">{money(a.revenue)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">{money(a.spend)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">{a.conversationsStarted === null ? "—" : a.conversationsStarted.toLocaleString("en-IN")}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">{a.spend && a.chats ? money(a.spend / a.chats) : "—"}</td>
+                          <td className={cn("px-4 py-2.5 text-right tabular-nums", a.spend && a.revenue >= a.spend ? "text-success" : "")}>{a.spend ? `${(a.revenue / a.spend).toFixed(1)}×` : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </SectionCard>
 
