@@ -16,6 +16,7 @@ import { ContactIdentityService, ContactRef, ContactTouch } from './contact-iden
 import { ConsentService, isOptInText, isOptOutText } from './consent.service';
 import { AutomationEventService, InboundEventType } from './automation-event.service';
 import { InboxEventsService } from './inbox-events.service';
+import { BroadcastTracker } from './broadcast-tracker';
 import { MediaSpec, MessageContent, previewOf } from './message-content';
 import { MEDIA_DOWNLOAD_QUEUE, MediaDownloadJobData, MEDIA_DOWNLOAD_JOB_OPTS } from './media/media-download.queue';
 
@@ -96,6 +97,7 @@ export class MessageIngestService {
         private readonly automationEvents: AutomationEventService,
         private readonly events: InboxEventsService,
         @InjectQueue(MEDIA_DOWNLOAD_QUEUE) private readonly mediaQueue: Queue<MediaDownloadJobData>,
+        private readonly broadcastTracker: BroadcastTracker,
     ) { }
 
     /** A message the customer sent. Returns null for a redelivery. */
@@ -201,6 +203,14 @@ export class MessageIngestService {
 
         this.events.publish(channel.organizationId, { type: 'message.created', conversationId: result.conversationId, messageId: result.messageId });
         this.events.publish(channel.organizationId, { type: 'conversation.updated', conversationId: result.conversationId });
+        if (live && input.content.kind !== MessageKind.COMMENT) {
+            await this.broadcastTracker.onInbound({
+                contactId: result.contactId,
+                at: input.occurredAt,
+                replyToExternalId: input.replyToExternalId ?? null,
+                kind: input.content.kind,
+            });
+        }
         await this.queueMediaDownload(result.messageId, input.content.media);
         if (result.needsProfile) {
             await this.mediaQueue
@@ -333,6 +343,7 @@ export class MessageIngestService {
                 });
             }
         }
+        if (advance) await this.broadcastTracker.onStatus(message.id, update.status, update.at, update.error);
         if (message.conversationId) {
             this.events.publish(message.organizationId, { type: 'message.updated', conversationId: message.conversationId, messageId: message.id });
         }

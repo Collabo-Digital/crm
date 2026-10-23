@@ -93,7 +93,13 @@ export class MessagingSendService {
         });
         if (!conversation) throw new NotFoundException('Conversation not found');
 
-        if (input.payload.type === 'media' && !input.payload.storageKey.startsWith(`${input.organizationId}/`)) {
+        const fileKey =
+            input.payload.type === 'media'
+                ? input.payload.storageKey
+                : input.payload.type === 'template'
+                    ? input.payload.headerMedia?.storageKey
+                    : undefined;
+        if (fileKey !== undefined && !fileKey.startsWith(`${input.organizationId}/`)) {
             throw new BadRequestException('Upload the file again before sending it.');
         }
 
@@ -201,6 +207,45 @@ export class MessagingSendService {
         this.events.publish(input.organizationId, { type: 'message.created', conversationId: conversation.id, messageId });
         this.events.publish(input.organizationId, { type: 'conversation.updated', conversationId: conversation.id });
         return { ok: true, messageId };
+    }
+
+    /**
+     * The conversation to send a broadcast or automation message in. A new
+     * one starts closed: an outbound message alone is not work for the
+     * inbox, and the customer's reply opens it.
+     */
+    async conversationFor(contactId: string): Promise<string> {
+        const contact = await this.prisma.channelContact.findUniqueOrThrow({
+            where: { id: contactId },
+            select: { id: true, organizationId: true, channelId: true, platform: true, customerId: true },
+        });
+        const existing = await this.prisma.conversation.findUnique({
+            where: { channelId_contactId: { channelId: contact.channelId, contactId: contact.id } },
+            select: { id: true },
+        });
+        if (existing) return existing.id;
+        try {
+            const created = await this.prisma.conversation.create({
+                data: {
+                    organizationId: contact.organizationId,
+                    channelId: contact.channelId,
+                    contactId: contact.id,
+                    platform: contact.platform,
+                    customerId: contact.customerId,
+                    status: 'CLOSED',
+                    closedAt: new Date(),
+                },
+                select: { id: true },
+            });
+            return created.id;
+        } catch (err) {
+            if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) throw err;
+            const winner = await this.prisma.conversation.findUniqueOrThrow({
+                where: { channelId_contactId: { channelId: contact.channelId, contactId: contact.id } },
+                select: { id: true },
+            });
+            return winner.id;
+        }
     }
 
     /** Send blue ticks / "seen" for the customer's latest message. Best-effort. */

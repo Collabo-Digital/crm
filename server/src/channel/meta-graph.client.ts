@@ -101,8 +101,9 @@ export class MetaGraphClient {
             method: req.method,
             // multipart sets no Content-Type: fetch adds it with the boundary.
             headers: {
-              ...(req.accessToken ? { Authorization: `Bearer ${req.accessToken}` } : {}),
-              ...(req.multipart !== undefined
+              ...(req.accessToken ? { Authorization: `${req.authScheme ?? 'Bearer'} ${req.accessToken}` } : {}),
+              ...req.headers,
+              ...(req.multipart !== undefined || req.binary !== undefined
                 ? {}
                 : req.form !== undefined
                   ? { 'Content-Type': 'application/x-www-form-urlencoded' }
@@ -113,7 +114,9 @@ export class MetaGraphClient {
             body:
               req.multipart !== undefined
                 ? req.multipart
-                : req.form !== undefined
+                : req.binary !== undefined
+                  ? new Blob([new Uint8Array(req.binary)])
+                  : req.form !== undefined
                   ? new URLSearchParams(req.form).toString()
                   : req.body !== undefined
                     ? JSON.stringify(req.body)

@@ -368,6 +368,13 @@ model Organization {
   inboxTeams             InboxTeam[]
   quickReplies           QuickReply[]
   inboxViews             InboxView[]
+  messageTemplates       MessageTemplate[]
+  segments               Segment[]
+  broadcasts             Broadcast[]
+  broadcastRecipients    BroadcastRecipient[]
+  messageRates           MessageRate[]
+  contactImports         ContactImport[]
+  customerRfmScores      CustomerRfmScore[]
 
   @@map("organizations")
 }
@@ -559,6 +566,8 @@ model Channel {
   automationTriggers AutomationTrigger[]
   automationEvents   AutomationEvent[]
   messages           Message[]
+  messageTemplates   MessageTemplate[]
+  broadcasts         Broadcast[]
 
   /// ONE ROW = ONE CONNECTED ACCOUNT. An org may hold several rows of the same
   /// platform (many Instagram accounts); the limits are PARTIAL unique indexes,
@@ -839,6 +848,7 @@ model Customer {
   whatsappMessages WhatsAppMessageLog[]
   channelContacts  ChannelContact[]
   conversations    Conversation[]
+  rfm              CustomerRfmScore?
   automationEvents AutomationEvent[]
   automationRuns   AutomationRun[]
   messages         Message[]
@@ -2065,17 +2075,18 @@ model ChannelContact {
   createdAt            DateTime        @default(now()) @map("created_at")
   updatedAt            DateTime        @updatedAt @map("updated_at")
 
-  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  channel       Channel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  customer      Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  ownerUser     User?              @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  ownerTeam     InboxTeam?         @relation("ContactOwnerTeam", fields: [ownerTeamId], references: [id], onDelete: SetNull)
-  events        AutomationEvent[]
-  runs          AutomationRun[]
-  messages      Message[]
-  conversations Conversation[]
-  dailyStats    ContactDailyStat[]
-  consentEvents ConsentEvent[]
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel             Channel              @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  customer            Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  ownerUser           User?                @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerTeam           InboxTeam?           @relation("ContactOwnerTeam", fields: [ownerTeamId], references: [id], onDelete: SetNull)
+  events              AutomationEvent[]
+  runs                AutomationRun[]
+  messages            Message[]
+  conversations       Conversation[]
+  dailyStats          ContactDailyStat[]
+  consentEvents       ConsentEvent[]
+  broadcastRecipients BroadcastRecipient[]
 
   @@unique([channelId, externalId])
   @@index([channelId, waId])
@@ -2810,4 +2821,230 @@ model InboxView {
 
   @@index([organizationId])
   @@map("inbox_views")
+}
+
+// ─── Campaigns: templates, segments, broadcasts ─────────────────────────────
+
+enum TemplateCategory {
+  MARKETING
+  UTILITY
+  AUTHENTICATION
+}
+
+/// A WhatsApp message template. Meta owns its status and quality; rows are
+/// kept current by sync and by the template webhooks.
+model MessageTemplate {
+  id                String            @id @default(cuid())
+  organizationId    String            @map("organization_id")
+  channelId         String            @map("channel_id")
+  wabaId            String            @map("waba_id")
+  /// Meta's template id.
+  externalId        String?           @map("external_id")
+  name              String
+  language          String
+  category          TemplateCategory
+  /// The category the business asked for, when Meta approved it as another.
+  requestedCategory TemplateCategory? @map("requested_category")
+  /// Meta's status: PENDING, APPROVED, REJECTED, PAUSED, DISABLED, ...
+  status            String
+  /// Rejection or pause reason as Meta gave it.
+  statusReason      String?           @map("status_reason")
+  /// GREEN, YELLOW, RED or UNKNOWN.
+  qualityScore      String?           @map("quality_score")
+  /// NAMED or POSITIONAL.
+  parameterFormat   String            @default("POSITIONAL") @map("parameter_format")
+  /// Meta's `components` array, as created or as last synced.
+  components        Json              @db.JsonB
+  /// The starter it was made from, if any.
+  starterKey        String?           @map("starter_key")
+  submittedAt       DateTime?         @map("submitted_at")
+  /// Approved templates may be edited once a day and ten times in 30 days.
+  editedAt          DateTime[]        @default([]) @map("edited_at")
+  syncedAt          DateTime?         @map("synced_at")
+  createdById       String?           @map("created_by_id")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  broadcasts   Broadcast[]
+
+  @@unique([wabaId, name, language])
+  @@index([organizationId, status])
+  @@map("message_templates")
+}
+
+/// A saved audience: rules over contacts, their store customer and their
+/// broadcast history. See src/campaigns/segments/segment-rules.ts.
+model Segment {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  name           String
+  description    String?
+  /// { match: "all" | "any", rules: [...] }
+  definition     Json      @db.JsonB
+  lastCount      Int?      @map("last_count")
+  lastCountedAt  DateTime? @map("last_counted_at")
+  createdById    String?   @map("created_by_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name])
+  @@map("segments")
+}
+
+/// Recency, frequency and monetary scores (1-5) per store customer, and the
+/// group they put the customer in. Recomputed daily and on demand.
+model CustomerRfmScore {
+  customerId     String   @id @map("customer_id")
+  organizationId String   @map("organization_id")
+  recency        Int
+  frequency      Int
+  monetary       Int
+  /// champions, loyal, new, needs_attention, at_risk, hibernating, lost
+  segment        String
+  lastOrderAt    DateTime @map("last_order_at")
+  orderCount     Int      @map("order_count")
+  computedAt     DateTime @map("computed_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, segment])
+  @@map("customer_rfm_scores")
+}
+
+enum BroadcastStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+/// One template sent to an audience on WhatsApp.
+model Broadcast {
+  id               String            @id @default(cuid())
+  organizationId   String            @map("organization_id")
+  channelId        String            @map("channel_id")
+  name             String
+  /// Free-text grouping, for reporting several broadcasts as one campaign.
+  campaign         String?
+  status           BroadcastStatus   @default(DRAFT)
+  templateId       String?           @map("template_id")
+  /// Snapshot when sending starts; the template row may change later.
+  templateName     String?           @map("template_name")
+  templateLanguage String?           @map("template_language")
+  templateCategory TemplateCategory? @map("template_category")
+  /// Where each template parameter's value comes from. See broadcast-variables.ts.
+  variables        Json?             @db.JsonB
+  /// Who receives it and who is left out. See broadcast-audience.ts.
+  audience         Json?             @db.JsonB
+  scheduledAt      DateTime?         @map("scheduled_at")
+  startedAt        DateTime?         @map("started_at")
+  completedAt      DateTime?         @map("completed_at")
+  cancelledAt      DateTime?         @map("cancelled_at")
+  /// Why a broadcast stopped as FAILED.
+  failureReason    String?           @map("failure_reason")
+  createdById      String?           @map("created_by_id")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel              @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  template     MessageTemplate?     @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  recipients   BroadcastRecipient[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
+  @@map("broadcasts")
+}
+
+enum BroadcastRecipientStatus {
+  PENDING
+  SKIPPED
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+/// One person in a broadcast, and how far the message got.
+model BroadcastRecipient {
+  id             String                   @id @default(cuid())
+  organizationId String                   @map("organization_id")
+  broadcastId    String                   @map("broadcast_id")
+  contactId      String                   @map("contact_id")
+  status         BroadcastRecipientStatus @default(PENDING)
+  /// Why they were left out: opted_out, blocked, recently_messaged, no_number, ...
+  skipReason     String?                  @map("skip_reason")
+  messageId      String?                  @unique @map("message_id")
+  errorCode      String?                  @map("error_code")
+  errorMessage   String?                  @map("error_message")
+  attempts       Int                      @default(0)
+  queuedAt       DateTime?                @map("queued_at")
+  sentAt         DateTime?                @map("sent_at")
+  deliveredAt    DateTime?                @map("delivered_at")
+  readAt         DateTime?                @map("read_at")
+  /// First message from them after the broadcast, within the reply window.
+  repliedAt      DateTime?                @map("replied_at")
+  /// They tapped one of the template's quick-reply buttons.
+  clickedAt      DateTime?                @map("clicked_at")
+  failedAt       DateTime?                @map("failed_at")
+  createdAt      DateTime                 @default(now()) @map("created_at")
+  updatedAt      DateTime                 @updatedAt @map("updated_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  broadcast    Broadcast      @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  contact      ChannelContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([broadcastId, contactId])
+  @@index([broadcastId, status])
+  @@index([contactId, sentAt])
+  @@map("broadcast_recipients")
+}
+
+/// What Meta charges per delivered template, as the business copied it from
+/// its rate card, for the broadcast cost estimate. Keyed by calling-code
+/// prefix; "*" covers every country without its own row.
+model MessageRate {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  countryPrefix  String   @map("country_prefix")
+  label          String?
+  currency       String
+  marketing      Decimal? @db.Decimal(10, 4)
+  utility        Decimal? @db.Decimal(10, 4)
+  authentication Decimal? @db.Decimal(10, 4)
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, countryPrefix])
+  @@map("message_rates")
+}
+
+/// A spreadsheet of contacts brought in by hand, kept for the record.
+model ContactImport {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  channelId      String   @map("channel_id")
+  filename       String
+  rowCount       Int      @map("row_count")
+  created        Int
+  updated        Int
+  skipped        Int
+  /// The first rows that could not be imported, with why.
+  errors         Json     @db.JsonB
+  createdById    String?  @map("created_by_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@map("contact_imports")
 }

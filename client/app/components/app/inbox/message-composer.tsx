@@ -1,5 +1,5 @@
 import { useRef, useState, type KeyboardEvent } from "react";
-import { FileText, ListPlus, Lock, MessageCircle, Paperclip, Plus, Send, X, Zap } from "lucide-react";
+import { FileText, LayoutTemplate, ListPlus, Lock, MessageCircle, Paperclip, Plus, Send, X, Zap } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -58,6 +58,7 @@ export function MessageComposer({
   onSend,
   onAddNote,
   onUpload,
+  onOpenTemplates,
 }: {
   conversation: InboxConversationDetail;
   quickReplies: QuickReply[];
@@ -71,6 +72,8 @@ export function MessageComposer({
   onSend: (payload: InboxSendPayload, replyToMessageId?: string) => Promise<boolean>;
   onAddNote: (body: string) => Promise<unknown>;
   onUpload: (file: File) => Promise<InboxUpload>;
+  /** WhatsApp only: open the approved-template picker. */
+  onOpenTemplates?: () => void;
 }) {
   const [draft, setDraftState] = useState(() => drafts.get(conversation.id) ?? "");
   const [isNoteMode, setIsNoteMode] = useState(false);
@@ -100,7 +103,7 @@ export function MessageComposer({
       : commentMode
         ? null
         : phase.phase === "template_only"
-          ? "The 24-hour reply window has closed. Only an approved template can restart this conversation; sending templates arrives with the template library."
+          ? "The 24-hour reply window has closed. Only an approved template can restart this conversation."
           : phase.phase === "closed" || phase.phase === "none"
             ? "Messenger and Instagram allow replies for 7 days after the customer’s last message. Wait for them to write again."
             : null;
@@ -354,6 +357,19 @@ export function MessageComposer({
           <ListPlus className="size-3.5" />
         </Button>
 
+        {onOpenTemplates && canReply && !contact.blockedAt && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onOpenTemplates}
+            disabled={isNoteMode || commentMode}
+            aria-label="Send a template"
+            title="Send a template"
+          >
+            <LayoutTemplate className="size-3.5" />
+          </Button>
+        )}
+
         {canReply && (
           <Button
             variant={isNoteMode ? "accent" : "ghost"}
@@ -376,7 +392,15 @@ export function MessageComposer({
       </div>
 
       {replyLocked ? (
-        <p className="mt-2 rounded-lg bg-muted px-3 py-2.5 text-caption text-muted-foreground">{blockedReason}</p>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted px-3 py-2.5">
+          <p className="text-caption text-muted-foreground">{blockedReason}</p>
+          {phase.phase === "template_only" && canReply && !contact.blockedAt && onOpenTemplates && (
+            <Button size="sm" variant="accent" onClick={onOpenTemplates}>
+              <LayoutTemplate className="size-3.5" />
+              Send a template
+            </Button>
+          )}
+        </div>
       ) : (
         <div className="mt-2 flex items-end gap-2">
           <Textarea

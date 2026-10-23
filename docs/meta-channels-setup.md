@@ -241,7 +241,7 @@ with `INSTAGRAM_APP_SECRET`, which is also accepted on the Instagram endpoint).
 
 | Product (dashboard) | Callback URL | Verify token | Fields |
 |---|---|---|---|
-| WhatsApp → Configuration | `{APP_URL}/api/v1/webhooks/whatsapp` | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | messages, smb_message_echoes, history, smb_app_state_sync, account_update, message_template_status_update, message_template_quality_update, template_category_update, phone_number_quality_update, phone_number_name_update, business_capability_update, user_preferences |
+| WhatsApp → Configuration | `{APP_URL}/api/v1/webhooks/whatsapp` | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | messages, smb_message_echoes, history, smb_app_state_sync, account_update, message_template_status_update, message_template_quality_update, template_category_update, message_template_components_update, phone_number_quality_update, phone_number_name_update, business_capability_update, user_preferences |
 | Messenger → Settings | `{APP_URL}/api/v1/webhooks/messenger` | `MESSENGER_WEBHOOK_VERIFY_TOKEN` | messages, message_echoes, message_deliveries, message_reads, message_reactions, message_edits, messaging_postbacks, messaging_referrals, messaging_handovers, standby, feed |
 | Instagram | `{APP_URL}/api/v1/webhooks/instagram` | `INSTAGRAM_WEBHOOK_VERIFY_TOKEN` | messages, messaging_postbacks, messaging_seen, message_reactions, message_edit, messaging_referral, messaging_handover, standby, comments, mentions |
 
@@ -266,6 +266,35 @@ Per-account subscription happens at connect time and is undone at disconnect:
    applies it. Errors are written to the row and the job retries.
 3. `MetaWebhookMaintenance` re-queues rows whose job was lost and prunes rows
    after 14 days.
+
+### Templates and broadcasts
+
+- **Templates** live on the WhatsApp Business Account. Collabo reads them
+  with `GET /{waba_id}/message_templates` (every six hours, from the
+  Templates page, and whenever a webhook names one it has not seen), creates
+  them with `POST /{waba_id}/message_templates`, edits with
+  `POST /{template_id}` and deletes with `DELETE /{waba_id}/message_templates`
+  — all with the business token. Status, quality and category changes arrive
+  on the template webhook fields above; they always go to the app-level
+  callback, never to a per-account override.
+- **Media header samples** go through the Resumable Upload API on the app
+  (`POST /{META_APP_ID}/uploads`, then the bytes with `Authorization: OAuth`).
+  Meta documents that call with a user access token; that it accepts the
+  business system-user token is **not yet verified** — check it with the
+  first live image template.
+- **Marketing Messages API.** Meta is moving marketing templates off the Cloud
+  API (new accounts from Apr 13, 2027; everyone from Oct 13, 2027). Once an
+  account accepts the API's terms in WhatsApp Manager — Collabo reads
+  `marketing_messages_onboarding_status` during template sync, listens for
+  `account_update` `MM_LITE_TERMS_SIGNED`, and also switches on a `131063`
+  refusal — marketing templates are sent to
+  `POST /{phone_number_id}/marketing_messages` with
+  `product_policy: CLOUD_API_FALLBACK`. Utility templates and everything else
+  stay on `/messages`.
+- **Broadcast pace:** 10 messages a second on a coexistence number (fixed at
+  20 by Meta), 40 otherwise (numbers start at 80), leaving room for the inbox.
+- **Cost estimates** use the per-message rates each business copies from its
+  own Meta rate card (Campaigns → Message rates). Collabo ships no prices.
 
 ## 5. Local testing
 

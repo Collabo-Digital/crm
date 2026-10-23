@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { resolveReportingTimeZone, zonedDayEndExclusive, zonedDayStart } from '../common/utils/zoned-date.util';
 import { ConsentService } from '../messaging/consent.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
+import { contactName } from '../messaging/contact-name';
 import { InboxViewer, canAssignOthers, canReply, seesAll, visibilityWhere } from './inbox-visibility';
 import { ASSIGNABLE_ROLES, InboxTeamService } from './inbox-team.service';
 import { UpdateContactDto } from './dto/update-contact.dto';
@@ -11,9 +12,6 @@ import { RecordConsentDto } from './dto/record-consent.dto';
 import { QueryContactsDto } from './dto/query-contacts.dto';
 import { BulkTagContactsDto } from './dto/bulk-tag-contacts.dto';
 
-export function contactName(c: Pick<ChannelContact, 'displayName' | 'addressBookName' | 'username' | 'phone' | 'externalId'>): string {
-    return c.displayName ?? c.addressBookName ?? (c.username ? `@${c.username}` : null) ?? c.phone ?? c.externalId;
-}
 
 const fullName = (u: { firstName: string; lastName: string }) => `${u.firstName} ${u.lastName}`.trim();
 

@@ -45,6 +45,12 @@ export interface MetaRequest {
   form?: Record<string, string>;
   /// Sent as multipart/form-data: media and attachment uploads.
   multipart?: FormData;
+  /// Sent as the raw request body: the Resumable Upload API's file data.
+  binary?: Uint8Array;
+  /// Extra request headers, e.g. the upload's `file_offset`.
+  headers?: Record<string, string>;
+  /// The Resumable Upload API wants `Authorization: OAuth <token>`; everything else `Bearer`.
+  authScheme?: 'Bearer' | 'OAuth';
   /// Wallets this call draws from, broad to specific: app, then business
   /// use case / ad account / page, then phone number.
   scopes: RateLimitScope[];

@@ -19,6 +19,10 @@ import {
   Lock,
   MessageSquare,
   Contact,
+  Megaphone,
+  Send,
+  LayoutTemplate,
+  Filter,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
@@ -75,11 +79,20 @@ const INBOX_CHILDREN: NavChild[] = [
   { label: "Contacts", href: "/inbox/contacts", icon: Contact },
 ];
 
+/** Sub-nav for Campaigns. Overview keeps the parent href, like "All orders". */
+const CAMPAIGNS_CHILDREN: NavChild[] = [
+  { label: "Overview", href: "/campaigns", icon: Megaphone },
+  { label: "Broadcasts", href: "/campaigns/broadcasts", icon: Send },
+  { label: "Templates", href: "/campaigns/templates", icon: LayoutTemplate },
+  { label: "Segments", href: "/campaigns/segments", icon: Filter },
+];
+
 const NAV_LINKS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Orders", href: "/orders", icon: ShoppingCart, children: ORDERS_CHILDREN },
   { label: "Products", href: "/products", icon: Package, children: PRODUCTS_CHILDREN },
   { label: "Inbox", href: "/inbox", icon: MessageSquare, children: INBOX_CHILDREN },
+  { label: "Campaigns", href: "/campaigns", icon: Megaphone, children: CAMPAIGNS_CHILDREN },
   { label: "Analytics", href: "/analytics", icon: BarChart3 },
 ];
 

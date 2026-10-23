@@ -4,6 +4,7 @@ import { AutomationController } from './automation.controller';
 import { AutomationService } from './automation.service';
 import { ChannelModule } from '../channel/channel.module';
 import { MessagingModule } from '../messaging/messaging.module';
+import { CampaignsModule } from '../campaigns/campaigns.module';
 import { InstagramMediaService } from './platforms/instagram/instagram-media.service';
 import { META_INBOUND_QUEUE } from './platforms/meta/meta-inbound.queue';
 import { MetaWebhookController } from './platforms/meta/meta-webhook.controller';
@@ -15,7 +16,7 @@ import { WhatsAppWebhookHandler } from './platforms/whatsapp/whatsapp-webhook.ha
 import { MessengerWebhookHandler } from './platforms/messenger/messenger-webhook.handler';
 
 @Module({
-  imports: [ChannelModule, MessagingModule, BullModule.registerQueue({ name: META_INBOUND_QUEUE })],
+  imports: [ChannelModule, MessagingModule, CampaignsModule, BullModule.registerQueue({ name: META_INBOUND_QUEUE })],
   controllers: [MetaWebhookController, AutomationController],
   providers: [
     AutomationService, InstagramMediaService,

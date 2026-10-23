@@ -13,6 +13,7 @@ const MOVED: Record<string, string> = {
   "/inventory": "/products/inventory",
   "/channel": "/settings/channels",
   "/conversation": "/inbox",
+  "/marketing": "/campaigns",
 };
 
 export default function LegacyRedirect() {

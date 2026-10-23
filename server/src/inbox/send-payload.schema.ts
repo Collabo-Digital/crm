@@ -25,6 +25,15 @@ const SendPayloadSchema = z.discriminatedUnion('type', [
         language: z.string().min(2).max(15),
         components: z.array(z.unknown()).max(20).optional(),
         category: z.enum(['MARKETING', 'UTILITY', 'AUTHENTICATION']).optional(),
+        headerMedia: z
+            .object({
+                storageKey: z.string().min(1).max(200),
+                mime: z.string().min(1).max(100),
+                kind: z.enum(['image', 'video', 'document']),
+                filename: z.string().max(200).optional(),
+            })
+            .optional(),
+        previewText: z.string().max(1100).optional(),
     }),
     z.object({ type: z.literal('buttons'), text, buttons: z.array(option).min(1).max(3), footer: z.string().max(60).optional() }),
     z.object({

@@ -49,6 +49,10 @@ export type OutboundPayload =
         components?: unknown[];
         /** MARKETING / UTILITY / AUTHENTICATION, for the consent rule. */
         category?: string;
+        /** A header file to upload at send time; its media id becomes the header parameter. */
+        headerMedia?: { storageKey: string; mime: string; kind: 'image' | 'video' | 'document'; filename?: string };
+        /** The body as this person reads it, for the thread and search. Never sent to Meta. */
+        previewText?: string;
     }
     | { type: 'buttons'; text: string; buttons: Array<{ id: string; title: string }>; footer?: string }
     | {
@@ -336,7 +340,7 @@ export function outboundText(payload: OutboundPayload): string | null {
         case 'media':
             return payload.caption ?? null;
         case 'template':
-            return `Template: ${payload.name}`;
+            return payload.previewText ?? `Template: ${payload.name}`;
         case 'location':
             return payload.name ?? payload.address ?? `${payload.latitude}, ${payload.longitude}`;
         case 'reaction':

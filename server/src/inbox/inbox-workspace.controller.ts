@@ -8,6 +8,7 @@ import { INBOX_ROLES } from './inbox.controller';
 import { InboxTeamService } from './inbox-team.service';
 import { QuickReplyService } from './quick-reply.service';
 import { InboxViewService } from './inbox-view.service';
+import { TemplatesService } from '../campaigns/templates/templates.service';
 import { SaveTeamDto } from './dto/save-team.dto';
 import { SetAvailabilityDto } from './dto/set-availability.dto';
 import { SaveQuickReplyDto } from './dto/save-quick-reply.dto';
@@ -26,7 +27,14 @@ export class InboxWorkspaceController {
         private readonly teams: InboxTeamService,
         private readonly quickReplies: QuickReplyService,
         private readonly views: InboxViewService,
+        private readonly templates: TemplatesService,
     ) { }
+
+    /** Approved WhatsApp templates, for the composer — the only thing a closed reply window allows. */
+    @Get('templates')
+    approvedTemplates(@CurrentUser() user: SessionPayload) {
+        return this.templates.approved(user.orgId!);
+    }
 
     /** The signed-in member: availability, teams and what the inbox lets them do. */
     @Get('me')

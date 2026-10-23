@@ -37,13 +37,13 @@ const SECTIONS: SectionDef[] = [
   { id: "invoices", label: "Invoices", prefix: "/orders/invoices" },
   { id: "products", label: "Products", prefix: "/products" },
   { id: "chat", label: "Inbox", prefix: "/inbox" },
+  { id: "campaigns", label: "Campaigns", prefix: "/campaigns" },
   { id: "analytics", label: "Analytics", prefix: "/analytics" },
 ];
 
 /**
- * The sections this build actually has. Campaigns and Logistics are not on
- * this branch; their ids stay in `SectionId` because a grant list may still
- * name them.
+ * The sections this build actually has. Logistics is not on this branch; its
+ * id stays in `SectionId` because a grant list may still name it.
  */
 export const AVAILABLE_SECTIONS: SectionDef[] = SECTIONS;
 
@@ -146,11 +146,13 @@ export function canAccessPath(access: SectionAccess, pathname: string): boolean 
     );
   }
   if (access.role === "INFLUENCER") {
-    // Campaigns opens only while they hold `campaigns.view`, so revoking that
-    // grant closes the section with no code change.
+    // Their own Instagram automations open only while they hold
+    // `campaigns.view`, so revoking that grant closes them with no code
+    // change. The rest of Campaigns (broadcasts, templates, segments) is the
+    // store's, never theirs.
     const allowed = [
       ...INFLUENCER_ALLOWED_PREFIXES,
-      ...(access.grants.includes("campaigns.view") ? ["/campaigns"] : []),
+      ...(access.grants.includes("campaigns.view") ? ["/campaigns/automations"] : []),
     ];
     return (
       !INFLUENCER_DENIED_PREFIXES.some((p) => isUnder(pathname, p)) &&
@@ -161,6 +163,16 @@ export function canAccessPath(access: SectionAccess, pathname: string): boolean 
   const section = sectionForPath(pathname);
   if (!section) return true;
   if (access.sections !== "all" && !access.sections.has(section)) return false;
+
+  // Campaigns, like the stock pages below, also needs its own key: the
+  // campaign API refuses an AGENT / VIEWER without `campaigns.view`.
+  if (
+    isUnder(pathname, "/campaigns") &&
+    isSectionScopedRole(access.role) &&
+    !access.grants.includes("campaigns.view")
+  ) {
+    return false;
+  }
 
   // Inventory sits inside Products but keeps its own key: the stock API
   // refuses an AGENT / VIEWER without `inventory.view` whatever their sections.

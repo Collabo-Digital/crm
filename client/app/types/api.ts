@@ -3863,7 +3863,17 @@ export type InboxSendPayload =
   | { type: "quick_replies"; text: string; replies: Array<{ title: string; payload: string }> }
   | { type: "reaction"; messageId: string; emoji: string }
   | { type: "private_reply"; commentMessageId: string; text: string }
-  | { type: "comment_reply"; commentMessageId: string; text: string };
+  | { type: "comment_reply"; commentMessageId: string; text: string }
+  | {
+      type: "template";
+      name: string;
+      language: string;
+      category?: "MARKETING" | "UTILITY" | "AUTHENTICATION";
+      components?: unknown[];
+      headerMedia?: { storageKey: string; mime: string; kind: "image" | "video" | "document"; filename?: string };
+      /** The body as this person reads it, for the thread. Never sent to Meta. */
+      previewText?: string;
+    };
 
 export type InboxSendRefusal =
   | "channel_unavailable"
@@ -3943,3 +3953,266 @@ export type InboxStreamEvent =
   | { type: "message.created"; conversationId: string; messageId: string }
   | { type: "message.updated"; conversationId: string; messageId: string }
   | { type: "note.created"; conversationId: string; noteId: string };
+
+// ─── Campaign Types ─────────────────────────────────────────────────────────
+// Mirrors server/src/campaigns.
+
+export type TemplateCategory = "MARKETING" | "UTILITY" | "AUTHENTICATION";
+export type ParameterFormat = "POSITIONAL" | "NAMED";
+export type HeaderMediaFormat = "IMAGE" | "VIDEO" | "DOCUMENT";
+
+export type TemplateDraftButton =
+  | { type: "QUICK_REPLY"; text: string }
+  | { type: "URL"; text: string; url: string; example?: string }
+  | { type: "PHONE_NUMBER"; text: string; phoneNumber: string }
+  | { type: "COPY_CODE"; example: string };
+
+export interface TemplateDraft {
+  name: string;
+  language: string;
+  category: TemplateCategory;
+  parameterFormat: ParameterFormat;
+  header?:
+    | { format: "TEXT"; text: string; example?: string }
+    | { format: HeaderMediaFormat; storageKey?: string; mime?: string; filename?: string }
+    | { format: "LOCATION" };
+  body: { text: string; examples: Record<string, string> };
+  footer?: string;
+  buttons?: TemplateDraftButton[];
+}
+
+/** One value a template send has to supply. */
+export interface TemplateParam {
+  /** header, body.1, body.first_name, button.0, coupon.1 */
+  key: string;
+  component: "header" | "body" | "button";
+  kind: "text" | "image" | "video" | "document" | "location" | "coupon_code";
+  name: string;
+  buttonIndex?: number;
+  example?: string;
+}
+
+export interface TemplateRender {
+  header: string | null;
+  headerFormat: string | null;
+  body: string;
+  footer: string | null;
+  buttons: string[];
+}
+
+export interface MessageTemplate {
+  id: string;
+  externalId: string | null;
+  name: string;
+  language: string;
+  category: TemplateCategory;
+  /** What the business asked for, when Meta approved it as another category. */
+  requestedCategory: TemplateCategory | null;
+  /** Meta's status: PENDING, APPROVED, REJECTED, PAUSED, DISABLED, … */
+  status: string;
+  statusReason: string | null;
+  qualityScore: string | null;
+  parameterFormat: ParameterFormat;
+  components: Array<Record<string, unknown>>;
+  params: TemplateParam[];
+  preview: TemplateRender;
+  draft: TemplateDraft;
+  editable: boolean;
+  starterKey: string | null;
+  submittedAt: string | null;
+  syncedAt: string | null;
+  updatedAt: string;
+}
+
+export interface TemplateStarter {
+  key: string;
+  useCase: "orders" | "shipping" | "payments" | "recovery" | "promotions" | "engagement";
+  title: string;
+  description: string;
+  draft: Omit<TemplateDraft, "language">;
+}
+
+export interface CampaignUpload {
+  storageKey: string;
+  mime: string;
+  size: number;
+  filename: string;
+  kind: "image" | "video" | "document";
+}
+
+export type RfmGroup = "champions" | "loyal" | "new" | "needs_attention" | "at_risk" | "hibernating" | "lost";
+
+export type SegmentRule =
+  | { field: "tag"; op: "has" | "not_has"; value: string }
+  | { field: "channel"; op: "is" | "is_not"; value: string }
+  | { field: "attribute"; key: string; op: "equals" | "not_equals" | "contains" | "exists" | "not_exists"; value?: string }
+  | { field: "consent"; op: "is"; value: "opted_in" | "not_opted_out" | "opted_out" }
+  | { field: "last_message"; op: "within_days" | "before_days" | "never"; value?: number }
+  | { field: "first_seen"; op: "within_days" | "before_days"; value: number }
+  | { field: "customer"; op: "linked" | "not_linked" }
+  | { field: "orders_count"; op: "gte" | "lte" | "eq"; value: number }
+  | { field: "total_spent"; op: "gte" | "lte"; value: number }
+  | { field: "last_order"; op: "within_days" | "before_days"; value: number }
+  | { field: "vip"; op: "in"; value: VipLevel[] }
+  | { field: "rfm"; op: "in"; value: RfmGroup[] }
+  | { field: "broadcast"; op: "received" | "read" | "replied" | "clicked" | "not_read" | "failed"; value: string };
+
+export interface SegmentDefinition {
+  match: "all" | "any";
+  rules: SegmentRule[];
+}
+
+export interface Segment {
+  id: string;
+  name: string;
+  description: string | null;
+  definition: SegmentDefinition;
+  lastCount: number | null;
+  lastCountedAt: string | null;
+  updatedAt: string;
+}
+
+export interface SegmentPreview {
+  count: number;
+  sample: Array<{ id: string; name: string; platform: ChannelPlatform; phone: string | null; username: string | null; tags: string[] }>;
+}
+
+export type BroadcastStatus = "DRAFT" | "SCHEDULED" | "SENDING" | "COMPLETED" | "CANCELLED" | "FAILED";
+export type BroadcastRecipientStatus = "PENDING" | "SKIPPED" | "QUEUED" | "SENT" | "DELIVERED" | "READ" | "FAILED";
+
+export interface BroadcastAudience {
+  everyone: boolean;
+  segmentIds: string[];
+  tags: string[];
+  exclude: { segmentIds: string[]; tags: string[]; broadcastIds: string[]; messagedWithinHours: number | null };
+  requireOptIn: boolean;
+}
+
+export type VariableSourceKind = "static" | "first_name" | "full_name" | "phone" | "attribute" | "customer_name" | "customer_email";
+
+export interface VariableSource {
+  source: VariableSourceKind;
+  value?: string;
+  fallback?: string;
+}
+
+export interface BroadcastVariables {
+  values: Record<string, VariableSource>;
+  headerMedia?: { storageKey: string; mime: string; kind: "image" | "video" | "document"; filename?: string };
+  headerLocation?: { latitude: number; longitude: number; name?: string; address?: string };
+}
+
+export interface BroadcastStats {
+  total: number;
+  pending: number;
+  sent: number;
+  delivered: number;
+  read: number;
+  replied: number;
+  clicked: number;
+  failed: number;
+  skipped: number;
+  byStatus: Partial<Record<BroadcastRecipientStatus, number>>;
+}
+
+export interface Broadcast {
+  id: string;
+  name: string;
+  campaign: string | null;
+  status: BroadcastStatus;
+  channelId: string;
+  templateId: string | null;
+  templateName: string | null;
+  templateCategory: TemplateCategory | null;
+  variables: BroadcastVariables;
+  audience: BroadcastAudience;
+  scheduledAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  stats: BroadcastStats;
+}
+
+export interface BroadcastDetail extends Broadcast {
+  template: MessageTemplate | null;
+}
+
+export interface BroadcastPreview {
+  ready: boolean;
+  blockers: string[];
+  warnings: string[];
+  audience: { total: number; sending: number; skipped: Record<string, number>; skippedLabels: Record<string, string> };
+  limit: { tier: string; limit: number; usedToday: number | null } | null;
+  cost: {
+    category: TemplateCategory | null;
+    totals: Array<{ currency: string; amount: number; count: number }>;
+    unpriced: number;
+    ratesConfigured: boolean;
+  };
+  sample: Array<{ contact: string; preview: TemplateRender }>;
+}
+
+export interface BroadcastRecipientRow {
+  id: string;
+  status: BroadcastRecipientStatus;
+  skipReason: string | null;
+  skipLabel: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  sentAt: string | null;
+  deliveredAt: string | null;
+  readAt: string | null;
+  repliedAt: string | null;
+  clickedAt: string | null;
+  failedAt: string | null;
+  contact: { id: string; name: string; phone: string | null; conversationId: string | null };
+}
+
+export interface MessageRate {
+  countryPrefix: string;
+  label: string | null;
+  currency: string;
+  marketing: number | null;
+  utility: number | null;
+  authentication: number | null;
+}
+
+export interface CampaignsOverview {
+  last30Days: { broadcasts: number; sent: number; delivered: number; read: number; replied: number; clicked: number; failed: number };
+  templates: Record<string, number>;
+  number: {
+    channelId: string;
+    name: string;
+    status: string;
+    quality: string | null;
+    messagingLimit: string | null;
+    marketingMessagesApi: string | null;
+  } | null;
+  recent: Array<{ id: string; name: string; status: BroadcastStatus; templateName: string | null; startedAt: string | null; scheduledAt: string | null; createdAt: string }>;
+}
+
+export interface ContactImportPreview {
+  headers: string[];
+  sample: string[][];
+  rowCount: number;
+}
+
+export interface ContactImportMapping {
+  phone: string;
+  name?: string;
+  tags?: string;
+  optIn?: string;
+  attributes?: Record<string, string>;
+}
+
+export interface ContactImportResult {
+  id: string;
+  rowCount: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: Array<{ row: number; error: string }>;
+}

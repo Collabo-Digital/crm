@@ -28,6 +28,11 @@ export interface ChannelAccess {
     scopes: RateLimitScope[];
     pageId: string | null;
     wabaId: string | null;
+    /**
+     * WhatsApp only: the account accepted the Marketing Messages API terms,
+     * so marketing templates go to `/{phone_number_id}/marketing_messages`.
+     */
+    marketingMessagesApi: boolean;
 }
 
 type Obj = Record<string, unknown>;
@@ -62,6 +67,8 @@ export class ChannelAccessService {
         const creds = channel.credentials as Obj;
         const meta = (channel.metadata ?? {}) as Obj;
         const coexistence = (meta.coexistence ?? {}) as Obj;
+        const marketing = (meta.marketingMessages ?? {}) as Obj;
+        const accountEvents = (meta.accountEvents ?? {}) as Obj;
         const base = {
             id: channel.id,
             organizationId: channel.organizationId,
@@ -69,6 +76,9 @@ export class ChannelAccessService {
             status: channel.status,
             isEnabled: channel.isEnabled,
             sendsPaused: coexistence.sendsPaused === true,
+            marketingMessagesApi:
+                channel.platform === ChannelPlatform.WHATSAPP &&
+                (marketing.status === 'ONBOARDED' || marketing.required === true || 'MM_LITE_TERMS_SIGNED' in accountEvents),
         };
         const app = this.metaGraph.baseScopes();
 

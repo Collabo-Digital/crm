@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ChannelModule } from '../channel/channel.module';
 import { AutomationEventService } from './automation-event.service';
+import { BroadcastTracker } from './broadcast-tracker';
 import { ChannelAccessService } from './channel-access.service';
 import { ConsentService } from './consent.service';
 import { ContactIdentityService } from './contact-identity.service';
@@ -30,6 +31,7 @@ import { PlatformSenderService } from './send/platform-sender.service';
     ],
     providers: [
         AutomationEventService,
+        BroadcastTracker,
         ChannelAccessService,
         ConsentService,
         ContactIdentityService,
@@ -45,6 +47,7 @@ import { PlatformSenderService } from './send/platform-sender.service';
     ],
     exports: [
         AutomationEventService,
+        BroadcastTracker,
         ChannelAccessService,
         ConsentService,
         ContactIdentityService,
@@ -52,6 +55,7 @@ import { PlatformSenderService } from './send/platform-sender.service';
         MessageIngestService,
         MessagingMediaStorage,
         MessagingSendService,
+        PlatformSenderService,
     ],
 })
 export class MessagingModule { }

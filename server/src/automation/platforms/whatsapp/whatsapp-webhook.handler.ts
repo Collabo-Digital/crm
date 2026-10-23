@@ -3,6 +3,7 @@ import { ChannelPlatform, MessageSource, MessageStatus, Prisma } from '@prisma/c
 import { PrismaService } from '../../../prisma/prisma.service';
 import { patchChannelMetadataSql, recordHistoryChunkSql } from '../../../channel/channel-metadata.util';
 import { IngestChannel, MessageIngestService } from '../../../messaging/message-ingest.service';
+import { TemplatesService } from '../../../campaigns/templates/templates.service';
 import { ContactRef } from '../../../messaging/contact-identity.service';
 import { whatsAppContent } from '../../../messaging/message-content';
 import { accountUpdateEffect } from './whatsapp-account-update.util';
@@ -54,6 +55,7 @@ export class WhatsAppWebhookHandler {
     constructor(
         private readonly prisma: PrismaService,
         private readonly ingest: MessageIngestService,
+        private readonly templates: TemplatesService,
     ) { }
 
     async handle(events: WaEvent[]): Promise<void> {
@@ -278,7 +280,7 @@ export class WhatsAppWebhookHandler {
                 return;
             }
             case 'template_update':
-                // Stored on the template rows by the templates service.
+                await this.templates.applyWebhook(channel, e);
                 return;
             case 'value_errors':
                 this.logger.warn(

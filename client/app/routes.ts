@@ -66,10 +66,21 @@ export default [
     route("inbox", "routes/app/inbox.tsx"),
     route("inbox/contacts", "routes/app/inbox/contacts.tsx"),
     route("conversation/*", "routes/app/legacy-redirect.tsx", { id: "legacy-conversation" }),
-    // Campaigns and Logistics are not on this branch. Their old URLs fall
-    // through legacy-redirect to the landing page rather than the bare 404.
+    // Campaigns section: WhatsApp broadcasts, templates and segments. Static
+    // segments ("new") outrank ":id".
+    route("campaigns", "routes/app/campaigns.tsx"),
+    route("campaigns/broadcasts", "routes/app/campaigns/broadcasts.tsx"),
+    route("campaigns/broadcasts/new", "routes/app/campaigns/broadcasts/new.tsx"),
+    route("campaigns/broadcasts/:id", "routes/app/campaigns/broadcasts/$id.tsx"),
+    route("campaigns/templates", "routes/app/campaigns/templates.tsx"),
+    route("campaigns/templates/new", "routes/app/campaigns/templates/new.tsx"),
+    route("campaigns/templates/:id", "routes/app/campaigns/templates/$id.tsx"),
+    route("campaigns/segments", "routes/app/campaigns/segments.tsx"),
+    route("campaigns/segments/new", "routes/app/campaigns/segments/$id.tsx", { id: "campaigns-segment-new" }),
+    route("campaigns/segments/:id", "routes/app/campaigns/segments/$id.tsx"),
+    // Logistics is not on this branch. Its old URLs fall through
+    // legacy-redirect to the landing page rather than the bare 404.
     route("logistics/*", "routes/app/legacy-redirect.tsx", { id: "removed-logistics" }),
-    route("campaigns/*", "routes/app/legacy-redirect.tsx", { id: "removed-campaigns" }),
     // A visual preview with no backend yet.
     route("analytics", "routes/app/analytics.tsx"),
     route("profile", "routes/app/profile.tsx"),

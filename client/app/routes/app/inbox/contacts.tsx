@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Tag } from "lucide-react";
+import { Tag, Upload } from "lucide-react";
 import { useNavigate } from "react-router";
 
 import {
@@ -14,14 +14,15 @@ import {
 } from "~/components/app/data-table";
 import { DockButton, FloatingDock } from "~/components/app/floating-dock";
 import { TagChip } from "~/components/app/inbox/tag-chip";
+import { ContactImportDialog } from "~/components/app/inbox/contact-import-dialog";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
-import { PageHeader, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "~/components/ui/page-header";
+import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "~/components/ui/page-header";
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
 import { useChannels } from "~/hooks/use-channel-queries";
 import { orderRangeDates, type DateRangePreset, type OrderRangePreset } from "~/hooks/use-date-range-filter";
 import { useBulkTagContactsMutation } from "~/hooks/use-inbox-mutations";
-import { useContactTags, useInboxContacts, useInboxMembers } from "~/hooks/use-inbox-queries";
+import { useContactTags, useInboxContacts, useInboxMe, useInboxMembers } from "~/hooks/use-inbox-queries";
 import { useInboxStream } from "~/hooks/use-inbox-stream";
 import { useListUrlState } from "~/hooks/use-list-url-state";
 import { getInitials } from "~/lib/inbox-format";
@@ -59,6 +60,8 @@ export default function InboxContactsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [tagDraft, setTagDraft] = useState("");
   const [tagOpen, setTagOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const { data: me } = useInboxMe();
   useInboxStream();
 
   const { data: channels = [] } = useChannels();
@@ -226,7 +229,16 @@ export default function InboxContactsPage() {
           <PageHeaderTitle>Contacts</PageHeaderTitle>
           <PageHeaderDescription>Everyone who has messaged you on WhatsApp, Messenger or Instagram.</PageHeaderDescription>
         </PageHeaderContent>
+        {me?.access.canManage && (
+          <PageHeaderActions>
+            <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+              <Upload />
+              Import
+            </Button>
+          </PageHeaderActions>
+        )}
       </PageHeader>
+      <ContactImportDialog open={importOpen} onOpenChange={setImportOpen} />
 
       <DataTable
         state={table}

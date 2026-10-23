@@ -10,6 +10,7 @@ import { ConversationThread } from "~/components/app/inbox/conversation-thread";
 import type { CommentReplyMode } from "~/components/app/inbox/message-bubble";
 import { MessageComposer } from "~/components/app/inbox/message-composer";
 import { SaveViewDialog } from "~/components/app/inbox/save-view-dialog";
+import { TemplatePickerDialog } from "~/components/app/inbox/template-picker-dialog";
 import { ThreadHeader } from "~/components/app/inbox/thread-header";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderTitle } from "~/components/ui/page-header";
@@ -107,6 +108,7 @@ export default function InboxPage() {
   const [quote, setQuote] = useState<InboxMessage | null>(null);
   const [commentTarget, setCommentTarget] = useState<{ message: InboxMessage; mode: CommentReplyMode } | null>(null);
   const [saveViewOpen, setSaveViewOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
 
   const connected = useInboxStream();
   const { data: me } = useInboxMe();
@@ -395,6 +397,14 @@ export default function InboxPage() {
                 onSend={sendPayload}
                 onAddNote={(body) => addNote.mutateAsync(body)}
                 onUpload={(file) => upload.mutateAsync(file)}
+                onOpenTemplates={conversation.platform === "WHATSAPP" ? () => setTemplatesOpen(true) : undefined}
+              />
+              <TemplatePickerDialog
+                open={templatesOpen}
+                onOpenChange={setTemplatesOpen}
+                contactName={conversation.contact.customer?.name ?? conversation.contact.name}
+                isSending={send.isPending}
+                onSend={(payload) => sendPayload(payload)}
               />
             </>
           )}

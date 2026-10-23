@@ -6,8 +6,10 @@ import { MetaGraphError } from '../../channel/meta-graph.types';
 import { Priority, isRateLimitedError } from '../../rate-limit/rate-limit.types';
 import { ChannelAccess, ChannelAccessService } from '../channel-access.service';
 import { InboxEventsService } from '../inbox-events.service';
+import { BroadcastTracker } from '../broadcast-tracker';
 import { MessagingMediaStorage } from '../media/messaging-media.storage';
 import { OutboundPayload, buildMessengerBody, buildWhatsAppBody } from '../outbound';
+import { patchChannelMetadataSql } from '../../channel/channel-metadata.util';
 
 /**
  * Meta errors that will fail the same way however often they are retried.
@@ -88,6 +90,7 @@ export class PlatformSenderService {
         private readonly metaGraph: MetaGraphClient,
         private readonly storage: MessagingMediaStorage,
         private readonly events: InboxEventsService,
+        private readonly broadcasts: BroadcastTracker,
     ) { }
 
     async deliver(messageId: string, humanAgentTag: boolean): Promise<'sent' | 'failed' | 'skipped'> {
@@ -172,18 +175,35 @@ export class PlatformSenderService {
             userId: isBsuid ? contact.externalId : null,
         };
         const mediaId = payload.type === 'media' ? await this.uploadWhatsAppMedia(channel, payload) : null;
-        const res = await this.metaGraph.request<{
-            messages?: Array<{ id: string }>;
-            contacts?: Array<{ wa_id?: string; user_id?: string }>;
-        }>({
-            method: 'POST',
-            path: channel.sendPath,
-            accessToken: channel.token,
-            body: buildWhatsAppBody(payload, recipient, { replyToExternalId, mediaId }),
-            scopes: channel.scopes,
-            priority: Priority.INTERACTIVE,
-            channelId: channel.id,
-        });
+        const toSend = payload.type === 'template' && payload.headerMedia ? await this.withHeaderMedia(channel, payload) : payload;
+        const body = buildWhatsAppBody(toSend, recipient, { replyToExternalId, mediaId });
+        const marketing = payload.type === 'template' && payload.category === 'MARKETING';
+        const send = (viaMarketingApi: boolean) =>
+            this.metaGraph.request<{
+                messages?: Array<{ id: string }>;
+                contacts?: Array<{ wa_id?: string; user_id?: string }>;
+            }>({
+                method: 'POST',
+                // Marketing Messages API: same body plus a product policy; it falls
+                // back to the Cloud API by itself for accounts not onboarded.
+                path: viaMarketingApi ? `/${channel.address}/marketing_messages` : channel.sendPath,
+                accessToken: channel.token,
+                body: viaMarketingApi ? { ...body, product_policy: 'CLOUD_API_FALLBACK' } : body,
+                scopes: channel.scopes,
+                priority: Priority.INTERACTIVE,
+                channelId: channel.id,
+            });
+        let res: Awaited<ReturnType<typeof send>>;
+        try {
+            res = await send(marketing && channel.marketingMessagesApi);
+        } catch (err) {
+            // 131063: this account no longer takes marketing on /messages. Remember, and use the other API.
+            if (!(marketing && err instanceof MetaGraphError && err.metaCode === 131063)) throw err;
+            await this.prisma.$executeRaw(
+                patchChannelMetadataSql(channel.id, 'marketingMessages', { required: true, at: new Date().toISOString() }),
+            );
+            res = await send(true);
+        }
         const id = res.data.messages?.[0]?.id;
         if (!id) throw new MetaGraphError('WhatsApp returned no message id', 'API_ERROR');
         const waId = res.data.contacts?.[0]?.wa_id;
@@ -213,6 +233,40 @@ export class PlatformSenderService {
         });
         // Reactions answer without a message id; there is no row to key.
         return res.data.message_id ?? `${payload.type}:${Date.now()}`;
+    }
+
+    /**
+     * Upload a stored file to the WhatsApp number once and get its media id,
+     * for a broadcast whose every message carries the same header.
+     */
+    async uploadForWhatsApp(channelId: string, file: { storageKey: string; mime: string; kind: 'image' | 'video' | 'document'; filename?: string }): Promise<string> {
+        const channel = await this.access.get(channelId);
+        return this.uploadWhatsAppMedia(channel, {
+            type: 'media',
+            mediaKind: file.kind,
+            storageKey: file.storageKey,
+            mime: file.mime,
+            filename: file.filename,
+        });
+    }
+
+    /** Upload a template's header file and put its media id into the header parameter. */
+    private async withHeaderMedia(
+        channel: ChannelAccess,
+        payload: Extract<OutboundPayload, { type: 'template' }>,
+    ): Promise<OutboundPayload> {
+        const media = payload.headerMedia!;
+        const id = await this.uploadWhatsAppMedia(channel, {
+            type: 'media',
+            mediaKind: media.kind,
+            storageKey: media.storageKey,
+            mime: media.mime,
+            filename: media.filename,
+        });
+        const rest = (payload.components ?? []).filter((c) => (c as { type?: string }).type !== 'header');
+        const header = { type: 'header', parameters: [{ type: media.kind, [media.kind]: { id } }] };
+        const { headerMedia: _h, ...template } = payload;
+        return { ...template, components: [header, ...rest] };
     }
 
     /**
@@ -291,6 +345,7 @@ export class PlatformSenderService {
      */
     private async markSent(messageId: string, channelId: string, externalId: string) {
         const data = { status: MessageStatus.SENT, externalId, sentAt: new Date() };
+        await this.broadcasts.onStatus(messageId, MessageStatus.SENT, data.sentAt);
         try {
             await this.prisma.message.update({ where: { id: messageId }, data });
         } catch (err) {
@@ -338,6 +393,10 @@ export class PlatformSenderService {
                 data: { outboundFailedCount: { increment: 1 }, consecutiveFailures: { increment: 1 } },
             });
         }
+        await this.broadcasts.onStatus(message.id, MessageStatus.FAILED, new Date(), {
+            code: code !== undefined ? String(code) : null,
+            message: reason,
+        });
         this.publish(message.organizationId, message.conversationId, message.id);
         this.logger.warn(`Message ${message.id} failed${code ? ` (${code})` : ''}: ${reason}`);
         return 'failed';
