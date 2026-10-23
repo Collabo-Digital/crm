@@ -368,6 +368,15 @@ export interface Playbook {
   steps: (channel: AutomationChannelKey) => AutomationStep[];
 }
 
+/**
+ * Template values under both kinds of key: {{1}}, {{2}}… for a template of
+ * your own, and the names the matching starter template uses ({{first_name}}…).
+ * A send reads only the keys its template has.
+ */
+const prefill = (named: Record<string, string>): Record<string, string> => ({
+  ...Object.fromEntries(Object.values(named).map((v, i) => [`body.${i + 1}`, v])),
+  ...Object.fromEntries(Object.entries(named).map(([k, v]) => [`body.${k}`, v])),
+});
 const t = (channel: AutomationChannelKey, config: Record<string, unknown>): AutomationStep => ({ id: newStepId(), type: "trigger", config: { channel, post: "", match: "contains", keyword: "", ...config } });
 const s = (type: AutomationBlockType, config: Record<string, unknown>, branches?: Record<string, AutomationStep[]>): AutomationStep => ({
   id: newStepId(),
@@ -474,7 +483,7 @@ export const PLAYBOOKS: Playbook[] = [
     channels: ["whatsapp"],
     steps: (channel) => [
       t(channel, { event: "order_created" }),
-      s("send_message", { kind: "template", templateValues: { "body.1": "{{first_name}}", "body.2": "{{order.name}}" }, options: [] }),
+      s("send_message", { kind: "template", templateValues: prefill({ first_name: "{{first_name}}", order_number: "{{order.name}}", order_total: "{{order.total}}" }), options: [] }),
     ],
   },
   {
@@ -484,7 +493,8 @@ export const PLAYBOOKS: Playbook[] = [
     channels: ["whatsapp"],
     steps: (channel) => [
       t(channel, { event: "order_fulfilled" }),
-      s("send_message", { kind: "template", templateValues: { "body.1": "{{order.name}}", "body.2": "{{order.tracking_url}}" }, options: [] }),
+      // As the "Order shipped" starter: name, order, carrier, and the tracking number after the link's address.
+      s("send_message", { kind: "template", templateValues: { "body.1": "{{first_name}}", "body.2": "{{order.name}}", "body.3": "{{order.carrier}}", "button.0": "{{order.tracking_number}}" }, options: [] }),
     ],
   },
   {
@@ -496,7 +506,7 @@ export const PLAYBOOKS: Playbook[] = [
       t(channel, { event: "order_created" }),
       s("condition", { match: "all", rules: [{ field: "order_payment", op: "is", key: "", value: "cod" }] }, {
         yes: [
-          s("send_message", { kind: "template", templateValues: { "body.1": "{{first_name}}", "body.2": "{{order.name}}", "body.3": "{{order.total}}" }, options: [] }),
+          s("send_message", { kind: "template", templateValues: prefill({ first_name: "{{first_name}}", order_number: "{{order.name}}", order_total: "{{order.total}}" }), options: [] }),
           s("wait_for_reply", { amount: 24, unit: "hours", saveAs: "" }, {
             replied: [
               // Whole replies only (the template's buttons, or the word alone): "Please don't cancel" or
@@ -529,7 +539,8 @@ export const PLAYBOOKS: Playbook[] = [
     channels: ["whatsapp"],
     steps: (channel) => [
       t(channel, { event: "checkout_abandoned" }),
-      s("send_message", { kind: "template", templateValues: { "body.1": "{{first_name}}", "button.0": "{{checkout.url}}" }, options: [] }),
+      // A link button adds {{1}} to the store's address, so it gets the part of Shopify's link after it.
+      s("send_message", { kind: "template", templateValues: { "body.1": "{{first_name}}", "button.0": "{{checkout.url_path}}" }, options: [] }),
       s("add_tag", { tags: ["abandoned-checkout"] }),
     ],
   },
@@ -541,7 +552,7 @@ export const PLAYBOOKS: Playbook[] = [
     steps: (channel) => [
       t(channel, { event: "order_delivered" }),
       s("wait", { amount: 2, unit: "days" }),
-      s("send_message", { kind: "template", templateValues: { "body.1": "{{first_name}}" }, options: [] }),
+      s("send_message", { kind: "template", templateValues: prefill({ first_name: "{{first_name}}", order_number: "{{order.name}}" }), options: [] }),
       s("wait_for_reply", { amount: 3, unit: "days", saveAs: "review" }, {
         replied: [
           s("condition", { match: "any", rules: [{ field: "last_reply", op: "contains", key: "", value: "love, great, good, 5" }] }, {

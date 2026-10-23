@@ -10,7 +10,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { QueryAutomationsDto } from "./dto/query-automations.dto";
 import { CreateAutomationDto } from "./dto/create-automation.dto";
 import { randomBytes } from 'node:crypto';
-import { collectIssues, defaultTriggerStep, keywordsFor, parseDefinition, reidSteps, triggerConfigFor, triggerPostFor, triggerTypeFor, type Issue } from './blocks/definition.schema';
+import { collectIssues, defaultTriggerStep, keywordsFor, parseDefinition, reidSteps, triggerConfigFor, triggerPostFor, triggerTypeFor, type Issue, type IssueContext, type StepDef } from './blocks/definition.schema';
+import { Flow } from './engine/flow';
+import { templateParams } from '../campaigns/templates/template-components';
 import { UpdateAutomationDto } from './dto/update-automation.dto';
 import { SaveDefinitionDto } from './dto/save-definition.dto';
 import { DuplicateAutomationDto } from './dto/duplicate-automation.dto';
@@ -93,6 +95,7 @@ export class AutomationService {
 
     private async withIssues<
         T extends {
+            organizationId: string;
             definition: Prisma.JsonValue;
             settings: Prisma.JsonValue;
             platform: ChannelPlatform | null;
@@ -103,7 +106,7 @@ export class AutomationService {
         let issues: Issue[] = [];
         try {
             const steps = parseDefinition(row.definition);
-            issues = collectIssues(steps, await this.issueContext(row));
+            issues = collectIssues(steps, await this.issueContext(row, steps));
         } catch {
             // A stored draft that no longer parses (schema tightened later) is
             // reported as one issue rather than a 500 on every detail read.
@@ -119,7 +122,7 @@ export class AutomationService {
         return { ...row, publishedVersion, unpublishedChanges, issues };
     }
 
-    private async issueContext(row: { platform: ChannelPlatform | null; channelId: string | null }) {
+    private async issueContext(row: { organizationId: string; platform: ChannelPlatform | null; channelId: string | null }, steps: StepDef[]): Promise<IssueContext> {
         let knownMediaIds: Set<string> | null = null;
         if (row.channelId) {
             const media = await this.prisma.channelMedia.findMany({
@@ -128,7 +131,19 @@ export class AutomationService {
             });
             if (media.length > 0) knownMediaIds = new Set(media.map((m) => m.externalId));
         }
-        return { platform: row.platform, knownMediaIds };
+        const templateIds = [...new Set(new Flow(steps).all().map(({ step }) => step.config.templateId).filter((v): v is string => typeof v === 'string' && !!v))];
+        const rows = templateIds.length
+            ? await this.prisma.messageTemplate.findMany({
+                where: { id: { in: templateIds }, organizationId: row.organizationId },
+                select: { id: true, name: true, components: true, parameterFormat: true },
+            })
+            : [];
+        const templates = new Map(rows.map((r) => [r.id, {
+            name: r.name,
+            params: templateParams(r.components as Record<string, unknown>[], r.parameterFormat === 'NAMED' ? 'NAMED' : 'POSITIONAL')
+                .map((p) => ({ key: p.key, name: p.name, kind: p.kind })),
+        }]));
+        return { platform: row.platform, knownMediaIds, templates };
     }
 
 
@@ -169,7 +184,7 @@ export class AutomationService {
     async issues(id: string, orgId: string, viewer: AutomationViewer): Promise<Issue[]> {
         const row = await this.getVisible(id, orgId, viewer);
         const steps = parseDefinition(row.definition);
-        return collectIssues(steps, await this.issueContext(row));
+        return collectIssues(steps, await this.issueContext(row, steps));
     }
 
 
@@ -262,7 +277,7 @@ export class AutomationService {
         this.assertNotArchived(row.status);
 
         const steps = parseDefinition(row.definition);
-        const issues = collectIssues(steps, await this.issueContext(row));
+        const issues = collectIssues(steps, await this.issueContext(row, steps));
         if (issues.length > 0) {
             throw new UnprocessableEntityException({
                 message: `Automation has ${issues.length} issue${issues.length === 1 ? '' : 's'}`,

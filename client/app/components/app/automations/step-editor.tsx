@@ -56,7 +56,7 @@ function variablesFor(ctx: EditorContext): string[] {
   }
   const event = String(trigger.event ?? "");
   if (ORDER_EVENTS.includes(event)) ["order.name", "order.total", "order.items", "order.payment", "order.status", "order.tracking_url", "order.tracking_number", "order.carrier"].forEach((v) => saved.add(v));
-  if (event === "checkout_abandoned") ["checkout.url", "checkout.total", "checkout.items"].forEach((v) => saved.add(v));
+  if (event === "checkout_abandoned") ["checkout.url", "checkout.url_path", "checkout.total", "checkout.items"].forEach((v) => saved.add(v));
   return [
     "first_name",
     "name",

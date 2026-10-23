@@ -252,19 +252,21 @@ export class AutomationRunner {
         const text = interpolate(m.message, s.vars);
         const options = m.options.map((o) => o.trim()).filter(Boolean);
         let payload: OutboundPayload;
+        // A tapped option names its run as well as its step, so with two runs waiting the tap answers its own.
+        const optionId = (i: number) => `${s.run.id}.${step.id}_${i}`;
         switch (m.kind) {
             case 'media':
                 if (!m.media) return fail('This step has no file to send.');
                 payload = { type: 'media', mediaKind: m.media.kind, storageKey: m.media.storageKey, mime: m.media.mime, filename: m.media.filename, ...(text ? { caption: text } : {}) };
                 break;
             case 'buttons':
-                payload = { type: 'buttons', text, buttons: options.map((title, i) => ({ id: `${step.id}_${i}`, title })) };
+                payload = { type: 'buttons', text, buttons: options.map((title, i) => ({ id: optionId(i), title })) };
                 break;
             case 'list':
-                payload = { type: 'list', text, buttonText: m.listButton, sections: [{ rows: options.map((title, i) => ({ id: `${step.id}_${i}`, title })) }] };
+                payload = { type: 'list', text, buttonText: m.listButton, sections: [{ rows: options.map((title, i) => ({ id: optionId(i), title })) }] };
                 break;
             case 'quick_replies':
-                payload = { type: 'quick_replies', text, replies: options.map((title, i) => ({ title, payload: `${step.id}_${i}` })) };
+                payload = { type: 'quick_replies', text, replies: options.map((title, i) => ({ title, payload: optionId(i) })) };
                 break;
             case 'template': {
                 const built = await this.templatePayload(s, m);

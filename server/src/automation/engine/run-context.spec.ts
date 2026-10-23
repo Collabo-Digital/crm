@@ -64,9 +64,9 @@ describe('order conditions', () => {
 });
 
 describe('parseRunContext', () => {
-    it('keeps the event of the last reply a run took, and drops unknown keys', () => {
-        const ctx = parseRunContext({ vars: { a: '1' }, replied: true, replyEventId: 'evt_1', stray: 'x' });
-        expect(ctx).toEqual({ vars: { a: '1' }, trigger: { eventType: '', commentId: null, postId: null }, depth: 0, replied: true, replyEventId: 'evt_1' });
+    it('keeps every reply event a run took, and drops unknown keys', () => {
+        const ctx = parseRunContext({ vars: { a: '1' }, replied: true, replyEventIds: ['evt_1', 'evt_2'], stray: 'x' });
+        expect(ctx).toEqual({ vars: { a: '1' }, trigger: { eventType: '', commentId: null, postId: null }, depth: 0, replied: true, replyEventIds: ['evt_1', 'evt_2'] });
     });
 });
 

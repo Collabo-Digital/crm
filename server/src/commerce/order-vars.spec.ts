@@ -27,8 +27,9 @@ describe('order variables', () => {
             'order.tracking_url': 'https://t.example/AWB1',
             'order.carrier': 'Delhivery',
         });
-        expect(checkoutVars({ recoveryUrl: 'https://s/r', total: 999, currency: 'INR', items: [{ title: 'Cap', quantity: 1 }] })).toEqual({
-            'checkout.url': 'https://s/r',
+        expect(checkoutVars({ recoveryUrl: 'https://s.example/12345/checkouts/b19/recover?key=abc', total: 999, currency: 'INR', items: [{ title: 'Cap', quantity: 1 }] })).toEqual({
+            'checkout.url': 'https://s.example/12345/checkouts/b19/recover?key=abc',
+            'checkout.url_path': '12345/checkouts/b19/recover?key=abc',
             'checkout.total': '₹999.00',
             'checkout.items': 'Cap',
         });

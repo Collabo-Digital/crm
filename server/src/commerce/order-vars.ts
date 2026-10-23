@@ -51,6 +51,17 @@ export function orderVars(order: OrderForVars): Record<string, string> {
     };
 }
 
+/** A link after the store's address ("1234/checkouts/b19/recover?key=…"), for a template button whose URL ends in {{1}}. */
+function pathOf(url: string | null): string {
+    if (!url) return '';
+    try {
+        const u = new URL(url);
+        return `${u.pathname}${u.search}`.replace(/^\//, '');
+    } catch {
+        return '';
+    }
+}
+
 export function checkoutVars(c: {
     recoveryUrl: string | null;
     total: number | string | null;
@@ -59,6 +70,7 @@ export function checkoutVars(c: {
 }): Record<string, string> {
     return {
         'checkout.url': c.recoveryUrl ?? '',
+        'checkout.url_path': pathOf(c.recoveryUrl),
         'checkout.total': formatMoney(c.total, c.currency),
         'checkout.items': itemsSummary(c.items),
     };

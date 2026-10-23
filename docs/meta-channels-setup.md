@@ -354,12 +354,18 @@ Per-account subscription happens at connect time and is undone at disconnect:
   On WhatsApp an unknown number becomes a new contact; on Instagram and
   Messenger the person must be the one contact linked to a store customer with
   that number (matched the same way as linking, below). A number starting with
-  00 is read as international; one still starting with 0 is refused. The global
-  rate limit applies.
+  00 is read as international, a trunk 0 after the country code
+  ("+91 098…") is dropped, and a number that still starts with 0 is refused.
+  The global rate limit applies.
 - **“Call a URL” steps** refuse private, loopback, link-local and metadata
   addresses, written as IPv4 or as any IPv6 form that carries one (mapped,
-  NAT64, 6to4), both for literal addresses and after DNS resolution, follow no redirects, time out after 10
-  seconds and read at most 256 KB.
+  NAT64, 6to4), both for literal addresses and after DNS resolution, follow no
+  redirects, time out after 10 seconds and read at most 256 KB.
+- **Templates in automations.** Publishing checks that a template step gives
+  every value its chosen template needs (and the header file, for a media
+  header); otherwise each run would stop at that step. Playbooks pre-fill the
+  values under both the starter templates' names (`{{first_name}}`…) and
+  `{{1}}`, `{{2}}`… for a template of your own.
 - **Free-form messages from automations** still obey the 24-hour window (7-day
   human-agent tag is for people only): a run whose message cannot go stops,
   and the reason shows on the automation.
@@ -373,10 +379,12 @@ Per-account subscription happens at connect time and is undone at disconnect:
   order's (or checkout's) phone number on each listening WhatsApp number; a new
   number becomes a contact linked to the store customer. (Any WhatsApp contact
   links to the one store customer with the same number. The last ten digits
-  must match, and before them the store's number may have nothing, the country
-  code, or the country code and a trunk 0, as in "+44 (0)7911 123456"; Mexican
-  and Argentine WhatsApp numbers also match without their mobile 1 or 9. So
-  +44 7911 123456 never links to a customer saved as +91 79111 23456.)
+  must match, and before them the store's number may have only the rest of the
+  national number (for numbers longer than ten digits, such as Brazilian or
+  German mobiles), alone, after the country code, or after the country code
+  and a trunk 0, as in "+44 (0)7911 123456"; Mexican and Argentine WhatsApp
+  numbers also match without their mobile 1 or 9. So +44 7911 123456 never
+  links to a customer saved as +91 79111 23456.)
   Messages from these
   triggers must be approved templates: the builder refuses free text there.
   Shopify has no delivered order state; a fulfilment whose carrier
@@ -407,7 +415,12 @@ Per-account subscription happens at connect time and is undone at disconnect:
   up to 3 days back). An order completes its checkout by `checkout_id` or
   token, even when the checkout's last update arrives after the order. The
   buyer's phone, name and addresses in these webhooks need Shopify's
-  **protected customer data** access for the app.
+  **protected customer data** access for the app. A WhatsApp link button adds
+  only the end of a URL to a fixed address, so the recovery template's button
+  is the store's address followed by `{{1}}` (for example
+  `https://yourstore.com/{{1}}`, using the domain of Shopify's recovery links)
+  and gets `{{checkout.url_path}}`, the part of the link after that address;
+  `{{checkout.url}}` is the whole link, for message text.
 - **WhatsApp catalog** (Campaigns → Catalog). Meta documents no API for
   linking a catalog to a WhatsApp account: the business connects it in
   WhatsApp Manager or Commerce Manager (one catalog per account) and pastes the

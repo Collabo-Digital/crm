@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AutomationEventService } from '../messaging/automation-event.service';
 import { AutomationJobs } from '../messaging/automation-jobs';
 import { storedPhoneIs } from '../messaging/contact-identity.service';
+import { normalizePhone } from '../common/phone.util';
 
 const MAX_FIELDS = 30;
 
@@ -35,8 +36,11 @@ export class AutomationHooksService {
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Send a JSON object.');
 
         const phoneField = ((trigger.config ?? {}) as { phoneField?: string }).phoneField || 'phone';
-        // 00 is the international prefix; a number that still starts with 0 has no country code.
-        const digits = String(pick(body, phoneField) ?? '').replace(/\D/g, '').replace(/^00/, '');
+        // 00 is the international prefix; a trunk 0 after the country code ("+91 098…") is dropped when the
+        // number is valid without it (WhatsApp's own 521…/549… forms are not, and stay as sent); a number
+        // that still starts with 0 has no country code.
+        const sent = String(pick(body, phoneField) ?? '').replace(/\D/g, '').replace(/^00/, '');
+        const digits = normalizePhone(`+${sent}`)?.slice(1) ?? sent;
         if (digits.length < 11 || digits.length > 15 || digits.startsWith('0')) {
             throw new BadRequestException(`Send "${phoneField}" as a full phone number with its country code, like +919876543210.`);
         }

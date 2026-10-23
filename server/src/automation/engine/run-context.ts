@@ -19,8 +19,8 @@ export interface RunContext {
     depth: number;
     /** Set when a reply arrived for a wait-for-reply step; the runner takes the replied branch. */
     replied?: boolean;
-    /** The event of the last reply this run took, so a retried event never gives it to a second run. */
-    replyEventId?: string;
+    /** Every reply event this run took, so a retried event never gives its reply to a second run. */
+    replyEventIds?: string[];
     /** A WhatsApp cart: catalog item ids (our variant ids) and quantities. */
     cart?: Array<{ retailerId: string; quantity: number; price: number | null; currency: string | null }>;
 }
@@ -32,7 +32,7 @@ export function parseRunContext(raw: unknown): RunContext {
         trigger: { eventType: c.trigger?.eventType ?? '', commentId: c.trigger?.commentId ?? null, postId: c.trigger?.postId ?? null },
         depth: c.depth ?? 0,
         ...(c.replied ? { replied: true } : {}),
-        ...(c.replyEventId ? { replyEventId: c.replyEventId } : {}),
+        ...(Array.isArray(c.replyEventIds) && c.replyEventIds.length ? { replyEventIds: c.replyEventIds } : {}),
         ...(c.cart ? { cart: c.cart } : {}),
     };
 }

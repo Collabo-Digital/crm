@@ -28,6 +28,11 @@ export interface IssueContext {
      * post from a typo, so we do not raise post_not_found.
      */
     knownMediaIds: Set<string> | null;
+    /**
+     * The templates the steps chose, with the values a send needs. Absent
+     * when not loaded (the test route): those checks are then skipped.
+     */
+    templates?: Map<string, { name: string; params: Array<{ key: string; name: string; kind: string }> }>;
 }
 
 const StepId = z.string().min(1).max(64);
@@ -345,6 +350,18 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 if (m.kind === 'template') {
                     if (channel !== 'whatsapp') push(step.id, 'template_needs_whatsapp', 'Templates are WhatsApp only', 'Send a text or buttons on this channel instead.');
                     if (!m.templateId) push(step.id, 'template_missing', 'Choose a template', 'Pick an approved WhatsApp template.');
+                    // Every value the chosen template needs, or each run would stop at this step.
+                    const chosen = m.templateId ? ctx.templates?.get(m.templateId) : undefined;
+                    if (m.templateId && ctx.templates && !chosen) push(step.id, 'template_not_found', 'Template not found', 'The chosen template was deleted. Pick another one.');
+                    for (const p of chosen?.params ?? []) {
+                        if (p.kind === 'location') {
+                            push(step.id, 'template_header_unsupported', 'Location headers are not supported', `Pick a template without a location header instead of “${chosen!.name}”.`);
+                        } else if (p.kind !== 'text' && p.kind !== 'coupon_code') {
+                            if (!m.media) push(step.id, 'template_media_missing', 'Add the header file', `“${chosen!.name}” needs a header image, video or document.`);
+                        } else if (!(m.templateValues[p.key] ?? '').trim()) {
+                            push(step.id, 'template_value_missing', 'Fill in the template', `“${p.name}” in “${chosen!.name}” has no value.`);
+                        }
+                    }
                     Object.values(m.templateValues).forEach(checkText);
                     break;
                 }

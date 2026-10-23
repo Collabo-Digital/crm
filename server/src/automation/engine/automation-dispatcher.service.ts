@@ -97,7 +97,7 @@ export class AutomationDispatcher {
     private async handOffReply(event: AutomationEvent, payload: EventPayload): Promise<number> {
         if (!event.contactId) return 0;
         const handed = await this.prisma.automationRun.findFirst({
-            where: { contactId: event.contactId, context: { path: ['replyEventId'], equals: event.id } },
+            where: { contactId: event.contactId, context: { path: ['replyEventIds'], array_contains: [event.id] } },
             select: { id: true },
         });
         if (handed) {
@@ -125,7 +125,7 @@ export class AutomationDispatcher {
         const ctx: RunContext = parseRunContext(run.context);
         ctx.vars.last_reply = reply;
         ctx.replied = true;
-        ctx.replyEventId = event.id;
+        ctx.replyEventIds = [...(ctx.replyEventIds ?? []), event.id];
         const step = run.currentStepKey ? new Flow(parseDefinition(run.version.definition)).step(run.currentStepKey) : null;
         const saveAs = typeof step?.config.saveAs === 'string' ? step.config.saveAs : '';
 
@@ -148,8 +148,8 @@ export class AutomationDispatcher {
 
     /**
      * The run whose message this reply answers, if any: the message a
-     * WhatsApp reply quotes, or the step whose Instagram or Messenger button
-     * or quick reply was tapped (its payload is `<stepKey>_<n>`).
+     * WhatsApp reply quotes, or the run named in a tapped Instagram or
+     * Messenger button or quick reply (its payload is `<runId>.<stepKey>_<n>`).
      */
     private async answeredRun(event: AutomationEvent, payload: EventPayload): Promise<string | null> {
         const quotedId = event.messageId
@@ -158,14 +158,7 @@ export class AutomationDispatcher {
         if (quotedId) {
             return (await this.prisma.message.findUnique({ where: { id: quotedId }, select: { automationRunId: true } }))?.automationRunId ?? null;
         }
-        const stepKey = /^(.+)_\d+$/.exec(payload.raw?.postbackPayload ?? payload.raw?.quickReplyPayload ?? '')?.[1];
-        if (!stepKey || !event.contactId) return null;
-        const sent = await this.prisma.message.findFirst({
-            where: { contactId: event.contactId, stepKey, automationRunId: { not: null } },
-            orderBy: { createdAt: 'desc' },
-            select: { automationRunId: true },
-        });
-        return sent?.automationRunId ?? null;
+        return /^([a-z0-9]+)\..+_\d+$/.exec(payload.raw?.postbackPayload ?? payload.raw?.quickReplyPayload ?? '')?.[1] ?? null;
     }
 
     /** Start the automations this event triggers. Returns the runs to execute. */

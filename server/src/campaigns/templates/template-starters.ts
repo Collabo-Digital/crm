@@ -113,7 +113,8 @@ export const TEMPLATE_STARTERS: TemplateStarter[] = [
                 examples: { 1: 'Ananya' },
             },
             footer: 'Tap Stop promotions to opt out',
-            buttons: [{ type: 'URL', text: 'Return to cart', url: 'https://example.com/cart/{{1}}', example: 'c_8f2a' }, STOP_BUTTON],
+            // Your store's address, then {{1}}: automations fill in the rest of Shopify's recovery link ({{checkout.url_path}}).
+            buttons: [{ type: 'URL', text: 'Return to cart', url: 'https://example.com/{{1}}', example: '12345/checkouts/c8f2a/recover?key=k1' }, STOP_BUTTON],
         },
     },
     {

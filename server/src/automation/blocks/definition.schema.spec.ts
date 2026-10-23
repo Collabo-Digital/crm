@@ -149,3 +149,25 @@ describe('store triggers', () => {
         expect(wa('message', [tagCustomer])).not.toContain('store_needs_whatsapp');
     });
 });
+
+describe('template steps', () => {
+    const templates = new Map([
+        ['tpl_cod', { name: 'cod_order_confirmation', params: [{ key: 'body.first_name', name: 'first_name', kind: 'text' }, { key: 'body.order_number', name: 'order_number', kind: 'text' }] }],
+        ['tpl_img', { name: 'sale_photo', params: [{ key: 'header', name: 'media', kind: 'image' }] }],
+    ]);
+    const send = (config: Record<string, unknown>) => [
+        { id: 't', type: 'trigger', config: { channel: 'whatsapp', event: 'order_created' } },
+        { id: 'm', type: 'send_message', config: { kind: 'template', ...config } },
+    ];
+    const check = (steps: unknown[], withTemplates = true) =>
+        collectIssues(parseDefinition({ steps }), { platform: 'WHATSAPP', knownMediaIds: null, ...(withTemplates ? { templates } : {}) }).map((i) => i.code);
+
+    it('need a value for every parameter of the chosen template', () => {
+        expect(check(send({ templateId: 'tpl_cod', templateValues: { 'body.1': '{{first_name}}' } }))).toEqual(['template_value_missing', 'template_value_missing']);
+        expect(check(send({ templateId: 'tpl_cod', templateValues: { 'body.first_name': '{{first_name}}', 'body.order_number': '{{order.name}}' } }))).toEqual([]);
+        expect(check(send({ templateId: 'tpl_img', templateValues: {} }))).toEqual(['template_media_missing']);
+        expect(check(send({ templateId: 'tpl_img', templateValues: {}, media: { storageKey: 'org/x.png', mime: 'image/png', kind: 'image' } }))).toEqual([]);
+        expect(check(send({ templateId: 'tpl_gone', templateValues: {} }))).toEqual(['template_not_found']);
+        expect(check(send({ templateId: 'tpl_cod', templateValues: {} }), false)).toEqual([]);
+    });
+});

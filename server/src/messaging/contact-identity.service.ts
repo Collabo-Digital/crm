@@ -1,17 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChannelContact, ChannelPlatform, Prisma } from '@prisma/client';
+import { parsePhoneNumberFromString } from 'libphonenumber-js';
 
 /**
  * SQL: is the phone stored in `column` (as typed, in any format) the number
  * `digits` (with its country code)? The last ten digits must match, and in
- * front of them may stand only nothing (a national number, with or without a
- * trunk 0), the country code, or the country code and a trunk 0
- * ("+44 (0)7911 123456"). So +44 7911 123456 never matches a number saved as
- * +91 79111 23456.
+ * front of them may stand only the rest of the national number, alone (with
+ * or without a trunk 0), after the country code, or after the country code
+ * and a trunk 0 ("+44 (0)7911 123456"). So +44 7911 123456 never matches a
+ * number saved as +91 79111 23456.
  */
 export function storedPhoneIs(column: Prisma.Sql, digits: string): Prisma.Sql {
-    const cc = digits.slice(0, -10);
-    const before = ['', cc, `${cc}0`];
+    // National numbers longer than ten digits (Brazilian, German, Chinese mobiles) keep their first digits.
+    const p = /^(521|549)\d{10}$/.test(digits) ? undefined : parsePhoneNumberFromString(`+${digits}`);
+    const long = !!p?.isValid() && p.number === `+${digits}` && p.nationalNumber.length > 10 && !p.nationalNumber.startsWith('0');
+    const cc = long ? p!.countryCallingCode : digits.slice(0, -10);
+    const rest = long ? p!.nationalNumber.slice(0, -10) : '';
+    const before = [rest, `${cc}${rest}`, `${cc}0${rest}`];
     // WhatsApp writes Mexican and Argentine mobiles as 521… and 549…; stores usually save them without the 1 or 9.
     if (/^521\d{10}$/.test(digits)) before.push('52');
     if (/^549\d{10}$/.test(digits)) before.push('54');
