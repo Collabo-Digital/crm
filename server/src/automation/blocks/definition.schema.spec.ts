@@ -76,9 +76,9 @@ describe('collectIssues', () => {
         expect(flow('{{shoe_size}}')).toContain('unknown_variable');
     });
 
-    it('flags empty steps and the invoice block that cannot run yet', () => {
+    it('flags empty steps, and an invoice sent outside an order on WhatsApp', () => {
         expect(codes([trigger({ match: 'contains', keyword: '' })])).toEqual(expect.arrayContaining(['keyword_missing', 'no_action']));
-        expect(codes([trigger({ keyword: 'x' }), { id: 'i', type: 'send_invoice', config: {} }])).toContain('not_available_yet');
+        expect(codes([trigger({ keyword: 'x' }), { id: 'i', type: 'send_invoice', config: {} }])).toEqual(expect.arrayContaining(['invoice_needs_whatsapp', 'invoice_needs_order', 'template_missing']));
         expect(codes([trigger({ keyword: 'x' }), { id: 'c', type: 'condition', config: {} }])).toContain('rules_missing');
         expect(codes([trigger({ keyword: 'x' }), { id: 'a', type: 'assign', config: { mode: 'user' } }])).toContain('assignee_missing');
     });
@@ -169,5 +169,26 @@ describe('template steps', () => {
         expect(check(send({ templateId: 'tpl_img', templateValues: {}, media: { storageKey: 'org/x.png', mime: 'image/png', kind: 'image' } }))).toEqual([]);
         expect(check(send({ templateId: 'tpl_gone', templateValues: {} }))).toEqual(['template_not_found']);
         expect(check(send({ templateId: 'tpl_cod', templateValues: {} }), false)).toEqual([]);
+    });
+});
+
+describe('sending the invoice', () => {
+    const templates = new Map([
+        ['tpl_doc', { name: 'invoice_ready', params: [{ key: 'header', name: 'media', kind: 'document' }, { key: 'body.invoice_number', name: 'invoice_number', kind: 'text' }] }],
+        ['tpl_img', { name: 'sale_photo', params: [{ key: 'header', name: 'media', kind: 'image' }] }],
+    ]);
+    const steps = (event: string, config: Record<string, unknown>) => [
+        { id: 't', type: 'trigger', config: { channel: 'whatsapp', event } },
+        { id: 'i', type: 'send_invoice', config },
+    ];
+    const check = (s: unknown[]) => collectIssues(parseDefinition({ steps: s }), { platform: 'WHATSAPP', knownMediaIds: null, templates }).map((i) => i.code);
+
+    it('runs on the invoice event and on order events, with a document-header template filled in', () => {
+        expect(triggerTypeFor(parseDefinition({ steps: steps('invoice_issued', {}) })[0])).toBe('crm.invoice.issued');
+        expect(check(steps('invoice_issued', { templateId: 'tpl_doc', templateValues: { 'body.invoice_number': '{{invoice.number}}' } }))).toEqual([]);
+        expect(check(steps('order_paid', { templateId: 'tpl_doc', templateValues: { 'body.invoice_number': '{{invoice.number}}' } }))).toEqual([]);
+        expect(check(steps('invoice_issued', { templateId: 'tpl_doc', templateValues: {} }))).toEqual(['template_value_missing']);
+        expect(check(steps('invoice_issued', { templateId: 'tpl_img' }))).toEqual(['template_needs_document']);
+        expect(check(steps('cart', { templateId: 'tpl_doc', templateValues: { 'body.invoice_number': 'x' } }))).toEqual(['invoice_needs_order']);
     });
 });

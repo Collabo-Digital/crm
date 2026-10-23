@@ -7,6 +7,9 @@ import {
   HttpException,
   PayloadTooLargeException,
 } from '@nestjs/common';
+import { invoicePdfFilename, renderInvoicePdf, type InvoiceForPdf } from './pdf/invoice-pdf';
+import { CommerceEventsService } from '../commerce/commerce-events.service';
+import { isCashOnDelivery } from '../commerce/order-vars';
 import {
   GstSupplyType,
   GstType,
@@ -172,6 +175,7 @@ export class InvoiceService {
     private readonly calculator: GstCalculatorService,
     private readonly taxResolver: TaxResolverService,
     private readonly invoiceNumber: InvoiceNumberService,
+    private readonly commerceEvents: CommerceEventsService,
   ) {}
 
   // ─── GENERATE INVOICE ───
@@ -182,7 +186,7 @@ export class InvoiceService {
   // transaction rolls back (consuming no number — the sequence stays gapless)
   // and the retry re-reads the new max.
   async create(orgId: string, dto: CreateInvoiceDto) {
-    return retryOnNumberingConflict(
+    const invoice = await retryOnNumberingConflict(
       () =>
         this.prisma.$transaction(
           (tx) => this.createForOrderTx(tx, orgId, dto.orderId, dto),
@@ -200,6 +204,9 @@ export class InvoiceService {
           ),
       },
     );
+    // Automations send it to the buyer (never throws).
+    await this.commerceEvents.invoiceIssued(invoice.id);
+    return invoice;
   }
 
   /**
@@ -366,6 +373,41 @@ export class InvoiceService {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Auto-invoice skipped for paid order ${orderId}: ${message}`);
+      await this.recordAutoInvoiceFailure(orgId, orderId, message);
+    }
+  }
+
+  /**
+   * Issue a cash-on-delivery order's invoice when it ships, if the org opted
+   * in via `orderSettings.autoInvoiceCodOnShipping` — GST wants the invoice by
+   * dispatch, and a COD order is paid only after delivery. Prepaid orders are
+   * left to the on-payment path. Never throws, like `autoInvoiceForPaidOrder`.
+   */
+  async autoInvoiceForShippedCodOrder(orgId: string, orderId: string): Promise<void> {
+    try {
+      const settingsRow = await this.prisma.organizationSettings.findUnique({
+        where: { organizationId: orgId },
+        select: { orderSettings: true },
+      });
+      if (!parseOrderSettings(settingsRow?.orderSettings ?? null).autoInvoiceCodOnShipping) {
+        return;
+      }
+      const order = await this.prisma.order.findFirst({
+        where: { id: orderId, organizationId: orgId, deletedAt: null },
+        select: { cancelledAt: true, paymentGateways: true },
+      });
+      if (!order || order.cancelledAt || !isCashOnDelivery(order.paymentGateways)) return;
+      const live = await this.prisma.invoice.findFirst({
+        where: { orderId, organizationId: orgId, status: { notIn: [InvoiceStatus.CANCELLED, InvoiceStatus.CREDIT_NOTE] } },
+        select: { id: true },
+      });
+      if (live) return;
+
+      const invoice = await this.create(orgId, { orderId } as CreateInvoiceDto);
+      this.logger.log(`Auto-issued invoice ${invoice.invoiceNumber} for shipped COD order ${orderId}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Auto-invoice skipped for shipped COD order ${orderId}: ${message}`);
       await this.recordAutoInvoiceFailure(orgId, orderId, message);
     }
   }
@@ -1113,6 +1155,16 @@ export class InvoiceService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  /**
+   * The invoice as a PDF — the file the app downloads and the one customers
+   * are sent on WhatsApp.
+   */
+  async pdf(id: string, orgId: string): Promise<{ buffer: Buffer; filename: string; invoiceNumber: string }> {
+    const invoice = await this.findOne(id, orgId);
+    const buffer = await renderInvoicePdf(invoice as unknown as InvoiceForPdf);
+    return { buffer, filename: invoicePdfFilename(invoice.invoiceNumber), invoiceNumber: invoice.invoiceNumber };
   }
 
   // ─── GET SINGLE INVOICE ───

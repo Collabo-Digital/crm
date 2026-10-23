@@ -65,6 +65,22 @@ export const TEMPLATE_STARTERS: TemplateStarter[] = [
         },
     },
     {
+        key: 'invoice_ready',
+        useCase: 'orders',
+        title: 'GST invoice',
+        description: 'Sends the order’s GST invoice as a PDF after the purchase.',
+        draft: {
+            name: 'invoice_ready',
+            category: 'UTILITY',
+            parameterFormat: 'NAMED',
+            header: { format: 'DOCUMENT' },
+            body: {
+                text: 'Hi {{first_name}}, thank you for your order {{order_number}}. Your GST invoice {{invoice_number}} for {{invoice_total}} is attached.',
+                examples: { first_name: 'Ananya', order_number: '#1042', invoice_number: 'INV-26-27/000042', invoice_total: '₹2,499' },
+            },
+        },
+    },
+    {
         key: 'cod_confirmation',
         useCase: 'payments',
         title: 'Confirm cash-on-delivery order',

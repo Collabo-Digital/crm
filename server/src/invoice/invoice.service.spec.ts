@@ -11,6 +11,7 @@ import { GstCalculatorService } from '../gst/gst-calculator.service';
 import { TaxResolverService } from '../gst/tax-resolver.service';
 import { InvoiceNumberService } from './invoice-number.service';
 import { InvoiceService } from './invoice.service';
+import { CommerceEventsService } from '../commerce/commerce-events.service';
 import { GstReturnType } from './dto/query-gst-return.dto';
 
 /**
@@ -93,6 +94,7 @@ describe('InvoiceService.getGstReturn', () => {
         { provide: GstCalculatorService, useValue: new GstCalculatorService() },
         { provide: TaxResolverService, useValue: {} },
         { provide: InvoiceNumberService, useValue: {} },
+        { provide: CommerceEventsService, useValue: { invoiceIssued: jest.fn() } },
       ],
     }).compile();
 
@@ -266,7 +268,7 @@ describe('InvoiceService.autoInvoiceForPaidOrder', () => {
       $transaction: jest.fn(),
     };
     const service = new InvoiceService(
-      prisma as any, {} as any, {} as any, {} as any, {} as any,
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any,
     );
     const create = jest
       .spyOn(service, 'create')
@@ -319,6 +321,82 @@ describe('InvoiceService.autoInvoiceForPaidOrder', () => {
   it('never throws, so it cannot break the payment that triggered it', async () => {
     const { service } = build({ createError: new Error('boom') });
     await expect(service.autoInvoiceForPaidOrder(ORG, ORDER)).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Cash-on-delivery invoicing at dispatch: GST wants the invoice by the time
+ * the goods leave, and a COD order is only paid after delivery.
+ */
+describe('InvoiceService.autoInvoiceForShippedCodOrder', () => {
+  const ORG = 'org_1';
+  const ORDER = 'order_1';
+
+  function build(
+    opts: { enabled?: boolean; gateways?: string[]; cancelled?: boolean; liveInvoice?: boolean; createError?: Error } = {},
+  ) {
+    const orderUpdates: Array<{ where: any; data: any }> = [];
+    const prisma = {
+      organizationSettings: {
+        findUnique: jest.fn().mockResolvedValue({
+          orderSettings: { autoInvoiceCodOnShipping: opts.enabled ?? true },
+        }),
+      },
+      order: {
+        findFirst: jest.fn().mockResolvedValue({
+          cancelledAt: opts.cancelled ? new Date() : null,
+          paymentGateways: opts.gateways ?? ['Cash on Delivery (COD)'],
+        }),
+        updateMany: jest.fn((args: any) => {
+          orderUpdates.push(args);
+          return Promise.resolve({ count: 1 });
+        }),
+      },
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(opts.liveInvoice ? { id: 'inv_1' } : null),
+      },
+    };
+    const service = new InvoiceService(
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any,
+    );
+    const create = jest
+      .spyOn(service, 'create')
+      .mockImplementation(async () =>
+        opts.createError ? Promise.reject(opts.createError) : ({ invoiceNumber: 'INV-26-27/000001' } as any),
+      );
+    return { service, create, orderUpdates };
+  }
+
+  it('invoices a COD order when it ships', async () => {
+    const { service, create } = build();
+    await service.autoInvoiceForShippedCodOrder(ORG, ORDER);
+    expect(create).toHaveBeenCalledWith(ORG, { orderId: ORDER });
+  });
+
+  it('does nothing when the org has not opted in', async () => {
+    const { service, create } = build({ enabled: false });
+    await service.autoInvoiceForShippedCodOrder(ORG, ORDER);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('leaves prepaid orders to the on-payment path', async () => {
+    const { service, create } = build({ gateways: ['razorpay'] });
+    await service.autoInvoiceForShippedCodOrder(ORG, ORDER);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('skips cancelled and already-invoiced orders', async () => {
+    for (const opts of [{ cancelled: true }, { liveInvoice: true }]) {
+      const { service, create } = build(opts);
+      await service.autoInvoiceForShippedCodOrder(ORG, ORDER);
+      expect(create).not.toHaveBeenCalled();
+    }
+  });
+
+  it('records the reason and never throws when invoicing fails', async () => {
+    const { service, orderUpdates } = build({ createError: new Error('No GSTIN registration found.') });
+    await expect(service.autoInvoiceForShippedCodOrder(ORG, ORDER)).resolves.toBeUndefined();
+    expect(orderUpdates[0].data.invoiceError).toMatch(/No GSTIN/);
   });
 });
 
@@ -403,6 +481,7 @@ describe('InvoiceService.createForOrderTx dating', () => {
       new GstCalculatorService(),
       taxResolver as any,
       invoiceNumber as any,
+      { invoiceIssued: jest.fn() } as any,
     );
     const warn = jest
       .spyOn((service as any).logger, 'warn')
@@ -577,7 +656,7 @@ describe('InvoiceService.update', () => {
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const service = new InvoiceService(
-      prisma as any, {} as any, {} as any, {} as any, {} as any,
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any,
     );
     return { service, prisma, updates, events };
   }
@@ -714,7 +793,7 @@ describe('InvoiceService.bulkCreate', () => {
       },
     };
     const service = new InvoiceService(
-      prisma as any, {} as any, {} as any, {} as any, {} as any,
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any,
     );
     let n = 0;
     const create = jest.spyOn(service, 'create').mockImplementation(async (_org, dto) => {

@@ -6,7 +6,7 @@ import type { InvoiceDetail } from "~/types/api";
  * The invoice as a printed document, rendered in HTML.
  *
  * One layout, three consumers: the invoice page's preview, the print route and
- * (mirrored in PDF primitives) `invoice-pdf-document.tsx`. It was the body of
+ * (mirrored in PDF primitives by the server, `server/src/invoice/pdf/invoice-pdf.tsx`). It was the body of
  * the print route; it moved here so the page did not become a second copy of
  * 250 lines of statutory layout.
  */

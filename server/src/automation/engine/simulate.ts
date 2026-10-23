@@ -57,8 +57,8 @@ export function simulate(
                 push('done', `${c.mode === 'public' ? 'Replies under the comment' : 'Replies privately'}: ${interpolate(String(c.message ?? ''), vars)}`);
                 break;
             case 'send_invoice':
-                push('error', 'Invoice delivery is not available yet.');
-                return trace;
+                push('done', `Sends the order's GST invoice as a PDF with the template "${opts.templateNames?.[String(c.templateId ?? '')] ?? 'not chosen'}".`);
+                break;
             case 'wait':
                 push('waits', `Waits ${unitLabel(Number(c.amount), String(c.unit))}.`);
                 break;

@@ -3,7 +3,7 @@ import { AutomationStatus, ChannelPlatform, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AutomationJobs } from '../messaging/automation-jobs';
 import { countryCodeOf, normalizePhone } from '../common/phone.util';
-import { StoreEventKind, checkoutVars, isCashOnDelivery, orderVars } from './order-vars';
+import { StoreEventKind, checkoutVars, invoiceVars, isCashOnDelivery, orderVars } from './order-vars';
 
 const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 const phoneOf = (address: unknown): string | null => {
@@ -35,18 +35,9 @@ export class CommerceEventsService {
         try {
             const unique = [...new Set(kinds)];
             if (!unique.length) return;
-            const order = await this.prisma.order.findUnique({
-                where: { id: orderId },
-                include: {
-                    customer: { select: { id: true, phone: true } },
-                    lineItems: { select: { title: true, quantity: true } },
-                    fulfillments: { select: { trackingNumber: true, trackingUrl: true, trackingCompany: true }, orderBy: { createdAt: 'desc' } },
-                },
-            });
-            if (!order) return;
-            const country = countryCodeOf(order.shippingAddress) ?? countryCodeOf(order.billingAddress);
-            const e164 = normalizePhone(phoneOf(order.shippingAddress) ?? phoneOf(order.billingAddress) ?? order.customer?.phone, country);
-            const vars = orderVars({ ...order, totalPrice: order.totalPrice.toString() });
+            const buyer = await this.buyerOf(orderId);
+            if (!buyer) return;
+            const { order, e164, vars } = buyer;
             for (const kind of unique) {
                 await this.raise({
                     organizationId: order.organizationId,
@@ -62,6 +53,51 @@ export class CommerceEventsService {
         } catch (err) {
             this.logger.warn(`Order events for ${orderId} not raised: ${err instanceof Error ? err.message : err}`);
         }
+    }
+
+    /**
+     * A GST invoice was issued — on payment, by hand, in bulk or with an
+     * offline sale — so automations can send it to the buyer. Carries the
+     * order's variables and {{invoice.*}}.
+     */
+    async invoiceIssued(invoiceId: string): Promise<void> {
+        try {
+            const invoice = await this.prisma.invoice.findUnique({
+                where: { id: invoiceId },
+                select: { id: true, orderId: true, invoiceNumber: true, invoiceDate: true, grandTotal: true, currency: true },
+            });
+            if (!invoice) return;
+            const buyer = await this.buyerOf(invoice.orderId);
+            if (!buyer) return;
+            await this.raise({
+                organizationId: buyer.order.organizationId,
+                eventType: 'crm.invoice.issued',
+                externalId: `${invoice.id}:issued`,
+                e164: buyer.e164,
+                customerId: buyer.order.customerId,
+                orderId: buyer.order.id,
+                vars: { ...buyer.vars, ...invoiceVars({ ...invoice, grandTotal: invoice.grandTotal.toString() }) },
+                extra: { invoiceId: invoice.id },
+            });
+        } catch (err) {
+            this.logger.warn(`Invoice event for ${invoiceId} not raised: ${err instanceof Error ? err.message : err}`);
+        }
+    }
+
+    /** The order, the buyer's number from its addresses (or the customer), and its {{order.*}} values. */
+    private async buyerOf(orderId: string) {
+        const order = await this.prisma.order.findUnique({
+            where: { id: orderId },
+            include: {
+                customer: { select: { id: true, phone: true } },
+                lineItems: { select: { title: true, quantity: true } },
+                fulfillments: { select: { trackingNumber: true, trackingUrl: true, trackingCompany: true }, orderBy: { createdAt: 'desc' } },
+            },
+        });
+        if (!order) return null;
+        const country = countryCodeOf(order.shippingAddress) ?? countryCodeOf(order.billingAddress);
+        const e164 = normalizePhone(phoneOf(order.shippingAddress) ?? phoneOf(order.billingAddress) ?? order.customer?.phone, country);
+        return { order, e164, vars: orderVars({ ...order, totalPrice: order.totalPrice.toString() }) };
     }
 
     async checkoutAbandoned(checkout: {

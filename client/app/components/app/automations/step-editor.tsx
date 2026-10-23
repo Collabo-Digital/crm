@@ -56,6 +56,10 @@ function variablesFor(ctx: EditorContext): string[] {
   }
   const event = String(trigger.event ?? "");
   if (ORDER_EVENTS.includes(event)) ["order.name", "order.total", "order.items", "order.payment", "order.status", "order.tracking_url", "order.tracking_number", "order.carrier"].forEach((v) => saved.add(v));
+  // The invoice event carries {{invoice.*}}; "Send the invoice" fills it on order events.
+  if (event === "invoice_issued" || (ORDER_EVENTS.includes(event) && allSteps(ctx.steps).some((s) => s.type === "send_invoice"))) {
+    ["invoice.number", "invoice.date", "invoice.total"].forEach((v) => saved.add(v));
+  }
   if (event === "checkout_abandoned") ["checkout.url", "checkout.url_path", "checkout.total", "checkout.items"].forEach((v) => saved.add(v));
   return [
     "first_name",
@@ -464,15 +468,21 @@ function FileField({ media, onChange, readOnly, label }: { media: Config["media"
   );
 }
 
-function TemplateFields({ config, set, ctx }: { config: Config; set: (p: Config) => void; ctx: EditorContext }) {
-  const { data: templates = [], isLoading } = useTemplates({ status: "APPROVED" });
+/** `invoice`: only templates with a document header, which carries the invoice PDF. */
+function TemplateFields({ config, set, ctx, invoice = false }: { config: Config; set: (p: Config) => void; ctx: EditorContext; invoice?: boolean }) {
+  const { data: all = [], isLoading } = useTemplates({ status: "APPROVED" });
+  const templates = invoice ? all.filter((t) => t.params.some((p) => p.component === "header" && p.kind === "document")) : all;
   const template = templates.find((t) => t.id === config.templateId);
   const values: Record<string, string> = config.templateValues ?? {};
   return (
     <div className="space-y-3">
-      <Field label="Template" hint="Approved WhatsApp templates. They can be sent even after the 24-hour window closes." htmlFor="m-template">
+      <Field
+        label="Template"
+        hint={invoice ? "Approved WhatsApp templates with a document header. Start from the “GST invoice” template if you have none." : "Approved WhatsApp templates. They can be sent even after the 24-hour window closes."}
+        htmlFor="m-template"
+      >
         <select id="m-template" className={selectClass} value={config.templateId ?? ""} disabled={ctx.readOnly || isLoading} onChange={(e) => set({ templateId: e.target.value || undefined })}>
-          <option value="">{isLoading ? "Loading…" : "Choose a template"}</option>
+          <option value="">{isLoading ? "Loading…" : templates.length ? "Choose a template" : invoice ? "No template with a document header yet" : "No approved templates yet"}</option>
           {templates.map((t) => (
             <option key={t.id} value={t.id}>
               {t.name} · {t.language} · {t.category.toLowerCase()}
@@ -484,7 +494,11 @@ function TemplateFields({ config, set, ctx }: { config: Config; set: (p: Config)
         <>
           <p className="whitespace-pre-wrap rounded-lg bg-muted p-2 text-caption">{template.preview.body}</p>
           {template.params.map((p) =>
-            p.component === "header" && p.kind !== "text" ? (
+            p.component === "header" && p.kind !== "text" && invoice ? (
+              <p key={p.key} className="rounded-lg border border-dashed p-2 text-caption text-muted-foreground">
+                The header carries the order’s GST invoice as a PDF.
+              </p>
+            ) : p.component === "header" && p.kind !== "text" ? (
               <FileField key={p.key} label="Header file" media={config.media} onChange={(media) => set({ media })} readOnly={ctx.readOnly} />
             ) : (
               <Field key={p.key} label={p.component === "body" ? `Body {{${p.name}}}` : p.kind === "coupon_code" ? "Coupon code" : p.component === "header" ? "Header" : `Button ${Number(p.name) + 1} link`} htmlFor={`tv-${p.key}`}>
@@ -499,7 +513,11 @@ function TemplateFields({ config, set, ctx }: { config: Config; set: (p: Config)
             ),
           )}
           {template.params.some((p) => p.component !== "header" || p.kind === "text") && (
-            <p className="text-micro text-muted-foreground">Use {"{{first_name}}"}, {"{{attr.field}}"} or {"{{webhook.field}}"} for values that change per person.</p>
+            <p className="text-micro text-muted-foreground">
+              {invoice
+                ? <>Use {"{{first_name}}"}, {"{{order.name}}"}, {"{{invoice.number}}"} or {"{{invoice.total}}"} for values that change per order.</>
+                : <>Use {"{{first_name}}"}, {"{{attr.field}}"} or {"{{webhook.field}}"} for values that change per person.</>}
+            </p>
           )}
         </>
       )}
@@ -812,7 +830,14 @@ export function StepEditor({ step, onChange, ctx }: { step: AutomationStep; onCh
       );
       break;
     case "send_invoice":
-      body = <p className="text-caption text-muted-foreground">Sending invoices from automations is not available yet. Remove this step to publish.</p>;
+      body = (
+        <div className="space-y-3">
+          <p className="text-caption text-muted-foreground">
+            Sends the GST invoice of the order this automation is about. The order needs an invoice: turn on automatic invoices in Settings → Orders, or issue it by hand.
+          </p>
+          <TemplateFields config={c} set={set} ctx={ctx} invoice />
+        </div>
+      );
       break;
     case "store_action":
       body = (

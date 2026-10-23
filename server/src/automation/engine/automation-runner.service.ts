@@ -195,7 +195,7 @@ export class AutomationRunner {
                 return this.deliver(s, step, payload);
             }
             case 'send_invoice':
-                return fail('Invoice delivery is not available yet.');
+                return this.sendInvoice(s, step);
             case 'wait': {
                 const resumeAt = new Date(Date.now() + toMinutes(Number(c.amount), c.unit as 'minutes') * 60_000);
                 return { kind: 'wait', resumeAt, forReply: false, output: { resumeAt: resumeAt.toISOString() } };
@@ -311,6 +311,31 @@ export class AutomationRunner {
             previewText: renderTemplate(components, values).body,
             ...(headerMedia ? { headerMedia } : {}),
         };
+    }
+
+    /** The order's GST invoice as a PDF, in the document header of an approved template. */
+    private async sendInvoice(s: StepState, step: FlowStep): Promise<Outcome> {
+        const orderId = s.run.orderId;
+        if (!orderId) return fail('This run is not about an order.');
+        const c = step.config as { templateId?: string; templateValues?: Record<string, string> };
+        const template = c.templateId
+            ? await this.prisma.messageTemplate.findFirst({ where: { id: c.templateId, organizationId: s.run.organizationId }, select: { components: true } })
+            : null;
+        const header = ((template?.components ?? []) as Array<{ type?: string; format?: string }>).find((x) => String(x.type).toUpperCase() === 'HEADER');
+        if (template && String(header?.format).toUpperCase() !== 'DOCUMENT') return fail('The template has no document header for the invoice PDF.');
+        const doc = await this.store.invoiceDocument(s.run.organizationId, orderId);
+        if (!doc) return fail('This order has no invoice yet.');
+        // {{invoice.*}} for this message and the steps after it.
+        Object.assign(s.ctx.vars, doc.vars);
+        Object.assign(s.vars, doc.vars);
+        const payload = await this.templatePayload(s, {
+            kind: 'template',
+            templateId: c.templateId,
+            templateValues: c.templateValues ?? {},
+            media: { storageKey: doc.storageKey, mime: 'application/pdf', kind: 'document', filename: doc.filename },
+        } as SendMessageConfigT);
+        if (typeof payload === 'string') return fail(payload);
+        return this.deliver(s, step, payload);
     }
 
     private async deliver(s: StepState, step: FlowStep, payload: OutboundPayload): Promise<Outcome> {

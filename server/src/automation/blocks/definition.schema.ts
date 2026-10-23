@@ -48,11 +48,13 @@ const TriggerConfig = z.object({
      * webhook — another system called this automation's URL · order_* — a
      * store order was placed, paid, shipped, delivered or cancelled ·
      * checkout_abandoned — a store checkout was left unfinished · cart — a
-     * WhatsApp cart sent from the catalog.
+     * WhatsApp cart sent from the catalog · invoice_issued — a GST invoice was
+     * issued for an order.
      */
     event: z.enum([
         'comment', 'message', 'mention', 'postback', 'tag_added', 'webhook',
         'order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled', 'checkout_abandoned', 'cart',
+        'invoice_issued',
     ]),
     /** Comment: the post or reel id; empty for every post. */
     post: z.string().max(64).default(''),
@@ -111,9 +113,10 @@ const StoreActionConfig = z.object({
     value: z.string().max(500).default(''),
 });
 
+/** The order's GST invoice as a PDF, in the document header of an approved WhatsApp template. */
 const SendInvoiceConfig = z.object({
-    template: z.string().max(64).default('gst_invoice'),
-    delivery: z.enum(['whatsapp']).default('whatsapp'),
+    templateId: z.string().max(64).optional(),
+    templateValues: z.record(z.string(), z.string().max(1024)).default({}),
 });
 
 const WaitConfig = z.object({
@@ -287,8 +290,10 @@ export function parseDefinition(input: unknown): StepDef[] {
 
 /** What a trigger can listen to on each channel. */
 const ORDER_EVENTS = ['order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled'];
+/** Events about one order: its actions and its invoice are available. */
+const ORDER_CONTEXT = [...ORDER_EVENTS, 'invoice_issued'];
 /** Store events reach people who may not have written in 24 hours: WhatsApp templates only. */
-const STORE_EVENTS = [...ORDER_EVENTS, 'checkout_abandoned'];
+const STORE_EVENTS = [...ORDER_CONTEXT, 'checkout_abandoned'];
 const EVENTS_BY_CHANNEL: Record<z.infer<typeof Channel>, string[]> = {
     instagram: ['comment', 'message', 'mention', 'postback', 'tag_added', 'webhook'],
     facebook: ['comment', 'message', 'postback', 'tag_added', 'webhook'],
@@ -328,7 +333,9 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
     const saved = new Set<string>();
     // A webhook's JSON fields arrive as {{webhook.<field>}}; store events bring their order or checkout.
     if (t.event === 'webhook') saved.add('webhook');
-    if (ORDER_EVENTS.includes(t.event)) saved.add('order');
+    if (ORDER_CONTEXT.includes(t.event)) saved.add('order');
+    // {{invoice.*}} comes with the invoice event, and "Send the invoice" fills it on order events.
+    if (ORDER_CONTEXT.includes(t.event)) saved.add('invoice');
     if (t.event === 'checkout_abandoned') saved.add('checkout');
     let privateReplies = 0;
     for (const { step, path } of actions) {
@@ -399,9 +406,24 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 checkText(r.message);
                 break;
             }
-            case 'send_invoice':
-                push(step.id, 'not_available_yet', 'Invoice delivery is not available yet', 'Sending invoices from automations arrives with store automations.');
+            case 'send_invoice': {
+                const v = c as z.infer<typeof SendInvoiceConfig>;
+                if (t.channel !== 'whatsapp') push(step.id, 'invoice_needs_whatsapp', 'Invoices go on WhatsApp', 'Use a WhatsApp automation to send invoices.');
+                if (!ORDER_CONTEXT.includes(t.event)) push(step.id, 'invoice_needs_order', 'Needs an order', 'Sending the invoice works when the trigger is an order or invoice event.');
+                if (!v.templateId) push(step.id, 'template_missing', 'Choose a template', 'Pick an approved WhatsApp template with a document header.');
+                const chosen = v.templateId ? ctx.templates?.get(v.templateId) : undefined;
+                if (v.templateId && ctx.templates && !chosen) push(step.id, 'template_not_found', 'Template not found', 'The chosen template was deleted. Pick another one.');
+                if (chosen && !chosen.params.some((p) => p.key === 'header' && p.kind === 'document')) {
+                    push(step.id, 'template_needs_document', 'Template needs a document header', `“${chosen.name}” has no document header for the invoice PDF. Pick a template that has one.`);
+                }
+                for (const p of chosen?.params ?? []) {
+                    if (p.key !== 'header' && (p.kind === 'text' || p.kind === 'coupon_code') && !(v.templateValues[p.key] ?? '').trim()) {
+                        push(step.id, 'template_value_missing', 'Fill in the template', `“${p.name}” in “${chosen!.name}” has no value.`);
+                    }
+                }
+                Object.values(v.templateValues).forEach(checkText);
                 break;
+            }
             case 'wait': {
                 const w = c as z.infer<typeof WaitConfig>;
                 if (toMinutes(w.amount, w.unit) > 30 * 1440) push(step.id, 'wait_too_long', 'Wait is too long', 'A wait step can be at most 30 days.');
@@ -443,7 +465,7 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
             case 'store_action': {
                 const a = c as z.infer<typeof StoreActionConfig>;
                 if (t.channel !== 'whatsapp') push(step.id, 'store_needs_whatsapp', 'Store actions are WhatsApp only', 'Use a WhatsApp automation to work with orders and customers.');
-                if (['tag_order', 'note_order', 'cancel_order'].includes(a.action) && !ORDER_EVENTS.includes(t.event)) {
+                if (['tag_order', 'note_order', 'cancel_order'].includes(a.action) && !ORDER_CONTEXT.includes(t.event)) {
                     push(step.id, 'needs_order', 'Needs an order', 'Order actions work when the trigger is an order event.');
                 }
                 if (a.action === 'create_draft_order' && t.event !== 'cart') {
@@ -487,6 +509,7 @@ export function triggerTypeFor(trigger: StepDef): string {
     if (c.event === 'webhook') return 'crm.webhook';
     if (c.event.startsWith('order_')) return `crm.order.${c.event.slice('order_'.length)}`;
     if (c.event === 'checkout_abandoned') return 'crm.checkout.abandoned';
+    if (c.event === 'invoice_issued') return 'crm.invoice.issued';
     if (c.event === 'cart') return 'whatsapp.cart';
     if (c.event === 'mention') return 'instagram.mention';
     return `${c.channel}.${c.event}`;

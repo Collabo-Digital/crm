@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { InvoiceModule } from '../invoice/invoice.module';
 import { ChannelModule } from '../channel/channel.module';
 import { MessagingModule } from '../messaging/messaging.module';
 import { OrderModule } from '../order/order.module';
@@ -12,7 +13,7 @@ import { StoreActionsService } from './store-actions.service';
  * actions automations and the inbox take on orders and carts.
  */
 @Module({
-    imports: [ChannelModule, MessagingModule, OrderModule, DraftOrderModule],
+    imports: [ChannelModule, MessagingModule, OrderModule, DraftOrderModule, InvoiceModule],
     controllers: [CommerceController],
     providers: [CatalogService, StoreActionsService],
     exports: [CatalogService, StoreActionsService],

@@ -175,6 +175,15 @@ export class InvoiceController {
     return this.invoiceService.findAll(orgId, query);
   }
 
+  // GET /api/v1/invoices/:id/pdf — the invoice as a PDF file
+  @Get(':id/pdf')
+  async pdf(@Param('id') id: string, @OrgId() orgId: string, @Res() res: Response) {
+    const { buffer, filename } = await this.invoiceService.pdf(id, orgId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', attachmentDisposition(filename, 'invoice.pdf'));
+    res.send(buffer);
+  }
+
   // GET /api/v1/invoices/:id — get full invoice detail
   @Get(':id')
   findOne(@Param('id') id: string, @OrgId() orgId: string) {

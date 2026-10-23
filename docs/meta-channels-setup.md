@@ -454,8 +454,27 @@ Per-account subscription happens at connect time and is undone at disconnect:
   (`{{draft.checkout_url}}`). The inbox shows “Create draft order” under a cart
   for doing it by hand. Without a Shopify store the draft stays in Collabo and
   there is no link.
-- **Not built:** sending a GST invoice from an automation (invoice PDFs are
-  only rendered in the browser today).
+- **GST invoices to every buyer.** Invoice PDFs are rendered on the server
+  (`GET /invoices/:id/pdf`, `server/src/invoice/pdf/invoice-pdf.tsx`); the
+  browser download uses the same file. Every newly issued invoice raises the
+  “A GST invoice is issued” trigger, whether it was issued on payment, on
+  shipping, at an offline sale or by hand. The “Send the GST invoice” playbook
+  sends it with the **Send invoice** step: the PDF is uploaded to WhatsApp and
+  sent as the document header of an approved utility template (the “GST
+  invoice” starter), named after the invoice number. Publishing refuses a
+  template without a document header. Meta's template reference does not show
+  `filename` on a template's document header, although its media object
+  accepts it for documents. That the name reaches the customer is **not yet
+  verified** live.
+- **When invoices are issued** (Settings → Orders, both off by default because
+  they consume invoice serials). “Auto-generate GST invoices for paid Shopify
+  orders” invoices a live Shopify order when it becomes paid. “Invoice
+  cash-on-delivery orders when they ship” invoices a COD order when it is
+  fulfilled, in Shopify or from Shipments in Collabo: GST wants the invoice
+  by dispatch, and a COD order is only paid after delivery. The later payment
+  finds the invoice and issues nothing more. Both need GST enabled with a
+  registered GSTIN, and a failure is recorded on the order instead of blocking
+  it.
 
 ### Messaging analytics (Analytics → Messaging)
 

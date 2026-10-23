@@ -1787,6 +1787,12 @@ export interface OrderSettings {
    * soft-fails server-side and the order still syncs.
    */
   autoInvoiceOnPayment: boolean;
+  /**
+   * When true, a cash-on-delivery order is invoiced when it ships rather than
+   * when it is paid, since GST wants the invoice by dispatch. Shopify
+   * fulfilments and shipments made in the CRM. Default false.
+   */
+  autoInvoiceCodOnShipping: boolean;
 }
 
 /** Per-org GST/tax settings. Both values change STATUTORY OUTPUT. */

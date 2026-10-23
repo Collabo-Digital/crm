@@ -4,10 +4,11 @@ import {
 } from './order-settings.schema';
 
 describe('orderSettings defaults', () => {
-  it('defaults autoInvoiceOnPayment to false for an org that never set it', () => {
+  it('defaults both auto-invoice settings to false for an org that never set them', () => {
     expect(parseOrderSettings(undefined)).toEqual({
       autoSyncToShopify: false,
       autoInvoiceOnPayment: false,
+      autoInvoiceCodOnShipping: false,
     });
   });
 
@@ -17,6 +18,7 @@ describe('orderSettings defaults', () => {
     expect(parseOrderSettings({ ...current, ...patch })).toEqual({
       autoSyncToShopify: true,
       autoInvoiceOnPayment: true,
+      autoInvoiceCodOnShipping: false,
     });
   });
 

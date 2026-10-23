@@ -44,7 +44,7 @@ export const BLOCKS: Record<AutomationBlockType, BlockSpec> = {
   trigger: { label: "Starts when", icon: Zap, hint: "What starts this automation.", group: "Flow" },
   send_message: { label: "Send a message", icon: MessageSquare, hint: "Text, a file, buttons, a list or a WhatsApp template.", group: "Messages" },
   reply_comment: { label: "Reply to the comment", icon: MessageCircleReply, hint: "A private DM to the commenter, or a public reply.", group: "Messages", commentsOnly: true },
-  send_invoice: { label: "Send the invoice", icon: FileText, hint: "Arrives with store automations.", group: "Messages", unavailable: "Arrives with store automations" },
+  send_invoice: { label: "Send the invoice", icon: FileText, hint: "The order’s GST invoice as a PDF on WhatsApp.", group: "Store", channels: ["whatsapp"] },
   wait: { label: "Wait", icon: Clock, hint: "Pause for minutes, hours or days.", group: "Flow" },
   wait_for_reply: { label: "Wait for a reply", icon: Hourglass, hint: "Go on when they answer, or another way if they don’t.", group: "Flow" },
   condition: { label: "Check a condition", icon: GitBranch, hint: "Split into yes and no.", group: "Flow" },
@@ -61,7 +61,7 @@ export const BLOCKS: Record<AutomationBlockType, BlockSpec> = {
 export const BLOCK_GROUPS: Array<BlockSpec["group"]> = ["Messages", "Flow", "Contact", "Conversation", "Store", "Connect"];
 
 /** Store triggers: the order or checkout they are about gives {{order.*}} or {{checkout.*}}. */
-export const ORDER_EVENTS = ["order_created", "order_paid", "order_fulfilled", "order_delivered", "order_cancelled"];
+export const ORDER_EVENTS = ["order_created", "order_paid", "order_fulfilled", "order_delivered", "order_cancelled", "invoice_issued"];
 export const STORE_EVENTS = [...ORDER_EVENTS, "checkout_abandoned"];
 
 export const BRANCH_LABEL: Partial<Record<AutomationBlockType, Record<string, string>>> = {
@@ -99,6 +99,7 @@ export const EVENTS: Record<AutomationChannelKey, Array<{ value: string; label: 
     { value: "cart", label: "Someone sends a cart from your catalog", hint: "Turn it into a draft order with a checkout link." },
     { value: "order_created", label: "An order is placed", hint: "In Shopify or in Collabo." },
     { value: "order_paid", label: "An order is paid", hint: "" },
+    { value: "invoice_issued", label: "A GST invoice is issued", hint: "On payment or when a cash-on-delivery order ships (with automatic invoices on), by hand, in bulk, or with an offline sale. Send it with “Send the invoice”." },
     { value: "order_fulfilled", label: "An order ships", hint: "Tracking details are in {{order.tracking_url}}." },
     { value: "order_delivered", label: "An order is delivered", hint: "When the carrier or your team marks it delivered." },
     { value: "order_cancelled", label: "An order is cancelled", hint: "" },
@@ -142,7 +143,7 @@ export function newStep(type: AutomationBlockType, channel: AutomationChannelKey
     case "http_request":
       return { id, type, config: { method: "POST", url: "", body: "", saveAs: "" } };
     case "send_invoice":
-      return { id, type, config: { template: "gst_invoice", delivery: "whatsapp" } };
+      return { id, type, config: { templateValues: {} } };
     case "store_action":
       return { id, type, config: { action: "tag_order", value: "" } };
     default:
@@ -258,6 +259,8 @@ export function triggerSummary(config: AutomationStep["config"]): string {
       return "A new order";
     case "order_paid":
       return "An order is paid";
+    case "invoice_issued":
+      return "A GST invoice is issued";
     case "order_fulfilled":
       return "An order ships";
     case "order_delivered":
@@ -302,6 +305,8 @@ export function stepSummary(step: AutomationStep, templateName?: (id: string) =>
       return c.text ? clip(c.text) : "Write the note";
     case "http_request":
       return c.url ? `${c.method} ${clip(c.url, 60)}` : "Add the URL";
+    case "send_invoice":
+      return c.templateId ? `The invoice PDF with “${templateName?.(c.templateId) ?? "a template"}”` : "Choose the template";
     case "store_action":
       return (
         {
@@ -313,7 +318,7 @@ export function stepSummary(step: AutomationStep, templateName?: (id: string) =>
         } as Record<string, string>
       )[c.action] ?? "Store action";
     default:
-      return BLOCKS[step.type]?.hint ?? "";
+      return BLOCKS[(step as AutomationStep).type]?.hint ?? "";
   }
 }
 
@@ -484,6 +489,18 @@ export const PLAYBOOKS: Playbook[] = [
     steps: (channel) => [
       t(channel, { event: "order_created" }),
       s("send_message", { kind: "template", templateValues: prefill({ first_name: "{{first_name}}", order_number: "{{order.name}}", order_total: "{{order.total}}" }), options: [] }),
+    ],
+  },
+  {
+    key: "invoice_after_purchase",
+    name: "Send the GST invoice",
+    description: "After each purchase, send the customer their GST invoice as a PDF on WhatsApp, as soon as it is issued.",
+    channels: ["whatsapp"],
+    steps: (channel) => [
+      t(channel, { event: "invoice_issued" }),
+      s("send_invoice", {
+        templateValues: prefill({ first_name: "{{first_name}}", order_number: "{{order.name}}", invoice_number: "{{invoice.number}}", invoice_total: "{{invoice.total}}" }),
+      }),
     ],
   },
   {

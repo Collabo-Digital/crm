@@ -1853,6 +1853,7 @@ export class OrderService {
       );
 
     await this.commerceEvents.order(result.order.id, result.order.financialStatus === OrderFinancialStatus.PAID ? ['created', 'paid'] : ['created']);
+    if (result.invoice) await this.commerceEvents.invoiceIssued(result.invoice.id);
     return result;
   }
 
@@ -3939,6 +3940,7 @@ export class OrderService {
       });
 
       const shipped = await this.prisma.order.findUnique({ where: { id: orderId } });
+      await this.invoiceService.autoInvoiceForShippedCodOrder(orgId, orderId);
       await this.commerceEvents.order(orderId, ['fulfilled']);
       return shipped;
     }
@@ -4024,6 +4026,7 @@ export class OrderService {
 
       return fulfillment;
     });
+    await this.invoiceService.autoInvoiceForShippedCodOrder(orgId, orderId);
     await this.commerceEvents.order(orderId, ['fulfilled']);
     return recorded;
   }

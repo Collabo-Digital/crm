@@ -2336,6 +2336,11 @@ export class ShopifySyncService {
         // often Shopify redelivers.
         if (opts.live && eventOrderId) {
             if ((so.fulfillments ?? []).some((f: any) => f?.shipment_status === 'delivered')) storeEvents.push('delivered');
+            if (storeEvents.includes('fulfilled')) {
+                // As on payment: the invoice snapshots the dispatch point, so resolve it first.
+                await this.ensureDispatchWarehouseFromShopify(orgId, eventOrderId);
+                await this.invoiceService.autoInvoiceForShippedCodOrder(orgId, eventOrderId);
+            }
             await this.commerceEvents.order(eventOrderId, storeEvents);
         }
 

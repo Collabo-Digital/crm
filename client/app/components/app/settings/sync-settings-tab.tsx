@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
+import { Link } from "react-router";
 import {
   useOrganizationSettings,
 } from "~/hooks/use-settings-queries";
@@ -287,7 +288,24 @@ export function OrderSettingsTab() {
             mutation.mutate({ autoInvoiceOnPayment: checked })
           }
         />
+        <SettingsToggleRow
+          label="Invoice cash-on-delivery orders when they ship"
+          help="GST expects the tax invoice to be issued by the time the goods leave, but a cash-on-delivery order is only paid after delivery. When ON, a COD order gets its GST invoice as soon as it is fulfilled — in Shopify or from Shipments in the CRM — and the later payment issues nothing more. Prepaid orders are left to the setting above. Requires GST enabled with a GSTIN registered under Tax & GST."
+          checked={settings.autoInvoiceCodOnShipping}
+          disabled={isFieldSaving(mutation, "autoInvoiceCodOnShipping")}
+          onChange={(checked) =>
+            mutation.mutate({ autoInvoiceCodOnShipping: checked })
+          }
+        />
       </SettingsCard>
+
+      <p className="text-xs text-muted-foreground">
+        To send every customer their invoice as a PDF on WhatsApp once it is issued, start the “Send the GST invoice” playbook in{" "}
+        <Link to="/campaigns/automations" className="font-medium text-foreground underline">
+          Automations
+        </Link>
+        .
+      </p>
     </div>
   );
 }

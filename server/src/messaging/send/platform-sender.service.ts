@@ -264,7 +264,9 @@ export class PlatformSenderService {
             filename: media.filename,
         });
         const rest = (payload.components ?? []).filter((c) => (c as { type?: string }).type !== 'header');
-        const header = { type: 'header', parameters: [{ type: media.kind, [media.kind]: { id } }] };
+        // A document keeps its name ("Invoice-INV-0042.pdf") on the customer's phone.
+        const file = media.kind === 'document' && media.filename ? { id, filename: media.filename } : { id };
+        const header = { type: 'header', parameters: [{ type: media.kind, [media.kind]: file }] };
         const { headerMedia: _h, ...template } = payload;
         return { ...template, components: [header, ...rest] };
     }

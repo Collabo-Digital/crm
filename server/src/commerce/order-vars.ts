@@ -62,6 +62,15 @@ function pathOf(url: string | null): string {
     }
 }
 
+/** {{invoice.*}}: the GST invoice issued for an order. */
+export function invoiceVars(invoice: { invoiceNumber: string; invoiceDate: Date; grandTotal: number | string; currency: string }): Record<string, string> {
+    return {
+        'invoice.number': invoice.invoiceNumber,
+        'invoice.date': invoice.invoiceDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }),
+        'invoice.total': formatMoney(invoice.grandTotal, invoice.currency),
+    };
+}
+
 export function checkoutVars(c: {
     recoveryUrl: string | null;
     total: number | string | null;

@@ -195,7 +195,7 @@ export function InvoiceRowActions({
   async function downloadPdf() {
     setDownloading(true);
     try {
-      await downloadInvoicePdf(invoice.id);
+      await downloadInvoicePdf({ id: invoice.id, invoiceNumber: invoice.invoiceNumber });
     } finally {
       setDownloading(false);
     }

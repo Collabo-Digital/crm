@@ -1,12 +1,14 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ChannelPlatform, OrderCancelReason, UserRole } from '@prisma/client';
+import { ChannelPlatform, InvoiceStatus, OrderCancelReason, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShopifyGraphqlClient } from '../channel/shopify-graphql.client';
 import { ShopifyOAuthService } from '../channel/shopify-oauth.service';
 import { CUSTOMER_TAGS_ADD_MUTATION, type CustomerTagsAddResponse, type CustomerTagsAddVariables } from '../channel/shopify-graphql.types';
 import { OrderService } from '../order/order.service';
 import { DraftOrderService } from '../draft-order/draft-order.service';
-import { formatMoney } from './order-vars';
+import { formatMoney, invoiceVars } from './order-vars';
+import { InvoiceService } from '../invoice/invoice.service';
+import { MessagingMediaStorage } from '../messaging/media/messaging-media.storage';
 
 export interface CartLine {
     retailerId: string;
@@ -41,7 +43,25 @@ export class StoreActionsService {
         private readonly drafts: DraftOrderService,
         private readonly graphql: ShopifyGraphqlClient,
         private readonly shopifyOAuth: ShopifyOAuthService,
+        private readonly invoices: InvoiceService,
+        private readonly media: MessagingMediaStorage,
     ) { }
+
+    /**
+     * The order's live GST invoice as a PDF in chat-media storage, ready to go
+     * as a template's document header, with its {{invoice.*}} values. Null
+     * when the order has no invoice (not paid yet, or invoiced by hand later).
+     */
+    async invoiceDocument(orgId: string, orderId: string): Promise<{ invoiceId: string; storageKey: string; filename: string; vars: Record<string, string> } | null> {
+        const invoice = await this.prisma.invoice.findFirst({
+            where: { orderId, organizationId: orgId, status: { notIn: [InvoiceStatus.CANCELLED, InvoiceStatus.CREDIT_NOTE] } },
+            select: { id: true, invoiceNumber: true, invoiceDate: true, grandTotal: true, currency: true },
+        });
+        if (!invoice) return null;
+        const { buffer, filename } = await this.invoices.pdf(invoice.id, orgId);
+        const { storageKey } = await this.media.save(orgId, buffer, 'application/pdf');
+        return { invoiceId: invoice.id, storageKey, filename, vars: invoiceVars({ ...invoice, grandTotal: invoice.grandTotal.toString() }) };
+    }
 
     /**
      * The person a change is recorded against: the automation's creator, else
