@@ -21,6 +21,9 @@ import type {
   SegmentPreview,
   TemplateDraft,
   TemplateStarter,
+  TemplateWriterStatus,
+  WriteTemplateRequest,
+  WrittenTemplate,
 } from "~/types/api";
 
 export interface SaveBroadcastRequest {
@@ -43,6 +46,9 @@ export const campaignsService = {
     apiClient.get<MessageTemplate[]>("/campaigns/templates", { params }).then((r) => r.data),
   getTemplate: (id: string) => apiClient.get<MessageTemplate>(`/campaigns/templates/${id}`).then((r) => r.data),
   starters: () => apiClient.get<TemplateStarter[]>("/campaigns/templates/starters").then((r) => r.data),
+  writerStatus: () => apiClient.get<TemplateWriterStatus>("/campaigns/templates/writer").then((r) => r.data),
+  writeTemplate: (body: WriteTemplateRequest) =>
+    apiClient.post<WrittenTemplate>("/campaigns/templates/writer", body, { timeout: 180_000 }).then((r) => r.data),
   syncTemplates: () =>
     apiClient.post<{ synced: number; removed: number }>("/campaigns/templates/sync", undefined, { timeout: 120_000 }).then((r) => r.data),
   createTemplate: (draft: TemplateDraft, starterKey?: string) =>

@@ -23,12 +23,18 @@ export default () => ({
         fromName: process.env.FROM_NAME || 'YourCRM',
         replyTo: process.env.REPLY_TO_EMAIL || undefined,
     },
-    // Merchants' own gateway accounts, for payment links sent in chat. Not
-    // Collabo's subscription billing (RAZORPAY_KEY_* / BillingService).
     // Facebook Login for Business configuration with ads_read, for ad results.
     ads: {
         configId: process.env.META_ADS_CONFIG_ID,
     },
+    // Collabo's own Anthropic key, for the AI template writer. Without it the
+    // writer reports itself unavailable.
+    ai: {
+        anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+        anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL,
+    },
+    // Merchants' own gateway accounts, for payment links sent in chat. Not
+    // Collabo's subscription billing (RAZORPAY_KEY_* / BillingService).
     payments: {
         razorpayApiBase: process.env.RAZORPAY_MERCHANT_API_BASE || 'https://api.razorpay.com',
     },

@@ -9,7 +9,7 @@ export interface TemplateStarter {
 }
 
 /// Shown on promotional starters: the reply that records an opt-out (see consent.service.ts).
-const STOP_BUTTON = { type: 'QUICK_REPLY' as const, text: 'Stop promotions' };
+export const STOP_BUTTON = { type: 'QUICK_REPLY' as const, text: 'Stop promotions' };
 
 /**
  * Starting points for common store messages, written for Collabo. Each is a

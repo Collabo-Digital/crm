@@ -19,6 +19,7 @@ export const campaignKeys = {
   templateList: (params: object) => [...campaignKeys.templates(), "list", params] as const,
   template: (id: string) => [...campaignKeys.templates(), "detail", id] as const,
   starters: () => [...campaignKeys.templates(), "starters"] as const,
+  writer: () => [...campaignKeys.templates(), "writer"] as const,
   inboxTemplates: () => [...campaignKeys.templates(), "inbox"] as const,
   segments: () => [...campaignKeys.all, "segments"] as const,
   segment: (id: string) => [...campaignKeys.segments(), "detail", id] as const,
@@ -63,6 +64,10 @@ export function useTemplate(id: string | undefined) {
 
 export function useTemplateStarters() {
   return useQuery({ queryKey: campaignKeys.starters(), queryFn: () => campaignsService.starters(), staleTime: Infinity });
+}
+
+export function useTemplateWriter() {
+  return useQuery({ queryKey: campaignKeys.writer(), queryFn: () => campaignsService.writerStatus(), staleTime: Infinity });
 }
 
 export function useInboxTemplates(enabled: boolean) {

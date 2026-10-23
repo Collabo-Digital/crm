@@ -10,6 +10,7 @@ import {
     IsObject,
     IsOptional,
     IsString,
+    Matches,
     Max,
     MaxLength,
     Min,
@@ -23,6 +24,14 @@ export class SaveTemplateDto {
     /** Validated against TemplateDraftSchema. */
     @IsObject() draft: Record<string, unknown>;
     @IsOptional() @IsString() @MaxLength(60) starterKey?: string;
+}
+
+/** A request to the AI template writer. */
+export class WriteTemplateDto {
+    @IsString() @MinLength(10) @MaxLength(1000) brief: string;
+    /** Meta's template language code, such as en, hi or pt_BR. */
+    @IsString() @Matches(/^[a-z]{2,3}(_[A-Z]{2})?$/) language: string;
+    @IsOptional() @IsIn(['MARKETING', 'UTILITY']) category?: 'MARKETING' | 'UTILITY';
 }
 
 export class QueryTemplatesDto {

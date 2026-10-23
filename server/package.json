@@ -41,6 +41,7 @@
     "gst:rcm-check": "node prisma/scripts/print-target.js && ts-node -r tsconfig-paths/register prisma/scripts/inward-supply-check.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
     "@nest-lab/throttler-storage-redis": "^1.2.0",
     "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.0.1",

@@ -4043,6 +4043,25 @@ export interface TemplateStarter {
   draft: Omit<TemplateDraft, "language">;
 }
 
+/** Whether the AI template writer is set up on the server. */
+export interface TemplateWriterStatus {
+  available: boolean;
+  draftsPerDay: number;
+}
+
+export interface WriteTemplateRequest {
+  brief: string;
+  language: string;
+  category?: "MARKETING" | "UTILITY";
+}
+
+/** A draft written by AI for the template editor; nothing has gone to Meta yet. */
+export interface WrittenTemplate {
+  draft: TemplateDraft;
+  notes: string;
+  model: string;
+}
+
 export interface CampaignUpload {
   storageKey: string;
   mime: string;

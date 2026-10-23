@@ -4,7 +4,7 @@ import { campaignKeys } from "~/hooks/use-campaign-queries";
 import { inboxKeys } from "~/hooks/use-inbox-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { campaignsService, type SaveBroadcastRequest } from "~/services/campaigns.service";
-import type { ContactImportMapping, MessageRate, SegmentDefinition, TemplateDraft } from "~/types/api";
+import type { ContactImportMapping, MessageRate, SegmentDefinition, TemplateDraft, WriteTemplateRequest } from "~/types/api";
 
 export function useSyncTemplatesMutation() {
   const queryClient = useQueryClient();
@@ -30,6 +30,14 @@ export function useSaveTemplateMutation() {
       void queryClient.invalidateQueries({ queryKey: campaignKeys.templates() });
     },
     onError: (error) => handleMutationError(error, "The template was not submitted."),
+  });
+}
+
+/** A template draft written by AI; the editor opens with it. */
+export function useWriteTemplateMutation() {
+  return useMutation({
+    mutationFn: (body: WriteTemplateRequest) => campaignsService.writeTemplate(body),
+    onError: (error) => handleMutationError(error, "The AI could not write a draft."),
   });
 }
 

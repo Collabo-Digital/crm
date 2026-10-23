@@ -15,6 +15,7 @@ import { ShopifySegmentsService } from './segments/shopify-segments.service';
 import { ShopifySegmentsController } from './segments/shopify-segments.controller';
 import { TemplateSyncScheduler } from './templates/template-sync.scheduler';
 import { TemplatesController } from './templates/templates.controller';
+import { TemplateWriterService } from './templates/template-writer.service';
 import { TemplatesService } from './templates/templates.service';
 
 /**
@@ -26,6 +27,7 @@ import { TemplatesService } from './templates/templates.service';
     controllers: [TemplatesController, SegmentsController, ShopifySegmentsController, BroadcastsController],
     providers: [
         TemplatesService,
+        TemplateWriterService,
         TemplateSyncScheduler,
         SegmentsService,
         RfmService,

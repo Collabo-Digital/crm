@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { ArrowLeft, FilePlus } from "lucide-react";
+import { ArrowLeft, FilePlus, Sparkles } from "lucide-react";
 
 import { TemplateEditor } from "~/components/app/campaigns/template-editor";
 import { TemplatePreview } from "~/components/app/campaigns/template-preview";
+import { EMPTY_BRIEF, TemplateWriterForm, type WriterBrief } from "~/components/app/campaigns/template-writer-form";
+import { Button } from "~/components/ui/button";
 import { PageHeader, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "~/components/ui/page-header";
-import { useSaveTemplateMutation } from "~/hooks/use-campaign-mutations";
-import { useTemplateStarters } from "~/hooks/use-campaign-queries";
+import { useSaveTemplateMutation, useWriteTemplateMutation } from "~/hooks/use-campaign-mutations";
+import { useTemplateStarters, useTemplateWriter } from "~/hooks/use-campaign-queries";
 import { CATEGORY_LABEL, renderDraft } from "~/lib/campaign-format";
 import type { TemplateDraft, TemplateStarter } from "~/types/api";
 
@@ -25,12 +27,16 @@ const USE_CASE_LABEL: Record<TemplateStarter["useCase"], string> = {
   engagement: "Engagement",
 };
 
-/** Pick a starter (or a blank page), then edit and submit for Meta's review. */
+/** Pick a starter, a blank page or a draft written by AI, then edit and submit for Meta's review. */
 export default function NewTemplatePage() {
   const navigate = useNavigate();
   const { data: starters = [] } = useTemplateStarters();
   const save = useSaveTemplateMutation();
-  const [chosen, setChosen] = useState<{ draft: TemplateDraft; starterKey?: string } | null>(null);
+  const { data: writer } = useTemplateWriter();
+  const write = useWriteTemplateMutation();
+  const [writing, setWriting] = useState(false);
+  const [brief, setBrief] = useState<WriterBrief>(EMPTY_BRIEF);
+  const [chosen, setChosen] = useState<{ draft: TemplateDraft; starterKey?: string; aiNotes?: string } | null>(null);
 
   return (
     <div className="space-y-6">
@@ -41,27 +47,78 @@ export default function NewTemplatePage() {
       <PageHeader>
         <PageHeaderContent>
           <PageHeaderTitle>New template</PageHeaderTitle>
-          <PageHeaderDescription>{chosen ? "Make it yours, then submit it for Meta’s review." : "Start from a ready-made message or from a blank page."}</PageHeaderDescription>
+          <PageHeaderDescription>
+            {chosen
+              ? "Make it yours, then submit it for Meta’s review."
+              : writing
+                ? "Describe the message and the AI writes a draft for you to edit."
+                : writer?.available
+                  ? "Start from a ready-made message, a blank page or a description of what you need."
+                  : "Start from a ready-made message or from a blank page."}
+          </PageHeaderDescription>
         </PageHeaderContent>
       </PageHeader>
 
       {chosen ? (
-        <TemplateEditor
-          initial={chosen.draft}
-          mode="create"
-          isSubmitting={save.isPending}
-          onSubmit={(draft) => save.mutate({ draft, starterKey: chosen.starterKey }, { onSuccess: (t) => navigate(`/campaigns/templates/${t.id}`) })}
+        <>
+          {chosen.aiNotes !== undefined && (
+            <div className="flex flex-col gap-3 rounded-xl border border-brand/40 bg-brand/5 p-4 text-caption sm:flex-row sm:items-start">
+              <div className="flex min-w-0 flex-1 items-start gap-3">
+                <Sparkles className="mt-0.5 size-4 shrink-0 text-brand" />
+                <div className="min-w-0 space-y-1">
+                  <p className="font-medium">Written by AI. Read every word before you submit it.</p>
+                  {chosen.aiNotes && <p className="text-muted-foreground">{chosen.aiNotes}</p>}
+                </div>
+              </div>
+              <Button size="sm" variant="outline" className="self-start" onClick={() => { setChosen(null); setWriting(true); }}>
+                Write another
+              </Button>
+            </div>
+          )}
+          <TemplateEditor
+            initial={chosen.draft}
+            mode="create"
+            isSubmitting={save.isPending}
+            onSubmit={(draft) => save.mutate({ draft, starterKey: chosen.starterKey }, { onSuccess: (t) => navigate(`/campaigns/templates/${t.id}`) })}
+          />
+        </>
+      ) : writing ? (
+        <TemplateWriterForm
+          value={brief}
+          onChange={setBrief}
+          isWriting={write.isPending}
+          draftsPerDay={writer?.draftsPerDay ?? 0}
+          onCancel={() => setWriting(false)}
+          onSubmit={(request) =>
+            write.mutate(request, {
+              onSuccess: (result) => {
+                setChosen({ draft: result.draft, aiNotes: result.notes });
+                setWriting(false);
+              },
+            })
+          }
         />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <button
             type="button"
             onClick={() => setChosen({ draft: BLANK })}
-            className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-5 text-muted-foreground hover:border-brand hover:text-foreground"
+            className="flex min-h-32 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-5 text-muted-foreground hover:border-brand hover:text-foreground sm:min-h-48"
           >
             <FilePlus className="size-6" />
             <span className="text-body font-medium">Blank template</span>
           </button>
+          {writer?.available && (
+            <button
+              type="button"
+              onClick={() => setWriting(true)}
+              className="flex min-h-32 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-5 text-center text-muted-foreground hover:border-brand hover:text-foreground sm:min-h-48"
+            >
+              <Sparkles className="size-6" />
+              <span className="text-body font-medium">Write with AI</span>
+              <span className="text-caption">Describe the message in your own words</span>
+            </button>
+          )}
           {starters.map((s) => (
             <button
               key={s.key}

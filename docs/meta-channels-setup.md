@@ -129,6 +129,10 @@ AUTOMATION_HTTP_ALLOW_PRIVATE=      # leave unset in production; "true" lets an
                                     # localhost and private networks (local tests)
 RAZORPAY_MERCHANT_API_BASE=         # leave unset in production (https://api.razorpay.com);
                                     # local tests point it at the Razorpay stand-in
+ANTHROPIC_API_KEY=                  # Collabo's own key, for the AI template writer;
+                                    # unset, the writer is hidden
+ANTHROPIC_BASE_URL=                 # leave unset in production; local tests point it
+                                    # at the Anthropic stand-in
 ```
 
 Client (`client/.env`):
@@ -300,6 +304,22 @@ Per-account subscription happens at connect time and is undone at disconnect:
   20 by Meta), 40 otherwise (numbers start at 80), leaving room for the inbox.
 - **Cost estimates** use the per-message rates each business copies from its
   own Meta rate card (Campaigns → Message rates). Collabo ships no prices.
+- **Writing with AI** (Templates → New template → Write with AI): the
+  merchant describes the message, picks the language and optionally the
+  category, and Claude (`claude-opus-5-5`, low effort, structured JSON
+  output) writes a draft that opens in the normal editor. Nothing is sent to
+  Meta until the merchant submits it. The draft is checked against Meta's
+  rules (the components limits, no variable at the start or end of the body,
+  no formatting characters in the header, coupon buttons only on marketing,
+  quick replies grouped); one that breaks a rule goes back to Claude once with
+  the problem. Marketing drafts get the "Stop promotions" button that records
+  an opt-out, and the name is made free in that language. What reaches
+  Anthropic: the description and the store's name, industry, website and
+  currency, with the organization identified only by a hash. Requests opt
+  into server-side refusal fallbacks (`fallbacks: "default"`, beta
+  `server-side-fallback-2026-07-01`). Each organization gets 50 drafts a UTC
+  day. The key is Collabo's own (`ANTHROPIC_API_KEY`); without it the option
+  is not shown.
 
 ### Automations and inbox rules
 

@@ -7,8 +7,9 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import type { SessionPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { MessagingMediaStorage } from '../../messaging/media/messaging-media.storage';
 import { CAMPAIGN_EDITORS, CAMPAIGN_READERS } from '../campaign-roles';
-import { QueryTemplatesDto, SaveTemplateDto } from '../dto/campaign.dto';
+import { QueryTemplatesDto, SaveTemplateDto, WriteTemplateDto } from '../dto/campaign.dto';
 import { parseDraft } from './template-draft.schema';
+import { TemplateWriterService } from './template-writer.service';
 import { TemplatesService } from './templates.service';
 
 /// Files a template header or a broadcast may carry, with WhatsApp's size ceilings.
@@ -25,6 +26,7 @@ const HEADER_FILES: Record<string, { kind: 'image' | 'video' | 'document'; max: 
 export class TemplatesController {
     constructor(
         private readonly templates: TemplatesService,
+        private readonly writer: TemplateWriterService,
         private readonly storage: MessagingMediaStorage,
     ) { }
 
@@ -40,6 +42,22 @@ export class TemplatesController {
     @RequirePermissions('campaigns.view')
     starters() {
         return this.templates.starters();
+    }
+
+    /** Whether the AI template writer is set up on this server. */
+    @Get('templates/writer')
+    @Roles(...CAMPAIGN_READERS)
+    @RequirePermissions('campaigns.view')
+    writerStatus() {
+        return this.writer.status();
+    }
+
+    /** A draft written by AI from a description, for the editor; nothing is sent to Meta. */
+    @Post('templates/writer')
+    @Roles(...CAMPAIGN_EDITORS)
+    @RequirePermissions('templates.manage')
+    write(@CurrentUser() user: SessionPayload, @Body() dto: WriteTemplateDto) {
+        return this.writer.write(user.orgId!, dto);
     }
 
     @Post('templates/sync')
