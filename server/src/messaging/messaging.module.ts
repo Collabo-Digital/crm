@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { ChannelModule } from '../channel/channel.module';
 import { AutomationEventService } from './automation-event.service';
 import { BroadcastTracker } from './broadcast-tracker';
+import { AUTOMATION_QUEUE, AutomationJobs } from './automation-jobs';
 import { ChannelAccessService } from './channel-access.service';
 import { ConsentService } from './consent.service';
 import { ContactIdentityService } from './contact-identity.service';
@@ -28,9 +29,11 @@ import { PlatformSenderService } from './send/platform-sender.service';
         ChannelModule,
         BullModule.registerQueue({ name: MEDIA_DOWNLOAD_QUEUE }),
         BullModule.registerQueue({ name: MESSAGING_OUTBOUND_QUEUE }),
+        BullModule.registerQueue({ name: AUTOMATION_QUEUE }),
     ],
     providers: [
         AutomationEventService,
+        AutomationJobs,
         BroadcastTracker,
         ChannelAccessService,
         ConsentService,
@@ -47,6 +50,7 @@ import { PlatformSenderService } from './send/platform-sender.service';
     ],
     exports: [
         AutomationEventService,
+        AutomationJobs,
         BroadcastTracker,
         ChannelAccessService,
         ConsentService,

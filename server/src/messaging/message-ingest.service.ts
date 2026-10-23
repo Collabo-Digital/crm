@@ -17,6 +17,7 @@ import { ConsentService, isOptInText, isOptOutText } from './consent.service';
 import { AutomationEventService, InboundEventType } from './automation-event.service';
 import { InboxEventsService } from './inbox-events.service';
 import { BroadcastTracker } from './broadcast-tracker';
+import { AutomationJobs } from './automation-jobs';
 import { MediaSpec, MessageContent, previewOf } from './message-content';
 import { MEDIA_DOWNLOAD_QUEUE, MediaDownloadJobData, MEDIA_DOWNLOAD_JOB_OPTS } from './media/media-download.queue';
 
@@ -98,6 +99,7 @@ export class MessageIngestService {
         private readonly events: InboxEventsService,
         @InjectQueue(MEDIA_DOWNLOAD_QUEUE) private readonly mediaQueue: Queue<MediaDownloadJobData>,
         private readonly broadcastTracker: BroadcastTracker,
+        private readonly automationJobs: AutomationJobs,
     ) { }
 
     /** A message the customer sent. Returns null for a redelivery. */
@@ -111,6 +113,7 @@ export class MessageIngestService {
         if (existing) return null;
 
         let result: { messageId: string; conversationId: string; contactId: string; blocked: boolean; needsProfile: boolean };
+        let eventId: string | null = null;
         try {
             result = await this.prisma.$transaction(async (tx) => {
                 const touch: ContactTouch = live
@@ -171,7 +174,7 @@ export class MessageIngestService {
                         });
                     }
                     if (input.event && !input.standby && !contact.blockedAt) {
-                        await this.automationEvents.record(tx, {
+                        eventId = (await this.automationEvents.record(tx, {
                             organizationId: channel.organizationId,
                             channelId: channel.id,
                             eventType: input.event.type,
@@ -183,8 +186,8 @@ export class MessageIngestService {
                             actorExternalId: contact.externalId,
                             actorUsername: contact.username ?? undefined,
                             text: input.content.text ?? undefined,
-                            payload: { ...input.body, ...(input.event.extraPayload ?? {}) },
-                        });
+                            payload: { ...input.body, ...(input.event.extraPayload ?? {}), newConversation: conversation.started },
+                        })).id;
                     }
                 }
                 return {
@@ -203,6 +206,7 @@ export class MessageIngestService {
 
         this.events.publish(channel.organizationId, { type: 'message.created', conversationId: result.conversationId, messageId: result.messageId });
         this.events.publish(channel.organizationId, { type: 'conversation.updated', conversationId: result.conversationId });
+        if (eventId) await this.automationJobs.event(eventId);
         if (live && input.content.kind !== MessageKind.COMMENT) {
             await this.broadcastTracker.onInbound({
                 contactId: result.contactId,
@@ -537,7 +541,7 @@ export class MessageIngestService {
 
         if (!existing) {
             try {
-                return await tx.conversation.create({
+                const created = await tx.conversation.create({
                     data: {
                         organizationId: channel.organizationId,
                         channelId: channel.id,
@@ -555,6 +559,7 @@ export class MessageIngestService {
                         status: opts.live ? ConversationStatus.OPEN : ConversationStatus.CLOSED,
                     },
                 });
+                return Object.assign(created, { started: opts.live && opts.inbound });
             } catch (err) {
                 if (!isUniqueViolation(err)) throw err;
                 return this.upsertConversation(tx, channel, contactId, customerId, opts);
@@ -564,7 +569,7 @@ export class MessageIngestService {
         const reopen =
             opts.reopen &&
             (existing.status === ConversationStatus.CLOSED || existing.status === ConversationStatus.SNOOZED);
-        return tx.conversation.update({
+        const updated = await tx.conversation.update({
             where: { id: existing.id },
             data: {
                 messageCount: { increment: 1 },
@@ -580,6 +585,7 @@ export class MessageIngestService {
                 ...(reopen ? { status: ConversationStatus.OPEN, snoozedUntil: null, closedAt: null, closedById: null } : {}),
             },
         });
+        return Object.assign(updated, { started: reopen });
     }
 
     private findByExternalId(tx: Prisma.TransactionClient, channelId: string, externalId?: string | null) {

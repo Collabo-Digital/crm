@@ -12,11 +12,16 @@ import { InboxTeamService } from './inbox-team.service';
 import { InboxViewService } from './inbox-view.service';
 import { QuickReplyService } from './quick-reply.service';
 import { InboxMaintenance } from './inbox.maintenance';
+import { InboxSettingsService } from './inbox-settings.service';
+import { InboxRulesService } from './inbox-rules.service';
 
 @Module({
     imports: [MessagingModule, CampaignsModule],
     controllers: [InboxController, InboxContactsController, InboxWorkspaceController, InboxMediaController],
-    providers: [InboxService, InboxContactsService, ContactImportService, InboxTeamService, InboxViewService, QuickReplyService, InboxMaintenance],
-    exports: [InboxTeamService],
+    providers: [
+        InboxService, InboxContactsService, ContactImportService, InboxTeamService, InboxViewService, QuickReplyService, InboxMaintenance,
+        InboxSettingsService, InboxRulesService,
+    ],
+    exports: [InboxTeamService, InboxSettingsService, InboxRulesService],
 })
 export class InboxModule { }

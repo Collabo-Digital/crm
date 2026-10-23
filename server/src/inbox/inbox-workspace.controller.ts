@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { PartialType } from '@nestjs/mapped-types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -13,6 +13,9 @@ import { SaveTeamDto } from './dto/save-team.dto';
 import { SetAvailabilityDto } from './dto/set-availability.dto';
 import { SaveQuickReplyDto } from './dto/save-quick-reply.dto';
 import { SaveInboxViewDto } from './dto/save-inbox-view.dto';
+import { SaveInboxSettingsDto } from './dto/save-inbox-settings.dto';
+import { InboxSettingsService } from './inbox-settings.service';
+import { canManageInbox } from './inbox-visibility';
 
 class UpdateTeamDto extends PartialType(SaveTeamDto) { }
 class UpdateQuickReplyDto extends PartialType(SaveQuickReplyDto) { }
@@ -28,7 +31,20 @@ export class InboxWorkspaceController {
         private readonly quickReplies: QuickReplyService,
         private readonly views: InboxViewService,
         private readonly templates: TemplatesService,
+        private readonly settings: InboxSettingsService,
     ) { }
+
+    /** Business hours, welcome and away messages, routing, round-robin, auto-close and spam. */
+    @Get('settings')
+    getSettings(@CurrentUser() user: SessionPayload) {
+        return this.settings.view(user.orgId!);
+    }
+
+    @Put('settings')
+    async saveSettings(@CurrentUser() user: SessionPayload, @Body() dto: SaveInboxSettingsDto) {
+        if (!canManageInbox(await this.teams.viewer(user))) throw new ForbiddenException('Only owners, admins and managers can change inbox settings.');
+        return this.settings.update(user.orgId!, dto.settings);
+    }
 
     /** Approved WhatsApp templates, for the composer — the only thing a closed reply window allows. */
     @Get('templates')

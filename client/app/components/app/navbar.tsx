@@ -23,6 +23,7 @@ import {
   Send,
   LayoutTemplate,
   Filter,
+  Workflow,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
@@ -85,6 +86,7 @@ const CAMPAIGNS_CHILDREN: NavChild[] = [
   { label: "Broadcasts", href: "/campaigns/broadcasts", icon: Send },
   { label: "Templates", href: "/campaigns/templates", icon: LayoutTemplate },
   { label: "Segments", href: "/campaigns/segments", icon: Filter },
+  { label: "Automations", href: "/campaigns/automations", icon: Workflow },
 ];
 
 const NAV_LINKS: NavItem[] = [

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Loader2, Paperclip, Pencil, Plus, Trash2, Users, X, Zap } from "lucide-react";
 
 import { SectionCard } from "~/components/app/section-card";
+import { InboxRulesSection } from "~/components/app/settings/inbox-rules-section";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
@@ -250,6 +251,7 @@ function QuickReplyDialog({
  */
 export function InboxSettingsTab() {
   const { data: me } = useInboxMe();
+  const { data: members = [] } = useInboxMembers();
   const { data: teams = [], isLoading: teamsLoading } = useInboxTeams();
   const { data: replies = [], isLoading: repliesLoading } = useQuickReplies(true);
   const deleteTeam = useDeleteTeamMutation();
@@ -264,8 +266,10 @@ export function InboxSettingsTab() {
     <div className="space-y-6">
       <div>
         <h2 className="text-base font-bold text-gray-900 dark:text-gray-100">Inbox</h2>
-        <p className="mt-1 text-xs text-muted-foreground">Teams and saved answers for WhatsApp, Messenger and Instagram chats.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Business hours, auto-replies, routing, teams and saved answers for WhatsApp, Messenger and Instagram chats.</p>
       </div>
+
+      <InboxRulesSection canManage={canManage} members={members.map((m) => ({ id: m.id, name: m.name }))} teams={teamRefs} />
 
       <SectionCard
         title="Teams"

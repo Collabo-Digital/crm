@@ -394,6 +394,9 @@ model OrganizationSettings {
   /// phone / WhatsApp / email, website, logo URL. Read by the package slip's
   /// "From" block; `Organization` has no address or contact columns at all.
   storeProfileSettings Json?    @map("store_profile_settings") @db.JsonB
+  /// Business hours, welcome and away messages, routing, round-robin and
+  /// auto-close. See src/inbox/inbox-settings.schema.ts.
+  inboxSettings        Json?    @map("inbox_settings") @db.JsonB
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
@@ -403,20 +406,22 @@ model OrganizationSettings {
 }
 
 model OrganizationMember {
-  id             String            @id @default(cuid())
-  organizationId String            @map("organization_id")
-  userId         String            @map("user_id")
-  role           UserRole          @default(AGENT)
-  permissions    Json?             @db.JsonB // Fine-grained overrides
-  vendorScope    String?           @map("vendor_scope") // For VENDOR role: the Product.vendor value this member is limited to
-  isActive       Boolean           @default(true) @map("is_active")
+  id                  String            @id @default(cuid())
+  organizationId      String            @map("organization_id")
+  userId              String            @map("user_id")
+  role                UserRole          @default(AGENT)
+  permissions         Json?             @db.JsonB // Fine-grained overrides
+  vendorScope         String?           @map("vendor_scope") // For VENDOR role: the Product.vendor value this member is limited to
+  isActive            Boolean           @default(true) @map("is_active")
   /// What the member chose in the inbox. Whether they are actually there is
   /// inboxSeenAt, refreshed while an inbox is open.
-  inboxStatus    InboxAvailability @default(ONLINE) @map("inbox_status")
-  inboxSeenAt    DateTime?         @map("inbox_seen_at")
-  joinedAt       DateTime          @default(now()) @map("joined_at")
-  createdAt      DateTime          @default(now()) @map("created_at")
-  updatedAt      DateTime          @updatedAt @map("updated_at")
+  inboxStatus         InboxAvailability @default(ONLINE) @map("inbox_status")
+  inboxSeenAt         DateTime?         @map("inbox_seen_at")
+  /// When round-robin last gave this member a conversation; ties go to whoever waited longest.
+  inboxLastAssignedAt DateTime?         @map("inbox_last_assigned_at")
+  joinedAt            DateTime          @default(now()) @map("joined_at")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -2341,6 +2346,9 @@ model AutomationRun {
   currentStepKey      String?             @map("current_step_key")
   /// Wait: when to wake up.
   resumeAt            DateTime?           @map("resume_at")
+  /// Waiting for the contact's next message (a wait-for-reply step); their
+  /// reply resumes this run instead of starting new automations.
+  waitingForReply     Boolean             @default(false) @map("waiting_for_reply")
   /// Resolved variables: first_name, product_name, order_number, link, discount.
   context             Json                @default("{}") @db.JsonB
   error               String?
@@ -2366,6 +2374,8 @@ model AutomationRun {
   @@index([organizationId, createdAt])
   /// Once-per-contact rule and "has this person been through it".
   @@index([automationId, contactId])
+  /// A reply finds the run waiting for it.
+  @@index([contactId, waitingForReply])
   @@map("automation_runs")
 }
 

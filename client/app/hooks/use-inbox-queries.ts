@@ -84,8 +84,8 @@ export function useInboxContacts(query: InboxContactQuery) {
   });
 }
 
-export function useContactTags() {
-  return useQuery({ queryKey: inboxKeys.contactTags(), queryFn: () => inboxService.contactTags() });
+export function useContactTags(enabled = true) {
+  return useQuery({ queryKey: inboxKeys.contactTags(), queryFn: () => inboxService.contactTags(), enabled });
 }
 
 export function useCustomerCandidates(contactId: string, q: string, enabled: boolean) {
@@ -101,17 +101,18 @@ export function useInboxMe() {
   return useQuery({ queryKey: inboxKeys.me(), queryFn: () => inboxService.me() });
 }
 
-export function useInboxMembers() {
+export function useInboxMembers(enabled = true) {
   return useQuery({
     queryKey: inboxKeys.members(),
     queryFn: () => inboxService.members(),
+    enabled,
     // Presence changes as people open and close the inbox.
     refetchInterval: SAFETY_REFETCH_MS,
   });
 }
 
-export function useInboxTeams() {
-  return useQuery({ queryKey: inboxKeys.teams(), queryFn: () => inboxService.listTeams() });
+export function useInboxTeams(enabled = true) {
+  return useQuery({ queryKey: inboxKeys.teams(), queryFn: () => inboxService.listTeams(), enabled });
 }
 
 export function useQuickReplies(manage = false) {

@@ -13,9 +13,9 @@ export class CreateAutomationDto {
     @MaxLength(500)
     description?: string;
 
-    /** Only the two channel families the builder supports today. */
+    /** The messaging channels; the manual channel has nothing to automate. */
     @IsEnum(ChannelPlatform)
-    @IsIn([ChannelPlatform.INSTAGRAM, ChannelPlatform.WHATSAPP])
+    @IsIn([ChannelPlatform.INSTAGRAM, ChannelPlatform.WHATSAPP, ChannelPlatform.FACEBOOK])
     platform!: ChannelPlatform;
 
     /** The connected account (Channel row) this automation listens on. */

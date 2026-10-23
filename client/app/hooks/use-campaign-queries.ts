@@ -47,10 +47,11 @@ export function useCampaignsOverview() {
   return useQuery({ queryKey: campaignKeys.overview(), queryFn: () => campaignsService.overview() });
 }
 
-export function useTemplates(params: { status?: string; category?: string; search?: string } = {}) {
+export function useTemplates(params: { status?: string; category?: string; search?: string } = {}, enabled = true) {
   return useQuery({
     queryKey: campaignKeys.templateList(params),
     queryFn: () => campaignsService.listTemplates(params),
+    enabled,
     placeholderData: keepPreviousData,
     refetchInterval: pollWhileReviewing,
   });

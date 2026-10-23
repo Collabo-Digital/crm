@@ -124,6 +124,9 @@ WHATSAPP_GRAPH_VERSION=v25.0        # optional; used by every Meta surface
 APP_URL=                            # public URL of THIS API
 FRONTEND_URL=                       # where OAuth sends the merchant back
 ENCRYPTION_KEY=                     # exactly 32 chars; encrypts stored tokens
+AUTOMATION_HTTP_ALLOW_PRIVATE=      # leave unset in production; "true" lets an
+                                    # automation's "Call a URL" step reach
+                                    # localhost and private networks (local tests)
 ```
 
 Client (`client/.env`):
@@ -295,6 +298,60 @@ Per-account subscription happens at connect time and is undone at disconnect:
   20 by Meta), 40 otherwise (numbers start at 80), leaving room for the inbox.
 - **Cost estimates** use the per-message rates each business copies from its
   own Meta rate card (Campaigns → Message rates). Collabo ships no prices.
+
+### Automations and inbox rules
+
+- **How work flows.** Every live inbound message, comment, story mention and
+  button tap is stored as an automation event in the same transaction as the
+  message, then queued on the `automation` BullMQ queue (Redis). A sweeper runs
+  every minute for anything a failed enqueue lost, waits whose wake-up never
+  fired, and runs whose worker died. Tags added in the inbox (one contact or
+  in bulk) or by automations raise `tag_added` events the same way (an
+  automation-added tag can start at most three further hops); contact imports
+  do not.
+- **Order of work for one event:** a contact waiting at a “Wait for a reply”
+  step gets the message as their reply (comments never count as replies);
+  otherwise the single most specific matching automation starts (a chosen post
+  beats any post, exact words beat keywords, keywords beat “any message”; tag
+  and webhook triggers start every match). Inbox rules run either way: routing
+  and round-robin for a new conversation, then the welcome or away message
+  unless an automation took the message.
+- **Comment replies** use the private-reply send (`recipient.comment_id`, one
+  per comment) and public replies with `POST /{ig-comment-id}/replies`
+  (Instagram) or `POST /{comment-id}/comments` (Facebook); they need
+  `instagram_manage_comments` / `pages_manage_engagement`.
+- **Post picker** (comment trigger on Instagram): Instagram Login accounts read
+  `graph.instagram.com/me/media`; Page-linked accounts read
+  `GET /{ig-user-id}/media` on the Graph API with the Page token. Meta's
+  reference lists `instagram_basic` plus `pages_read_engagement` or
+  `pages_show_list`, and names a *user* access token. That the stored Page token
+  is accepted is **not yet verified** — check it on the first live account.
+- **Conversation starters** (Campaigns → Automations → Conversation starters)
+  write ice breakers (at most four), Messenger's Get Started button and the
+  persistent menu with `POST /me/messenger_profile` and clear removed ones with
+  `DELETE`, using the Page token (Page-linked Instagram adds
+  `platform=instagram`; Instagram Login accounts call graph.instagram.com).
+  Meta allows 10 such calls per 10 minutes per Page, and setting ice breakers
+  this way replaces any written in Meta's own inbox tools. The exact permission
+  Meta checks for this call is **not yet verified** live.
+- **Spam → block on WhatsApp** calls `POST /{phone_number_id}/block_users`
+  with the contact's phone number. Meta only allows it for people who messaged
+  in the last 24 hours; its docs do not cover BSUID-only contacts or
+  coexistence numbers, so a refusal is written as a note on the conversation.
+- **Webhook trigger.** Publishing an automation whose trigger is “Another app
+  calls a URL” issues a secret URL,
+  `POST {APP_URL}/api/v1/automations/hooks/{token}`. The body is JSON with the
+  person's phone number (international format) at the field the trigger names;
+  other top-level fields become `{{webhook.<field>}}`. Send an
+  `Idempotency-Key` header to make retries safe. On WhatsApp an unknown number
+  becomes a contact; on Instagram and Messenger the person must already be a
+  contact with that number. The global rate limit applies.
+- **“Call a URL” steps** refuse private, loopback, link-local and metadata
+  addresses after DNS resolution, follow no redirects, time out after 10
+  seconds and read at most 256 KB.
+- **Free-form messages from automations** still obey the 24-hour window (7-day
+  human-agent tag is for people only): a run whose message cannot go stops,
+  and the reason shows on the automation.
 
 ## 5. Local testing
 

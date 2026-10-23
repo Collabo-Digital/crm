@@ -4,6 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { resolveReportingTimeZone, zonedDayEndExclusive, zonedDayStart } from '../common/utils/zoned-date.util';
 import { ConsentService } from '../messaging/consent.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
+import { AutomationEventService } from '../messaging/automation-event.service';
+import { AutomationJobs } from '../messaging/automation-jobs';
 import { contactName } from '../messaging/contact-name';
 import { InboxViewer, canAssignOthers, canReply, seesAll, visibilityWhere } from './inbox-visibility';
 import { ASSIGNABLE_ROLES, InboxTeamService } from './inbox-team.service';
@@ -37,6 +39,8 @@ export class InboxContactsService {
         private readonly consent: ConsentService,
         private readonly events: InboxEventsService,
         private readonly teams: InboxTeamService,
+        private readonly automationEvents: AutomationEventService,
+        private readonly automationJobs: AutomationJobs,
     ) { }
 
     async list(orgId: string, viewer: InboxViewer, q: QueryContactsDto) {
@@ -163,6 +167,7 @@ export class InboxContactsService {
             )
             : undefined;
 
+        let tagEvents: string[] = [];
         const updated = await this.prisma.$transaction(async (tx) => {
             const row = await tx.channelContact.update({
                 where: { id: contact.id },
@@ -179,8 +184,10 @@ export class InboxContactsService {
             if (dto.customerId !== undefined) {
                 await tx.conversation.updateMany({ where: { contactId: contact.id }, data: { customerId: dto.customerId } });
             }
+            if (dto.tags) tagEvents = await this.automationEvents.recordTagsAdded(tx, contact, newTags(contact.tags, row.tags));
             return row;
         });
+        for (const id of tagEvents) await this.automationJobs.event(id);
         await this.publishFor(orgId, [contact.id]);
         return this.view(updated);
     }
@@ -206,16 +213,18 @@ export class InboxContactsService {
                 organizationId: orgId,
                 ...(seesAll(viewer) ? {} : { conversations: { some: visibilityWhere(viewer) } }),
             },
-            select: { id: true, tags: true },
+            select: { id: true, tags: true, organizationId: true, channelId: true, externalId: true },
         });
-        await this.prisma.$transaction(
-            contacts.map((c) =>
-                this.prisma.channelContact.update({
-                    where: { id: c.id },
-                    data: { tags: cleanTags([...c.tags, ...add]).filter((t) => !remove.has(t)) },
-                }),
-            ),
-        );
+        const tagEvents = await this.prisma.$transaction(async (tx) => {
+            const ids: string[] = [];
+            for (const c of contacts) {
+                const tags = cleanTags([...c.tags, ...add]).filter((t) => !remove.has(t));
+                await tx.channelContact.update({ where: { id: c.id }, data: { tags } });
+                ids.push(...(await this.automationEvents.recordTagsAdded(tx, c, newTags(c.tags, tags))));
+            }
+            return ids;
+        });
+        for (const id of tagEvents) await this.automationJobs.event(id);
         await this.publishFor(orgId, contacts.map((c) => c.id));
         return { updated: contacts.length, skipped: dto.ids.length - contacts.length };
     }
@@ -402,4 +411,10 @@ export class InboxContactsService {
 
 function cleanTags(tags: string[]): string[] {
     return [...new Set(tags.map((t) => t.trim()).filter(Boolean))];
+}
+
+/** Tags in `after` the contact did not have before, ignoring case. */
+function newTags(before: string[], after: string[]): string[] {
+    const had = new Set(before.map((t) => t.toLowerCase()));
+    return after.filter((t) => !had.has(t.toLowerCase()));
 }

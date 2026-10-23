@@ -4216,3 +4216,173 @@ export interface ContactImportResult {
   skipped: number;
   errors: Array<{ row: number; error: string }>;
 }
+
+// ─── Automation Types ───────────────────────────────────────────────────────
+
+export type AutomationStatus = "DRAFT" | "ACTIVE" | "PAUSED" | "ERROR" | "ARCHIVED";
+export type AutomationRunStatus = "PENDING" | "RUNNING" | "WAITING" | "COMPLETED" | "FAILED" | "SKIPPED" | "CANCELLED";
+export type AutomationPlatform = "INSTAGRAM" | "WHATSAPP" | "FACEBOOK";
+export type AutomationChannelKey = "instagram" | "whatsapp" | "facebook";
+
+export type AutomationBlockType =
+  | "trigger"
+  | "send_message"
+  | "reply_comment"
+  | "send_invoice"
+  | "wait"
+  | "wait_for_reply"
+  | "condition"
+  | "add_tag"
+  | "remove_tag"
+  | "set_attribute"
+  | "assign"
+  | "set_status"
+  | "add_note"
+  | "http_request";
+
+/** One block of a flow. Condition (yes / no) and wait-for-reply (replied / timeout) carry branches. */
+export interface AutomationStep {
+  id: string;
+  type: AutomationBlockType;
+  // Each block type has its own config; lib/automation-blocks.ts knows them.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  config: Record<string, any>;
+  branches?: Record<string, AutomationStep[]>;
+}
+
+export interface AutomationIssue {
+  stepId: string;
+  code: string;
+  title: string;
+  body: string;
+}
+
+export interface AutomationSettings {
+  oncePerContact?: "ever" | "perDay" | "never";
+}
+
+export interface Automation {
+  id: string;
+  name: string;
+  description: string | null;
+  status: AutomationStatus;
+  platform: AutomationPlatform | null;
+  version: number;
+  publishedAt: string | null;
+  triggeredCount: number;
+  lastTriggeredAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+  channel: { id: string; name: string; platform: AutomationPlatform } | null;
+  ownerUser: { id: string; firstName: string; lastName: string; email: string } | null;
+}
+
+export interface AutomationDetail extends Automation {
+  definition: { steps: AutomationStep[] };
+  settings: AutomationSettings | null;
+  issues: AutomationIssue[];
+  lastErrorAt: string | null;
+  publishedVersion: { id: string; version: number; publishedAt: string } | null;
+  /** The draft differs from the published version that runs. */
+  unpublishedChanges: boolean;
+}
+
+export interface AutomationStats {
+  runs: Record<AutomationRunStatus, number>;
+  total: number;
+  skipReasons: Record<string, number>;
+  /** Per step id: how many runs reached it, by outcome. */
+  steps: Record<string, Partial<Record<AutomationRunStatus, number>>>;
+  messages: { sent: number; delivered: number; read: number; failed: number; queued: number };
+  daily: Array<{ day: string; runs: number; completed: number }>;
+}
+
+export interface AutomationRunRow {
+  id: string;
+  status: AutomationRunStatus;
+  skipReason: string | null;
+  error: string | null;
+  version: number;
+  currentStepKey: string | null;
+  resumeAt: string | null;
+  waitingForReply: boolean;
+  createdAt: string;
+  completedAt: string | null;
+  contact: { id: string; name: string; platform: AutomationPlatform } | null;
+  conversationId: string | null;
+  steps: Array<{
+    stepKey: string;
+    blockType: AutomationBlockType;
+    status: AutomationRunStatus;
+    error: string | null;
+    output: Record<string, unknown> | null;
+    startedAt: string;
+    finishedAt: string | null;
+  }>;
+}
+
+export interface AutomationTestStep {
+  stepId: string;
+  type: AutomationBlockType;
+  status: "done" | "waits" | "error";
+  detail: string;
+  branch?: string;
+}
+
+export interface AutomationTestResult {
+  contact: { id: string | null; name: string | null };
+  issues: AutomationIssue[];
+  steps: AutomationTestStep[];
+}
+
+export interface InstagramPost {
+  id: string;
+  externalId: string;
+  mediaType: string | null;
+  permalink: string | null;
+  thumbnailUrl: string | null;
+  caption: string | null;
+  postedAt: string | null;
+  likeCount: number | null;
+  commentCount: number | null;
+}
+
+export interface ConversationStarters {
+  platform: "FACEBOOK" | "INSTAGRAM";
+  getStarted: { enabled: boolean; payload: string };
+  iceBreakers: Array<{ question: string; payload: string }>;
+  persistentMenu: Array<{ title: string; type: "postback" | "web_url"; payload: string; url: string }>;
+  pushedAt: string | null;
+}
+
+// ─── Inbox Rules Types ──────────────────────────────────────────────────────
+
+export interface InboxAutoReply {
+  enabled: boolean;
+  message: string;
+  platforms: AutomationPlatform[];
+  cooldownHours: number;
+}
+
+export interface InboxRoutingRule {
+  id: string;
+  name: string;
+  match: "all" | "any";
+  conditions: Array<{ field: "message" | "platform" | "channel" | "tag" | "customer"; op: "contains" | "is" | "has" | "linked" | "vip"; value: string }>;
+  assign: { mode: "user" | "team" | "round_robin"; userId: string; teamId: string };
+}
+
+export interface InboxRulesSettings {
+  businessHours: { enabled: boolean; timezone: string; days: Array<{ day: number; open: string; close: string }> };
+  welcome: InboxAutoReply;
+  away: InboxAutoReply;
+  routing: { rules: InboxRoutingRule[] };
+  roundRobin: { enabled: boolean; teamId: string; maxOpenPerAgent: number };
+  autoClose: { enabled: boolean; afterHours: number };
+  spam: { enabled: boolean; tag: string; blockOnWhatsApp: boolean };
+}
+
+export interface InboxRulesSettingsView extends InboxRulesSettings {
+  organizationTimeZone: string;
+}

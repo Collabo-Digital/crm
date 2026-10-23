@@ -9,7 +9,8 @@ import { UserRole, Prisma, AutomationStatus, ChannelPlatform } from "@prisma/cli
 import { PrismaService } from '../prisma/prisma.service';
 import { QueryAutomationsDto } from "./dto/query-automations.dto";
 import { CreateAutomationDto } from "./dto/create-automation.dto";
-import { collectIssues, defaultTriggerStep, keywordsFor, parseDefinition, reidSteps, triggerMatchFor, triggerPostFor, triggerTypeFor, type Issue } from './blocks/definition.schema';
+import { randomBytes } from 'node:crypto';
+import { collectIssues, defaultTriggerStep, keywordsFor, parseDefinition, reidSteps, triggerConfigFor, triggerPostFor, triggerTypeFor, type Issue } from './blocks/definition.schema';
 import { UpdateAutomationDto } from './dto/update-automation.dto';
 import { SaveDefinitionDto } from './dto/save-definition.dto';
 import { DuplicateAutomationDto } from './dto/duplicate-automation.dto';
@@ -43,7 +44,7 @@ const LIST_SELECT = {
 const DETAIL_INCLUDE = {
     channel: { select: { id: true, name: true, platform: true, externalStoreId: true } },
     ownerUser: { select: { id: true, firstName: true, lastName: true, email: true } },
-    publishedVersion: { select: { id: true, version: true, publishedAt: true } },
+    publishedVersion: { select: { id: true, version: true, publishedAt: true, definition: true, settings: true } },
     triggers: {
         orderBy: { position: 'asc' },
         select: {
@@ -68,7 +69,7 @@ export class AutomationService {
     }
 
     /** By-id read with tenant + visibility in the WHERE. 404 for both "missing" and "not yours". */
-    private async getVisible(id: string, orgId: string, viewer: AutomationViewer) {
+    async getVisible(id: string, orgId: string, viewer: AutomationViewer) {
         const row = await this.prisma.automation.findFirst({
             where: { id, organizationId: orgId, ...this.scope(viewer) },
             include: DETAIL_INCLUDE,
@@ -77,7 +78,15 @@ export class AutomationService {
         return row;
     }
 
-    private async withIssues<T extends { definition: Prisma.JsonValue; platform: ChannelPlatform | null; channelId: string | null }>(row: T) {
+    private async withIssues<
+        T extends {
+            definition: Prisma.JsonValue;
+            settings: Prisma.JsonValue;
+            platform: ChannelPlatform | null;
+            channelId: string | null;
+            publishedVersion: { definition: Prisma.JsonValue; settings: Prisma.JsonValue; id: string; version: number; publishedAt: Date } | null;
+        },
+    >(row: T) {
         let issues: Issue[] = [];
         try {
             const steps = parseDefinition(row.definition);
@@ -87,7 +96,14 @@ export class AutomationService {
             // reported as one issue rather than a 500 on every detail read.
             issues = [{ stepId: '', code: 'invalid_definition', title: 'Definition needs attention', body: 'Re-save this automation in the editor.' }];
         }
-        return { ...row, issues };
+        // The draft differs from what runs: edited since the last publish.
+        const published = row.publishedVersion;
+        const unpublishedChanges =
+            !!published &&
+            (JSON.stringify(published.definition) !== JSON.stringify(row.definition) ||
+                JSON.stringify(published.settings ?? DEFAULT_SETTINGS) !== JSON.stringify(row.settings ?? DEFAULT_SETTINGS));
+        const publishedVersion = published ? { id: published.id, version: published.version, publishedAt: published.publishedAt } : null;
+        return { ...row, publishedVersion, unpublishedChanges, issues };
     }
 
     private async issueContext(row: { platform: ChannelPlatform | null; channelId: string | null }) {
@@ -199,6 +215,11 @@ export class AutomationService {
         this.assertNotArchived(row.status);
 
         const steps = parseDefinition(dto.definition);
+        // An editor that loaded the draft before its first publish must not drop the webhook URL issued since.
+        const storedToken = (row.definition as { steps?: Array<{ config?: { token?: string } }> })?.steps?.[0]?.config?.token;
+        if (steps[0].config.event === 'webhook' && !steps[0].config.token && storedToken) {
+            steps[0].config = { ...steps[0].config, token: storedToken };
+        }
         const settings = { ...DEFAULT_SETTINGS, ...(row.settings as object ?? {}), ...(dto.settings ?? {}) };
 
         const updated = await this.prisma.automation.update({
@@ -232,6 +253,9 @@ export class AutomationService {
         }
 
         const trigger = steps[0];
+        // A webhook trigger gets its secret URL on first publish and keeps it.
+        const issueToken = trigger.config.event === 'webhook' && !trigger.config.token;
+        if (issueToken) trigger.config = { ...trigger.config, token: randomBytes(18).toString('base64url') };
         const post = triggerPostFor(trigger);
         const media = post && row.channelId
             ? await this.prisma.channelMedia.findUnique({
@@ -257,6 +281,7 @@ export class AutomationService {
             await tx.automation.update({
                 where: { id: row.id },
                 data: {
+                    ...(issueToken ? { definition: { steps } as unknown as Prisma.InputJsonValue } : {}),
                     version: nextVersion,
                     publishedVersionId: version.id,
                     publishedAt: new Date(),
@@ -266,15 +291,14 @@ export class AutomationService {
                 },
             });
 
-            // One trigger row per automation in this build (position 0). The id
-            // equals the trigger step's id so run.triggerId and step keys agree.
+            // One trigger row per automation in this build (position 0). Step ids
+            // are only unique within an automation, so the row has its own id.
             await tx.automationTrigger.deleteMany({
-                where: { automationId: row.id, NOT: { id: trigger.id } },
+                where: { automationId: row.id, NOT: { position: 0 } },
             });
             await tx.automationTrigger.upsert({
                 where: { automationId_position: { automationId: row.id, position: 0 } },
                 create: {
-                    id: trigger.id,
                     organizationId: orgId,
                     automationId: row.id,
                     position: 0,
@@ -283,7 +307,7 @@ export class AutomationService {
                     mediaId: media?.id ?? null,
                     subjectId: post,
                     keywords: keywordsFor(trigger),
-                    config: { match: triggerMatchFor(trigger) } as Prisma.InputJsonValue,
+                    config: triggerConfigFor(trigger) as Prisma.InputJsonValue,
                     isActive: true,
                 },
                 update: {
@@ -292,7 +316,7 @@ export class AutomationService {
                     mediaId: media?.id ?? null,
                     subjectId: post,
                     keywords: keywordsFor(trigger),
-                    config: { match: triggerMatchFor(trigger) } as Prisma.InputJsonValue,
+                    config: triggerConfigFor(trigger) as Prisma.InputJsonValue,
                     isActive: true,
                 },
             });

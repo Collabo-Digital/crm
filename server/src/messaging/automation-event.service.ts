@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 
 /**
@@ -13,7 +14,14 @@ export type InboundEventType =
     | 'facebook.comment'
     | 'instagram.mention'
     | 'instagram.postback'
-    | 'facebook.postback';
+    | 'facebook.postback'
+    /** A tag was added to a contact, by a person, an import or an automation. */
+    | 'crm.contact.tag_added'
+    /** Another system called an automation's webhook URL. */
+    | 'crm.webhook';
+
+/** Tags added by automations can start automations that add tags; stop after this many hops. */
+export const MAX_TAG_DEPTH = 3;
 
 export interface RecordEventInput {
     organizationId: string;
@@ -87,5 +95,34 @@ export class AutomationEventService {
                 } as Prisma.InputJsonValue,
             },
         });
+    }
+
+    /**
+     * One tag_added event per tag that is new on the contact. Returns the event
+     * ids for the caller to queue once its transaction commits.
+     */
+    async recordTagsAdded(
+        tx: Prisma.TransactionClient,
+        contact: { id: string; organizationId: string; channelId: string; externalId: string },
+        tags: string[],
+        depth = 0,
+    ): Promise<string[]> {
+        if (depth > MAX_TAG_DEPTH) return [];
+        const ids: string[] = [];
+        for (const tag of tags) {
+            const row = await this.record(tx, {
+                organizationId: contact.organizationId,
+                channelId: contact.channelId,
+                eventType: 'crm.contact.tag_added',
+                externalId: `${contact.id}:${tag}:${randomUUID()}`,
+                occurredAt: new Date(),
+                contactId: contact.id,
+                actorExternalId: contact.externalId,
+                text: tag,
+                payload: { tag, depth },
+            });
+            ids.push(row.id);
+        }
+        return ids;
     }
 }

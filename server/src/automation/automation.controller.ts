@@ -17,6 +17,9 @@ import { SaveDefinitionDto } from './dto/save-definition.dto';
 import { UpdateAutomationDto } from './dto/update-automation.dto';
 import { QueryMediaDto } from './dto/query-media.dto';
 import { SyncMediaDto } from './dto/sync-media.dto';
+import { QueryRunsDto, SaveStartersDto, TestAutomationDto } from './dto/automation-insights.dto';
+import { AutomationInsightsService } from './automation-insights.service';
+import { ConversationStartersService } from './conversation-starters.service';
 
 /**
  * Every route declares explicit @Roles (RolesGuard is allow-by-default),
@@ -34,7 +37,12 @@ function viewerOf(user: JwtPayload): AutomationViewer {
 
 @Controller('automations')
 export class AutomationController {
-    constructor(private readonly automations: AutomationService, private readonly media: InstagramMediaService,) { }
+    constructor(
+        private readonly automations: AutomationService,
+        private readonly media: InstagramMediaService,
+        private readonly insights: AutomationInsightsService,
+        private readonly starters: ConversationStartersService,
+    ) { }
 
     // GET /automations — list page
     @Get()
@@ -74,6 +82,24 @@ export class AutomationController {
         return this.media.refresh(dto.channelId, orgId, viewerOf(user));
     }
 
+    // GET /automations/starters/:channelId — ice breakers, Get Started and menu of a Page or Instagram account
+    @Get('starters/:channelId')
+    @Roles(...READERS)
+    @AllowInfluencer()
+    @RequirePermissions('campaigns.view')
+    getStarters(@Param('channelId') channelId: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload) {
+        return this.starters.get(orgId, viewerOf(user), channelId);
+    }
+
+    // PUT /automations/starters/:channelId — saves and pushes them to Meta
+    @Put('starters/:channelId')
+    @Roles(...EDITORS)
+    @AllowInfluencer()
+    @RequirePermissions('campaigns.manage')
+    saveStarters(@Param('channelId') channelId: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: SaveStartersDto) {
+        return this.starters.save(orgId, viewerOf(user), channelId, dto.starters);
+    }
+
     // GET /automations/:id — editor load
     @Get(':id')
     @Roles(...READERS)
@@ -90,6 +116,34 @@ export class AutomationController {
     @RequirePermissions('campaigns.view')
     issues(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload) {
         return this.automations.issues(id, orgId, viewerOf(user));
+    }
+
+    // GET /automations/:id/stats — runs, per-step counts, messages
+    @Get(':id/stats')
+    @Roles(...READERS)
+    @AllowInfluencer()
+    @RequirePermissions('campaigns.view')
+    async stats(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload) {
+        return this.insights.stats(await this.automations.getVisible(id, orgId, viewerOf(user)));
+    }
+
+    // GET /automations/:id/runs — the run log
+    @Get(':id/runs')
+    @Roles(...READERS)
+    @AllowInfluencer()
+    @RequirePermissions('campaigns.view')
+    async runs(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Query() query: QueryRunsDto) {
+        return this.insights.runs(await this.automations.getVisible(id, orgId, viewerOf(user)), query);
+    }
+
+    // POST /automations/:id/test — walk the draft without sending anything
+    @Post(':id/test')
+    @HttpCode(200)
+    @Roles(...EDITORS)
+    @AllowInfluencer()
+    @RequirePermissions('campaigns.manage')
+    async test(@Param('id') id: string, @OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: TestAutomationDto) {
+        return this.insights.test(orgId, await this.automations.getVisible(id, orgId, viewerOf(user)), dto);
     }
 
     // PATCH /automations/:id — rename / description

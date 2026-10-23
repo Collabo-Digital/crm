@@ -270,6 +270,26 @@ export class PlatformSenderService {
     }
 
     /**
+     * Block a number on WhatsApp: `POST /{phone_number_id}/block_users`. Meta
+     * only allows it for people who messaged in the last 24 hours, and its
+     * docs name phone numbers only, so a contact known just by its BSUID is
+     * not attempted.
+     */
+    async blockOnWhatsApp(channelId: string, contact: { waId: string | null }): Promise<void> {
+        if (!contact.waId) throw new MetaGraphError('WhatsApp blocking needs the phone number, which this contact has not shared.', 'API_ERROR');
+        const channel = await this.access.get(channelId);
+        await this.metaGraph.request({
+            method: 'POST',
+            path: `/${channel.address}/block_users`,
+            accessToken: channel.token,
+            body: { messaging_product: 'whatsapp', block_users: [{ user: contact.waId }] },
+            scopes: channel.scopes,
+            priority: Priority.INTERACTIVE,
+            channelId: channel.id,
+        });
+    }
+
+    /**
      * A public reply under a comment: Facebook `POST /{comment-id}/comments`,
      * Instagram `POST /{ig-comment-id}/replies`. Our own reply comes back on
      * the comments webhook from the account itself, which the handler skips.

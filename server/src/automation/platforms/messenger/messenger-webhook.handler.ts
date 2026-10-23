@@ -58,7 +58,10 @@ export class MessengerWebhookHandler {
                     standby: e.standby,
                     consentPayload: e.message.quickReplyPayload,
                     event: {
-                        type: e.platform === ChannelPlatform.INSTAGRAM ? 'instagram.message' : 'facebook.message',
+                        // A story mention reaches us as a DM with a story_mention attachment.
+                        type: e.platform === ChannelPlatform.INSTAGRAM
+                            ? (e.message.attachments[0]?.type === 'story_mention' ? 'instagram.mention' : 'instagram.message')
+                            : 'facebook.message',
                         extraPayload: {
                             quickReplyPayload: e.message.quickReplyPayload,
                             storyReply: e.message.replyToStory,
