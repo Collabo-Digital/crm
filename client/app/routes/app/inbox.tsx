@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Bell, BellOff, MessageSquarePlus } from "lucide-react";
+import { NewChatDialog } from "~/components/app/inbox/new-chat-dialog";
+import { useAlertsSwitch } from "~/hooks/use-new-message-alerts";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 
@@ -192,6 +194,8 @@ export default function InboxPage() {
 
   // Nothing opens until the agent picks a row: opening marks it read.
   const selectedId = searchParams.get("c");
+  const [newChatOpen, setNewChatOpen] = useState(false);
+  const alerts = useAlertsSwitch();
   const detailQuery = useInboxConversation(selectedId);
   const conversation = detailQuery.data;
   const messagesQuery = useInboxMessages(selectedId);
@@ -289,12 +293,36 @@ export default function InboxPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 md:gap-2">
+      <NewChatDialog
+        open={newChatOpen}
+        onOpenChange={setNewChatOpen}
+        mode="chat"
+        onDone={(result) => {
+          setNewChatOpen(false);
+          patchParams({ c: result.conversationId });
+        }}
+      />
       <PageHeader className={cn("shrink-0 items-center", selectedId && "hidden md:flex")}>
         <PageHeaderContent>
           <PageHeaderTitle>Inbox</PageHeaderTitle>
           <p className="text-sm text-muted-foreground md:hidden">Every conversation, in one place.</p>
         </PageHeaderContent>
         <PageHeaderActions>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={alerts.toggle}
+            aria-label={alerts.on ? "Turn off new-message alerts" : "Turn on new-message alerts"}
+            title={alerts.on ? "New-message alerts are on" : "New-message alerts are off"}
+          >
+            {alerts.on ? <Bell /> : <BellOff />}
+          </Button>
+          {me?.access.canReply && (
+            <Button size="sm" variant="accent" onClick={() => setNewChatOpen(true)}>
+              <MessageSquarePlus />
+              New chat
+            </Button>
+          )}
           <AvailabilityMenu
             status={me?.status}
             connected={connected}

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { oneOf, useSessionState } from "~/hooks/use-session-state";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
+import { useStartChatMutation } from "~/hooks/use-inbox-mutations";
+import { useSectionAccess } from "~/hooks/use-section-access";
 import {
   ChevronLeft,
   ChevronRight,
@@ -74,6 +76,9 @@ export default function CustomerDetailPage() {
   const [gstOpen, setGstOpen] = useState(false);
 
   const { data: customer, isLoading, isError, refetch } = useCustomer(id);
+  const navigate = useNavigate();
+  const startChat = useStartChatMutation();
+  const { canAccess } = useSectionAccess();
   const { data: org } = useCurrentOrg();
   const gstEnabled = org?.gstEnabled ?? false;
   const orgCurrency = org?.currency ?? "USD";
@@ -180,11 +185,20 @@ export default function CustomerDetailPage() {
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              <NotYet title="Messaging customers isn't wired up yet">
-                <Button variant="brand" size="action" disabled>
-                  Send Message
-                </Button>
-              </NotYet>
+              <Button
+                variant="brand"
+                size="action"
+                disabled={!customer.phone || !canAccess("/inbox") || startChat.isPending}
+                title={!customer.phone ? "This customer has no phone number." : !canAccess("/inbox") ? "You do not have access to the inbox." : undefined}
+                onClick={() =>
+                  startChat.mutate(
+                    { phone: customer.phone!, customerId: customer.id, name: [customer.firstName, customer.lastName].filter(Boolean).join(" ") || undefined },
+                    { onSuccess: (r) => navigate(`/inbox?c=${r.conversationId}`) },
+                  )
+                }
+              >
+                Send Message
+              </Button>
 
               {/* <NotYet title="Stepping between customers isn't available yet">
                 <Button

@@ -5,6 +5,8 @@ import { ImpersonationBanner } from "~/components/app/impersonation-banner";
 import { AuthGuard } from "~/components/guards/auth-guard";
 import { useMembershipSync, useSectionAccess } from "~/hooks/use-section-access";
 import { cn } from "~/lib/utils";
+import { useNewMessageAlerts } from "~/hooks/use-new-message-alerts";
+import { useAuthStore } from "~/stores/auth.store";
 
 // Routes that fill the window height and scroll their own panes instead of the
 // page. The inbox needs this so its composer stays pinned and each column
@@ -43,6 +45,8 @@ export default function AppLayout() {
   // Read before the print-route early return below, so the hook order is the
   // same on every route.
   const matches = useMatches();
+  const signedIn = useAuthStore((state) => state.isAuthenticated);
+  useNewMessageAlerts(signedIn && canAccess("/inbox"));
 
   // A section this member was not given, or a page outside a vendor's allow
   // list (the server enforces the real boundary; this is UX so nobody lands on

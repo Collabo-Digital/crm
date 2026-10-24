@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ChannelContact, ChannelPlatform, ChannelStatus, ConsentType, Prisma } from '@prisma/client';
-import { normalizePhone } from '../common/phone.util';
+import { countryCodeOf, normalizePhone as toE164 } from '../common/phone.util';
+import { normalizePhone } from './contact-import.service';
 import { ContactIdentityService } from '../messaging/contact-identity.service';
 import { MessagingSendService } from '../messaging/send/messaging-send.service';
 import { StartChatDto } from './dto/start-chat.dto';
@@ -62,12 +63,15 @@ export class InboxContactsService {
             select: { id: true },
         });
         if (!channel) throw new BadRequestException('Connect a WhatsApp number in Settings → Channels first.');
-        const digits = normalizePhone(dto.phone, dto.countryCode);
-        if (!digits) throw new BadRequestException('Enter a WhatsApp number with its country code, like +91 98765 43210.');
         const customer = dto.customerId
-            ? await this.prisma.customer.findFirst({ where: { id: dto.customerId, organizationId: orgId, deletedAt: null }, select: { id: true } })
+            ? await this.prisma.customer.findFirst({ where: { id: dto.customerId, organizationId: orgId, deletedAt: null }, select: { id: true, defaultAddress: true } })
             : null;
         if (dto.customerId && !customer) throw new NotFoundException('Customer not found');
+        // A store customer's number is often saved without its country code: their address says which.
+        const digits =
+            normalizePhone(dto.phone, dto.countryCode) ??
+            (customer ? toE164(dto.phone, countryCodeOf(customer.defaultAddress) ?? 'IN')?.replace(/^\+/, '') ?? null : null);
+        if (!digits) throw new BadRequestException('Enter a WhatsApp number with its country code, like +91 98765 43210.');
         const name = dto.name?.trim() || null;
 
         const { contactId, created } = await this.prisma.$transaction(async (tx) => {

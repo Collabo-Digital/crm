@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Tag, Upload } from "lucide-react";
+import { Tag, Upload, UserPlus } from "lucide-react";
 import { useNavigate } from "react-router";
 
 import {
@@ -15,6 +15,8 @@ import {
 import { DockButton, FloatingDock } from "~/components/app/floating-dock";
 import { TagChip } from "~/components/app/inbox/tag-chip";
 import { ContactImportDialog } from "~/components/app/inbox/contact-import-dialog";
+import { NewChatDialog } from "~/components/app/inbox/new-chat-dialog";
+import { toast } from "sonner";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "~/components/ui/page-header";
@@ -63,6 +65,7 @@ export default function InboxContactsPage() {
   const [tagDraft, setTagDraft] = useState("");
   const [tagOpen, setTagOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const { data: me } = useInboxMe();
   useInboxStream();
 
@@ -231,18 +234,37 @@ export default function InboxContactsPage() {
       <PageHeader>
         <PageHeaderContent>
           <PageHeaderTitle>Contacts</PageHeaderTitle>
-          <PageHeaderDescription>Everyone who has messaged you on {messagingChannelWords()}.</PageHeaderDescription>
+          <PageHeaderDescription>Everyone who has messaged you on {messagingChannelWords()}, and the people you added.</PageHeaderDescription>
         </PageHeaderContent>
-        {me?.access.canManage && (
+        {(me?.access.canManage || me?.access.canReply) && (
           <PageHeaderActions>
-            <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
-              <Upload />
-              Import
-            </Button>
+            {me?.access.canReply && (
+              <Button variant="accent" size="sm" onClick={() => setAddOpen(true)}>
+                <UserPlus />
+                Add contact
+              </Button>
+            )}
+            {me?.access.canManage && (
+              <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+                <Upload />
+                Import
+              </Button>
+            )}
           </PageHeaderActions>
         )}
       </PageHeader>
       <ContactImportDialog open={importOpen} onOpenChange={setImportOpen} />
+      <NewChatDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        mode="contact"
+        onDone={(result) => {
+          setAddOpen(false);
+          toast.success(result.created ? "Contact added." : "That number was already a contact.", {
+            action: { label: "Open chat", onClick: () => navigate(`/inbox?c=${result.conversationId}`) },
+          });
+        }}
+      />
 
       <DataTable
         state={table}

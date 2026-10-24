@@ -35,6 +35,19 @@ export function useSendMessageMutation(conversationId: string) {
   });
 }
 
+/** Start a WhatsApp chat with a number, or add it as a contact. */
+export function useStartChatMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: inboxService.startChat,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: inboxKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: inboxKeys.contacts() });
+    },
+    onError: (error) => handleMutationError(error, "The chat could not be started."),
+  });
+}
+
 /** Send a failed message again. A refusal comes back as `{ ok: false, message }`, like a send. */
 export function useResendMessageMutation(conversationId: string) {
   const queryClient = useQueryClient();

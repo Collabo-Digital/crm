@@ -68,6 +68,12 @@ export const inboxService = {
   send: (id: string, data: { payload: InboxSendPayload; replyToMessageId?: string; clientId?: string }) =>
     apiClient.post<InboxSendOutcome>(`/inbox/conversations/${id}/messages`, data).then((response) => response.data),
 
+  /** A WhatsApp chat with a number: the contact found or added, and its conversation. */
+  startChat: (data: { phone: string; countryCode?: string; name?: string; optIn?: boolean; customerId?: string }) =>
+    apiClient
+      .post<{ contactId: string; conversationId: string; created: boolean }>("/inbox/contacts", data)
+      .then((response) => response.data),
+
   /** A failed message sent again, as it was. */
   resend: (id: string, messageId: string, clientId: string) =>
     apiClient.post<InboxSendOutcome>(`/inbox/conversations/${id}/messages/${messageId}/resend`, { clientId }).then((response) => response.data),
