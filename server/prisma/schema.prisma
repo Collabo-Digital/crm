@@ -247,6 +247,7 @@ model User {
   // doesn't exist yet. Copied to Organization on org creation and cleared.
   pendingBillingPlan            BillingPlan?        @map("pending_billing_plan")
   pendingBillingInterval        BillingInterval?    @map("pending_billing_interval")
+  pendingBillingCurrency        String?             @map("pending_billing_currency")
   pendingExternalCustomerId     String?             @map("pending_external_customer_id")
   pendingExternalSubscriptionId String?             @map("pending_external_subscription_id")
   pendingSubscriptionStatus     SubscriptionStatus? @map("pending_subscription_status")
@@ -311,6 +312,8 @@ model Organization {
   billingProvider        BillingProvider?    @map("billing_provider")
   subscriptionStatus     SubscriptionStatus? @map("subscription_status")
   currentPeriodEnd       DateTime?           @map("current_period_end")
+  /// INR or USD: the currency of the Razorpay plan the subscription is on.
+  billingCurrency        String?             @map("billing_currency")
   lowStockThreshold      Int                 @default(10) @map("low_stock_threshold")
   gstEnabled             Boolean             @default(false) @map("gst_enabled")
   loyaltyMetric          LoyaltyMetric       @default(ORDERS) @map("loyalty_metric")
@@ -371,6 +374,8 @@ model Organization {
   productReviews         ProductReview[]
   googleAccount          GoogleAccount?
   googleSheets           GoogleSheet[]
+  usageMonths            UsageMonth[]
+  usageBills             UsageBill[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -2124,6 +2129,9 @@ model ChannelContact {
   /// temporary, permanent or declined. A temporary one ends at callPermissionUntil.
   callPermission       String?         @map("call_permission")
   callPermissionUntil  DateTime?       @map("call_permission_until")
+  /// When this person's current conversation ends, for Collabo's usage meter: a
+  /// WhatsApp message either way opens a 24-hour conversation when none is open.
+  usageWindowEndsAt    DateTime?       @map("usage_window_ends_at")
   /// The member or team responsible for this contact.
   ownerUserId          String?         @map("owner_user_id")
   ownerTeamId          String?         @map("owner_team_id")
@@ -3811,4 +3819,65 @@ model GoogleSheet {
 
   @@unique([organizationId, spreadsheetId])
   @@map("google_sheets")
+}
+
+/// Collabo's usage meter, a calendar month (UTC, "2026-10") at a time: the
+/// WhatsApp conversations started. Calling minutes, team members and Instagram
+/// accounts are read from their own tables.
+model UsageMonth {
+  organizationId String   @map("organization_id")
+  period         String
+  conversations  Int      @default(0)
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, period])
+  @@map("usage_months")
+}
+
+enum UsageBillStatus {
+  PROCESSING
+  /// Nothing over the plan's allowance, or too little to charge.
+  NOTHING_DUE
+  /// An add-on on the card subscription, charged with its next renewal.
+  ADDED
+  /// Emailed as a payment link: add-ons need a subscription paid by card.
+  LINK_SENT
+  PAID
+  /// Not billed here: no active subscription on a plan with usage prices.
+  SKIPPED
+  FAILED
+}
+
+/// A month's charges over the plan's allowance, billed once the month is over.
+/// Amounts are in the currency's smallest unit (paise, cents).
+model UsageBill {
+  id             String          @id @default(cuid())
+  organizationId String          @map("organization_id")
+  period         String
+  status         UsageBillStatus @default(PROCESSING)
+  plan           BillingPlan?
+  currency       String?
+  /// The month's usage: { conversations, callingMinutes, members, instagramAccounts }.
+  usage          Json?           @db.JsonB
+  /// Each charge: [{ key, quantity, unitPrice, amount }].
+  lines          Json?           @db.JsonB
+  subtotal       Int?
+  tax            Int?
+  total          Int?
+  /// The Razorpay add-on (ao_…) or payment link (plink_…).
+  externalId     String?         @map("external_id")
+  paymentUrl     String?         @map("payment_url")
+  /// Why it was skipped or failed.
+  note           String?
+  attempts       Int             @default(0)
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, period])
+  @@index([status])
+  @@map("usage_bills")
 }

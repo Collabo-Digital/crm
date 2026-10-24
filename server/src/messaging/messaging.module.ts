@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ChannelModule } from '../channel/channel.module';
+import { BillingModule } from '../billing/billing.module';
 import { AutomationEventService } from './automation-event.service';
 import { BroadcastTracker } from './broadcast-tracker';
 import { AUTOMATION_QUEUE, AutomationJobs } from './automation-jobs';
@@ -27,6 +28,7 @@ import { PlatformSenderService } from './send/platform-sender.service';
 @Module({
     imports: [
         ChannelModule,
+        BillingModule,
         BullModule.registerQueue({ name: MEDIA_DOWNLOAD_QUEUE }),
         BullModule.registerQueue({ name: MESSAGING_OUTBOUND_QUEUE }),
         BullModule.registerQueue({ name: AUTOMATION_QUEUE }),

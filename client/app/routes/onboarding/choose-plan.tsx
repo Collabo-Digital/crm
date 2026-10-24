@@ -4,19 +4,17 @@ import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   ArrowRight,
-  Check,
   Loader2,
   Rocket,
-  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { cn } from "~/lib/utils";
 import { useAuthStore } from "~/stores/auth.store";
-import { PRICING_PLANS } from "~/data/pricing-plans";
 import { loadScript } from "~/lib/load-script";
 import { billingService } from "~/services/billing.service";
 import { useStartOnboardingCheckoutMutation } from "~/hooks/use-billing-mutations";
+import { useBillingPlans } from "~/hooks/use-billing";
+import { CurrencyToggle, PlanCards, PRICING_NOTE } from "~/components/billing/plan-cards";
 import {
   choosePlanSchema,
   type ChoosePlanFormValues,
@@ -56,6 +54,7 @@ export default function ChoosePlanPage() {
   const [scriptReady, setScriptReady] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const startCheckout = useStartOnboardingCheckoutMutation();
+  const { data: catalog, isError: catalogFailed } = useBillingPlans();
   const pollAbortRef = useRef<AbortController | null>(null);
 
   // Load Razorpay Checkout.js once on mount.
@@ -70,19 +69,22 @@ export default function ChoosePlanPage() {
     control,
     handleSubmit,
     watch,
+    setValue,
     formState: { isValid },
   } = useForm<ChoosePlanFormValues>({
     resolver: zodResolver(choosePlanSchema),
     mode: "onChange",
     defaultValues: {
-      billingPlan: pendingPlan ?? undefined,
-      // Yearly plans aren't configured in Razorpay yet, so we lock the form
-      // to MONTHLY. The toggle UI is hidden below.
+      // Enterprise is set up with the Collabo team, never bought here.
+      billingPlan: pendingPlan && pendingPlan !== "ADVANCE" ? pendingPlan : undefined,
+      // Plans are billed monthly: usage over a plan is billed each month.
       billingInterval: pendingBillingInterval ?? "MONTHLY",
+      currency: "INR",
     },
   });
 
   const selectedPlan = watch("billingPlan");
+  const currency = watch("currency");
 
   /**
    * Polls /billing/pending-status until status flips to ACTIVE/AUTHENTICATED
@@ -136,7 +138,7 @@ export default function ChoosePlanPage() {
         return;
       }
 
-      const planConfig = PRICING_PLANS.find(
+      const planConfig = catalog?.plans.find(
         (p) => p.id === values.billingPlan,
       );
 
@@ -199,27 +201,45 @@ export default function ChoosePlanPage() {
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-        {/* Plan cards — 3 plans (Basic / Growth / Advance), monthly billing only */}
-        <Controller
-          control={control}
-          name="billingPlan"
-          render={({ field }) => (
-            <div
-              role="radiogroup"
-              aria-label="Pricing plan"
-              className="grid grid-cols-1 gap-4 sm:grid-cols-3"
-            >
-              {PRICING_PLANS.map((plan) => (
-                <PlanCard
-                  key={plan.id}
-                  plan={plan}
-                  selected={field.value === plan.id}
-                  onSelect={() => field.onChange(plan.id)}
-                />
-              ))}
-            </div>
-          )}
-        />
+        <div className="flex justify-center">
+          <Controller
+            control={control}
+            name="currency"
+            render={({ field }) => (
+              <CurrencyToggle
+                value={field.value}
+                onChange={(next) => {
+                  field.onChange(next);
+                  // A plan that cannot be bought in the new currency is unpicked.
+                  if (selectedPlan && !(catalog?.checkout[selectedPlan] ?? []).includes(next)) {
+                    setValue("billingPlan", undefined as never, { shouldValidate: true });
+                  }
+                }}
+              />
+            )}
+          />
+        </div>
+
+        {catalog ? (
+          <Controller
+            control={control}
+            name="billingPlan"
+            render={({ field }) => (
+              <PlanCards
+                catalog={catalog}
+                currency={currency}
+                selected={field.value}
+                onSelect={field.onChange}
+              />
+            )}
+          />
+        ) : (
+          <p className="py-10 text-center text-sm text-gray-500">
+            {catalogFailed ? "The plans could not be loaded. Refresh to try again." : "Loading plans…"}
+          </p>
+        )}
+
+        <p className="text-center text-xs leading-relaxed text-gray-500">{PRICING_NOTE}</p>
 
         {/* Submit */}
         <button
@@ -245,84 +265,6 @@ export default function ChoosePlanPage() {
           </p>
         )}
       </form>
-    </div>
-  );
-}
-
-interface PlanCardProps {
-  plan: (typeof PRICING_PLANS)[number];
-  selected: boolean;
-  onSelect: () => void;
-}
-
-function PlanCard({ plan, selected, onSelect }: PlanCardProps) {
-  const formattedPrice = plan.priceMonthlyInr.toLocaleString("en-IN");
-
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      onClick={onSelect}
-      className={cn(
-        "group relative flex h-full flex-col gap-4 rounded-2xl border-2 bg-white p-6 text-left shadow-sm transition-all",
-        "hover:border-[#CEF17B] hover:shadow-md",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#CEF17B]/60",
-        selected ? "border-[#CEF17B] shadow-md" : "border-transparent",
-      )}
-    >
-      {plan.highlighted && (
-        <span className="absolute -top-2.5 right-5 inline-flex items-center gap-1 rounded-full bg-[#084734] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#CEF17B]">
-          <Sparkles className="size-3" />
-          Popular
-        </span>
-      )}
-
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-lg font-bold text-gray-900">{plan.name}</h3>
-          <p className="mt-1 text-xs text-gray-500 leading-relaxed">
-            {plan.tagline}
-          </p>
-        </div>
-        <SelectedIndicator selected={selected} />
-      </div>
-
-      <div className="flex items-baseline gap-1">
-        <span className="text-3xl font-bold text-gray-900">₹{formattedPrice}</span>
-        <span className="text-sm text-gray-500">/month</span>
-      </div>
-
-      <ul className="space-y-2">
-        {plan.features.map((feature) => (
-          <li
-            key={feature}
-            className="flex items-start gap-2 text-sm text-gray-600"
-          >
-            <Check
-              className="mt-0.5 size-4 shrink-0 text-[#084734]"
-              aria-hidden
-            />
-            <span>{feature}</span>
-          </li>
-        ))}
-      </ul>
-    </button>
-  );
-}
-
-function SelectedIndicator({ selected }: { selected: boolean }) {
-  return (
-    <div
-      aria-hidden
-      className={cn(
-        "flex size-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
-        selected
-          ? "border-[#084734] bg-[#CEF17B]"
-          : "border-gray-300 bg-white group-hover:border-[#CEF17B]",
-      )}
-    >
-      {selected && <Check className="size-3 text-[#084734]" />}
     </div>
   );
 }

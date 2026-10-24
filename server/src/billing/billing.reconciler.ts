@@ -96,6 +96,7 @@ export class BillingReconciler {
                 data: {
                     pendingBillingPlan: null,
                     pendingBillingInterval: null,
+                    pendingBillingCurrency: null,
                     pendingExternalCustomerId: null,
                     pendingExternalSubscriptionId: null,
                     pendingSubscriptionStatus: null,

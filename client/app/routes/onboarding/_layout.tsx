@@ -1,4 +1,4 @@
-import { Outlet, Link } from "react-router";
+import { Outlet, Link, useLocation } from "react-router";
 import { OnboardingGuard } from "~/components/guards/onboarding-guard";
 import { BrandLogo } from "~/components/app/brand-logo";
 
@@ -7,6 +7,8 @@ import { BrandLogo } from "~/components/app/brand-logo";
  * Renders a top bar with logo, main content area, and footer.
  */
 export default function OnboardingLayout() {
+  // Three plan cards need more room than a form.
+  const wide = useLocation().pathname.endsWith("/choose-plan");
   return (
     <OnboardingGuard>
       <div className="flex min-h-svh flex-col bg-[#f1f7fa]">
@@ -28,7 +30,7 @@ export default function OnboardingLayout() {
 
         {/* Content */}
         <main className="flex flex-1 flex-col items-center justify-center px-4 py-10">
-          <div className="w-full max-w-2xl">
+          <div className={wide ? "w-full max-w-5xl" : "w-full max-w-2xl"}>
             <Outlet />
           </div>
         </main>

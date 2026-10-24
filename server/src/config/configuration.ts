@@ -33,6 +33,19 @@ export default () => ({
         anthropicApiKey: process.env.ANTHROPIC_API_KEY,
         anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL,
     },
+    // Collabo's subscription billing, with Collabo's own Razorpay keys
+    // (RAZORPAY_KEY_*). The API base is for local tests of usage billing.
+    billing: {
+        razorpayApiBase: process.env.RAZORPAY_API_BASE || 'https://api.razorpay.com',
+        // The Razorpay plan for each plan and currency: test and live mode have their own.
+        plans: {
+            BASIC: { INR: process.env.RAZORPAY_PLAN_BASIC_INR, USD: process.env.RAZORPAY_PLAN_BASIC_USD },
+            GROWTH: { INR: process.env.RAZORPAY_PLAN_GROWTH_INR, USD: process.env.RAZORPAY_PLAN_GROWTH_USD },
+        },
+        // Where "Talk to us" on the Enterprise plan writes to.
+        salesEmail: process.env.BILLING_SALES_EMAIL,
+        usagePollSeconds: Number.parseInt(process.env.BILLING_USAGE_POLL_SECONDS || '3600', 10),
+    },
     // Merchants' own gateway accounts, for payment links sent in chat. Not
     // Collabo's subscription billing (RAZORPAY_KEY_* / BillingService).
     payments: {

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChannelPlatform, ChannelStatus, MessageDirection, MessageSource, MessageStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { UsageMeter } from '../../billing/usage-meter';
 import { MetaGraphClient } from '../../channel/meta-graph.client';
 import { MetaGraphError } from '../../channel/meta-graph.types';
 import { Priority, isRateLimitedError } from '../../rate-limit/rate-limit.types';
@@ -92,6 +93,7 @@ export class PlatformSenderService {
         private readonly storage: MessagingMediaStorage,
         private readonly events: InboxEventsService,
         private readonly broadcasts: BroadcastTracker,
+        private readonly usageMeter: UsageMeter,
     ) { }
 
     async deliver(messageId: string, humanAgentTag: boolean): Promise<'sent' | 'failed' | 'skipped'> {
@@ -112,6 +114,9 @@ export class PlatformSenderService {
                         ? await this.sendWhatsApp(channel, message.contact, payload, message.replyToExternalId)
                         : await this.sendMessenger(channel, message.contact.externalId, payload, message.replyToExternalId, humanAgentTag);
             await this.markSent(message.id, message.channelId, externalId);
+            if (channel.platform === ChannelPlatform.WHATSAPP) {
+                await this.usageMeter.noteMessage(message.organizationId, message.contact.id, new Date());
+            }
             if (payload.type === 'reaction') {
                 await this.applyBusinessReaction(channel, payload.targetExternalId, payload.emoji);
             }

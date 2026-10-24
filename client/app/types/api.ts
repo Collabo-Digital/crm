@@ -46,8 +46,11 @@ export interface User {
 /** Metric used to decide a customer's loyalty tier. */
 export type LoyaltyMetric = "ORDERS" | "TOTAL_SPENT";
 
-/** Available pricing plan tiers. Mirrors the Prisma `BillingPlan` enum. */
+/** Available pricing plan tiers. Mirrors the Prisma `BillingPlan` enum; ADVANCE is Enterprise. */
 export type BillingPlan = "BASIC" | "GROWTH" | "ADVANCE";
+
+/** The currencies plans are sold in. */
+export type BillingCurrency = "INR" | "USD";
 
 /** Billing cadence for a plan. Mirrors the Prisma `BillingInterval` enum. */
 export type BillingInterval = "MONTHLY" | "YEARLY";
@@ -74,6 +77,100 @@ export interface BillingConfigResponse {
 export interface StartOnboardingCheckoutRequest {
   billingPlan: BillingPlan;
   billingInterval: BillingInterval;
+  currency?: BillingCurrency;
+}
+
+/** A price in each currency's main unit (rupees, dollars). */
+export type Money = Record<BillingCurrency, number>;
+
+/** So many a month without charge, then a fee for each one over. `included: null` is unlimited. */
+export interface PlanAllowance {
+  included: number | null;
+  fee: Money | null;
+}
+
+/** One plan from GET /billing/plans. */
+export interface PricingPlan {
+  id: BillingPlan;
+  name: string;
+  tagline: string;
+  /** A month, before GST. Null: priced per contract (Enterprise). */
+  price: Money | null;
+  highlighted?: boolean;
+  selfServe: boolean;
+  conversations: PlanAllowance;
+  members: PlanAllowance;
+  callingMinutes: PlanAllowance;
+  /** Each connected Instagram account, a month. Null: included. */
+  instagram: Money | null;
+}
+
+/** Response from GET /billing/plans. */
+export interface BillingPlansResponse {
+  plans: PricingPlan[];
+  gstPercent: number;
+  /** The currencies each self-serve plan can be bought in right now. */
+  checkout: Partial<Record<BillingPlan, BillingCurrency[]>>;
+  salesEmail: string | null;
+}
+
+/** What an organization used in a month. */
+export interface BillingUsage {
+  conversations: number;
+  callingMinutes: number;
+  members: number;
+  instagramAccounts: number;
+}
+
+export interface UsageChargeLine {
+  key: "conversations" | "callingMinutes" | "members" | "instagram";
+  quantity: number;
+  /** In the main unit (rupees, dollars). */
+  unitPrice: number;
+  /** In the smallest unit (paise, cents). */
+  amount: number;
+}
+
+/** Amounts in the smallest unit (paise, cents). */
+export interface UsageCharges {
+  lines: UsageChargeLine[];
+  subtotal: number;
+  tax: number;
+  total: number;
+}
+
+export type UsageBillStatus = "PROCESSING" | "NOTHING_DUE" | "ADDED" | "LINK_SENT" | "PAID" | "SKIPPED" | "FAILED";
+
+/** A month's usage over the plan, billed after the month ends. Amounts in the smallest unit. */
+export interface UsageBill {
+  id: string;
+  period: string;
+  status: UsageBillStatus;
+  currency: BillingCurrency | null;
+  usage: BillingUsage | null;
+  lines: UsageChargeLine[] | null;
+  subtotal: number | null;
+  tax: number | null;
+  total: number | null;
+  paymentUrl: string | null;
+  note: string | null;
+  updatedAt: string;
+}
+
+/** Response from GET /billing/usage (owners and admins). */
+export interface BillingUsageSummary {
+  /** This month, "2026-10" (UTC). */
+  period: string;
+  usage: BillingUsage;
+  subscription: {
+    plan: BillingPlan;
+    status: SubscriptionStatus;
+    currency: BillingCurrency;
+    currentPeriodEnd: string | null;
+  } | null;
+  /** What this month would add on the plan, in the subscription's currency; null without a usage-priced subscription. */
+  estimate: UsageCharges | null;
+  bills: UsageBill[];
 }
 
 /** Response from POST /billing/onboarding-checkout. */

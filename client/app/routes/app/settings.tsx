@@ -7,7 +7,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 import { toast } from "sonner";
 import {
-  Building2, Lock, Bell, CreditCard, Palette, Users, Shield, Smartphone,
+  Building2, Lock, Bell, Palette, Users, Shield, Smartphone,
   Check, ChevronRight, AlertTriangle, Loader2, Plus, X, Mail, Trash2,
   Sun, Moon, Monitor, Receipt, Star, MapPin, Package, ShoppingBag, Layers, MessageSquare,
   Pencil, Store, ArrowLeft,
@@ -39,7 +39,7 @@ import {
 } from "~/hooks/use-gst-mutations";
 import { useProductTypes } from "~/hooks/use-product-queries";
 import { useRecomputeLoyaltyMutation } from "~/hooks/use-loyalty-mutations";
-import { getPricingPlan } from "~/data/pricing-plans";
+import { BillingIcon, BillingTab } from "~/components/app/settings/billing-tab";
 import {
   ProductSettingsTab,
   OrderSettingsTab,
@@ -80,7 +80,7 @@ const TABS = [
   // { id: "notifications", label: "Notifications", icon: Bell },
   { id: "members", label: "Team Members", icon: Users },
   { id: "developers", label: "Developers", icon: DevelopersIcon },
-  // { id: "billing",       label: "Billing & Plan",  icon: CreditCard },
+  { id: "billing", label: "Billing & Plan", icon: BillingIcon },
   // { id: "appearance",    label: "Appearance",       icon: Palette },
 ];
 
@@ -1511,10 +1511,11 @@ export default function SettingsPage() {
   const { data: invites } = useOrgInvites(currentOrgId);
   const { role: memberRole, isInfluencer } = useCurrentRole();
   const { canAccess } = useSectionAccess();
-  // Inbox settings are for members who can open the Inbox; the API refuses the rest.
+  // Inbox settings are for members who can open the Inbox, and billing for
+  // owners and admins; the API refuses the rest.
   const visibleTabs = isInfluencer
     ? TABS.filter((t) => INFLUENCER_TABS.includes(t.id))
-    : TABS.filter((t) => t.id !== "inbox" || canAccess("/inbox"));
+    : TABS.filter((t) => (t.id !== "inbox" || canAccess("/inbox")) && (t.id !== "billing" || memberRole === "OWNER" || memberRole === "ADMIN"));
   // Who may invite, resend and cancel. The server is the real boundary
   // (`requireRole` on every invite route); this hides affordances that would
   // only be refused.
@@ -2096,55 +2097,7 @@ export default function SettingsPage() {
           )}
 
           {/* ─── BILLING ─── */}
-          {activeTab === "billing" && (
-            <>
-              {(() => {
-                const plan = org ? getPricingPlan(org.billingPlan) : null;
-                const interval = org?.billingInterval ?? null;
-                return (
-                  <Section
-                    title="Current Plan"
-                    description={plan ? `You are on the ${plan.name} plan.` : ""}
-                  >
-                    <div className="flex items-center justify-between gap-4 rounded-lg bg-[#f1f7fa] dark:bg-gray-800/60 p-4">
-                      <div>
-                        <p className="text-sm font-bold text-gray-900 dark:text-gray-100">
-                          {plan?.name ?? "—"} Plan
-                          {interval && (
-                            <span className="ml-2 text-xs font-normal text-gray-500">
-                              ({interval.toLowerCase()})
-                            </span>
-                          )}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Billing managed via Stripe.
-                        </p>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {plan?.features.map((feature) => (
-                            <span
-                              key={feature}
-                              className="inline-flex items-center gap-1 rounded-full bg-[#CEF17B]/30 px-2 py-0.5 text-[10px] font-medium text-[#084734]"
-                            >
-                              <Check className="size-2.5" /> {feature}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      <button className="shrink-0 inline-flex h-8 items-center rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800/60 transition-colors">
-                        Change plan
-                      </button>
-                    </div>
-                  </Section>
-                );
-              })()}
-
-              <Section title="Payment Method" description="Manage your billing information.">
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-dashed border-input px-3 text-xs text-muted-foreground hover:border-[#CEF17B] hover:text-gray-900 dark:hover:text-gray-100 transition-colors">
-                  + Add Payment Method
-                </button>
-              </Section>
-            </>
-          )}
+          {activeTab === "billing" && org && <BillingTab orgId={org.id} />}
 
           {/* ─── PRODUCT SETTINGS ─── */}
           {activeTab === "store-profile" && <StoreProfileTab />}

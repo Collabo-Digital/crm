@@ -12,6 +12,7 @@ import {
     Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { UsageMeter } from '../billing/usage-meter';
 import { ContactIdentityService, ContactRef, ContactTouch } from './contact-identity.service';
 import { ConsentService, isOptInText, isOptOutText } from './consent.service';
 import { AutomationEventService, InboundEventType } from './automation-event.service';
@@ -100,6 +101,7 @@ export class MessageIngestService {
         @InjectQueue(MEDIA_DOWNLOAD_QUEUE) private readonly mediaQueue: Queue<MediaDownloadJobData>,
         private readonly broadcastTracker: BroadcastTracker,
         private readonly automationJobs: AutomationJobs,
+        private readonly usageMeter: UsageMeter,
     ) { }
 
     /** A message the customer sent. Returns null for a redelivery. */
@@ -207,6 +209,9 @@ export class MessageIngestService {
         this.events.publish(channel.organizationId, { type: 'message.created', conversationId: result.conversationId, messageId: result.messageId });
         this.events.publish(channel.organizationId, { type: 'conversation.updated', conversationId: result.conversationId });
         if (eventId) await this.automationJobs.event(eventId);
+        if (live && channel.platform === ChannelPlatform.WHATSAPP && !result.blocked) {
+            await this.usageMeter.noteMessage(channel.organizationId, result.contactId, input.occurredAt);
+        }
         if (live && input.content.kind !== MessageKind.COMMENT) {
             await this.broadcastTracker.onInbound({
                 contactId: result.contactId,
@@ -291,6 +296,7 @@ export class MessageIngestService {
         }
         this.events.publish(channel.organizationId, { type: 'message.created', conversationId: result.conversationId, messageId: result.messageId });
         this.events.publish(channel.organizationId, { type: 'conversation.updated', conversationId: result.conversationId });
+        await this.usageMeter.noteMessage(channel.organizationId, input.contactId, input.occurredAt);
         await this.queueMediaDownload(result.messageId, input.content.media);
         return result;
     }

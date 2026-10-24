@@ -4,17 +4,19 @@ import {
     Injectable,
     Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
     BillingInterval,
     BillingPlan,
     Prisma,
     SubscriptionStatus,
-    User,
 } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { BILLING_CURRENCIES, BillingCurrency, GST_PERCENT, PLANS, pricingPlan } from './pricing';
 import { RazorpayService } from './razorpay.service';
-import { resolvePlanId, SupportedCurrency } from './razorpay-plans';
+import { razorpayPlanId } from './razorpay-plans';
+import { UsageBillingService } from './usage-billing.service';
 
 /**
  * Razorpay event payload subset we care about. The actual Razorpay payload has
@@ -53,6 +55,13 @@ interface RazorpayWebhookPayload {
             error_description?: string;
         };
     };
+    /** `payment_link.paid`: a usage bill sent as a payment link was paid. */
+    payment_link?: {
+        entity?: {
+            id: string;
+            status: string;
+        };
+    };
 }
 
 /**
@@ -83,18 +92,20 @@ export class BillingService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly razorpay: RazorpayService,
+        private readonly config: ConfigService,
+        private readonly usageBilling: UsageBillingService,
     ) { }
 
-    /**
-     * Pick the user's currency for plan-id resolution.
-     *
-     * TODO: replace with proper geolocation (CF-IPCountry header / MaxMind).
-     * For now we default to INR — INR is the dominant onboarding case for this
-     * app (full GST support exists). Switch to USD-by-default later if global
-     * traffic grows.
-     */
-    private resolveCurrency(_user: User): SupportedCurrency {
-        return 'INR';
+    /** The price list, and which plans can be bought in which currency. */
+    plans() {
+        return {
+            plans: PLANS,
+            gstPercent: GST_PERCENT,
+            checkout: Object.fromEntries(
+                PLANS.filter((p) => p.selfServe).map((p) => [p.id, BILLING_CURRENCIES.filter((c) => razorpayPlanId(this.config, p.id, c))]),
+            ),
+            salesEmail: this.config.get<string>('billing.salesEmail') ?? null,
+        };
     }
 
     /**
@@ -142,13 +153,22 @@ export class BillingService {
         userId: string,
         plan: BillingPlan,
         interval: BillingInterval,
+        currency: BillingCurrency,
     ) {
+        const pricing = pricingPlan(plan);
+        if (!pricing.selfServe) {
+            throw new BadRequestException(`${pricing.name} is set up with the Collabo team. Talk to us to start it.`);
+        }
+        if (interval !== BillingInterval.MONTHLY) {
+            throw new BadRequestException('Plans are billed monthly.');
+        }
+        const planId = razorpayPlanId(this.config, plan, currency);
+        if (!planId) {
+            throw new BadRequestException(`The ${pricing.name} plan cannot be bought in ${currency} yet.`);
+        }
         const user = await this.prisma.user.findUniqueOrThrow({
             where: { id: userId },
         });
-
-        const currency = this.resolveCurrency(user);
-        const planId = resolvePlanId(currency, plan, interval);
         this.logger.log(
             `Creating subscription: planId=${planId} userEmail=${user.email} currency=${currency}`,
         );
@@ -171,6 +191,7 @@ export class BillingService {
             data: {
                 pendingBillingPlan: plan,
                 pendingBillingInterval: interval,
+                pendingBillingCurrency: currency,
                 pendingExternalSubscriptionId: subscription.id,
                 pendingSubscriptionStatus: SubscriptionStatus.CREATED,
                 pendingCurrentPeriodEnd: null,
@@ -211,7 +232,8 @@ export class BillingService {
      * createPersonal()'s `$transaction`. Copies User.pending_* → Organization
      * billing fields, clears the pending fields. Throws if no ACTIVE/AUTHENTICATED
      * subscription — this is the server-side hard gate that prevents an org from
-     * being created without payment.
+     * being created without payment. The plan is the one paid for, whatever
+     * the create request said.
      */
     async applyPendingSubscriptionToOrg(
         tx: Prisma.TransactionClient,
@@ -223,6 +245,7 @@ export class BillingService {
             select: {
                 pendingBillingPlan: true,
                 pendingBillingInterval: true,
+                pendingBillingCurrency: true,
                 pendingExternalCustomerId: true,
                 pendingExternalSubscriptionId: true,
                 pendingSubscriptionStatus: true,
@@ -252,6 +275,9 @@ export class BillingService {
         await tx.organization.update({
             where: { id: orgId },
             data: {
+                ...(user.pendingBillingPlan ? { billingPlan: user.pendingBillingPlan } : {}),
+                ...(user.pendingBillingInterval ? { billingInterval: user.pendingBillingInterval } : {}),
+                billingCurrency: user.pendingBillingCurrency,
                 externalCustomerId: user.pendingExternalCustomerId,
                 externalSubscriptionId: user.pendingExternalSubscriptionId,
                 billingProvider: 'RAZORPAY',
@@ -265,6 +291,7 @@ export class BillingService {
             data: {
                 pendingBillingPlan: null,
                 pendingBillingInterval: null,
+                pendingBillingCurrency: null,
                 pendingExternalCustomerId: null,
                 pendingExternalSubscriptionId: null,
                 pendingSubscriptionStatus: null,
@@ -319,6 +346,11 @@ export class BillingService {
                     periodEndUnix,
                     invoice.customer_id ?? null,
                 );
+                break;
+            }
+            case 'payment_link.paid': {
+                const link = payload.payment_link?.entity;
+                if (link) await this.usageBilling.onLinkPaid(link.id);
                 break;
             }
             case 'payment.failed':
