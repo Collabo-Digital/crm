@@ -19,7 +19,7 @@ export class BroadcastProcessor extends WorkerHost {
                 case 'start':
                     return await this.broadcasts.start(data.broadcastId);
                 case 'send':
-                    return await this.broadcasts.sendBatch(data.broadcastId, data.recipientIds);
+                    return await this.broadcasts.sendBatch(data.broadcastId, data.recipientIds, data.batch ?? 0);
                 case 'finish':
                     return await this.broadcasts.finishIfDone(data.broadcastId, data.attempt);
             }

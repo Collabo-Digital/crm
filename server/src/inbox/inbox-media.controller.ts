@@ -2,6 +2,7 @@ import { Controller, Get, Param, Query, Res } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
+import { mediaResponseHeaders } from '../messaging/media/media-url';
 import { InboxService } from './inbox.service';
 
 /**
@@ -24,13 +25,10 @@ export class InboxMediaController {
         @Res() res: Response,
     ) {
         const file = await this.inbox.openMedia(messageId, exp, sig);
-        res.setHeader('Content-Type', file.mime);
+        for (const [name, value] of Object.entries(mediaResponseHeaders(file.mime, file.filename))) res.setHeader(name, value);
         res.setHeader('Content-Length', String(file.size));
         res.setHeader('Cache-Control', 'private, max-age=600');
         res.setHeader('X-Content-Type-Options', 'nosniff');
-        if (file.filename) {
-            res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(file.filename)}`);
-        }
         file.stream.pipe(res);
     }
 }

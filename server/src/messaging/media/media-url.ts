@@ -18,6 +18,27 @@ export function signMediaPath(secret: string, messageId: string, now = Date.now(
     return `/inbox/media/${encodeURIComponent(messageId)}?exp=${exp}&sig=${signature(secret, messageId, exp)}`;
 }
 
+/// Types a browser shows without running anything the sender wrote.
+const INLINE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf', 'text/plain']);
+
+/**
+ * The headers a stored chat file is served with. The type comes from the
+ * sender (a customer's WhatsApp document can claim text/html or SVG), so
+ * only pictures, audio, video, PDF and plain text open in the browser;
+ * anything else downloads as opaque bytes. A sandbox stops scripts in what
+ * does open; PDF is left out because Chrome will not show a sandboxed PDF.
+ */
+export function mediaResponseHeaders(mime: string | null | undefined, filename: string | null): Record<string, string> {
+    const type = (mime ?? '').split(';')[0].trim().toLowerCase();
+    const inline = INLINE_TYPES.has(type) || /^(audio|video)\/[\w.+-]+$/.test(type);
+    const name = filename ? `; filename*=UTF-8''${encodeURIComponent(filename)}` : '';
+    return {
+        'Content-Type': inline ? type : 'application/octet-stream',
+        'Content-Disposition': `${inline ? 'inline' : 'attachment'}${name}`,
+        ...(type === 'application/pdf' ? {} : { 'Content-Security-Policy': 'sandbox' }),
+    };
+}
+
 export function verifyMediaSignature(
     secret: string,
     messageId: string,

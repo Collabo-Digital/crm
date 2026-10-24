@@ -15,6 +15,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { contactName } from '../../messaging/contact-name';
 import { MessagingSendService } from '../../messaging/send/messaging-send.service';
+import { ORIGIN_PRIORITY, broadcastPriority } from '../../messaging/send/outbound.queue';
 import { PlatformSenderService } from '../../messaging/send/platform-sender.service';
 import { SegmentsService } from '../segments/segments.service';
 import { SegmentDefinition } from '../segments/segment-rules';
@@ -336,6 +337,8 @@ export class BroadcastsService {
             organizationId: orgId,
             conversationId,
             origin: 'broadcast',
+            // Someone is waiting to see it on their phone: not behind any broadcast.
+            priority: ORIGIN_PRIORITY.agent,
             payload: {
                 type: 'template',
                 name: template.name,
@@ -472,7 +475,7 @@ export class BroadcastsService {
     }
 
     /** Hand one batch of recipients to the send pipeline. */
-    async sendBatch(broadcastId: string, recipientIds: string[]) {
+    async sendBatch(broadcastId: string, recipientIds: string[], batch = 0) {
         const b = await this.prisma.broadcast.findUnique({ where: { id: broadcastId } });
         if (!b || b.status !== BroadcastStatus.SENDING || !b.templateId) return;
         const template = await this.prisma.messageTemplate.findUnique({ where: { id: b.templateId } });
@@ -498,6 +501,7 @@ export class BroadcastsService {
                     organizationId: b.organizationId,
                     conversationId,
                     origin: 'broadcast',
+                    priority: broadcastPriority(batch),
                     idempotencyKey: `broadcast:${r.id}:${r.attempts}`,
                     payload: {
                         type: 'template',
@@ -703,7 +707,7 @@ export class BroadcastsService {
         await this.queue.addBulk(
             batches.map((recipientIds, i) => ({
                 name: 'send',
-                data: { kind: 'send' as const, broadcastId: b.id, recipientIds },
+                data: { kind: 'send' as const, broadcastId: b.id, recipientIds, batch: i },
                 opts: { delay: i * 1000, attempts: 3, backoff: { type: 'exponential', delay: 10_000 }, removeOnComplete: true, removeOnFail: { count: 200 } },
             })),
         );

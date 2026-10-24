@@ -12,7 +12,7 @@ import {
     UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { UserRole } from '@prisma/client';
 import { Observable, interval, map, merge, takeUntil, tap } from 'rxjs';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -34,6 +34,8 @@ import { BulkConversationsDto } from './dto/bulk-conversations.dto';
 export const INBOX_ROLES = [UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.AGENT, UserRole.VIEWER];
 /// Proxies (Caddy, Cloudflare) close idle streams; a comment line every 25s keeps it open.
 const HEARTBEAT_MS = 25_000;
+/// The live inbox refetches these as events stream in, and a member's tabs share one budget.
+const LIVE_READ_LIMIT = { default: { ttl: 60_000, limit: 300 } };
 
 /**
  * The shared inbox: WhatsApp, Messenger and Instagram conversations in one
@@ -52,6 +54,7 @@ export class InboxController {
     ) { }
 
     @Get('conversations')
+    @Throttle(LIVE_READ_LIMIT)
     async list(@CurrentUser() user: SessionPayload, @Query() q: QueryConversationsDto) {
         return this.inbox.listConversations(user.orgId!, await this.teams.viewer(user), q);
     }
@@ -62,16 +65,19 @@ export class InboxController {
     }
 
     @Get('counts')
+    @Throttle(LIVE_READ_LIMIT)
     async counts(@CurrentUser() user: SessionPayload) {
         return this.inbox.counts(user.orgId!, await this.teams.viewer(user));
     }
 
     @Get('conversations/:id')
+    @Throttle(LIVE_READ_LIMIT)
     async get(@CurrentUser() user: SessionPayload, @Param('id') id: string) {
         return this.inbox.getConversation(user.orgId!, await this.teams.viewer(user), id);
     }
 
     @Get('conversations/:id/messages')
+    @Throttle(LIVE_READ_LIMIT)
     async messages(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Query() q: QueryMessagesDto) {
         return this.inbox.listMessages(user.orgId!, await this.teams.viewer(user), id, q);
     }

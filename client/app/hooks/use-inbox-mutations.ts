@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { inboxKeys } from "~/hooks/use-inbox-queries";
@@ -17,15 +18,36 @@ let clientSeq = 0;
 export const nextClientId = () => `${Date.now().toString(36)}-${(clientSeq++).toString(36)}`;
 
 /**
+ * Keys for sends the server has not answered yet, by what was sent. If the
+ * answer was lost (a dropped connection, a timeout) the message may already
+ * be on its way, so sending the same thing again reuses the key and the
+ * server sends it once. A changed message gets a new key.
+ */
+function useUnansweredKeys() {
+  const keys = useRef(new Map<string, string>());
+  return {
+    keyFor: (what: unknown) => {
+      const fingerprint = JSON.stringify(what);
+      const key = keys.current.get(fingerprint) ?? nextClientId();
+      keys.current.set(fingerprint, key);
+      return key;
+    },
+    answered: (what: unknown) => keys.current.delete(JSON.stringify(what)),
+  };
+}
+
+/**
  * Send from the composer. A refusal (window closed, opted out…) is not an
  * HTTP error: it comes back as `{ ok: false, message }` and is shown as is.
  */
 export function useSendMessageMutation(conversationId: string) {
   const queryClient = useQueryClient();
+  const unanswered = useUnansweredKeys();
   return useMutation({
     mutationFn: (data: { payload: InboxSendPayload; replyToMessageId?: string }) =>
-      inboxService.send(conversationId, { ...data, clientId: nextClientId() }),
-    onSuccess: (outcome) => {
+      inboxService.send(conversationId, { ...data, clientId: unanswered.keyFor([conversationId, data]) }),
+    onSuccess: (outcome, data) => {
+      unanswered.answered([conversationId, data]);
       if (!outcome.ok) toast.error(outcome.message);
       void queryClient.invalidateQueries({ queryKey: inboxKeys.messages(conversationId) });
       void queryClient.invalidateQueries({ queryKey: inboxKeys.conversation(conversationId) });
@@ -38,9 +60,11 @@ export function useSendMessageMutation(conversationId: string) {
 /** Send a failed message again. A refusal comes back as `{ ok: false, message }`, like a send. */
 export function useResendMessageMutation(conversationId: string) {
   const queryClient = useQueryClient();
+  const unanswered = useUnansweredKeys();
   return useMutation({
-    mutationFn: (messageId: string) => inboxService.resend(conversationId, messageId, nextClientId()),
-    onSuccess: (outcome) => {
+    mutationFn: (messageId: string) => inboxService.resend(conversationId, messageId, unanswered.keyFor([conversationId, messageId])),
+    onSuccess: (outcome, messageId) => {
+      unanswered.answered([conversationId, messageId]);
       if (!outcome.ok) toast.error(outcome.message);
       void queryClient.invalidateQueries({ queryKey: inboxKeys.messages(conversationId) });
       void queryClient.invalidateQueries({ queryKey: inboxKeys.lists() });

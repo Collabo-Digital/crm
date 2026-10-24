@@ -42,6 +42,9 @@ export function isMetaThrottleError(code?: number, subcode?: number): boolean {
   );
 }
 
+/// WhatsApp pair rate limit: too many messages to one customer, not to everyone.
+export const META_PAIR_RATE_LIMIT_CODE = 131056;
+
 /// Meta's "temporary issue, try again" code.
 export const META_TRANSIENT_CODES: ReadonlySet<number> = new Set([1, 2]);
 /// Token invalid / expired / revoked.

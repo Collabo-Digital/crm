@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { MessageDirection, MessageKind, MessageSource, MessageStatus, Prisma, WhatsAppGroupStatus } from '@prisma/client';
+import { ChannelPlatform, MessageDirection, MessageKind, MessageSource, MessageStatus, Prisma, WhatsAppGroupStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ChannelAccessService } from '../channel-access.service';
 import { InboxEventsService } from '../inbox-events.service';
@@ -27,6 +27,8 @@ export interface SendInput {
     automation?: { automationId: string; runId: string; stepKey: string } | null;
     /** Same key twice sends once. */
     idempotencyKey?: string | null;
+    /** Queue priority instead of the origin's (see ORIGIN_PRIORITY). */
+    priority?: number;
 }
 
 export type SendOutcome =
@@ -99,12 +101,10 @@ export class MessagingSendService {
     ) { }
 
     async send(input: SendInput): Promise<SendOutcome> {
+        const priority = input.priority ?? ORIGIN_PRIORITY[input.origin];
         if (input.idempotencyKey) {
-            const prior = await this.prisma.message.findUnique({
-                where: { idempotencyKey: input.idempotencyKey },
-                select: { id: true },
-            });
-            if (prior) return { ok: true, messageId: prior.id, duplicate: true };
+            const prior = await this.duplicateOf(input.idempotencyKey, priority);
+            if (prior) return prior;
         }
 
         const conversation = await this.prisma.conversation.findFirst({
@@ -124,6 +124,16 @@ export class MessagingSendService {
         }
 
         const channel = await this.access.get(conversation.channelId);
+        if (input.payload.type === 'template' && channel.platform === ChannelPlatform.WHATSAPP && channel.wabaId) {
+            // Consent and the marketing route follow the category Meta approved, never the caller's.
+            const template = await this.prisma.messageTemplate.findUnique({
+                where: { wabaId_name_language: { wabaId: channel.wabaId, name: input.payload.name, language: input.payload.language } },
+                select: { category: true },
+            });
+            // Unknown here: an opted-out customer gets it only once its category is known.
+            const category = template?.category ?? (conversation.contact.optedOutAt ? 'MARKETING' : input.payload.category);
+            input = { ...input, payload: { ...input.payload, category } };
+        }
         const gate = checkSend({
             platform: conversation.platform,
             payload: input.payload,
@@ -214,20 +224,42 @@ export class MessagingSendService {
             });
         } catch (err) {
             if (input.idempotencyKey && err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-                const prior = await this.prisma.message.findUnique({ where: { idempotencyKey: input.idempotencyKey }, select: { id: true } });
-                if (prior) return { ok: true, messageId: prior.id, duplicate: true };
+                const prior = await this.duplicateOf(input.idempotencyKey, priority);
+                if (prior) return prior;
             }
             throw err;
         }
 
-        await this.queue.add(
-            'deliver',
-            { kind: 'deliver', messageId, humanAgentTag: gate.humanAgentTag },
-            { ...OUTBOUND_JOB_OPTS, jobId: `deliver-${messageId}`, priority: ORIGIN_PRIORITY[input.origin] },
-        );
+        await this.enqueue(messageId, gate.humanAgentTag, priority);
         this.events.publish(input.organizationId, { type: 'message.created', conversationId: conversation.id, messageId });
         this.events.publish(input.organizationId, { type: 'conversation.updated', conversationId: conversation.id });
         return { ok: true, messageId };
+    }
+
+    /** Queue delivery of a QUEUED row. One job per message, however often this is called. */
+    async enqueue(messageId: string, humanAgentTag: boolean, priority: number): Promise<void> {
+        await this.queue.add(
+            'deliver',
+            { kind: 'deliver', messageId, humanAgentTag },
+            { ...OUTBOUND_JOB_OPTS, jobId: `deliver-${messageId}`, priority },
+        );
+    }
+
+    /**
+     * The message an earlier call with this key created. If it is still
+     * waiting to go out, its delivery is queued again, since that call may
+     * have failed between writing the row and queueing it.
+     */
+    private async duplicateOf(idempotencyKey: string, priority: number): Promise<SendOutcome | null> {
+        const prior = await this.prisma.message.findUnique({
+            where: { idempotencyKey },
+            select: { id: true, status: true, body: true },
+        });
+        if (!prior) return null;
+        if (prior.status === MessageStatus.QUEUED) {
+            await this.enqueue(prior.id, (prior.body as { humanAgentTag?: boolean } | null)?.humanAgentTag === true, priority);
+        }
+        return { ok: true, messageId: prior.id, duplicate: true };
     }
 
     /**

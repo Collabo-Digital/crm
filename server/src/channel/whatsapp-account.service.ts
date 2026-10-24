@@ -1,7 +1,8 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ChannelPlatform } from '@prisma/client';
+import { ChannelPlatform, ChannelStatus } from '@prisma/client';
 import { randomInt } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { RESTRICTION_ERRORS, healthClearsRestriction } from '../automation/platforms/whatsapp/whatsapp-account-update.util';
 import { EncryptionService } from './encryption.service';
 import { MetaGraphClient } from './meta-graph.client';
 import { MetaGraphError, metaScope } from './meta-graph.types';
@@ -178,6 +179,13 @@ export class WhatsAppAccountService {
                 number: { ...number, checkedAt: new Date().toISOString() },
             }),
         );
+        if (healthClearsRestriction(number.health_status?.can_send_message)) {
+            // A lifted restriction whose webhook never came.
+            await this.prisma.channel.updateMany({
+                where: { id: channelId, status: ChannelStatus.ERROR, lastError: { in: RESTRICTION_ERRORS } },
+                data: { status: ChannelStatus.CONNECTED, lastError: null },
+            });
+        }
         return number;
     }
 

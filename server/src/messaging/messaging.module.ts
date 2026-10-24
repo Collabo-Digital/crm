@@ -18,6 +18,7 @@ import { MessagingMediaStorage } from './media/messaging-media.storage';
 import { MESSAGING_OUTBOUND_QUEUE } from './send/outbound.queue';
 import { MessagingSendService } from './send/messaging-send.service';
 import { OutboundProcessor } from './send/outbound.processor';
+import { OutboundSweeper } from './send/outbound.sweeper';
 import { PlatformSenderService } from './send/platform-sender.service';
 
 /**
@@ -48,6 +49,7 @@ import { PlatformSenderService } from './send/platform-sender.service';
         MessagingMediaStorage,
         MessagingSendService,
         OutboundProcessor,
+        OutboundSweeper,
         PlatformSenderService,
     ],
     exports: [

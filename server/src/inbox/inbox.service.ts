@@ -26,11 +26,10 @@ import { CreateNoteDto } from './dto/create-note.dto';
 import { BulkConversationsDto } from './dto/bulk-conversations.dto';
 import { asOutbound, parseSendPayload } from './send-payload.schema';
 
-/** Files the composer may attach, by the media kind they are sent as. */
+/** Files the composer may attach, by the media kind they are sent as. WhatsApp pictures are JPEG or PNG only. */
 const UPLOAD_KINDS: Record<string, 'image' | 'video' | 'audio' | 'document'> = {
     'image/jpeg': 'image',
     'image/png': 'image',
-    'image/webp': 'image',
     'video/mp4': 'video',
     'video/3gpp': 'video',
     'audio/mpeg': 'audio',
@@ -443,10 +442,11 @@ export class InboxService {
 
     async markRead(orgId: string, viewer: InboxViewer, id: string) {
         const conversation = await this.loadConversation(orgId, viewer, id);
-        if (conversation.unreadCount === 0) return { unreadCount: 0 };
+        // Unread is shared by the team: a viewer looking in has not handled anything.
+        if (conversation.unreadCount === 0 || !canReply(viewer)) return { unreadCount: conversation.unreadCount };
         await this.prisma.conversation.update({ where: { id: conversation.id }, data: { unreadCount: 0 } });
         this.events.publish(orgId, { type: 'conversation.updated', conversationId: conversation.id });
-        if (canReply(viewer)) await this.sender.markRead(conversation.id);
+        await this.sender.markRead(conversation.id);
         return { unreadCount: 0 };
     }
 
@@ -560,6 +560,9 @@ export class InboxService {
         if (!file) throw new BadRequestException('Choose a file to attach.');
         const mime = file.mimetype.split(';')[0].trim().toLowerCase();
         const mediaKind = UPLOAD_KINDS[mime];
+        if (!mediaKind && mime.startsWith('image/')) {
+            throw new BadRequestException('WhatsApp sends pictures as JPEG or PNG only. Save this picture as JPEG or PNG and attach it again.');
+        }
         if (!mediaKind) throw new BadRequestException('This file type cannot be sent. Use an image, video, audio file, PDF or Office document.');
         if (file.size > UPLOAD_MAX_BYTES[mediaKind]) {
             throw new BadRequestException(`${mediaKind[0].toUpperCase()}${mediaKind.slice(1)}s can be at most ${UPLOAD_MAX_BYTES[mediaKind] / 1024 / 1024} MB.`);

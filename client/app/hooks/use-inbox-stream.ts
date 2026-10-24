@@ -10,7 +10,35 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 /// Events arrive in bursts (a send is message.created + conversation.updated);
 /// one refetch per burst is plenty.
 const FLUSH_MS = 250;
+/// At most one refetch of the open thread per this long.
+const THREAD_EVERY_MS = 1_500;
+/// At most one refetch of the list (every loaded page) and counts per this
+/// long. A broadcast streams thousands of events, and these reads share a
+/// per-member rate limit with every open tab.
+const LIST_EVERY_MS = 5_000;
 const MAX_BACKOFF_MS = 30_000;
+
+/**
+ * Runs `fn` soon after `request()`, then at most once per `everyMs`: the
+ * first event of a burst shows at once, the rest of the burst in one go.
+ */
+export function paced(fn: () => void, everyMs: number, soonMs = FLUSH_MS) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let lastAt = -Infinity;
+  return {
+    request() {
+      timer ??= setTimeout(() => {
+        timer = null;
+        lastAt = Date.now();
+        fn();
+      }, Math.max(soonMs, lastAt + everyMs - Date.now()));
+    },
+    cancel() {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    },
+  };
+}
 
 /**
  * Keep the open inbox live.
@@ -32,14 +60,11 @@ export function useInboxStream(enabled = true): boolean {
     if (!enabled) return;
     let stopped = false;
     let controller: AbortController | null = null;
-    let flushTimer: ReturnType<typeof setTimeout> | null = null;
     const changedConversations = new Set<string>();
     const changedThreads = new Set<string>();
 
-    const flush = () => {
-      flushTimer = null;
-      void queryClient.invalidateQueries({ queryKey: inboxKeys.lists() });
-      void queryClient.invalidateQueries({ queryKey: inboxKeys.counts() });
+    // Only what is on screen refetches: invalidating an inactive query just marks it stale.
+    const threads = paced(() => {
       for (const id of changedConversations) {
         void queryClient.invalidateQueries({ queryKey: inboxKeys.conversation(id) });
       }
@@ -48,14 +73,24 @@ export function useInboxStream(enabled = true): boolean {
       }
       changedConversations.clear();
       changedThreads.clear();
-    };
+    }, THREAD_EVERY_MS);
+    const lists = paced(() => {
+      void queryClient.invalidateQueries({ queryKey: inboxKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: inboxKeys.counts() });
+    }, LIST_EVERY_MS);
 
     const handle = (event: InboxStreamEvent) => {
       // A call rang, was answered or ended: the call dock checks at once.
       if (event.type === "call.updated") void queryClient.invalidateQueries({ queryKey: callKeys.live });
-      changedConversations.add(event.conversationId);
-      if (event.type !== "conversation.updated") changedThreads.add(event.conversationId);
-      flushTimer ??= setTimeout(flush, FLUSH_MS);
+      // A delivery or read receipt changes one bubble's ticks, not the list or the counts.
+      if (event.type === "message.updated") {
+        changedThreads.add(event.conversationId);
+      } else {
+        changedConversations.add(event.conversationId);
+        if (event.type !== "conversation.updated") changedThreads.add(event.conversationId);
+        lists.request();
+      }
+      threads.request();
     };
 
     const read = async (body: ReadableStream<Uint8Array>) => {
@@ -126,7 +161,8 @@ export function useInboxStream(enabled = true): boolean {
     return () => {
       stopped = true;
       controller?.abort();
-      if (flushTimer) clearTimeout(flushTimer);
+      threads.cancel();
+      lists.cancel();
     };
   }, [enabled, queryClient]);
 

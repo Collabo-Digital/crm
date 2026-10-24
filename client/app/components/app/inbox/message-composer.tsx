@@ -409,7 +409,7 @@ export function MessageComposer({
           ref={fileRef}
           type="file"
           className="hidden"
-          accept="image/jpeg,image/png,image/webp,video/mp4,video/3gpp,audio/mpeg,audio/mp4,audio/aac,audio/ogg,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
+          accept="image/jpeg,image/png,video/mp4,video/3gpp,audio/mpeg,audio/mp4,audio/aac,audio/ogg,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) void attach(file);

@@ -37,6 +37,13 @@ describe('checkSend', () => {
         expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: text })).toEqual({ ok: true, humanAgentTag: false });
     });
 
+    it('refuses a WebP picture on WhatsApp, which takes JPEG and PNG only', () => {
+        const picture = (mime: string) => ({ type: 'media' as const, mediaKind: 'image' as const, storageKey: 'org1/a', mime });
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: picture('image/webp') })).toMatchObject({ ok: false, code: 'invalid_payload' });
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: picture('image/jpeg') })).toEqual({ ok: true, humanAgentTag: false });
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: picture('image/png') })).toEqual({ ok: true, humanAgentTag: false });
+    });
+
     it('requires a template once the WhatsApp window closed, saying when it closed', () => {
         const res = gate({ platform: ChannelPlatform.WHATSAPP, payload: text, window: replyWindow(ChannelPlatform.WHATSAPP, hoursBefore(30), now) });
         expect(res).toMatchObject({ ok: false, code: 'window_closed' });

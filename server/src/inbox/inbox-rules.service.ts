@@ -26,6 +26,8 @@ export interface RuleEvent {
 const MESSAGE_EVENTS = new Set(['whatsapp.message', 'whatsapp.cart', 'instagram.message', 'facebook.message', 'instagram.postback', 'facebook.postback', 'instagram.mention']);
 const CONVERSATION_EVENTS = new Set([...MESSAGE_EVENTS, 'instagram.comment', 'facebook.comment']);
 const HOUR = 3600_000;
+/// The automation queue routes 5 events at once; each lost race leaves one fewer contender.
+const PICK_ATTEMPTS = 6;
 
 const conversationInclude = {
     contact: { select: { id: true, tags: true, displayName: true, username: true, addressBookName: true, phone: true, externalId: true, waId: true } },
@@ -33,6 +35,11 @@ const conversationInclude = {
 } satisfies Prisma.ConversationInclude;
 
 type RuleConversation = Prisma.ConversationGetPayload<{ include: typeof conversationInclude }>;
+
+/** The send-once key of a welcome or away message: one per contact per cooldown period. */
+export function autoReplyKey(kind: 'welcome' | 'away', contactId: string, cooldownHours: number, now: number): string {
+    return `${kind}:${contactId}:${Math.floor(now / (cooldownHours * HOUR))}`;
+}
 
 /**
  * What the inbox does on its own when a conversation starts or a message
@@ -116,36 +123,43 @@ export class InboxRulesService {
      * Someone to take a new conversation: an online member (of the team, when
      * given) under their open-conversation cap, the one assigned longest ago
      * first. Null when nobody is available.
+     *
+     * Events are routed in parallel, so the pick is claimed by moving the
+     * member's last-assigned time only if no one else moved it since it was
+     * read; a lost race picks again with fresh times and counts.
      */
     async pickAgent(orgId: string, teamId: string | null, maxOpenPerAgent: number): Promise<string | null> {
-        const now = new Date();
-        const members = await this.prisma.organizationMember.findMany({
-            where: {
-                organizationId: orgId,
-                isActive: true,
-                role: { in: ASSIGNABLE_ROLES },
-                inboxStatus: InboxAvailability.ONLINE,
-                ...(teamId ? { user: { inboxTeams: { some: { teamId } } } } : {}),
-            },
-            select: { userId: true, inboxStatus: true, inboxSeenAt: true, inboxLastAssignedAt: true },
-        });
-        const online = members.filter((m) => presenceOf(m.inboxStatus, m.inboxSeenAt, now) === 'online');
-        if (!online.length) return null;
-        const load = await this.prisma.conversation.groupBy({
-            by: ['assignedUserId'],
-            where: { organizationId: orgId, status: ConversationStatus.OPEN, assignedUserId: { in: online.map((m) => m.userId) } },
-            _count: { _all: true },
-        });
-        const open = new Map(load.map((l) => [l.assignedUserId, l._count._all]));
-        const pick = online
-            .filter((m) => (open.get(m.userId) ?? 0) < maxOpenPerAgent)
-            .sort((a, b) => (a.inboxLastAssignedAt?.getTime() ?? 0) - (b.inboxLastAssignedAt?.getTime() ?? 0))[0];
-        if (!pick) return null;
-        await this.prisma.organizationMember.update({
-            where: { organizationId_userId: { organizationId: orgId, userId: pick.userId } },
-            data: { inboxLastAssignedAt: now },
-        });
-        return pick.userId;
+        for (let attempt = 0; attempt < PICK_ATTEMPTS; attempt++) {
+            const now = new Date();
+            const members = await this.prisma.organizationMember.findMany({
+                where: {
+                    organizationId: orgId,
+                    isActive: true,
+                    role: { in: ASSIGNABLE_ROLES },
+                    inboxStatus: InboxAvailability.ONLINE,
+                    ...(teamId ? { user: { inboxTeams: { some: { teamId } } } } : {}),
+                },
+                select: { userId: true, inboxStatus: true, inboxSeenAt: true, inboxLastAssignedAt: true },
+            });
+            const online = members.filter((m) => presenceOf(m.inboxStatus, m.inboxSeenAt, now) === 'online');
+            if (!online.length) return null;
+            const load = await this.prisma.conversation.groupBy({
+                by: ['assignedUserId'],
+                where: { organizationId: orgId, status: ConversationStatus.OPEN, assignedUserId: { in: online.map((m) => m.userId) } },
+                _count: { _all: true },
+            });
+            const open = new Map(load.map((l) => [l.assignedUserId, l._count._all]));
+            const pick = online
+                .filter((m) => (open.get(m.userId) ?? 0) < maxOpenPerAgent)
+                .sort((a, b) => (a.inboxLastAssignedAt?.getTime() ?? 0) - (b.inboxLastAssignedAt?.getTime() ?? 0))[0];
+            if (!pick) return null;
+            const claimed = await this.prisma.organizationMember.updateMany({
+                where: { organizationId: orgId, userId: pick.userId, inboxLastAssignedAt: pick.inboxLastAssignedAt },
+                data: { inboxLastAssignedAt: now },
+            });
+            if (claimed.count) return pick.userId;
+        }
+        return null;
     }
 
     /** Close conversations nobody has written in for the configured time. Hourly. */
@@ -252,7 +266,9 @@ export class InboxRulesService {
             conversationId: conversation.id,
             origin: 'system',
             payload: { type: 'text', text: interpolate(reply.message, { first_name: first, name }) },
-            idempotencyKey: `${keyPrefix}${event.id}`,
+            // One key per cooldown period, not per event: a burst (a photo album)
+            // is handled in parallel, and every event passes the check above.
+            idempotencyKey: autoReplyKey(kind, conversation.contactId, reply.cooldownHours, Date.now()),
         });
         if (!outcome.ok) this.logger.warn(`${kind} message not sent in ${conversation.id}: ${outcome.message}`);
     }

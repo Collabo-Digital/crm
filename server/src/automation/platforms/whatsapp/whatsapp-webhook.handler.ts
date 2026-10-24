@@ -2,11 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ChannelPlatform, MessageSource, MessageStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { patchChannelMetadataSql, recordHistoryChunkSql } from '../../../channel/channel-metadata.util';
-import { IngestChannel, MessageIngestService } from '../../../messaging/message-ingest.service';
+import { IngestChannel, MessageIngestService, StatusBeforeMessage } from '../../../messaging/message-ingest.service';
 import { TemplatesService } from '../../../campaigns/templates/templates.service';
 import { ContactRef } from '../../../messaging/contact-identity.service';
 import { whatsAppContent } from '../../../messaging/message-content';
-import { accountUpdateEffect } from './whatsapp-account-update.util';
+import { accountUpdateEffect, channelChange } from './whatsapp-account-update.util';
 import type { WaContactRef, WaEvent, WaMessage } from './whatsapp-webhook.parser';
 import { WhatsAppPayService } from '../../../payments/whatsapp-pay.service';
 import { GrowthService } from '../../../growth/growth.service';
@@ -76,6 +76,7 @@ export class WhatsAppWebhookHandler {
             byWaba.set(e.wabaId, list);
         }
 
+        let early = 0;
         for (const [wabaId, list] of byWaba) {
             const channel = await this.prisma.channel.findFirst({
                 where: { platform: ChannelPlatform.WHATSAPP, externalStoreId: wabaId },
@@ -100,9 +101,16 @@ export class WhatsAppWebhookHandler {
             };
             for (const e of mine) {
                 await this.handleAccountEvent(channel, e);
-                await this.handleMessageEvent(ingestChannel, e);
+                try {
+                    await this.handleMessageEvent(ingestChannel, e);
+                } catch (err) {
+                    if (!(err instanceof StatusBeforeMessage)) throw err;
+                    early++;
+                }
             }
         }
+        // Everything else is applied; the delivery runs again (idempotently) for these.
+        if (early) throw new Error(`${early} delivery statuses arrived before their messages were saved; trying again`);
     }
 
     private async handleMessageEvent(channel: IngestChannel, e: WaEvent): Promise<void> {
@@ -264,27 +272,26 @@ export class WhatsAppWebhookHandler {
         const now = new Date().toISOString();
         switch (e.kind) {
             case 'account_update': {
-                const effect = accountUpdateEffect(e.event, e.reason);
+                const effect = accountUpdateEffect(e.event, e.reason, e.value);
                 await this.prisma.$executeRaw(
                     patchChannelMetadataSql(channel.id, 'accountEvents', {
                         [e.event ?? 'UNKNOWN']: { at: now, reason: e.reason, initiatedBy: e.initiatedBy },
                     }),
                 );
                 if (!effect) return;
-                await this.prisma.channel.update({
-                    where: { id: channel.id },
-                    data: {
-                        ...(effect.status ? { status: effect.status } : {}),
-                        ...(effect.lastError !== undefined ? { lastError: effect.lastError } : {}),
-                    },
-                });
-                await this.prisma.$executeRaw(
-                    patchChannelMetadataSql(channel.id, 'coexistence', {
-                        ...(effect.coexistence ?? {}),
-                        sendsPaused: effect.pauseSends,
-                        updatedAt: now,
-                    }),
-                );
+                const current = await this.prisma.channel.findUnique({ where: { id: channel.id }, select: { status: true, lastError: true } });
+                const data = current ? channelChange(current, effect) : {};
+                if (Object.keys(data).length) await this.prisma.channel.update({ where: { id: channel.id }, data });
+                // Restrictions and warnings leave a coexistence pause as it is.
+                if (effect.coexistence || effect.pauseSends) {
+                    await this.prisma.$executeRaw(
+                        patchChannelMetadataSql(channel.id, 'coexistence', {
+                            ...(effect.coexistence ?? {}),
+                            sendsPaused: effect.pauseSends,
+                            updatedAt: now,
+                        }),
+                    );
+                }
                 this.logger.log(`WhatsApp channel ${channel.id}: account_update ${e.event} (${e.reason ?? 'no reason'})`);
                 return;
             }
