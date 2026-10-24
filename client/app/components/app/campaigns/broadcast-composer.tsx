@@ -15,6 +15,7 @@ import {
 import { useBroadcastPreview, useBroadcasts, useSegments, useTemplates } from "~/hooks/use-campaign-queries";
 import { useContactTags } from "~/hooks/use-inbox-queries";
 import { CATEGORY_LABEL, VARIABLE_SOURCE_LABEL, renderBroadcast } from "~/lib/campaign-format";
+import { serverMessage } from "~/lib/handle-mutation-error";
 import { cn, formatCurrency } from "~/lib/utils";
 import type {
   BroadcastAudience,
@@ -60,7 +61,14 @@ function PickList({ items, value, onChange, empty }: { items: Array<{ id: string
 
 /** Comma-separated tag entry with suggestions. */
 function TagInput({ value, onChange, suggestions, id }: { value: string[]; onChange: (v: string[]) => void; suggestions: string[]; id: string }) {
-  const [text, setText] = useState(value.join(", "));
+  const joined = value.join(", ");
+  const [text, setText] = useState(joined);
+  // Follow the saved tags when they change, so the box never shows a value that was not saved.
+  const [shown, setShown] = useState(joined);
+  if (shown !== joined) {
+    setShown(joined);
+    setText(joined);
+  }
   return (
     <>
       <Input
@@ -100,7 +108,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
   const upload = useCampaignUploadMutation();
   const test = useTestBroadcastMutation(broadcast.id);
   const send = useSendBroadcastMutation(broadcast.id);
-  const { data: segments = [] } = useSegments();
+  const { data: segments = [], isSuccess: segmentsLoaded } = useSegments();
   const { data: tagRows = [] } = useContactTags();
   const { data: past } = useBroadcasts({ status: "COMPLETED", limit: 50 });
   const { data: templates = [], isLoading: templatesLoading } = useTemplates({ status: "APPROVED" });
@@ -113,12 +121,20 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
   const mediaParam = params.find((p) => p.component === "header" && p.kind !== "text" && p.kind !== "location");
   const tags = tagRows.map((t) => t.tag);
 
-  const setAudience = (patch: Partial<BroadcastAudience>) => update.mutate({ audience: { ...audience, ...patch } });
-  const setExclude = (patch: Partial<BroadcastAudience["exclude"]>) => setAudience({ exclude: { ...audience.exclude, ...patch } });
-  const setValue = (key: string, source: VariableSource) => update.mutate({ variables: { ...vars, values: { ...vars.values, [key]: source } } });
+  // Each change is built from the draft as it stands when made, not from this render.
+  const setAudience = (patch: Partial<BroadcastAudience>) => update.save((d) => ({ audience: { ...d.audience, ...patch } }));
+  const setExclude = (patch: Partial<BroadcastAudience["exclude"]>) =>
+    update.save((d) => ({ audience: { ...d.audience, exclude: { ...d.audience.exclude, ...patch } } }));
+  const setValue = (key: string, source: VariableSource) =>
+    update.save((d) => ({ variables: { ...d.variables, values: { ...d.variables.values, [key]: source } } }));
 
-  const chooseTemplate = (t: MessageTemplate) =>
-    update.mutate({ templateId: t.id, variables: { values: defaultValues(t.params) } });
+  const chooseTemplate = (t: MessageTemplate) => update.save(() => ({ templateId: t.id, variables: { values: defaultValues(t.params) } }));
+
+  // A ticked segment that no longer exists is listed too, so it can be unticked.
+  const segmentItems = (selected: string[], hint: boolean) => [
+    ...segments.map((s) => ({ id: s.id, label: s.name, hint: hint ? s.lastCount?.toLocaleString("en-IN") : undefined })),
+    ...(segmentsLoaded ? selected.filter((id) => !segments.some((s) => s.id === id)).map((id) => ({ id, label: "Deleted segment" })) : []),
+  ];
 
   const audienceChosen = audience.everyone || audience.segmentIds.length > 0 || audience.tags.length > 0;
   const valuesFilled = params
@@ -140,7 +156,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
     const uploaded = await upload.mutateAsync(file).catch(() => null);
     if (!uploaded) return;
     setHeaderPreview(uploaded.kind === "image" ? URL.createObjectURL(file) : null);
-    update.mutate({ variables: { ...vars, headerMedia: { storageKey: uploaded.storageKey, mime: uploaded.mime, kind: uploaded.kind, filename: uploaded.filename } } });
+    update.save((d) => ({ variables: { ...d.variables, headerMedia: { storageKey: uploaded.storageKey, mime: uploaded.mime, kind: uploaded.kind, filename: uploaded.filename } } }));
   }
 
   const r = review.data;
@@ -150,7 +166,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
       <div className="grid gap-3 rounded-xl bg-card p-4 shadow-sm ring-1 ring-border sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="bc-name">Broadcast name</Label>
-          <Input id="bc-name" value={name} onChange={(e) => setName(e.target.value)} onBlur={() => name !== broadcast.name && update.mutate({ name })} />
+          <Input id="bc-name" value={name} onChange={(e) => setName(e.target.value)} onBlur={() => name !== broadcast.name && update.save(() => ({ name }))} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="bc-campaign">Campaign</Label>
@@ -158,7 +174,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
             id="bc-campaign"
             value={campaign}
             onChange={(e) => setCampaign(e.target.value)}
-            onBlur={() => campaign !== (broadcast.campaign ?? "") && update.mutate({ campaign: campaign || null })}
+            onBlur={() => campaign !== (broadcast.campaign ?? "") && update.save(() => ({ campaign: campaign || null }))}
             placeholder="Optional — groups broadcasts in reports"
           />
         </div>
@@ -191,7 +207,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
                     <div className="space-y-1.5">
                       <Label>Segments</Label>
                       <PickList
-                        items={segments.map((s) => ({ id: s.id, label: s.name, hint: s.lastCount?.toLocaleString("en-IN") }))}
+                        items={segmentItems(audience.segmentIds, true)}
                         value={audience.segmentIds}
                         onChange={(segmentIds) => setAudience({ segmentIds })}
                         empty="No segments yet. Build one under Segments."
@@ -209,7 +225,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
                 <div className="space-y-1.5">
                   <Label>People in these segments</Label>
                   <PickList
-                    items={segments.map((s) => ({ id: s.id, label: s.name }))}
+                    items={segmentItems(audience.exclude.segmentIds, false)}
                     value={audience.exclude.segmentIds}
                     onChange={(segmentIds) => setExclude({ segmentIds })}
                     empty="No segments."
@@ -363,7 +379,15 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
           )}
 
           {step === 3 &&
-            (review.isLoading || !r ? (
+            (review.isError ? (
+              <div className="flex flex-wrap items-start gap-2 rounded-lg bg-danger-subtle px-3 py-2 text-caption text-danger">
+                <AlertTriangle className="mt-px size-4 shrink-0" />
+                <span className="flex-1">{serverMessage(review.error, "The review could not be worked out.")}</span>
+                <Button size="sm" variant="outline" onClick={() => void review.refetch()} disabled={review.isFetching}>
+                  Try again
+                </Button>
+              </div>
+            ) : review.isLoading || !r ? (
               <div className="flex items-center gap-2 text-caption text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />
                 Working out who receives it…
@@ -476,7 +500,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
             <Button
               variant="accent"
               size="sm"
-              disabled={!r?.ready || send.isPending || (timing === "later" && !scheduledFor)}
+              disabled={!r?.ready || review.isError || send.isPending || (timing === "later" && !scheduledFor)}
               onClick={() => send.mutate(timing === "later" && scheduledFor ? new Date(scheduledFor).toISOString() : undefined)}
             >
               {send.isPending ? <Loader2 className="animate-spin" /> : <Send />}

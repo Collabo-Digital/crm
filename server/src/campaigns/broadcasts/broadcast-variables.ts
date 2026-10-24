@@ -40,6 +40,13 @@ export function parseVariables(raw: unknown): BroadcastVariables {
     return parsed.data;
 }
 
+/** Uploads are stored under the organization's id; a header file from anywhere else is refused. */
+export function assertOwnHeaderFile(vars: BroadcastVariables, orgId: string): void {
+    if (vars.headerMedia && !vars.headerMedia.storageKey.startsWith(`${orgId}/`)) {
+        throw new BadRequestException('Upload the header file again.');
+    }
+}
+
 /** What a recipient brings to the template. */
 export interface RecipientContext {
     name: string | null;

@@ -7,8 +7,7 @@ import {
     BroadcastRecipientStatus as R,
     BroadcastStatus,
     ChannelPlatform,
-    MessageDirection,
-    MessageKind,
+    MessageStatus,
     Prisma,
     TemplateCategory,
 } from '@prisma/client';
@@ -29,7 +28,7 @@ import {
     rateFor,
     skipReason,
 } from './broadcast-audience';
-import { BroadcastVariables, RecipientContext, parseVariables, resolveValues } from './broadcast-variables';
+import { BroadcastVariables, RecipientContext, assertOwnHeaderFile, parseVariables, resolveValues } from './broadcast-variables';
 import { BROADCAST_QUEUE, BroadcastJobData, startJobId } from './broadcast.queue';
 
 /// Messaging limit tiers: unique people reachable outside a reply window in a moving 24 hours.
@@ -38,9 +37,17 @@ const TIER_LIMITS: Record<string, number> = { TIER_250: 250, TIER_2K: 2000, TIER
 /// coexistence numbers are fixed at 20 messages a second, others start at 80.
 const RATE_COEXISTENCE = 10;
 const RATE_DEFAULT = 40;
-/// Failures a retry would only repeat.
-const FINAL_ERRORS = new Set(['131050', '131026', '131051', '132000', '132001', '132005', '132007', '132012', '132015', '132016']);
+/// Failures a retry would only repeat. A paused template (132015) is not one: Meta lifts the pause after hours.
+const FINAL_ERRORS = new Set(['131050', '131026', '131051', '132000', '132001', '132005', '132007', '132012', '132016']);
 const PAGE = 2000;
+/// Recipient statuses that mean the message reached WhatsApp, as the segment rule 'received' reads them.
+const RECEIVED: R[] = [R.SENT, R.DELIVERED, R.READ];
+/// Meta keeps an uploaded file for 30 days; a header file older than this is uploaded again.
+const HEADER_MEDIA_MAX_AGE_MS = 25 * 86_400_000;
+/// How often a sending broadcast is checked for completion, and how many checks in a row
+/// without progress make it stalled (10 minutes).
+const FINISH_CHECK_MS = 30_000;
+const STALLED_CHECKS = 20;
 
 export interface SaveBroadcastInput {
     name?: string;
@@ -159,14 +166,19 @@ export class BroadcastsService {
     async update(orgId: string, id: string, input: SaveBroadcastInput) {
         const b = await this.load(orgId, id);
         if (b.status !== BroadcastStatus.DRAFT) throw new BadRequestException('Only a draft can be changed. Cancel the schedule first.');
-        if (input.templateId) await this.templates.load(orgId, input.templateId);
+        if (input.templateId) {
+            const [template, channel] = await Promise.all([this.templates.load(orgId, input.templateId), this.templates.channelFor(orgId)]);
+            if (template.wabaId !== channel.wabaId) throw new BadRequestException('This template belongs to a WhatsApp account that is no longer connected. Choose another.');
+        }
+        const variables = input.variables !== undefined ? parseVariables(input.variables) : undefined;
+        if (variables) assertOwnHeaderFile(variables, orgId);
         await this.prisma.broadcast.update({
             where: { id: b.id },
             data: {
                 ...(input.name !== undefined ? { name: input.name.trim() || 'Untitled broadcast' } : {}),
                 ...(input.campaign !== undefined ? { campaign: input.campaign?.trim() || null } : {}),
                 ...(input.templateId !== undefined ? { templateId: input.templateId } : {}),
-                ...(input.variables !== undefined ? { variables: parseVariables(input.variables) as Prisma.InputJsonValue } : {}),
+                ...(variables ? { variables: variables as Prisma.InputJsonValue } : {}),
                 ...(input.audience !== undefined ? { audience: parseAudience(input.audience) as Prisma.InputJsonValue } : {}),
             },
         });
@@ -189,7 +201,8 @@ export class BroadcastsService {
                 name: `${b.name} (copy)`,
                 campaign: b.campaign,
                 templateId: b.templateId,
-                variables: (b.variables ?? undefined) as Prisma.InputJsonValue | undefined,
+                // Parsed, so the original's uploaded media id (which Meta expires) is not carried over.
+                variables: b.variables ? (parseVariables(b.variables) as Prisma.InputJsonValue) : undefined,
                 audience: (b.audience ?? undefined) as Prisma.InputJsonValue | undefined,
                 createdById: userId,
             },
@@ -265,7 +278,10 @@ export class BroadcastsService {
         const skipped: Record<string, number> = {};
         for (const e of evaluated) if (e.reason) skipped[e.reason] = (skipped[e.reason] ?? 0) + 1;
 
-        const channel = await this.prisma.channel.findUnique({ where: { id: b.channelId }, select: { metadata: true } });
+        const channel = await this.prisma.channel.findUnique({ where: { id: b.channelId }, select: { metadata: true, externalStoreId: true } });
+        if (template && template.wabaId !== channel?.externalStoreId) {
+            blockers.push('This template belongs to a WhatsApp account that is no longer connected to this number. Choose another template.');
+        }
         const health = ((channel?.metadata as Record<string, any> | null)?.health?.number ?? {}) as Record<string, any>;
         const sending = describeSending(health);
         if (sending && sending.state !== 'AVAILABLE') {
@@ -371,8 +387,9 @@ export class BroadcastsService {
 
     /**
      * A scheduled broadcast goes back to being a draft. One that is sending
-     * stops: people not yet handed to WhatsApp are left out; messages already
-     * on their way still arrive.
+     * stops: people not yet handed to WhatsApp are left out, and messages
+     * still waiting in the send queue are withdrawn. Only a message being
+     * sent at that moment still arrives.
      */
     async cancel(orgId: string, id: string) {
         const b = await this.load(orgId, id);
@@ -381,10 +398,9 @@ export class BroadcastsService {
             await this.prisma.broadcast.update({ where: { id: b.id }, data: { status: BroadcastStatus.DRAFT, scheduledAt: null } });
         } else if (b.status === BroadcastStatus.SENDING) {
             await this.prisma.broadcast.update({ where: { id: b.id }, data: { status: BroadcastStatus.CANCELLED, cancelledAt: new Date() } });
-            await this.prisma.broadcastRecipient.updateMany({
-                where: { broadcastId: b.id, status: R.PENDING },
-                data: { status: R.SKIPPED, skipReason: 'cancelled' },
-            });
+            const left = { status: R.SKIPPED, skipReason: 'cancelled' };
+            await this.prisma.broadcastRecipient.updateMany({ where: { broadcastId: b.id, status: R.PENDING }, data: left });
+            await this.withdrawQueued(b.id, left, 'Not sent: the broadcast was stopped.');
         } else {
             throw new BadRequestException('Only scheduled or sending broadcasts can be cancelled.');
         }
@@ -394,8 +410,13 @@ export class BroadcastsService {
     /** Send again to people whose message failed for a reason a retry could fix. */
     async retryFailed(orgId: string, id: string) {
         const b = await this.load(orgId, id);
-        if (b.status !== BroadcastStatus.COMPLETED && b.status !== BroadcastStatus.CANCELLED) {
+        if (b.status !== BroadcastStatus.COMPLETED && b.status !== BroadcastStatus.CANCELLED && b.status !== BroadcastStatus.FAILED) {
             throw new BadRequestException('Retry once the broadcast has finished sending.');
+        }
+        const template = b.templateId ? await this.prisma.messageTemplate.findUnique({ where: { id: b.templateId } }) : null;
+        if (!template) throw new BadRequestException('The template was deleted. Duplicate the broadcast and choose another template.');
+        if (template.status !== 'APPROVED') {
+            throw new BadRequestException(`The template is ${statusWords(template.status)}. Retry once Meta has approved it again.`);
         }
         const failed = await this.prisma.broadcastRecipient.findMany({
             where: { broadcastId: b.id, status: R.FAILED },
@@ -403,11 +424,12 @@ export class BroadcastsService {
         });
         const retryable = failed.filter((f) => !f.errorCode || !FINAL_ERRORS.has(f.errorCode)).map((f) => f.id);
         if (!retryable.length) throw new BadRequestException('No failed messages can be retried; the rest failed for reasons a retry would repeat.');
+        await this.headerMediaId(b, parseVariables(b.variables));
         await this.prisma.broadcastRecipient.updateMany({
             where: { id: { in: retryable } },
             data: { status: R.PENDING, attempts: { increment: 1 }, messageId: null, errorCode: null, errorMessage: null, failedAt: null },
         });
-        await this.prisma.broadcast.update({ where: { id: b.id }, data: { status: BroadcastStatus.SENDING, completedAt: null } });
+        await this.prisma.broadcast.update({ where: { id: b.id }, data: { status: BroadcastStatus.SENDING, completedAt: null, failureReason: null } });
         await this.enqueueBatches(b, retryable);
         return { retrying: retryable.length, notRetryable: failed.length - retryable.length };
     }
@@ -427,15 +449,7 @@ export class BroadcastsService {
         const vars = parseVariables(b.variables);
         const params = templateParams(template.components as Record<string, unknown>[], formatOf(template.parameterFormat));
 
-        // The header file goes up once; every message reuses its media id.
-        let mediaId = (b.variables as { headerMediaId?: string } | null)?.headerMediaId ?? null;
-        if (vars.headerMedia && !mediaId) {
-            mediaId = await this.platform.uploadForWhatsApp(b.channelId, vars.headerMedia);
-            await this.prisma.broadcast.update({
-                where: { id: b.id },
-                data: { variables: { ...vars, headerMediaId: mediaId } as Prisma.InputJsonValue },
-            });
-        }
+        const mediaId = await this.headerMediaId(b, vars);
         await this.prisma.broadcast.update({
             where: { id: b.id },
             data: {
@@ -474,9 +488,11 @@ export class BroadcastsService {
     /** Hand one batch of recipients to the send pipeline. */
     async sendBatch(broadcastId: string, recipientIds: string[]) {
         const b = await this.prisma.broadcast.findUnique({ where: { id: broadcastId } });
-        if (!b || b.status !== BroadcastStatus.SENDING || !b.templateId) return;
-        const template = await this.prisma.messageTemplate.findUnique({ where: { id: b.templateId } });
-        if (!template) return;
+        if (!b || b.status !== BroadcastStatus.SENDING) return;
+        // A deleted template leaves templateId null.
+        const template = b.templateId ? await this.prisma.messageTemplate.findUnique({ where: { id: b.templateId } }) : null;
+        if (!template) return this.fail(b.id, 'The template was deleted while sending, so the rest of the audience was not sent to.');
+        if (template.status !== 'APPROVED') return this.halt(b.id, template.status);
         const vars = parseVariables(b.variables);
         const mediaId = (b.variables as { headerMediaId?: string } | null)?.headerMediaId ?? null;
         const format = formatOf(template.parameterFormat);
@@ -487,9 +503,11 @@ export class BroadcastsService {
             include: { contact: { select: contactSelect } },
         });
         for (const r of recipients) {
+            const live = await this.prisma.broadcast.findUnique({ where: { id: b.id }, select: { status: true } });
+            if (live?.status !== BroadcastStatus.SENDING) return;
             const { values, missing } = resolveValues(params, vars, contextOf(r.contact), mediaId);
             if (missing.length) {
-                await this.prisma.broadcastRecipient.update({ where: { id: r.id }, data: { status: R.SKIPPED, skipReason: 'missing_value' } });
+                await this.prisma.broadcastRecipient.updateMany({ where: { id: r.id, status: R.PENDING }, data: { status: R.SKIPPED, skipReason: 'missing_value' } });
                 continue;
             }
             try {
@@ -508,46 +526,115 @@ export class BroadcastsService {
                         previewText: renderTemplate(components, values).body,
                     },
                 });
-                await this.prisma.broadcastRecipient.update({
-                    where: { id: r.id },
+                const { count } = await this.prisma.broadcastRecipient.updateMany({
+                    where: { id: r.id, status: R.PENDING },
                     data: outcome.ok
                         ? { status: R.QUEUED, messageId: outcome.messageId, queuedAt: new Date() }
                         : outcome.code === 'opted_out' || outcome.code === 'contact_blocked'
                             ? { status: R.SKIPPED, skipReason: outcome.code === 'opted_out' ? 'opted_out' : 'blocked' }
                             : { status: R.FAILED, failedAt: new Date(), errorMessage: outcome.message },
                 });
+                // Stopped while this one was being handed over: its message is taken back too.
+                if (!count && outcome.ok) await this.withdrawMessages([outcome.messageId], 'Not sent: the broadcast was stopped.');
             } catch (err) {
-                await this.prisma.broadcastRecipient.update({
-                    where: { id: r.id },
+                await this.prisma.broadcastRecipient.updateMany({
+                    where: { id: r.id, status: R.PENDING },
                     data: { status: R.FAILED, failedAt: new Date(), errorMessage: err instanceof Error ? err.message : String(err) },
                 });
             }
         }
     }
 
-    /** Done once nobody is waiting to be handed over; delivery keeps updating the numbers after. */
-    async finishIfDone(broadcastId: string, attempt: number) {
+    /**
+     * Done once every message has gone to WhatsApp or failed; delivery keeps
+     * updating the numbers after. While that count keeps falling this checks
+     * again; once it stops moving for ten minutes, people never handed over
+     * are marked failed (Retry failed can reach them) and the broadcast closes.
+     */
+    async finishIfDone(broadcastId: string, attempt: number, lastWaiting?: number) {
         const b = await this.prisma.broadcast.findUnique({ where: { id: broadcastId }, select: { id: true, status: true } });
         if (!b || b.status !== BroadcastStatus.SENDING) return;
-        const pending = await this.prisma.broadcastRecipient.count({ where: { broadcastId, status: R.PENDING } });
-        if (pending === 0) {
-            await this.prisma.broadcast.update({ where: { id: broadcastId }, data: { status: BroadcastStatus.COMPLETED, completedAt: new Date() } });
-            return;
+        const waiting = await this.prisma.broadcastRecipient.count({ where: { broadcastId, status: { in: [R.PENDING, R.QUEUED] } } });
+        let failureReason: string | null = null;
+        if (waiting > 0) {
+            const stalled = lastWaiting !== undefined && waiting >= lastWaiting ? attempt + 1 : 0;
+            if (stalled < STALLED_CHECKS) {
+                await this.queue.add('finish', { kind: 'finish', broadcastId, attempt: stalled, waiting }, { delay: FINISH_CHECK_MS, removeOnComplete: true });
+                return;
+            }
+            const { count } = await this.prisma.broadcastRecipient.updateMany({
+                where: { broadcastId, status: R.PENDING },
+                data: { status: R.FAILED, failedAt: new Date(), errorMessage: 'Not sent: sending stalled before reaching this person.' },
+            });
+            if (count) failureReason = `Sending stalled, so ${count.toLocaleString('en-IN')} ${count === 1 ? 'person was' : 'people were'} not sent to. Use Retry failed to send to them.`;
+            this.logger.warn(`Broadcast ${broadcastId}: closed after ${STALLED_CHECKS} checks without progress, ${waiting} still waiting`);
         }
-        if (attempt < 60) {
-            await this.queue.add('finish', { kind: 'finish', broadcastId, attempt: attempt + 1 }, { delay: 30_000, removeOnComplete: true });
-        }
+        await this.prisma.broadcast.update({ where: { id: broadcastId }, data: { status: BroadcastStatus.COMPLETED, completedAt: new Date(), failureReason } });
     }
 
+    /** Stop for good: nobody else is sent to, and messages still waiting in the send queue are withdrawn. */
     async fail(broadcastId: string, reason: string) {
         await this.prisma.broadcast.update({
             where: { id: broadcastId },
             data: { status: BroadcastStatus.FAILED, failureReason: reason, completedAt: new Date() },
         });
-        await this.prisma.broadcastRecipient.updateMany({
-            where: { broadcastId, status: R.PENDING },
-            data: { status: R.SKIPPED, skipReason: 'cancelled' },
+        const left = { status: R.SKIPPED, skipReason: 'cancelled' };
+        await this.prisma.broadcastRecipient.updateMany({ where: { broadcastId, status: R.PENDING }, data: left });
+        await this.withdrawQueued(broadcastId, left, 'Not sent: the broadcast stopped.');
+    }
+
+    /**
+     * The template stopped being approved mid-send (Meta paused or disabled
+     * it, or an edit is in review). Sending stops, and everyone not reached
+     * is recorded as failed, so Retry failed can send to them once it is
+     * approved again.
+     */
+    private async halt(broadcastId: string, templateStatus: string) {
+        const words = statusWords(templateStatus);
+        await this.prisma.broadcast.update({
+            where: { id: broadcastId },
+            data: {
+                status: BroadcastStatus.FAILED,
+                failureReason: `Sending stopped because the template is now ${words}. Once Meta approves it again, use Retry failed to send to the people it did not reach.`,
+                completedAt: new Date(),
+            },
         });
+        const notSent = { status: R.FAILED, failedAt: new Date(), errorMessage: `Not sent: the template is ${words}.` };
+        await this.prisma.broadcastRecipient.updateMany({ where: { broadcastId, status: R.PENDING }, data: notSent });
+        await this.withdrawQueued(broadcastId, notSent, notSent.errorMessage);
+    }
+
+    /**
+     * Messages of this broadcast still waiting in the send queue are marked
+     * failed with `note`, which makes the sender skip them, and their
+     * recipients get `data`. A message already being sent still goes out.
+     */
+    private async withdrawQueued(broadcastId: string, data: Prisma.BroadcastRecipientUpdateManyMutationInput, note: string) {
+        const queued = await this.prisma.broadcastRecipient.findMany({
+            where: { broadcastId, status: R.QUEUED, messageId: { not: null } },
+            select: { messageId: true },
+        });
+        const ids = queued.map((q) => q.messageId!);
+        for (let i = 0; i < ids.length; i += 1000) {
+            const withdrawn = await this.withdrawMessages(ids.slice(i, i + 1000), note);
+            if (withdrawn.length) {
+                await this.prisma.broadcastRecipient.updateMany({ where: { broadcastId, status: R.QUEUED, messageId: { in: withdrawn } }, data });
+            }
+        }
+    }
+
+    /** Mark still-queued messages failed; returns the ones that were. */
+    private async withdrawMessages(messageIds: string[], note: string): Promise<string[]> {
+        const at = new Date();
+        await this.prisma.message.updateMany({
+            where: { id: { in: messageIds }, status: MessageStatus.QUEUED },
+            data: { status: MessageStatus.FAILED, failedAt: at, errorMessage: note },
+        });
+        const rows = await this.prisma.message.findMany({
+            where: { id: { in: messageIds }, status: MessageStatus.FAILED, failedAt: at, errorMessage: note },
+            select: { id: true },
+        });
+        return rows.map((m) => m.id);
     }
 
     // ─── Helpers ───────────────────────────────────────────────────────
@@ -573,41 +660,46 @@ export class BroadcastsService {
         mode: 'review' | 'send',
         mediaId: string | null = null,
     ): Promise<EvaluatedContact[]> {
-        const segmentWhere = async (ids: string[]) =>
-            Promise.all(
-                ids.map(async (sid) => {
-                    const s = await this.segments.load(orgId, sid);
-                    return this.segments.where(orgId, s.definition as SegmentDefinition);
-                }),
-            );
+        // One at a time: an RFM segment may refresh the scores first.
+        const segmentWhere = async (ids: string[]) => {
+            const out: Prisma.ChannelContactWhereInput[] = [];
+            for (const sid of ids) {
+                const s = await this.segments.load(orgId, sid).catch((err) => {
+                    throw err instanceof NotFoundException
+                        ? new BadRequestException('A segment this broadcast uses has been deleted. Untick it under Audience, then review again.')
+                        : err;
+                });
+                out.push(await this.segments.where(orgId, s.definition as SegmentDefinition));
+            }
+            return out;
+        };
         const include: Prisma.ChannelContactWhereInput = audience.everyone
             ? {}
             : { OR: [...(await segmentWhere(audience.segmentIds)), ...audience.tags.map((t) => ({ tags: { has: t } }))] };
         const base: Prisma.ChannelContactWhereInput = { AND: [{ organizationId: orgId, channelId: b.channelId, isGroup: false }, include] };
         const ex = audience.exclude;
         const excludeParts = [...(await segmentWhere(ex.segmentIds)), ...ex.tags.map((t) => ({ tags: { has: t } }))];
+        const recentSince = ex.messagedWithinHours ? new Date(Date.now() - ex.messagedWithinHours * 3600_000) : null;
 
-        const excluded = new Set<string>();
-        if (excludeParts.length) {
-            const rows = await this.prisma.channelContact.findMany({ where: { AND: [base, { OR: excludeParts }] }, select: { id: true } });
-            rows.forEach((r) => excluded.add(r.id));
-        }
-        const already = new Set<string>();
-        if (ex.broadcastIds.length) {
-            const rows = await this.prisma.broadcastRecipient.findMany({
-                where: { broadcastId: { in: ex.broadcastIds }, organizationId: orgId, sentAt: { not: null } },
-                select: { contactId: true },
-            });
-            rows.forEach((r) => already.add(r.contactId));
-        }
-        const recent = new Set<string>();
-        if (ex.messagedWithinHours) {
-            const rows = await this.prisma.broadcastRecipient.findMany({
-                where: { organizationId: orgId, broadcastId: { not: b.id }, sentAt: { gte: new Date(Date.now() - ex.messagedWithinHours * 3600_000) } },
-                select: { contactId: true },
-            });
-            rows.forEach((r) => recent.add(r.contactId));
-        }
+        // Who is left out is looked up a page of contacts at a time, so memory stays bounded by the page.
+        const leftOut = async (ids: string[]) => {
+            const excluded = excludeParts.length
+                ? (await this.prisma.channelContact.findMany({ where: { id: { in: ids }, OR: excludeParts }, select: { id: true } })).map((r) => r.id)
+                : [];
+            const already = ex.broadcastIds.length
+                ? (await this.prisma.broadcastRecipient.groupBy({
+                    by: ['contactId'],
+                    where: { contactId: { in: ids }, broadcastId: { in: ex.broadcastIds }, organizationId: orgId, status: { in: RECEIVED } },
+                })).map((r) => r.contactId)
+                : [];
+            const recent = recentSince
+                ? (await this.prisma.broadcastRecipient.groupBy({
+                    by: ['contactId'],
+                    where: { contactId: { in: ids }, organizationId: orgId, broadcastId: { not: b.id }, sentAt: { gte: recentSince } },
+                })).map((r) => r.contactId)
+                : [];
+            return { excluded: new Set(excluded), already: new Set(already), recent: new Set(recent) };
+        };
 
         const out: EvaluatedContact[] = [];
         const marketing = category === TemplateCategory.MARKETING;
@@ -622,6 +714,8 @@ export class BroadcastsService {
                 take: PAGE,
                 ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
             });
+            if (!page.length) break;
+            const { excluded, already, recent } = await leftOut(page.map((c) => c.id));
             for (const c of page) {
                 let reason: EvaluatedContact['reason'] = skipReason(
                     {
@@ -643,18 +737,30 @@ export class BroadcastsService {
 
     /** Unique people messaged with a template in the last 24 hours on this number: what counts toward the limit. */
     private async reachedOutsideWindow(channelId: string): Promise<number> {
-        const rows = await this.prisma.message.findMany({
-            where: {
-                channelId,
-                direction: MessageDirection.OUTBOUND,
-                kind: MessageKind.TEMPLATE,
-                createdAt: { gte: new Date(Date.now() - 24 * 3600_000) },
-                status: { not: 'FAILED' },
-            },
-            distinct: ['contactId'],
-            select: { contactId: true },
+        const [row] = await this.prisma.$queryRaw<Array<{ n: number }>>`
+            SELECT count(DISTINCT "contact_id")::int AS n FROM "messages"
+            WHERE "channel_id" = ${channelId} AND "direction" = 'OUTBOUND' AND "kind" = 'TEMPLATE'
+              AND "created_at" >= ${new Date(Date.now() - 24 * 3600_000)} AND "status" <> 'FAILED'`;
+        return row?.n ?? 0;
+    }
+
+    /**
+     * The header file's WhatsApp media id, uploaded once per broadcast and
+     * reused by every message; uploaded again when there is none yet or Meta
+     * is about to expire it (a retry weeks later).
+     */
+    private async headerMediaId(b: Broadcast, vars: BroadcastVariables): Promise<string | null> {
+        if (!vars.headerMedia) return null;
+        const stored = b.variables as { headerMediaId?: string; headerMediaUploadedAt?: string } | null;
+        const uploadedAt = stored?.headerMediaUploadedAt ? Date.parse(stored.headerMediaUploadedAt) : Number.NaN;
+        if (stored?.headerMediaId && Date.now() - uploadedAt < HEADER_MEDIA_MAX_AGE_MS) return stored.headerMediaId;
+        assertOwnHeaderFile(vars, b.organizationId);
+        const mediaId = await this.platform.uploadForWhatsApp(b.channelId, vars.headerMedia);
+        await this.prisma.broadcast.update({
+            where: { id: b.id },
+            data: { variables: { ...vars, headerMediaId: mediaId, headerMediaUploadedAt: new Date().toISOString() } as Prisma.InputJsonValue },
         });
-        return rows.length;
+        return mediaId;
     }
 
     /** The cost estimate from the rates the business entered from its Meta rate card. */
@@ -777,3 +883,6 @@ function emptyStats() {
 }
 
 const formatOf = (f: string): ParameterFormat => (f === 'NAMED' ? 'NAMED' : 'POSITIONAL');
+
+/** A template status as words: PAUSED → "paused", PENDING → "in review". */
+const statusWords = (status: string) => (status === 'PENDING' ? 'in review' : status.toLowerCase().replace(/_/g, ' '));

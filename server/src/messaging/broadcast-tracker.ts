@@ -71,15 +71,15 @@ export class BroadcastTracker {
                 return;
             }
         }
+        // Only the latest broadcast is credited; once it has its reply, later messages credit nothing.
         const recent = await this.prisma.broadcastRecipient.findFirst({
             where: {
                 contactId: input.contactId,
-                repliedAt: null,
                 sentAt: { gte: new Date(input.at.getTime() - BROADCAST_REPLY_WINDOW_MS), lte: input.at },
             },
             orderBy: { sentAt: 'desc' },
-            select: { id: true },
+            select: { id: true, repliedAt: true },
         });
-        if (recent) await this.prisma.broadcastRecipient.update({ where: { id: recent.id }, data: { repliedAt: input.at } });
+        if (recent && !recent.repliedAt) await this.prisma.broadcastRecipient.update({ where: { id: recent.id }, data: { repliedAt: input.at } });
     }
 }

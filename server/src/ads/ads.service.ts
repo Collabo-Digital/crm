@@ -145,8 +145,9 @@ export class AdsService implements OnModuleInit {
                    count(DISTINCT contact_id)::int AS chats, max(occurred_at) AS last_at
             FROM ad_referrals WHERE organization_id = ${orgId} AND occurred_at >= ${since}
             GROUP BY ad_id`;
-        // An order counts for an ad when its customer came from that ad in the 7 days before it.
-        const sales = await this.prisma.$queryRaw<Array<{ ad_id: string; orders: number; revenue: number }>>`
+        // An order counts for an ad when its customer came from that ad in the 7 days before it,
+        // so it can count for several ads; the row with no ad_id counts each order once, for the totals.
+        const sales = await this.prisma.$queryRaw<Array<{ ad_id: string | null; orders: number; revenue: number }>>`
             WITH credited AS (
                 SELECT DISTINCT r.ad_id, o.id, (o.total_price * coalesce(o.exchange_rate, 1))::float AS revenue
                 FROM ad_referrals r
@@ -156,7 +157,10 @@ export class AdsService implements OnModuleInit {
                   AND coalesce(o.external_created_at, o.created_at) >= r.occurred_at
                   AND coalesce(o.external_created_at, o.created_at) < r.occurred_at + interval '7 days'
             )
-            SELECT ad_id, count(*)::int AS orders, coalesce(sum(revenue), 0)::float AS revenue FROM credited GROUP BY ad_id`;
+            SELECT ad_id, count(*)::int AS orders, coalesce(sum(revenue), 0)::float AS revenue FROM credited GROUP BY ad_id
+            UNION ALL
+            SELECT NULL, count(*)::int, coalesce(sum(revenue), 0)::float FROM (SELECT DISTINCT id, revenue FROM credited) AS each_order`;
+        const sold = sales.find((s) => s.ad_id === null) ?? { orders: 0, revenue: 0 };
 
         const account = await this.prisma.adAccount.findUnique({ where: { organizationId: orgId } });
         let insights: Array<Record<string, unknown>> = [];
@@ -179,7 +183,7 @@ export class AdsService implements OnModuleInit {
             return r;
         };
         for (const l of local) Object.assign(row(l.ad_id), { headline: l.headline, platform: l.platform, chats: l.chats, lastChatAt: l.last_at });
-        for (const s of sales) Object.assign(row(s.ad_id), { orders: s.orders, revenue: s.revenue });
+        for (const s of sales) if (s.ad_id !== null) Object.assign(row(s.ad_id), { orders: s.orders, revenue: s.revenue });
         for (const i of insights) {
             const adId = String(i.ad_id ?? '');
             if (!adId) continue;
@@ -193,14 +197,14 @@ export class AdsService implements OnModuleInit {
             });
         }
         const ads = [...rows.values()].sort((a, b) => b.chats - a.chats || (b.spend ?? 0) - (a.spend ?? 0));
-        const total = (k: 'chats' | 'orders' | 'revenue') => ads.reduce((n, a) => n + a[k], 0);
+        const chats = ads.reduce((n, a) => n + a.chats, 0);
         const spend = account?.externalId ? ads.reduce((n, a) => n + (a.spend ?? 0), 0) : null;
         return {
             period: { from: since, to: until, days, timeZone: org.timezone },
             currency: org.currency,
             account: account ? { connected: true, externalId: account.externalId, name: account.name, currency: account.currency, available: account.available, lastError: account.lastError } : { connected: false },
             metaError,
-            totals: { chats: total('chats'), orders: total('orders'), revenue: total('revenue'), spend },
+            totals: { chats, orders: sold.orders, revenue: sold.revenue, spend },
             ads,
         };
     }
