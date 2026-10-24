@@ -108,6 +108,13 @@ the scopes above.
 
 ## 2. Environment
 
+**Launch scope.** Collabo launches with WhatsApp only. `MESSAGING_CHANNELS` on the
+server and `VITE_MESSAGING_CHANNELS` on the client (comma lists of `WHATSAPP`,
+`INSTAGRAM`, `FACEBOOK`; WhatsApp only when unset) decide which messaging channels
+are offered. Unlisted ones are hidden in the app (connect buttons, comment
+filters, conversation starters, influencer invites, their prices) and the server
+refuses to connect them. List a channel in both to switch it on.
+
 Server (`server/.env`):
 
 ```
