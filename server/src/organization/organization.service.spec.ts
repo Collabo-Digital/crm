@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BillingService } from '../billing/billing.service';
+import { ChannelService } from '../channel/channel.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { OrganizationService } from './organization.service';
@@ -14,6 +15,7 @@ describe('OrganizationService', () => {
         { provide: PrismaService, useValue: {} },
         { provide: BillingService, useValue: {} },
         { provide: RedisService, useValue: {} },
+        { provide: ChannelService, useValue: {} },
       ],
     }).compile();
 
