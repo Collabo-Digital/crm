@@ -552,7 +552,9 @@ export class WhatsAppGroupsService {
         if (!group.contactId) return;
         void this.prisma.conversation
             .findFirst({ where: { contactId: group.contactId }, select: { id: true } })
-            .then((c) => c && this.events.publish(group.organizationId, { type: 'conversation.updated', conversationId: c.id }));
+            .then((c) => c && this.events.publish(group.organizationId, { type: 'conversation.updated', conversationId: c.id }))
+            // Unhandled, a rejection here would stop the whole process.
+            .catch((err) => this.logger.warn(`Group ${group.id}: could not tell open inboxes it changed: ${err instanceof Error ? err.message : err}`));
     }
 
     private async call<T = Record<string, unknown>>(

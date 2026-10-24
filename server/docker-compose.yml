@@ -39,6 +39,8 @@ services:
       # Chat media (customer photos, documents, voice notes) copied from Meta.
       # Private files, so not under /uploads; must outlive container redeploys.
       - messaging_media:/app/storage/messaging
+      # Product images uploaded in the CRM (LocalImageStorage, served at /uploads).
+      - uploads:/app/uploads
     networks:
       - webnet
     healthcheck:
@@ -91,3 +93,4 @@ volumes:
   caddy_config:
   redis_data:
   messaging_media:
+  uploads:

@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { ChannelModule } from '../channel/channel.module';
 import { MessagingModule } from '../messaging/messaging.module';
 import { BROADCAST_QUEUE } from './broadcasts/broadcast.queue';
+import { BroadcastMaintenance } from './broadcasts/broadcast.maintenance';
 import { BroadcastProcessor } from './broadcasts/broadcast.processor';
 import { BroadcastsController } from './broadcasts/broadcasts.controller';
 import { BroadcastsService } from './broadcasts/broadcasts.service';
@@ -34,6 +35,7 @@ import { TemplatesService } from './templates/templates.service';
         ShopifySegmentsService,
         BroadcastsService,
         BroadcastProcessor,
+        BroadcastMaintenance,
         MessageRatesService,
         CampaignsOverviewService,
     ],

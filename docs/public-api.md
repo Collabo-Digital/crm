@@ -30,6 +30,14 @@ it at once and switches off the webhooks it made.
 Base URL: `https://<your API host>/api/v1/public/v1`. Responses are JSON,
 wrapped as `{ "success": true, "data": … }`; errors carry `message`.
 
+## Rate limits
+
+Each key may call each endpoint 600 times a minute. Past that the answer is
+`429` with a `Retry-After` header (seconds); wait that long and send again,
+with the same `Idempotency-Key` for `POST /messages`. Every answer carries
+`X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`
+(seconds). Calls without a key are limited by address instead.
+
 ## Endpoints
 
 ### `GET /me`

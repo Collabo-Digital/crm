@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Headers, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Public } from '../auth/decorators/public.decorator';
-import { ApiKeyGuard, Caller, RequireApiScope } from './api-key.guard';
+import { ApiKeyGuard, Caller, RequireApiScope, apiKeyTracker } from './api-key.guard';
 import type { ApiCaller } from './api-keys.service';
 import { PublicSendMessageDto, PublicSubscribeDto, PublicUpsertContactDto } from './dto/developer.dto';
 import { PublicApiService } from './public-api.service';
@@ -14,6 +15,8 @@ import { WEBHOOK_EVENTS, WebhooksService } from './webhooks.service';
 @Controller('public/v1')
 @Public()
 @UseGuards(ApiKeyGuard)
+// Per key and endpoint (see docs/public-api.md), not the per-address default.
+@Throttle({ default: { ttl: 60_000, limit: 600, getTracker: apiKeyTracker } })
 export class PublicApiController {
     constructor(
         private readonly api: PublicApiService,
