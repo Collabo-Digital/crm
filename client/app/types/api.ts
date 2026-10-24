@@ -2759,10 +2759,16 @@ export interface CreateCreditNoteRequest {
   reason: string;
   /**
    * Amount to credit, inclusive of tax. Omit for a FULL reversal of whatever
-   * remains uncredited. A partial credit is apportioned pro-rata across the
-   * original lines, so each keeps its own GST rate.
+   * remains uncredited. A partial credit is spread across the original lines,
+   * so each keeps its own GST rate, and credits goods before untaxed shipping.
    */
   amount?: number;
+  /**
+   * GST included in `amount`, when known (the refund reports it). The note
+   * then reverses exactly this much GST; the rest beyond the goods it was
+   * charged on is untaxed shipping. Sent only with `amount`.
+   */
+  tax?: number;
   notes?: string;
 }
 
@@ -3060,8 +3066,14 @@ export interface Gstr1B2csRow {
 
 /** One GSTR-1 Table 9B row — a credit note against an earlier invoice. */
 export interface Gstr1CreditNoteRow {
-  /** CDNR when the buyer is registered, CDNUR when they are not. */
+  /**
+   * CDNR when the buyer is registered. CDNUR only for an unregistered buyer
+   * whose original invoice was B2CL or an export; a note against an ordinary
+   * B2C sale is netted out of B2CS instead and has no row here.
+   */
   section: "CDNR" | "CDNUR";
+  /** CDNUR's "UR type": B2CL, EXPWP or EXPWOP. Null on CDNR. */
+  urType: "B2CL" | "EXPWP" | "EXPWOP" | null;
   noteNumber: string;
   noteDate: string;
   buyerGstin: string | null;

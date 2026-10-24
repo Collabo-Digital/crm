@@ -18,7 +18,17 @@ export function InvoiceDocument({ invoice }: { invoice: InvoiceDetail }) {
   // comparison — "0.00" is truthy and would render an empty discount row.
   const num = (value: number | string | null | undefined) => Number(value ?? 0);
   const discount = num(invoice.totalDiscount);
-  const shipping = num(invoice.shippingCharge);
+  // Only the part added on top of the lines. Invoices that taxed shipping into
+  // the lines still store the full charge, and printing it here listed it twice.
+  const shipping = Math.max(
+    0,
+    Math.min(
+      num(invoice.shippingCharge),
+      Math.round(
+        (num(invoice.grandTotal) - num(invoice.subtotal) - num(invoice.totalTax)) * 100,
+      ) / 100,
+    ),
+  );
   // Pre-discount value of the goods. Shown so the "less discount" line has
   // something to be subtracted from — `subtotal` is already net of it.
   const grossValue = num(invoice.subtotal) + discount;
@@ -227,7 +237,7 @@ export function InvoiceDocument({ invoice }: { invoice: InvoiceDetail }) {
         {shipping > 0 && (
           <Row
             label="Shipping (not taxed)"
-            value={formatCurrency(invoice.shippingCharge, currency)}
+            value={formatCurrency(shipping, currency)}
           />
         )}
         <div className="border-t pt-1">

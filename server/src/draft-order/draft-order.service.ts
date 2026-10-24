@@ -58,6 +58,11 @@ import { SendDraftInvoiceDto } from './dto/send-invoice.dto';
 import { QueryDraftOrdersDto } from './dto/query-drafts.dto';
 import { QueryDraftStatsDto } from './dto/query-draft-stats.dto';
 
+/** Set on a draft priced from tax-inclusive catalogue prices; see `create`. */
+function draftPricesIncludeTax(metadata: Prisma.JsonValue | null): boolean {
+  return (metadata as { pricesIncludeTax?: unknown } | null)?.pricesIncludeTax === true;
+}
+
 /**
  * Draft orders — in-progress / quote-style orders that haven't been
  * finalized. Sits beside `OrderService` (which handles finalized Orders);
@@ -416,6 +421,17 @@ export class DraftOrderService {
         ? this.calculator.isIntraState(sellerState, placeOfSupplyCode)
         : true;
 
+      // A draft priced straight from the catalogue (a WhatsApp cart) charges
+      // what the catalogue says. In a store whose prices include GST, adding
+      // GST on top asked the customer for 18% more than the price they saw,
+      // and more than the Shopify draft's checkout. Typed prices are taken as
+      // the order form shows them, before tax. The draft keeps its basis for
+      // later edits and for completion.
+      const pricesIncludeTax =
+        sellerState !== null &&
+        dto.lineItems.every((li) => li.unitPriceOverride === undefined) &&
+        (await this.catalogPricesIncludeTax(tx, orgId));
+
       const lineRows: Array<{
         variantId: string;
         title: string;
@@ -472,10 +488,10 @@ export class DraftOrderService {
         // Resolved above, in one batch.
         const gstRate = lineGstRates[lineIndex];
 
-        const calc = this.calculator.calculateLineItem(
-          { unitPrice, quantity: li.quantity, discount, gstRate },
-          isIntraState,
-        );
+        const input = { unitPrice, quantity: li.quantity, discount, gstRate };
+        const calc = pricesIncludeTax
+          ? this.calculator.calculateInclusiveLineItem(input, isIntraState)
+          : this.calculator.calculateLineItem(input, isIntraState);
 
         subtotal += calc.taxableValue;
         totalTax += calc.totalTax;
@@ -532,6 +548,7 @@ export class DraftOrderService {
           metadata: {
             createdByUserId: userId,
             placeOfSupplyCode,
+            ...(pricesIncludeTax && { pricesIncludeTax: true }),
           } as Prisma.InputJsonObject,
           lineItems: {
             create: lineRows.map((r) => ({
@@ -690,9 +707,12 @@ export class DraftOrderService {
         customerId: true,
         shippingAddress: true,
         billingAddress: true,
+        metadata: true,
         customer: { select: { billingStateCode: true, gstin: true } },
       },
     });
+    // Edited prices are read on the same basis the draft was created on.
+    const pricesIncludeTax = draftPricesIncludeTax(draftMeta.metadata);
 
     // Reuse create() shape — build a CreateDraftOrderDto from the patch +
     // existing draft metadata, then call the create logic against an
@@ -805,10 +825,10 @@ export class DraftOrderService {
         // Resolved above, in one batch.
         const gstRate = lineGstRates[lineIndex];
 
-        const calc = this.calculator.calculateLineItem(
-          { unitPrice, quantity: li.quantity, discount, gstRate },
-          isIntraState,
-        );
+        const input = { unitPrice, quantity: li.quantity, discount, gstRate };
+        const calc = pricesIncludeTax
+          ? this.calculator.calculateInclusiveLineItem(input, isIntraState)
+          : this.calculator.calculateLineItem(input, isIntraState);
 
         subtotal += calc.taxableValue;
         totalTax += calc.totalTax;
@@ -1069,6 +1089,8 @@ export class DraftOrderService {
           discount: this.calculator.toNumber(li.totalDiscount),
         })),
         paymentMethod: dto.paymentMethod!,
+        // The order is charged what the draft quoted.
+        pricesIncludeTax: draftPricesIncludeTax(draft.metadata),
         note: draft.note ?? undefined,
         generateInvoice: dto.generateInvoice ?? true,
         sellerGstinId: dto.sellerGstinId,
@@ -1339,6 +1361,30 @@ export class DraftOrderService {
     return this.prisma.channel.findFirst({
       where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
+  }
+
+  /**
+   * Whether this store's catalogue prices already include GST, as its own
+   * Shopify orders say (`taxes_included`). Orders the CRM pushed are left out:
+   * they were sent with tax on top whatever the store's setting. With no
+   * Shopify order to go by, prices are read as excluding GST, as before.
+   */
+  private async catalogPricesIncludeTax(
+    tx: Prisma.TransactionClient,
+    orgId: string,
+  ): Promise<boolean> {
+    const latest = await tx.order.findFirst({
+      where: {
+        organizationId: orgId,
+        deletedAt: null,
+        taxesIncluded: { not: null },
+        channel: { platform: ChannelPlatform.SHOPIFY },
+        OR: [{ sourceName: null }, { sourceName: { not: 'collabo-crm' } }],
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { taxesIncluded: true },
+    });
+    return latest?.taxesIncluded === true;
   }
 
   /**

@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { BadRequestException, Injectable, Logger, NotFoundException, OnApplicationShutdown, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnApplicationShutdown, OnModuleInit, UnauthorizedException } from '@nestjs/common';
 import { DraftOrderStatus, OrderFinancialStatus, PaymentLink, PaymentLinkStatus, PaymentProvider, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrderService } from '../order/order.service';
 import { DraftOrderService } from '../draft-order/draft-order.service';
 import { StoreActionsService } from '../commerce/store-actions.service';
 import { CommerceEventsService } from '../commerce/commerce-events.service';
+import { formatMoney } from '../commerce/order-vars';
 import { countryCodeOf, normalizePhone } from '../common/phone.util';
 import { PaymentAccountsService } from './payment-accounts.service';
 import { RazorpayApiError, RazorpayMerchantClient, RazorpayPaymentLink } from './razorpay-merchant.client';
@@ -42,6 +43,9 @@ export interface PaymentLinkView {
 }
 
 const OPEN: PaymentLinkStatus[] = [PaymentLinkStatus.CREATED, PaymentLinkStatus.PARTIALLY_PAID];
+/** Why the other links and bills for an order or draft are being closed. */
+export type CloseReason = 'replaced' | 'paid';
+type LinkTarget = Pick<PaymentLink, 'id' | 'organizationId' | 'orderId' | 'draftOrderId'>;
 const phoneOf = (address: unknown): string | null => {
     const a = address as { phone?: unknown } | null;
     return typeof a?.phone === 'string' && a.phone.trim() ? a.phone : null;
@@ -63,9 +67,10 @@ const draftPaymentMethod = (method: string | null): 'UPI' | 'CARD' | 'OTHER' => 
  * (a restart) is run again by the sweep.
  */
 @Injectable()
-export class PaymentLinksService implements OnApplicationShutdown {
+export class PaymentLinksService implements OnModuleInit, OnApplicationShutdown {
     private readonly logger = new Logger(PaymentLinksService.name);
     private readonly running = new Set<Promise<void>>();
+    private readonly closeListeners: Array<(keep: LinkTarget, reason: CloseReason) => Promise<void>> = [];
 
     constructor(
         private readonly prisma: PrismaService,
@@ -76,6 +81,42 @@ export class PaymentLinksService implements OnApplicationShutdown {
         private readonly store: StoreActionsService,
         private readonly events: CommerceEventsService,
     ) { }
+
+    onModuleInit() {
+        this.events.onOrder(async (orderId, kinds) => {
+            if (kinds.includes('cancelled')) await this.orderCancelled(orderId);
+        });
+    }
+
+    /**
+     * Told when the other ways to pay an order or draft are closed: WhatsApp
+     * Pay closes its bills this way, since it depends on this service.
+     */
+    onClose(listener: (keep: LinkTarget, reason: CloseReason) => Promise<void>): void {
+        this.closeListeners.push(listener);
+    }
+
+    /**
+     * One payable link or bill per order or draft. A newer one replaces the
+     * rest, and a paid one closes them; otherwise a customer holding two could
+     * pay both, and nothing would say so.
+     */
+    async closeOthers(keep: LinkTarget, reason: CloseReason): Promise<void> {
+        if (!keep.orderId && !keep.draftOrderId) return;
+        const open = await this.prisma.paymentLink.findMany({
+            where: {
+                organizationId: keep.organizationId,
+                provider: PaymentProvider.RAZORPAY,
+                status: PaymentLinkStatus.CREATED,
+                id: { not: keep.id },
+                ...(keep.orderId ? { orderId: keep.orderId } : { draftOrderId: keep.draftOrderId }),
+            },
+        });
+        for (const link of open) await this.cancelAtRazorpay(link);
+        for (const listener of this.closeListeners) {
+            await listener(keep, reason).catch((err) => this.logger.warn(`Closing other payment requests for ${keep.id} failed: ${err instanceof Error ? err.message : err}`));
+        }
+    }
 
     async forOrder(orgId: string, orderId: string, opts: LinkOptions = {}): Promise<PaymentLinkView> {
         const order = await this.prisma.order.findFirst({
@@ -290,8 +331,9 @@ export class PaymentLinksService implements OnApplicationShutdown {
             if (err instanceof RazorpayApiError) throw new BadRequestException(`Razorpay refused the link: ${err.message}`);
             throw err;
         }
+        let row: PaymentLink;
         try {
-            const row = await this.prisma.paymentLink.create({
+            row = await this.prisma.paymentLink.create({
                 data: {
                     organizationId: orgId,
                     accountId: account.id,
@@ -313,11 +355,31 @@ export class PaymentLinksService implements OnApplicationShutdown {
                     expiresAt,
                 },
             });
-            return this.toView(row);
         } catch (err) {
             // A payable link we cannot track would take money we never record.
             await this.razorpay.cancel(keys, entity.id).catch(() => undefined);
             throw err;
+        }
+        await this.closeOthers(row, 'replaced').catch((err) => this.logger.warn(`Older payment links for ${row.id} not closed: ${err instanceof Error ? err.message : err}`));
+        return this.toView(row);
+    }
+
+    /** Cancelled orders take no payment: their open Razorpay links are cancelled too. */
+    private async orderCancelled(orderId: string): Promise<void> {
+        const open = await this.prisma.paymentLink.findMany({
+            where: { provider: PaymentProvider.RAZORPAY, status: PaymentLinkStatus.CREATED, OR: [{ orderId }, { draftOrder: { completedOrderId: orderId } }] },
+        });
+        for (const link of open) await this.cancelAtRazorpay(link);
+    }
+
+    /** Best effort: a link that cannot be cancelled and is then paid is caught by `refundNeeded`. */
+    private async cancelAtRazorpay(link: PaymentLink): Promise<void> {
+        try {
+            const account = link.accountId ? await this.prisma.paymentAccount.findUnique({ where: { id: link.accountId } }) : null;
+            if (!account?.credentials || account.disconnectedAt) throw new Error('Razorpay is not connected');
+            await this.apply(link, await this.razorpay.cancel(this.accounts.keys(account), link.externalId), null);
+        } catch (err) {
+            this.logger.warn(`Payment link ${link.id} was left open: ${err instanceof Error ? err.message : err}`);
         }
     }
 
@@ -377,6 +439,20 @@ export class PaymentLinksService implements OnApplicationShutdown {
 
     /** The order or draft follows the payment. A failure is kept on the link; the payment stands. */
     private async afterPaid(link: PaymentLink): Promise<void> {
+        // A second payment, or one for a cancelled order, has to go back to the
+        // customer. Nothing about the order follows it, and no "payment
+        // received" message goes out.
+        const refund = await this.refundNeeded(link);
+        if (refund) {
+            this.logger.warn(`Payment link ${link.id} paid, refund needed: ${refund.message}`);
+            await this.prisma.paymentLink.update({ where: { id: link.id }, data: { followedUpAt: new Date(), followUpError: refund.message } });
+            if (refund.orderId) {
+                await this.prisma.orderTimelineEvent
+                    .create({ data: { orderId: refund.orderId, action: 'payment_refund_needed', message: refund.message, metadata: { paymentLinkId: link.id, paymentId: link.paymentId } } })
+                    .catch((err) => this.logger.warn(`Refund note for payment link ${link.id} not added to the order: ${err instanceof Error ? err.message : err}`));
+            }
+            return;
+        }
         const problems: string[] = [];
         let orderId = link.orderId;
         try {
@@ -398,6 +474,7 @@ export class PaymentLinksService implements OnApplicationShutdown {
             problems.push(err instanceof Error ? err.message : String(err));
         }
         if (problems.length) this.logger.warn(`Payment link ${link.id} paid, follow-up failed: ${problems.join('; ')}`);
+        await this.closeOthers(link, 'paid').catch((err) => this.logger.warn(`Other payment links for ${link.id} not closed: ${err instanceof Error ? err.message : err}`));
         await this.prisma.paymentLink.update({
             where: { id: link.id },
             data: {
@@ -419,6 +496,47 @@ export class PaymentLinksService implements OnApplicationShutdown {
                 'payment.description': link.description,
             },
         });
+    }
+
+    /**
+     * Why this payment has to be refunded: another link or bill for the same
+     * order or draft was paid first, or the order was cancelled. Null when it
+     * is the payment that counts.
+     */
+    private async refundNeeded(link: PaymentLink): Promise<{ message: string; orderId: string | null } | null> {
+        if (!link.orderId && !link.draftOrderId) return null;
+        const amount = formatMoney(link.amount.toString(), link.currency);
+        const from = link.provider === PaymentProvider.WHATSAPP_PAY ? 'the payment gateway linked to WhatsApp Pay' : 'your Razorpay dashboard';
+        const self = await this.prisma.paymentLink.findUnique({ where: { id: link.id }, select: { paidAt: true } });
+        const paidAt = self?.paidAt ?? new Date();
+        const earlier = await this.prisma.paymentLink.findFirst({
+            where: {
+                organizationId: link.organizationId,
+                status: PaymentLinkStatus.PAID,
+                id: { not: link.id },
+                ...(link.orderId ? { orderId: link.orderId } : { draftOrderId: link.draftOrderId }),
+                // The first payment counts; a tie on the instant goes to the lower id.
+                OR: [{ paidAt: { lt: paidAt } }, { paidAt, id: { lt: link.id } }],
+            },
+            orderBy: { paidAt: 'asc' },
+        });
+        if (earlier) {
+            const what = earlier.provider === PaymentProvider.WHATSAPP_PAY ? 'a WhatsApp Pay bill' : 'another payment link';
+            const draft = link.draftOrderId && !link.orderId
+                ? await this.prisma.draftOrder.findUnique({ where: { id: link.draftOrderId }, select: { completedOrderId: true } })
+                : null;
+            return {
+                message: `This is a second payment: ${what} for this ${link.orderId ? 'order' : 'draft order'} was already paid${earlier.paymentId ? ` (${earlier.paymentId})` : ''}. Refund ${amount} to the customer from ${from}.`,
+                orderId: link.orderId ?? draft?.completedOrderId ?? earlier.orderId ?? null,
+            };
+        }
+        if (link.orderId) {
+            const order = await this.prisma.order.findUnique({ where: { id: link.orderId }, select: { name: true, cancelledAt: true } });
+            if (order?.cancelledAt) {
+                return { message: `Order ${order.name} was cancelled before this payment came in. Refund ${amount} to the customer from ${from}.`, orderId: link.orderId };
+            }
+        }
+        return null;
     }
 
     toView(r: PaymentLink): PaymentLinkView {

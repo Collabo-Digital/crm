@@ -53,6 +53,7 @@ import {
     shouldAcceptRemoteFulfilmentStatus,
     statusForShippedUnits,
 } from './fulfillment-line-map.util';
+import { quantityAfterEdits } from './line-quantity.util';
 import {
     DRAFT_MIRROR_QUEUE,
     DraftMirrorJobData,
@@ -950,6 +951,8 @@ export class ShopifySyncService {
             variant_title: li.variantTitle,
             sku: li.sku,
             quantity: li.quantity,
+            // REST name, as webhooks carry it; see `quantityAfterEdits`.
+            current_quantity: li.currentQuantity,
             price: li.originalUnitPriceSet?.shopMoney?.amount ?? '0',
             total_discount: li.totalDiscountSet?.shopMoney?.amount ?? '0',
             // Emitted under its REST name so both ingestion paths converge —
@@ -1928,7 +1931,12 @@ export class ShopifySyncService {
         // The line-item loop used to issue up to three serial queries per item;
         // these run before the transaction opens, so the transaction below
         // contains writes only and stays short.
-        const payloadLines: any[] = Array.isArray(so.line_items) ? so.line_items : [];
+        // Lines carry what is still on the order: a line an order edit took off
+        // is left out, so the reconcile below deletes it, and one an edit
+        // reduced keeps the reduced count.
+        const payloadLines: any[] = (Array.isArray(so.line_items) ? so.line_items : [])
+            .map((li: any) => ({ ...li, quantity: quantityAfterEdits(li, so.refunds) }))
+            .filter((li: any) => li.quantity > 0);
         const variantExternalIds = [
             ...new Set(
                 payloadLines.filter((li) => li.variant_id).map((li) => String(li.variant_id)),

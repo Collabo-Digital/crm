@@ -396,8 +396,9 @@ export class ShopifyPushService {
 
     const orderInput: Record<string, unknown> = {
       currency,
-      // Line prices are pre-tax; the tax rides on `taxLines` above.
-      taxesIncluded: false,
+      // The tax rides on `taxLines` above; line prices are pre-tax unless the
+      // sale was priced with tax included.
+      taxesIncluded: order.taxesIncluded === true,
       email: order.customer?.email ?? undefined,
       phone: phone.e164 ?? undefined,
       ...(shippingAddress && { shippingAddress }),

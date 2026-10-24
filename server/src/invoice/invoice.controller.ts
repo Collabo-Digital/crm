@@ -26,6 +26,7 @@ import { ORG_MANAGERS, Roles } from '../auth/decorators/roles.decorator';
 import { RequireSection } from '../auth/decorators/require-section.decorator';
 import { Throttle } from '@nestjs/throttler';
 import { attachmentDisposition } from '../common/utils/content-disposition.util';
+import { neutraliseCsvFormula } from '../common/utils/csv-formula.util';
 import { renderCsvSections } from './gst-return-rows';
 
 @RequireSection('invoices')
@@ -140,7 +141,17 @@ export class InvoiceController {
         'dispatchFrom',
       ],
     });
-    const csv = parser.parse(data);
+    // Buyer names are typed by shoppers; keep them from running as formulas.
+    const csv = parser.parse(
+      data.map((row) =>
+        Object.fromEntries(
+          Object.entries(row).map(([key, value]) => [
+            key,
+            typeof value === 'string' ? neutraliseCsvFormula(value) : value,
+          ]),
+        ),
+      ),
+    );
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(

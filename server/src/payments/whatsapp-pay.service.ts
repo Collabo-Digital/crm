@@ -10,7 +10,7 @@ import { Priority } from '../rate-limit/rate-limit.types';
 import { CommerceEventsService } from '../commerce/commerce-events.service';
 import { formatMoney } from '../commerce/order-vars';
 import type { StoreEventKind } from '../commerce/order-vars';
-import { PaymentLinksService, PaymentLinkView } from './payment-links.service';
+import { CloseReason, PaymentLinksService, PaymentLinkView } from './payment-links.service';
 import { MAX_LINK_HOURS, toPaise } from './payment-link.util';
 import { BillLine, ORDER_DETAILS_MAX_PAISE, buildOrderDetails, configurationActive, indianAddress } from './whatsapp-pay.util';
 
@@ -68,6 +68,7 @@ export class WhatsAppPayService implements OnModuleInit {
 
     onModuleInit() {
         this.events.onOrder((orderId, kinds) => this.orderChanged(orderId, kinds));
+        this.links.onClose((keep, reason) => this.closeRequests(keep, reason));
     }
 
     // ─── Settings ──────────────────────────────────────────────────────
@@ -149,8 +150,8 @@ export class WhatsAppPayService implements OnModuleInit {
     /**
      * Send a "Review and Pay" bill for an unpaid order or an open draft, in
      * the chat. Only inside the 24-hour window. A newer request for the same
-     * order replaces an older unpaid one; a payment on the older one still
-     * counts.
+     * order replaces older unpaid ones and payment links; a payment that
+     * still lands on one of them is recorded and flagged for a refund.
      */
     async request(orgId: string, target: { orderId?: string; draftOrderId?: string }, opts: RequestOptions): Promise<{ link: PaymentLinkView; outcome: SendOutcome }> {
         const conversation = await this.prisma.conversation.findFirst({
@@ -253,11 +254,8 @@ export class WhatsAppPayService implements OnModuleInit {
             await this.prisma.paymentLink.delete({ where: { id: row.id } });
             throw new BadRequestException(outcome.message);
         }
-        // The older unpaid request is replaced; its payment, if it still comes, is still recorded.
-        await this.prisma.paymentLink.updateMany({
-            where: { organizationId: orgId, provider: PaymentProvider.WHATSAPP_PAY, status: PaymentLinkStatus.CREATED, id: { not: row.id }, ...target },
-            data: { status: PaymentLinkStatus.CANCELLED },
-        });
+        // The bill is out; closing the older ones must not turn that into an error.
+        await this.links.closeOthers(row, 'replaced').catch((err) => this.logger.warn(`Older payment requests for ${row.id} not closed: ${err instanceof Error ? err.message : err}`));
         return { link: this.links.toView(row), outcome };
     }
 
@@ -280,11 +278,21 @@ export class WhatsAppPayService implements OnModuleInit {
         return this.links.toView(await this.links.get(orgId, id));
     }
 
-    /** Requests whose webhook never came, and ones past their expiry. */
+    /**
+     * Requests whose webhook never came, and ones past their expiry. Closed
+     * ones are asked about until they expire too: a customer can pay a bill
+     * before WhatsApp takes in that it was closed, and only the webhook
+     * would say so otherwise.
+     */
     async sweep(limit = 25): Promise<number> {
         const now = Date.now();
         const due = await this.prisma.paymentLink.findMany({
-            where: { provider: PaymentProvider.WHATSAPP_PAY, status: PaymentLinkStatus.CREATED, createdAt: { gt: new Date(now - 7 * 86_400_000) }, updatedAt: { lt: new Date(now - 10 * 60_000) } },
+            where: {
+                provider: PaymentProvider.WHATSAPP_PAY,
+                createdAt: { gt: new Date(now - 7 * 86_400_000) },
+                updatedAt: { lt: new Date(now - 10 * 60_000) },
+                OR: [{ status: PaymentLinkStatus.CREATED }, { status: PaymentLinkStatus.CANCELLED, expiresAt: { gt: new Date(now - 3_600_000) } }],
+            },
             orderBy: { updatedAt: 'asc' },
             take: limit,
         });
@@ -297,7 +305,7 @@ export class WhatsAppPayService implements OnModuleInit {
             } catch (err) {
                 this.logger.warn(`WhatsApp Pay request ${link.id} not checked: ${err instanceof Error ? err.message : err}`);
             }
-            await this.prisma.paymentLink.updateMany({ where: { id: link.id, status: PaymentLinkStatus.CREATED }, data: { updatedAt: new Date() } });
+            await this.prisma.paymentLink.updateMany({ where: { id: link.id, status: { in: [PaymentLinkStatus.CREATED, PaymentLinkStatus.CANCELLED] } }, data: { updatedAt: new Date() } });
         }
         return due.length;
     }
@@ -343,6 +351,28 @@ export class WhatsAppPayService implements OnModuleInit {
                 await this.orderStatus(link, 'canceled', 'This order was cancelled.');
                 await this.prisma.paymentLink.updateMany({ where: { id: link.id, status: PaymentLinkStatus.CREATED }, data: { status: PaymentLinkStatus.CANCELLED } });
             }
+        }
+    }
+
+    /**
+     * Close the other unpaid bills for the same order or draft. Marking them
+     * cancelled here is not enough: the bill in the chat stays payable until
+     * WhatsApp is told the order is cancelled.
+     */
+    private async closeRequests(keep: Pick<PaymentLink, 'id' | 'organizationId' | 'orderId' | 'draftOrderId'>, reason: CloseReason) {
+        const open = await this.prisma.paymentLink.findMany({
+            where: {
+                organizationId: keep.organizationId,
+                provider: PaymentProvider.WHATSAPP_PAY,
+                status: PaymentLinkStatus.CREATED,
+                id: { not: keep.id },
+                ...(keep.orderId ? { orderId: keep.orderId } : { draftOrderId: keep.draftOrderId }),
+            },
+        });
+        for (const link of open) {
+            const closed = await this.prisma.paymentLink.updateMany({ where: { id: link.id, status: PaymentLinkStatus.CREATED }, data: { status: PaymentLinkStatus.CANCELLED } });
+            if (!closed.count) continue;
+            await this.orderStatus(link, 'canceled', reason === 'paid' ? 'This order is already paid, so this request is closed.' : 'This payment request was replaced by a newer one. Please use the latest one to pay.');
         }
     }
 

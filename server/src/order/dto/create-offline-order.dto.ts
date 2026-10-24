@@ -95,6 +95,14 @@ export class CreateOfflineOrderDto {
 
   @IsOptional() @IsBoolean() generateInvoice?: boolean;
 
+  /**
+   * The unit prices already include GST, so the tax is taken out of them
+   * rather than added on top. Set when completing a draft that was priced
+   * that way (a WhatsApp cart from a tax-inclusive store), so the order
+   * charges what the draft quoted.
+   */
+  @IsOptional() @IsBoolean() pricesIncludeTax?: boolean;
+
   /** Optional ship-to; when omitted, falls back to customer.address. */
   @IsOptional() @IsObject()
   shippingAddress?: Record<string, unknown>;

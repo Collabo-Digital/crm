@@ -70,6 +70,8 @@ export interface OrderLineItemNode {
   variantTitle: string | null;
   sku: string | null;
   quantity: number;
+  /** `quantity` less units taken off by order edits or refunded. */
+  currentQuantity?: number;
   /**
    * Units on this line NOT yet fulfilled. The only per-line shipping signal the
    * GraphQL order query exposes — there is no flat `fulfillment_status` — and a
@@ -190,6 +192,7 @@ export const ORDER_LINE_ITEMS_PAGE_QUERY = /* GraphQL */ `
           variantTitle
           sku
           quantity
+          currentQuantity
           unfulfilledQuantity
           originalUnitPriceSet { shopMoney { amount currencyCode } }
           totalDiscountSet { shopMoney { amount currencyCode } }
@@ -289,6 +292,7 @@ export const ORDERS_LIST_QUERY = /* GraphQL */ `
             variantTitle
             sku
             quantity
+            currentQuantity
             unfulfilledQuantity
             originalUnitPriceSet { shopMoney { amount currencyCode } }
             totalDiscountSet { shopMoney { amount currencyCode } }

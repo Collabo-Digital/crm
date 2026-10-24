@@ -1005,11 +1005,68 @@ describe('Gstr1Accumulator — credit notes', () => {
   it('splits CDNR from CDNUR on whether the buyer is registered', () => {
     const acc = new Gstr1Accumulator({ b2cLargeThreshold: 100000 });
     acc.addInvoice(creditNote({ buyerGstin: '29AABCU9603R1ZM' }));
-    acc.addInvoice(creditNote({ invoiceNumber: 'CN-2', buyerGstin: null }));
+    // Against a B2CL invoice: inter-state, unregistered, above the threshold.
+    acc.addInvoice(
+      creditNote({ invoiceNumber: 'CN-2', buyerGstin: null, creditNoteForGrandTotal: '150000.00' }),
+    );
 
-    const sections = acc.finish().creditNotes.map((n) => n.section);
+    const notes = acc.finish().creditNotes.map((n) => [n.section, n.urType]);
 
-    expect(sections).toEqual(['CDNR', 'CDNUR']);
+    expect(notes).toEqual([
+      ['CDNR', null],
+      ['CDNUR', 'B2CL'],
+    ]);
+  });
+
+  it('nets a note against an ordinary B2C sale out of table 7 instead of filing it as CDNUR', () => {
+    const intra = {
+      gstType: GstType.CGST_SGST,
+      totalCgst: '90.00',
+      totalSgst: '90.00',
+      totalIgst: '0.00',
+      lineItems: [line({ cgstAmount: '90.00', sgstAmount: '90.00', igstAmount: '0.00' })],
+    };
+    const acc = new Gstr1Accumulator({ b2cLargeThreshold: 100000 });
+    acc.addInvoice(invoice(intra));
+    acc.addInvoice(creditNote({ ...intra, creditNoteForGrandTotal: '1180.00' }));
+
+    const out = acc.finish();
+
+    expect(out.creditNotes).toEqual([]);
+    expect(out.b2cs).toEqual([
+      expect.objectContaining({ gstRate: 18, taxableValue: 0, cgst: 0, sgst: 0, igst: 0 }),
+    ]);
+    expect(out.b2cSummary[0]).toMatchObject({ totalTaxable: 0, totalTax: 0 });
+    expect(out.totals.totalTaxable).toBe(0);
+  });
+
+  it('reports a B2C note in a later month as a negative table 7 adjustment', () => {
+    const acc = new Gstr1Accumulator({ b2cLargeThreshold: 100000 });
+    acc.addInvoice(creditNote({ creditNoteForGrandTotal: '1180.00' }));
+
+    expect(acc.finish().b2cs).toEqual([
+      expect.objectContaining({ placeOfSupply: '29', gstRate: 18, taxableValue: -1000, igst: -180 }),
+    ]);
+  });
+
+  it('files a note against an export as CDNUR with its UR type', () => {
+    const acc = new Gstr1Accumulator({ b2cLargeThreshold: 100000 });
+    acc.addInvoice(creditNote({ placeOfSupply: '96', placeOfSupplyName: 'Other Countries' }));
+    acc.addInvoice(
+      creditNote({
+        invoiceNumber: 'CN-2',
+        placeOfSupply: '96',
+        placeOfSupplyName: 'Other Countries',
+        totalIgst: '0.00',
+        totalTax: '0.00',
+        lineItems: [line({ igstAmount: '0.00', totalTax: '0.00', gstRate: '0.00' })],
+      }),
+    );
+
+    expect(acc.finish().creditNotes.map((n) => [n.section, n.urType])).toEqual([
+      ['CDNUR', 'EXPWP'],
+      ['CDNUR', 'EXPWOP'],
+    ]);
   });
 
   it('NETS the filed totals — this is the whole point', () => {
@@ -1049,18 +1106,28 @@ describe('Gstr1Accumulator — credit notes', () => {
     expect(totals.totalIgst).toBe(108); // 180 - 72
   });
 
-  it('keeps credit-note lines out of table 12 and table 8', () => {
-    // Table 12 reports invoice LINES. Adding a credit note's lines would
-    // inflate the quantity and taxable value of the HSN it reverses.
+  it('nets credit-note lines out of table 12, which is reported net', () => {
+    // Adding a credit note's lines would inflate the HSN it reverses; leaving
+    // them out kept table 12 gross while the rest of the return was net.
     const acc = new Gstr1Accumulator({ b2cLargeThreshold: 100000 });
     acc.addInvoice(invoice());
     acc.addInvoice(creditNote());
+    acc.addInvoice(invoice({ invoiceNumber: 'INV-2', buyerGstin: '29AABCU9603R1ZM' }));
+    acc.addInvoice(
+      creditNote({
+        invoiceNumber: 'CN-2',
+        buyerGstin: '29AABCU9603R1ZM',
+        lineItems: [line({ quantity: 0, taxableValue: '400.00', igstAmount: '72.00', totalTax: '72.00' })],
+      }),
+    );
 
     const out = acc.finish();
 
-    expect(out.hsnSummary).toHaveLength(1);
-    expect(out.hsnSummary[0].quantity).toBe(1);
-    expect(out.totals.grossTaxable).toBe(1000);
+    expect(out.hsnSummary).toEqual([
+      expect.objectContaining({ recipientType: 'B2B', quantity: 1, taxableValue: 600, igst: 108, totalValue: 708 }),
+      expect.objectContaining({ recipientType: 'B2C', quantity: 0, taxableValue: 0, igst: 0, totalValue: 0 }),
+    ]);
+    expect(out.totals.grossTaxable).toBe(2000);
   });
 });
 
