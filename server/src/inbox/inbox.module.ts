@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ChannelModule } from '../channel/channel.module';
 import { MessagingModule } from '../messaging/messaging.module';
 import { CampaignsModule } from '../campaigns/campaigns.module';
 import { CommerceModule } from '../commerce/commerce.module';
@@ -16,14 +17,16 @@ import { QuickReplyService } from './quick-reply.service';
 import { InboxMaintenance } from './inbox.maintenance';
 import { InboxSettingsService } from './inbox-settings.service';
 import { InboxRulesService } from './inbox-rules.service';
+import { WhatsAppGroupsController } from './groups/whatsapp-groups.controller';
+import { WhatsAppGroupsService } from './groups/whatsapp-groups.service';
 
 @Module({
-    imports: [MessagingModule, CampaignsModule, CommerceModule, PaymentsModule],
-    controllers: [InboxController, InboxContactsController, InboxWorkspaceController, InboxMediaController],
+    imports: [ChannelModule, MessagingModule, CampaignsModule, CommerceModule, PaymentsModule],
+    controllers: [InboxController, InboxContactsController, InboxWorkspaceController, InboxMediaController, WhatsAppGroupsController],
     providers: [
         InboxService, InboxContactsService, ContactImportService, InboxTeamService, InboxViewService, QuickReplyService, InboxMaintenance,
-        InboxSettingsService, InboxRulesService,
+        InboxSettingsService, InboxRulesService, WhatsAppGroupsService,
     ],
-    exports: [InboxTeamService, InboxSettingsService, InboxRulesService],
+    exports: [InboxTeamService, InboxSettingsService, InboxRulesService, WhatsAppGroupsService],
 })
 export class InboxModule { }

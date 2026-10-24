@@ -11,6 +11,7 @@ import type { WaContactRef, WaEvent, WaMessage } from './whatsapp-webhook.parser
 import { WhatsAppPayService } from '../../../payments/whatsapp-pay.service';
 import { GrowthService } from '../../../growth/growth.service';
 import { AdsService } from '../../../ads/ads.service';
+import { WhatsAppGroupsService } from '../../../inbox/groups/whatsapp-groups.service';
 
 export interface WhatsAppChannelRef {
     id: string;
@@ -62,6 +63,7 @@ export class WhatsAppWebhookHandler {
         private readonly whatsAppPay: WhatsAppPayService,
         private readonly growth: GrowthService,
         private readonly ads: AdsService,
+        private readonly groups: WhatsAppGroupsService,
     ) { }
 
     async handle(events: WaEvent[]): Promise<void> {
@@ -143,6 +145,9 @@ export class WhatsAppWebhookHandler {
                     await this.ingest.applyMarketingPreference(channel, toRef(e.contact), e.value, e.at ?? new Date());
                 }
                 return;
+            case 'group':
+                await this.groups.onChange(channel, e.field, e.change);
+                return;
             default:
                 return;
         }
@@ -166,6 +171,11 @@ export class WhatsAppWebhookHandler {
                 if (revoke?.original_message_id) await this.ingest.applyRevoke(channel, revoke.original_message_id, m.timestamp);
                 return;
             }
+        }
+        // A group's messages go to the group's chat, never a participant's own.
+        if (m.groupId) {
+            if (!imported) await this.groups.recordInbound(channel, m);
+            return;
         }
         let from = m.from;
         if (m.type === 'system') {

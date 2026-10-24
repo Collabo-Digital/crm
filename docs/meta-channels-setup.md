@@ -250,7 +250,7 @@ with `INSTAGRAM_APP_SECRET`, which is also accepted on the Instagram endpoint).
 
 | Product (dashboard) | Callback URL | Verify token | Fields |
 |---|---|---|---|
-| WhatsApp → Configuration | `{APP_URL}/api/v1/webhooks/whatsapp` | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | messages, smb_message_echoes, history, smb_app_state_sync, account_update, message_template_status_update, message_template_quality_update, template_category_update, message_template_components_update, phone_number_quality_update, phone_number_name_update, business_capability_update, user_preferences |
+| WhatsApp → Configuration | `{APP_URL}/api/v1/webhooks/whatsapp` | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | messages, smb_message_echoes, history, smb_app_state_sync, account_update, message_template_status_update, message_template_quality_update, template_category_update, message_template_components_update, phone_number_quality_update, phone_number_name_update, business_capability_update, user_preferences, group_lifecycle_update, group_participants_update, group_settings_update, group_status_update |
 | Messenger → Settings | `{APP_URL}/api/v1/webhooks/messenger` | `MESSENGER_WEBHOOK_VERIFY_TOKEN` | messages, message_echoes, message_deliveries, message_reads, message_reactions, message_edits, messaging_postbacks, messaging_referrals, messaging_handovers, standby, feed |
 | Instagram | `{APP_URL}/api/v1/webhooks/instagram` | `INSTAGRAM_WEBHOOK_VERIFY_TOKEN` | messages, messaging_postbacks, messaging_seen, message_reactions, message_edit, messaging_referral, messaging_handover, standby, comments, mentions |
 
@@ -655,6 +655,49 @@ the customer's number, which is what Collabo matches.
   de-duplicate, so `conversion_events` does. Website orders are counted on the
   page but not sent: Meta wants messaging events to happen in the chat.
   Messenger and Instagram conversions are not sent yet.
+
+### WhatsApp groups (Inbox → Groups)
+
+Meta's Groups API (Cloud API): small groups of customers on the business's
+number, for VIP drops, workshops or order help.
+
+- **Who can:** numbers with an Official Business Account (the blue tick) on
+  the Cloud API. Never a number shared with the WhatsApp Business app; Collabo
+  says so and refuses before asking Meta. Meta's own refusal (131215) is shown
+  in words. Owners, admins and managers make and run groups; everyone in the
+  inbox can see them.
+- **Making one:** `POST /{phone_number_id}/groups` (subject up to 128
+  characters, description up to 2048, join approval `auto_approve` or
+  `approval_required`). Creation is asynchronous: the group shows as being
+  created until the `group_lifecycle_update` webhook brings its id and invite
+  link (matched by `request_id`); a refusal there is shown with Meta's reason.
+- **People:** at most 8 besides the business, and they join only with the
+  invite link (copy, QR code, or a new link that retires the old one,
+  `POST /{group_id}/invite_link`). With approval required, join requests wait
+  in Collabo to be approved or declined (`POST`/`DELETE
+  /{group_id}/join_requests`). Removing someone (`DELETE
+  /{group_id}/participants`) stops them rejoining with the link. Joins,
+  removals and leaves arrive on `group_participants_update` and show as
+  notices in the chat. "Refresh from WhatsApp" re-reads the group
+  (`GET /{group_id}?fields=...`, the invite link and join requests).
+- **The chat:** each group is an inbox conversation of its own contact (flagged
+  `is_group`; external id `group:<group id>`), assigned to whoever made it.
+  Participants' messages carry `group_id` and land there under their names; a
+  participant's message opens the reply window for the whole group, as Meta
+  prices it. Replies go with `recipient_type: group`. Groups take text,
+  files and templates only (no buttons, lists, products, payments or
+  reactions), so the composer hides the rest. Group messages start no
+  automation, link no customer and record no consent keyword.
+- **Kept out of audiences:** segments, broadcasts and the contact list leave
+  group chats out, because Meta bills a group send once per participant.
+- **Suspended or deleted:** `group_status_update` suspends and restores
+  sending; deleting (`DELETE /{group_id}`) removes everyone, the business
+  included, closes the chat and keeps its history. A group made outside
+  Collabo is recorded, under its own name, when its first message arrives.
+- **Webhook fields:** subscribe the app to `group_lifecycle_update`,
+  `group_participants_update`, `group_settings_update` and
+  `group_status_update` (table above). Meta's "group invite link" utility
+  template (template library) is not sent from Collabo yet.
 
 ### Messaging analytics (Analytics → Messaging)
 

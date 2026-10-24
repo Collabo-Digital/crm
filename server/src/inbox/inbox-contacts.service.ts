@@ -46,7 +46,7 @@ export class InboxContactsService {
     async list(orgId: string, viewer: InboxViewer, q: QueryContactsDto) {
         const limit = q.limit ?? 25;
         const page = q.page ?? 1;
-        const and: Prisma.ChannelContactWhereInput[] = [{ organizationId: orgId }];
+        const and: Prisma.ChannelContactWhereInput[] = [{ organizationId: orgId, isGroup: false }];
         // Contacts with no conversation (an imported address book) are only for members who see everything.
         if (!seesAll(viewer)) and.push({ conversations: { some: visibilityWhere(viewer) } });
         if (q.platform) and.push({ platform: q.platform });
@@ -299,6 +299,7 @@ export class InboxContactsService {
         return {
             id: contact.id,
             platform: contact.platform,
+            isGroup: contact.isGroup,
             name: contactName(contact),
             displayName: contact.displayName,
             addressBookName: contact.addressBookName,

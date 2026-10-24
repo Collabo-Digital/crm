@@ -225,6 +225,106 @@ export class MessageIngestService {
     }
 
     /**
+     * A participant's message in a WhatsApp group, filed under the group's
+     * contact. It opens the reply window for the whole group (Meta: any
+     * participant's message does). Unlike a person's message it records no
+     * consent keyword, links no customer and starts no automation.
+     */
+    async recordGroupInbound(input: {
+        channel: IngestChannel;
+        contactId: string;
+        participant: { waId: string; name: string | null };
+        externalId: string;
+        occurredAt: Date;
+        content: InboundInput['content'];
+        body: Record<string, unknown>;
+        replyToExternalId: string | null;
+    }): Promise<{ messageId: string; conversationId: string } | null> {
+        const { channel } = input;
+        const existing = await this.prisma.message.findFirst({ where: { channelId: channel.id, externalId: input.externalId }, select: { id: true } });
+        if (existing) return null;
+        let result: { messageId: string; conversationId: string };
+        try {
+            result = await this.prisma.$transaction(async (tx) => {
+                await tx.channelContact.update({
+                    where: { id: input.contactId },
+                    data: { lastInboundMessageAt: input.occurredAt, inboundCount: { increment: 1 } },
+                });
+                const conversation = await this.upsertConversation(tx, channel, input.contactId, null, {
+                    at: input.occurredAt,
+                    preview: `${input.participant.name ?? `+${input.participant.waId}`}: ${previewOf(input.content)}`,
+                    inbound: true,
+                    live: true,
+                    opensWindow: true,
+                    reopen: true,
+                });
+                const replyTo = await this.findByExternalId(tx, channel.id, input.replyToExternalId);
+                const message = await tx.message.create({
+                    data: {
+                        organizationId: channel.organizationId,
+                        channelId: channel.id,
+                        platform: channel.platform,
+                        direction: MessageDirection.INBOUND,
+                        kind: input.content.kind,
+                        source: MessageSource.CUSTOMER,
+                        conversationId: conversation.id,
+                        contactId: input.contactId,
+                        toAddress: channel.address,
+                        fromAddress: input.participant.waId,
+                        text: input.content.text,
+                        body: { ...input.body, groupSender: input.participant } as Prisma.InputJsonValue,
+                        media: (input.content.media ?? undefined) as Prisma.InputJsonValue | undefined,
+                        status: MessageStatus.DELIVERED,
+                        externalId: input.externalId,
+                        deliveredAt: input.occurredAt,
+                        replyToExternalId: input.replyToExternalId,
+                        replyToMessageId: replyTo?.id ?? null,
+                        createdAt: input.occurredAt,
+                    },
+                    select: { id: true },
+                });
+                return { messageId: message.id, conversationId: conversation.id };
+            });
+        } catch (err) {
+            if (isUniqueViolation(err)) return null;
+            throw err;
+        }
+        this.events.publish(channel.organizationId, { type: 'message.created', conversationId: result.conversationId, messageId: result.messageId });
+        this.events.publish(channel.organizationId, { type: 'conversation.updated', conversationId: result.conversationId });
+        await this.queueMediaDownload(result.messageId, input.content.media);
+        return result;
+    }
+
+    /**
+     * A notice in a group's chat (someone joined, left, was removed). It does
+     * not open the reply window or count as unread.
+     */
+    async recordGroupNotice(channel: IngestChannel, contactId: string, text: string, at: Date): Promise<void> {
+        const conversation = await this.prisma.conversation.findUnique({ where: { channelId_contactId: { channelId: channel.id, contactId } }, select: { id: true } });
+        if (!conversation) return;
+        const message = await this.prisma.message.create({
+            data: {
+                organizationId: channel.organizationId,
+                channelId: channel.id,
+                platform: channel.platform,
+                direction: MessageDirection.INBOUND,
+                kind: MessageKind.SYSTEM,
+                source: MessageSource.SYSTEM,
+                conversationId: conversation.id,
+                contactId,
+                toAddress: channel.address,
+                text,
+                body: { notice: text } as Prisma.InputJsonValue,
+                status: MessageStatus.DELIVERED,
+                deliveredAt: at,
+                createdAt: at,
+            },
+            select: { id: true },
+        });
+        this.events.publish(channel.organizationId, { type: 'message.created', conversationId: conversation.id, messageId: message.id });
+    }
+
+    /**
      * A message the business sent somewhere other than this inbox: the
      * WhatsApp Business app on a coexistence number, Meta Business Suite, a
      * history import. Recorded as outbound so the thread is complete.

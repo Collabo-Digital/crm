@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { MessageDirection, MessageKind, MessageSource, MessageStatus, Prisma } from '@prisma/client';
+import { MessageDirection, MessageKind, MessageSource, MessageStatus, Prisma, WhatsAppGroupStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ChannelAccessService } from '../channel-access.service';
 import { InboxEventsService } from '../inbox-events.service';
@@ -40,6 +40,20 @@ const SOURCE_BY_ORIGIN: Record<SendOrigin, MessageSource> = {
     system: MessageSource.SYSTEM,
     api: MessageSource.API,
 };
+
+/** Why a group's chat cannot be messaged, if it cannot. */
+function groupClosed(status: WhatsAppGroupStatus | undefined): string | null {
+    switch (status) {
+        case WhatsAppGroupStatus.ACTIVE:
+            return null;
+        case WhatsAppGroupStatus.SUSPENDED:
+            return 'WhatsApp has suspended this group.';
+        case WhatsAppGroupStatus.CREATING:
+            return 'The group is still being created.';
+        default:
+            return 'This group no longer exists on WhatsApp.';
+    }
+}
 
 function kindOf(payload: OutboundPayload): MessageKind {
     switch (payload.type) {
@@ -95,7 +109,7 @@ export class MessagingSendService {
 
         const conversation = await this.prisma.conversation.findFirst({
             where: { id: input.conversationId, organizationId: input.organizationId },
-            include: { contact: true },
+            include: { contact: { include: { whatsappGroup: { select: { status: true } } } } },
         });
         if (!conversation) throw new NotFoundException('Conversation not found');
 
@@ -116,6 +130,7 @@ export class MessagingSendService {
             origin: input.origin,
             channel: { status: channel.status, isEnabled: channel.isEnabled, sendsPaused: channel.sendsPaused, onBusinessApp: channel.onBusinessApp },
             contact: { blockedAt: conversation.contact.blockedAt, optedOutAt: conversation.contact.optedOutAt },
+            group: conversation.contact.isGroup ? { closed: groupClosed(conversation.contact.whatsappGroup?.status) } : null,
             window: replyWindow(conversation.platform, conversation.lastInboundAt),
         });
         if (!gate.ok) return gate;

@@ -63,7 +63,7 @@ export interface UploadedFile {
 }
 
 const conversationInclude = {
-    contact: true,
+    contact: { include: { whatsappGroup: { select: { id: true, status: true, participantCount: true } } } },
     channel: { select: { id: true, name: true, platform: true } },
     assignedUser: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } },
     team: { select: { id: true, name: true } },
@@ -251,6 +251,8 @@ export class InboxService {
                 reactions: m.reactions,
                 templateName: m.templateName,
                 sentBy: m.sentByUserId ? { id: m.sentByUserId, name: userById.get(m.sentByUserId) ?? null } : null,
+                // In a WhatsApp group: the participant who wrote it.
+                groupSender: m.direction === MessageDirection.INBOUND ? ((m.body as { groupSender?: { waId: string; name: string | null } } | null)?.groupSender ?? null) : null,
                 replyTo: m.replyToMessageId ? quotedById.get(m.replyToMessageId) ?? null : null,
                 media: this.mediaView(m.id, m.media),
                 details:
@@ -627,7 +629,9 @@ export class InboxService {
                 tags: row.contact.tags,
                 optedOut: !!row.contact.optedOutAt,
                 blocked: !!row.contact.blockedAt,
+                isGroup: row.contact.isGroup,
             },
+            group: row.contact.whatsappGroup,
             customerId: row.customerId,
             assignee: row.assignedUser
                 ? { id: row.assignedUser.id, name: `${row.assignedUser.firstName} ${row.assignedUser.lastName}`.trim(), avatarUrl: row.assignedUser.avatarUrl }

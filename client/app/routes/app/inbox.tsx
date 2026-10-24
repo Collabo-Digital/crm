@@ -7,6 +7,7 @@ import { AvailabilityMenu } from "~/components/app/inbox/availability-menu";
 import { CatalogPanel, type CatalogDrop } from "~/components/app/inbox/catalog-panel";
 import { ChatDropZone } from "~/components/app/inbox/chat-drop-zone";
 import { ContactPanel } from "~/components/app/inbox/contact-panel";
+import { GroupSidePanel } from "~/components/app/inbox/group-side-panel";
 import { ConversationEmpty } from "~/components/app/inbox/conversation-empty";
 import { ConversationList } from "~/components/app/inbox/conversation-list";
 import { ThreadSkeleton } from "~/components/app/inbox/conversation-skeletons";
@@ -384,124 +385,130 @@ export default function InboxPage() {
           ) : !conversation ? (
             <ThreadSkeleton />
           ) : (
-            <>
-              <ThreadHeader
-                conversation={conversation}
-                members={members}
-                teams={teams}
-                me={me}
-                isPanelOpen={hasRoomForPanel ? isPanelOpen : mobileDetailsOpen}
-                isMutating={update.isPending}
-                onTogglePanel={() => hasRoomForPanel ? setIsPanelOpen((previous) => !previous) : setMobileDetailsOpen(true)}
-                onBack={() => patchParams({ c: null })}
-                onAssign={(assignedUserId) =>
-                  update.mutate(
-                    { id: conversation.id, assignedUserId, done: assignedUserId ? "Assigned." : "Unassigned." },
-                    { onSuccess: (result) => "visible" in result && patchParams({ c: null }) },
-                  )
-                }
-                onTeam={(teamId) => update.mutate({ id: conversation.id, teamId, done: teamId ? "Moved to team." : "Removed from team." })}
-                onSnooze={(snoozedUntil, label) =>
-                  update.mutate(
-                    { id: conversation.id, status: "SNOOZED", snoozedUntil, done: `Snoozed until ${label.toLowerCase()}.` },
-                    { onSuccess: () => filters.status === "open" && patchParams({ c: nextAfter(conversation.id) }) },
-                  )
-                }
-                onClose={() =>
-                  update.mutate(
-                    { id: conversation.id, status: "CLOSED", done: "Conversation closed." },
-                    { onSuccess: () => filters.status === "open" && patchParams({ c: nextAfter(conversation.id) }) },
-                  )
-                }
-                onReopen={() => update.mutate({ id: conversation.id, status: "OPEN", done: "Conversation reopened." })}
-              />
-
-              <ChatDropZone className="flex min-h-0 flex-1 flex-col" disabled={!conversation.reply.canReply} onCatalog={addToReply} onFile={attachDropped}>
-                {messagesQuery.isError ? (
-                  <div className="flex-1 p-6">
-                    <QueryErrorState resource="messages" onRetry={() => void messagesQuery.refetch()} />
-                  </div>
-                ) : messagesQuery.isLoading ? (
-                  <ThreadSkeleton />
-                ) : (
-                  <ConversationThread
-                    conversationId={conversation.id}
-                    messages={messages}
-                    notes={notes}
-                    canReply={conversation.reply.canReply}
-                    hasEarlier={!!messagesQuery.hasNextPage}
-                    isLoadingEarlier={messagesQuery.isFetchingNextPage}
-                    onLoadEarlier={() => void messagesQuery.fetchNextPage()}
-                    onQuote={(message) => {
-                      setCommentTarget(null);
-                      setQuote(message);
-                    }}
-                    onReact={(message, emoji) => void sendPayload({ type: "reaction", messageId: message.id, emoji })}
-                    onCommentReply={(message, mode) => {
-                      setQuote(null);
-                      setCommentTarget({ message, mode });
-                    }}
+              <>
+                  <ThreadHeader
+                    conversation={conversation}
+                    members={members}
+                    teams={teams}
+                    me={me}
+                    isPanelOpen={hasRoomForPanel ? isPanelOpen : mobileDetailsOpen}
+                    isMutating={update.isPending}
+                    onTogglePanel={() => hasRoomForPanel ? setIsPanelOpen((previous) => !previous) : setMobileDetailsOpen(true)}
+                    onBack={() => patchParams({ c: null })}
+                    onAssign={(assignedUserId) =>
+                      update.mutate(
+                        { id: conversation.id, assignedUserId, done: assignedUserId ? "Assigned." : "Unassigned." },
+                        { onSuccess: (result) => "visible" in result && patchParams({ c: null }) },
+                      )
+                    }
+                    onTeam={(teamId) => update.mutate({ id: conversation.id, teamId, done: teamId ? "Moved to team." : "Removed from team." })}
+                    onSnooze={(snoozedUntil, label) =>
+                      update.mutate(
+                        { id: conversation.id, status: "SNOOZED", snoozedUntil, done: `Snoozed until ${label.toLowerCase()}.` },
+                        { onSuccess: () => filters.status === "open" && patchParams({ c: nextAfter(conversation.id) }) },
+                      )
+                    }
+                    onClose={() =>
+                      update.mutate(
+                        { id: conversation.id, status: "CLOSED", done: "Conversation closed." },
+                        { onSuccess: () => filters.status === "open" && patchParams({ c: nextAfter(conversation.id) }) },
+                      )
+                    }
+                    onReopen={() => update.mutate({ id: conversation.id, status: "OPEN", done: "Conversation reopened." })}
                   />
-                )}
 
-                <MessageComposer
-                  key={conversation.id}
-                  conversation={conversation}
-                  quickReplies={quickReplies}
-                  agentName={user?.firstName ?? ""}
-                  quote={quote}
-                  commentTarget={commentTarget}
-                  isSending={send.isPending}
-                  onClearQuote={() => setQuote(null)}
-                  onClearCommentTarget={() => setCommentTarget(null)}
-                  onSend={sendPayload}
-                  onAddNote={(body) => addNote.mutateAsync(body)}
-                  onUpload={(file) => upload.mutateAsync(file)}
-                  onOpenTemplates={conversation.platform === "WHATSAPP" ? () => setTemplatesOpen(true) : undefined}
-                  ref={composerRef}
-                />
-              </ChatDropZone>
-              <TemplatePickerDialog
-                open={templatesOpen}
-                onOpenChange={setTemplatesOpen}
-                contactName={conversation.contact.customer?.name ?? conversation.contact.name}
-                isSending={send.isPending}
-                onSend={(payload) => sendPayload(payload)}
-              />
-            </>
+                  <ChatDropZone className="flex min-h-0 flex-1 flex-col" disabled={!conversation.reply.canReply} onCatalog={addToReply} onFile={attachDropped}>
+                    {messagesQuery.isError ? (
+                      <div className="flex-1 p-6">
+                        <QueryErrorState resource="messages" onRetry={() => void messagesQuery.refetch()} />
+                      </div>
+                    ) : messagesQuery.isLoading ? (
+                      <ThreadSkeleton />
+                    ) : (
+                      <ConversationThread
+                        conversationId={conversation.id}
+                        messages={messages}
+                        notes={notes}
+                        canReply={conversation.reply.canReply}
+                        hasEarlier={!!messagesQuery.hasNextPage}
+                        isLoadingEarlier={messagesQuery.isFetchingNextPage}
+                        onLoadEarlier={() => void messagesQuery.fetchNextPage()}
+                        onQuote={(message) => {
+                          setCommentTarget(null);
+                          setQuote(message);
+                        }}
+                        onReact={(message, emoji) => void sendPayload({ type: "reaction", messageId: message.id, emoji })}
+                        onCommentReply={(message, mode) => {
+                          setQuote(null);
+                          setCommentTarget({ message, mode });
+                        }}
+                      />
+                    )}
+
+                    <MessageComposer
+                      key={conversation.id}
+                      conversation={conversation}
+                      quickReplies={quickReplies}
+                      agentName={user?.firstName ?? ""}
+                      quote={quote}
+                      commentTarget={commentTarget}
+                      isSending={send.isPending}
+                      onClearQuote={() => setQuote(null)}
+                      onClearCommentTarget={() => setCommentTarget(null)}
+                      onSend={sendPayload}
+                      onAddNote={(body) => addNote.mutateAsync(body)}
+                      onUpload={(file) => upload.mutateAsync(file)}
+                      onOpenTemplates={conversation.platform === "WHATSAPP" ? () => setTemplatesOpen(true) : undefined}
+                      ref={composerRef}
+                    />
+                  </ChatDropZone>
+                  <TemplatePickerDialog
+                    open={templatesOpen}
+                    onOpenChange={setTemplatesOpen}
+                    contactName={conversation.contact.customer?.name ?? conversation.contact.name}
+                    isSending={send.isPending}
+                    onSend={(payload) => sendPayload(payload)}
+                  />
+              </>
           )}
         </div>
 
         {/* The docked desktop panel and mobile sheet leave the composer mounted. */}
         {conversation && (
           <div className={cn("min-h-0 flex-col border-l", showPanel ? "hidden lg:flex" : "hidden")}>
-            {sideTabs}
-            {sidePanel === "contact" ? (
-              <ContactPanel
-                key={conversation.contact.id}
-                contact={conversation.contact}
-                conversationId={conversation.id}
-                notes={notes}
-                members={members}
-                teams={teams}
-                canEdit={conversation.reply.canReply}
-                canAssignOthers={!!me?.access.canAssignOthers}
-                meId={me?.userId}
-                defaultCurrency={org?.currency ?? "INR"}
-                isSavingNote={addNote.isPending}
-                onAddNote={(body) => addNote.mutate(body)}
-                className="flex-1"
-              />
+            {conversation.contact.isGroup ? (
+              <GroupSidePanel groupId={conversation.group?.id} className="flex-1" />
             ) : (
-              <CatalogPanel
-                key={conversation.id}
-                conversationId={conversation.id}
-                blockedReason={catalogBlocked}
-                isSending={send.isPending}
-                onAdd={addToReply}
-                onSend={sendFromCatalog}
-                className="flex-1"
-              />
+              <>
+                {sideTabs}
+                {sidePanel === "contact" ? (
+                  <ContactPanel
+                    key={conversation.contact.id}
+                    contact={conversation.contact}
+                    conversationId={conversation.id}
+                    notes={notes}
+                    members={members}
+                    teams={teams}
+                    canEdit={conversation.reply.canReply}
+                    canAssignOthers={!!me?.access.canAssignOthers}
+                    meId={me?.userId}
+                    defaultCurrency={org?.currency ?? "INR"}
+                    isSavingNote={addNote.isPending}
+                    onAddNote={(body) => addNote.mutate(body)}
+                    className="flex-1"
+                  />
+                ) : (
+                  <CatalogPanel
+                    key={conversation.id}
+                    conversationId={conversation.id}
+                    blockedReason={catalogBlocked}
+                    isSending={send.isPending}
+                    onAdd={addToReply}
+                    onSend={sendFromCatalog}
+                    className="flex-1"
+                  />
+                )}
+              </>
             )}
           </div>
         )}
@@ -512,35 +519,43 @@ export default function InboxPage() {
           <SheetContent className="max-w-md pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] [&>button]:top-[max(1rem,env(safe-area-inset-top))] [&>button]:size-11 [&>button]:rounded-full">
             <SheetHeader className="shrink-0 px-5 py-6 pr-16">
               <SheetTitle className="text-xl">{conversation.contact.name}</SheetTitle>
-              <SheetDescription>{sidePanel === "contact" ? "Contact details, orders and team notes" : "Products to share in this chat"}</SheetDescription>
+              <SheetDescription>
+                {conversation.contact.isGroup ? "WhatsApp group" : sidePanel === "contact" ? "Contact details, orders and team notes" : "Products to share in this chat"}
+              </SheetDescription>
             </SheetHeader>
-            {sideTabs}
-            {sidePanel === "products" ? (
-              <CatalogPanel
-                key={conversation.id}
-                conversationId={conversation.id}
-                blockedReason={catalogBlocked}
-                isSending={send.isPending}
-                onAdd={addToReply}
-                onSend={sendFromCatalog}
-                className="min-h-0 flex-1 [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_input]:text-base"
-              />
+            {conversation.contact.isGroup ? (
+              <GroupSidePanel groupId={conversation.group?.id} className="min-h-0 flex-1" />
             ) : (
-              <ContactPanel
-                key={conversation.contact.id}
-                contact={conversation.contact}
-                conversationId={conversation.id}
-                notes={notes}
-                members={members}
-                teams={teams}
-                canEdit={conversation.reply.canReply}
-                canAssignOthers={!!me?.access.canAssignOthers}
-                meId={me?.userId}
-                defaultCurrency={org?.currency ?? "INR"}
-                isSavingNote={addNote.isPending}
-                onAddNote={(body) => addNote.mutate(body)}
-                className="min-h-0 flex-1 overscroll-contain bg-muted/30 [&>section]:mx-3 [&>section]:my-3 [&>section]:rounded-2xl [&>section]:border-0 [&>section]:bg-card [&>section]:p-5 [&_button]:min-h-11 [&_input]:min-h-11 [&_input]:text-base [&_h3]:text-xs [&_dl]:space-y-3 [&_dl]:text-sm"
-              />
+              <>
+                {sideTabs}
+                {sidePanel === "products" ? (
+                  <CatalogPanel
+                    key={conversation.id}
+                    conversationId={conversation.id}
+                    blockedReason={catalogBlocked}
+                    isSending={send.isPending}
+                    onAdd={addToReply}
+                    onSend={sendFromCatalog}
+                    className="min-h-0 flex-1 [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_input]:text-base"
+                  />
+                ) : (
+                  <ContactPanel
+                    key={conversation.contact.id}
+                    contact={conversation.contact}
+                    conversationId={conversation.id}
+                    notes={notes}
+                    members={members}
+                    teams={teams}
+                    canEdit={conversation.reply.canReply}
+                    canAssignOthers={!!me?.access.canAssignOthers}
+                    meId={me?.userId}
+                    defaultCurrency={org?.currency ?? "INR"}
+                    isSavingNote={addNote.isPending}
+                    onAddNote={(body) => addNote.mutate(body)}
+                    className="min-h-0 flex-1 overscroll-contain bg-muted/30 [&>section]:mx-3 [&>section]:my-3 [&>section]:rounded-2xl [&>section]:border-0 [&>section]:bg-card [&>section]:p-5 [&_button]:min-h-11 [&_input]:min-h-11 [&_input]:text-base [&_h3]:text-xs [&_dl]:space-y-3 [&_dl]:text-sm"
+                  />
+                )}
+              </>
             )}
           </SheetContent>
         </Sheet>

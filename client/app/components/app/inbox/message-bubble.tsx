@@ -319,6 +319,9 @@ export const MessageBubble = memo(function MessageBubble({
   return (
     <div className={cn("group flex items-center gap-1", isOutbound ? "flex-row-reverse" : "flex-row")}>
       <div className={cn("flex max-w-[min(34rem,78%)] flex-col gap-1", isOutbound ? "items-end" : "items-start")}>
+        {message.groupSender && !isOutbound && (
+          <span className="px-1 text-micro font-semibold text-brand-strong">{message.groupSender.name ?? `+${message.groupSender.waId}`}</span>
+        )}
         <div
           className={cn(
             // 14px, not 12px. `text-caption` is meta-text size — timestamps and

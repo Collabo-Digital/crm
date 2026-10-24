@@ -44,6 +44,8 @@ export interface WaMessage {
     errors: WaError[];
     /** History only: the message's state on the device at sync time. */
     historyStatus: string | null;
+    /** The WhatsApp group it was sent in; `from` is then the participant. */
+    groupId: string | null;
     raw: Record<string, unknown>;
 }
 
@@ -56,8 +58,43 @@ export interface WaStatus {
     pricing: { type: string | null; category: string | null; billable: boolean | null } | null;
     errors: WaError[];
     bizOpaqueCallbackData: string | null;
+    /** A message sent to a group: the group, and the participant this status is about. */
+    groupId: string | null;
+    participant: string | null;
     raw: Record<string, unknown>;
 }
+
+/** One entry of a groups webhook (`value.groups[]`). */
+export interface WaGroupChange {
+    groupId: string | null;
+    /**
+     * group_create, group_delete, group_participants_add,
+     * group_participants_remove, group_join_request_created,
+     * group_join_request_revoked, group_settings_update, group_suspend,
+     * group_suspend_cleared.
+     */
+    type: string;
+    requestId: string | null;
+    timestamp: Date | null;
+    subject: string | null;
+    description: string | null;
+    inviteLink: string | null;
+    joinApprovalMode: string | null;
+    reason: string | null;
+    /** `business` or `participant`, on removals. */
+    initiatedBy: string | null;
+    /** The wa_id (or the number Meta echoes as `input`) of each participant added, removed, or not removed. */
+    added: string[];
+    removed: string[];
+    failed: string[];
+    joinRequestId: string | null;
+    /** The user a join request is about. */
+    waId: string | null;
+    errors: WaError[];
+    raw: Record<string, unknown>;
+}
+
+export type WaGroupField = 'group_lifecycle_update' | 'group_participants_update' | 'group_settings_update' | 'group_status_update';
 
 /** WhatsApp Pay: a payment on an `order_details` bill, from the gateway Meta is linked to. */
 export interface WaPayment {
@@ -124,6 +161,7 @@ export type WaEvent =
     })
     | (Base & { kind: 'number_update'; field: string; event: string | null; value: Record<string, unknown> })
     | (Base & { kind: 'value_errors'; errors: WaError[] })
+    | (Base & { kind: 'group'; field: WaGroupField; change: WaGroupChange })
     | (Base & { kind: 'other'; field: string; value: Record<string, unknown> });
 
 type Obj = Record<string, unknown>;
@@ -260,6 +298,7 @@ function toMessage(
         referral: obj(m.referral),
         errors: errorsOf(m.errors),
         historyStatus: str(obj(m.history_context)?.status),
+        groupId: str(m.group_id),
         raw: m,
     };
 }
@@ -270,11 +309,14 @@ function toStatus(s: Obj, index: Map<string, Obj>): WaStatus | null {
     const status = str(s.status);
     if (!messageId || !timestamp || !status) return null;
     const pricing = obj(s.pricing);
+    const group = str(s.recipient_type) === 'group';
+    // Meta's examples spell the participant both ways.
+    const participant = group ? (str(s.participant_recipient_id) ?? str(s.recipient_participant_id)) : null;
     return {
         messageId,
         status,
         timestamp,
-        recipient: contactRef(str(s.recipient_id), str(s.recipient_user_id), index),
+        recipient: group ? contactRef(participant, null, index) : contactRef(str(s.recipient_id), str(s.recipient_user_id), index),
         pricing: pricing
             ? {
                 type: str(pricing.type),
@@ -284,7 +326,41 @@ function toStatus(s: Obj, index: Map<string, Obj>): WaStatus | null {
             : null,
         errors: errorsOf(s.errors),
         bizOpaqueCallbackData: str(s.biz_opaque_callback_data),
+        groupId: group ? str(s.recipient_id) : null,
+        participant,
         raw: s,
+    };
+}
+
+const participantIds = (v: unknown) => arr(v).map((p) => str(p.wa_id) ?? str(p.input)).filter((id): id is string => !!id);
+
+/** A setting changed by a `group_settings_update`, or null when it was not, or failed. */
+function changedSetting(v: unknown): string | null {
+    const setting = obj(v);
+    return setting && setting.update_successful !== false ? str(setting.text) : null;
+}
+
+function toGroupChange(g: Obj): WaGroupChange | null {
+    const type = str(g.type);
+    if (!type) return null;
+    return {
+        groupId: str(g.group_id),
+        type,
+        requestId: str(g.request_id),
+        timestamp: seconds(g.timestamp),
+        subject: type === 'group_settings_update' ? changedSetting(g.group_subject) : str(g.subject),
+        description: type === 'group_settings_update' ? changedSetting(g.group_description) : str(g.description),
+        inviteLink: str(g.invite_link),
+        joinApprovalMode: str(g.join_approval_mode),
+        reason: str(g.reason),
+        initiatedBy: str(g.initiated_by),
+        added: participantIds(g.added_participants),
+        removed: participantIds(g.removed_participants),
+        failed: participantIds(g.failed_participants),
+        joinRequestId: str(g.join_request_id),
+        waId: str(g.wa_id),
+        errors: errorsOf(g.errors),
+        raw: g,
     };
 }
 
@@ -475,6 +551,16 @@ function parseChange(field: string, value: Obj, base: Base): WaEvent[] {
                 event: str(value.event) ?? str(value.new_quality_score) ?? str(value.new_category),
                 value,
             });
+            return out;
+
+        case 'group_lifecycle_update':
+        case 'group_participants_update':
+        case 'group_settings_update':
+        case 'group_status_update':
+            for (const g of arr(value.groups)) {
+                const change = toGroupChange(g);
+                if (change) out.push({ ...base, kind: 'group', field, change });
+            }
             return out;
 
         case 'payment_configuration_update':

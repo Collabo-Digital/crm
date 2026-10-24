@@ -205,3 +205,68 @@ describe('WhatsApp Pay webhooks', () => {
         expect(e).toMatchObject({ kind: 'payment_configuration', name: 'acme-razorpay', provider: 'razorpay', status: 'Active' });
     });
 });
+
+describe('WhatsApp groups', () => {
+    const G = 'HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA';
+
+    it('reads a message sent in a group, with the participant as sender', () => {
+        const [e] = ofKind(parseWhatsAppDelivery(fixture('wa-group-message.json')), 'message');
+        expect(e.message).toMatchObject({
+            groupId: G,
+            type: 'text',
+            text: 'What does everyone think about this?',
+            from: { waId: '16505551234', profileName: 'Tiago Mingo' },
+        });
+        const [solo] = ofKind(parseWhatsAppDelivery(fixture('wa-inbound-messages.json')), 'message');
+        expect(solo.message.groupId).toBeNull();
+    });
+
+    it('reads a group message’s statuses per participant, in both of Meta’s spellings', () => {
+        const statuses = ofKind(parseWhatsAppDelivery(fixture('wa-group-statuses.json')), 'status').map((e) => e.status);
+        expect(statuses.map((s) => [s.status, s.groupId, s.participant, s.recipient.waId])).toEqual([
+            ['delivered', G, '16505551234', '16505551234'],
+            ['read', G, '16505550000', '16505550000'],
+        ]);
+        expect(statuses[0].pricing).toMatchObject({ category: 'group_service', billable: true });
+        const [solo] = ofKind(parseWhatsAppDelivery(fixture('wa-statuses.json')), 'status');
+        expect([solo.status.groupId, solo.status.participant]).toEqual([null, null]);
+    });
+
+    it('reads the group lifecycle: created, refused, deleted', () => {
+        const changes = ofKind(parseWhatsAppDelivery(fixture('wa-group-lifecycle.json')), 'group');
+        expect(changes.map((e) => e.field)).toEqual(['group_lifecycle_update', 'group_lifecycle_update', 'group_lifecycle_update']);
+        expect(changes[0].change).toMatchObject({
+            type: 'group_create',
+            groupId: G,
+            requestId: 'req-1',
+            subject: 'Summer drop VIPs',
+            inviteLink: 'https://chat.whatsapp.com/LINK_ID',
+            joinApprovalMode: 'approval_required',
+            errors: [],
+        });
+        expect(changes[1].change).toMatchObject({ type: 'group_create', requestId: 'req-2', errors: [{ code: 131211, details: 'This number has reached its group limit.' }] });
+        expect(changes[2].change).toMatchObject({ type: 'group_delete', groupId: G, requestId: 'req-3' });
+        expect(changes[0].phoneNumberId).toBe('106540352242922');
+    });
+
+    it('reads who joined, was removed, left, or asked to join', () => {
+        const changes = ofKind(parseWhatsAppDelivery(fixture('wa-group-participants.json')), 'group').map((e) => e.change);
+        expect(changes.map((c) => [c.type, c.added, c.removed, c.initiatedBy])).toEqual([
+            ['group_participants_add', ['16505551234'], [], null],
+            ['group_participants_add', ['16505550000'], [], null],
+            ['group_participants_remove', [], ['16505550000'], 'business'],
+            ['group_participants_remove', [], ['16505551234'], 'participant'],
+            ['group_join_request_created', [], [], null],
+        ]);
+        expect(changes[4]).toMatchObject({ joinRequestId: 'jr-1', waId: '16505557777', reason: 'invite_link' });
+    });
+
+    it('reads only the settings that changed, and suspensions', () => {
+        const changes = ofKind(parseWhatsAppDelivery(fixture('wa-group-settings-status.json')), 'group');
+        expect(changes[0].change).toMatchObject({ type: 'group_settings_update', subject: 'Summer drop insiders', description: null });
+        expect(changes.slice(1).map((e) => [e.field, e.change.type])).toEqual([
+            ['group_status_update', 'group_suspend'],
+            ['group_status_update', 'group_suspend_cleared'],
+        ]);
+    });
+});

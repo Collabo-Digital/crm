@@ -69,7 +69,7 @@ export function ThreadHeader({
         </Button>
 
         <button type="button" onClick={onTogglePanel} aria-label={`Show contact details for ${contact.name}`} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <ConversationAvatar name={contact.name} avatarUrl={contact.avatarUrl} className="max-md:[&_[data-slot=avatar]]:size-11" />
+          <ConversationAvatar name={contact.name} avatarUrl={contact.avatarUrl} isGroup={contact.isGroup} className="max-md:[&_[data-slot=avatar]]:size-11" />
           <div className="min-w-0 flex-1">
             <p className="truncate text-base font-semibold text-foreground md:text-body">{contact.name}</p>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground md:text-micro">

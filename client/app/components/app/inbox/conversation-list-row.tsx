@@ -55,7 +55,7 @@ export const ConversationListRow = memo(function ConversationListRow({
       <div className="relative shrink-0">
         {/* The checkbox takes the avatar's place on hover or while selecting. */}
         <div className={cn(selecting ? "hidden" : "md:group-hover:hidden")}>
-          <ConversationAvatar name={contact.name} avatarUrl={contact.avatarUrl} platform={platform} className="max-md:[&_[data-slot=avatar]]:size-12 max-md:[&_[data-slot=avatar-fallback]]:text-base" />
+          <ConversationAvatar name={contact.name} avatarUrl={contact.avatarUrl} platform={platform} isGroup={contact.isGroup} className="max-md:[&_[data-slot=avatar]]:size-12 max-md:[&_[data-slot=avatar-fallback]]:text-base" />
         </div>
         <div className={cn("relative z-10 size-12 items-center justify-center md:size-8", selecting ? "flex" : "hidden md:group-hover:flex")}>
           <Checkbox

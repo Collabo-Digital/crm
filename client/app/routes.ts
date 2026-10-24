@@ -65,6 +65,7 @@ export default [
     // contacts behind them. The old preview lived at /conversation.
     route("inbox", "routes/app/inbox.tsx"),
     route("inbox/contacts", "routes/app/inbox/contacts.tsx"),
+    route("inbox/groups", "routes/app/inbox/groups.tsx"),
     route("conversation/*", "routes/app/legacy-redirect.tsx", { id: "legacy-conversation" }),
     // Campaigns section: WhatsApp broadcasts, templates and segments. Static
     // segments ("new") outrank ":id".

@@ -3601,7 +3601,10 @@ export interface InboxConversation {
     tags: string[];
     optedOut: boolean;
     blocked: boolean;
+    /** A WhatsApp group's chat, not a person. */
+    isGroup: boolean;
   };
+  group: { id: string; status: WhatsAppGroupStatus; participantCount: number } | null;
   customerId: string | null;
   assignee: InboxPerson | null;
   team: InboxTeamRef | null;
@@ -3611,6 +3614,44 @@ export interface InboxConversation {
   unreadCount: number;
   awaitingReplySince: string | null;
   window: ReplyWindowState;
+}
+
+// ─── WhatsApp groups ────────────────────────────────────────────────────────
+
+export type WhatsAppGroupStatus = "CREATING" | "ACTIVE" | "SUSPENDED" | "DELETING" | "DELETED" | "FAILED";
+
+export interface WhatsAppGroupSummary {
+  id: string;
+  channelId: string;
+  channelName: string;
+  subject: string;
+  description: string | null;
+  joinApprovalMode: "auto_approve" | "approval_required";
+  inviteLink: string | null;
+  status: WhatsAppGroupStatus;
+  statusReason: string | null;
+  participantCount: number;
+  pendingJoinRequests: number;
+  conversationId: string | null;
+  createdAt: string;
+}
+
+export interface WhatsAppGroupDetail extends WhatsAppGroupSummary {
+  participants: Array<{ waId: string; name: string | null; joinedAt: string }>;
+  joinRequests: Array<{ id: string; waId: string; requestedAt: string }>;
+}
+
+export interface WhatsAppGroupsResponse {
+  /** The organization's WhatsApp numbers, and whether each can run groups. */
+  numbers: Array<{ channelId: string; name: string; available: boolean; reason: string | null }>;
+  groups: WhatsAppGroupSummary[];
+}
+
+export interface CreateGroupRequest {
+  channelId: string;
+  subject: string;
+  description?: string;
+  joinApprovalMode: "auto_approve" | "approval_required";
 }
 
 export interface InboxCursor {
@@ -3634,6 +3675,8 @@ export interface InboxCustomerMatch {
 export interface InboxContactDetail {
   id: string;
   platform: ChannelPlatform;
+  /** A WhatsApp group's chat, not a person. */
+  isGroup: boolean;
   name: string;
   displayName: string | null;
   addressBookName: string | null;
@@ -3741,6 +3784,8 @@ export interface InboxMessage {
   reactions: Record<string, string | null> | null;
   templateName: string | null;
   sentBy: { id: string; name: string | null } | null;
+  /** In a WhatsApp group: the participant who wrote it. */
+  groupSender: { waId: string; name: string | null } | null;
   replyTo: { id: string; text: string | null; kind: InboxMessageKind; direction: MessageDirection } | null;
   media: InboxMedia | null;
   details: InboxMessageDetails | null;

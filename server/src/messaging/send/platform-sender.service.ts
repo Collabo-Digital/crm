@@ -9,6 +9,7 @@ import { InboxEventsService } from '../inbox-events.service';
 import { BroadcastTracker } from '../broadcast-tracker';
 import { MessagingMediaStorage } from '../media/messaging-media.storage';
 import { OutboundPayload, buildMessengerBody, buildWhatsAppBody } from '../outbound';
+import { groupIdOfContact } from '../group-contact';
 import { patchChannelMetadataSql } from '../../channel/channel-metadata.util';
 
 /**
@@ -169,15 +170,16 @@ export class PlatformSenderService {
         payload: OutboundPayload,
         replyToExternalId: string | null,
     ): Promise<string> {
+        const groupId = groupIdOfContact(contact.externalId);
         const isBsuid = /^[A-Z]{2}\./.test(contact.externalId);
-        const recipient = {
-            waId: contact.waId ?? (isBsuid ? null : contact.externalId),
-            userId: isBsuid ? contact.externalId : null,
-        };
+        const recipient = groupId
+            ? { waId: null, userId: null, groupId }
+            : { waId: contact.waId ?? (isBsuid ? null : contact.externalId), userId: isBsuid ? contact.externalId : null };
         const mediaId = payload.type === 'media' ? await this.uploadWhatsAppMedia(channel, payload) : null;
         const toSend = payload.type === 'template' && payload.headerMedia ? await this.withHeaderMedia(channel, payload) : payload;
         const body = buildWhatsAppBody(toSend, recipient, { replyToExternalId, mediaId });
-        const marketing = payload.type === 'template' && payload.category === 'MARKETING';
+        // Meta documents group sends on /messages only.
+        const marketing = !groupId && payload.type === 'template' && payload.category === 'MARKETING';
         const send = (viaMarketingApi: boolean) =>
             this.metaGraph.request<{
                 messages?: Array<{ id: string }>;
@@ -206,7 +208,7 @@ export class PlatformSenderService {
         }
         const id = res.data.messages?.[0]?.id;
         if (!id) throw new MetaGraphError('WhatsApp returned no message id', 'API_ERROR');
-        const waId = res.data.contacts?.[0]?.wa_id;
+        const waId = groupId ? undefined : res.data.contacts?.[0]?.wa_id;
         if (waId && waId !== contact.waId) {
             await this.prisma.channelContact.update({ where: { id: contact.id }, data: { waId, phone: `+${waId}` } });
         }

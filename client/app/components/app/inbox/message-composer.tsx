@@ -115,6 +115,7 @@ export function MessageComposer({
   const { platform, contact } = conversation;
   const phase = windowPhase(platform, conversation.window, Date.now());
   const canReply = conversation.reply.canReply;
+  const isGroup = conversation.contact.isGroup;
   const commentMode = !!commentTarget;
   /** Why free-form replies are not possible right now, if they are not. */
   const blockedReason = replyBlockedReason(conversation, Date.now(), commentMode);
@@ -134,7 +135,9 @@ export function MessageComposer({
   /** Why products or a file cannot join this message right now, if they cannot. */
   const productsBlocked = replyLocked
     ? blockedReason
-    : isNoteMode
+    : isGroup
+      ? "WhatsApp groups take text, files and templates only."
+      : isNoteMode
       ? "Notes cannot carry products."
       : commentMode
         ? "Products cannot go in a comment reply."
@@ -427,31 +430,35 @@ export function MessageComposer({
           </PopoverContent>
         </Popover>
 
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => setOptions((list) => (list.length ? [] : ["", ""]))}
-          disabled={replyLocked || isNoteMode || commentMode || !!staged}
-          aria-pressed={options.length > 0}
-          aria-label={platform === "WHATSAPP" ? "Add reply buttons" : "Add quick reply options"}
-          title={platform === "WHATSAPP" ? "Reply buttons (up to 3)" : "Quick reply options (up to 13)"}
-        >
-          <ListPlus className="size-3.5" />
-        </Button>
+        {!isGroup && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setOptions((list) => (list.length ? [] : ["", ""]))}
+            disabled={replyLocked || isNoteMode || commentMode || !!staged}
+            aria-pressed={options.length > 0}
+            aria-label={platform === "WHATSAPP" ? "Add reply buttons" : "Add quick reply options"}
+            title={platform === "WHATSAPP" ? "Reply buttons (up to 3)" : "Quick reply options (up to 13)"}
+          >
+            <ListPlus className="size-3.5" />
+          </Button>
+        )}
 
-        <ProductPickerButton
-          conversationId={conversation.id}
-          selected={products}
-          disabled={replyLocked || isNoteMode || commentMode || !!staged || options.length > 0}
-          onToggle={(product, asCards) => {
-            setProductsAsCards(asCards);
-            setProducts((list) =>
-              list.some((p) => p.variantId === product.variantId)
-                ? list.filter((p) => p.variantId !== product.variantId)
-                : [...list, product].slice(0, MAX_PRODUCTS),
-            );
-          }}
-        />
+        {!isGroup && (
+          <ProductPickerButton
+            conversationId={conversation.id}
+            selected={products}
+            disabled={replyLocked || isNoteMode || commentMode || !!staged || options.length > 0}
+            onToggle={(product, asCards) => {
+              setProductsAsCards(asCards);
+              setProducts((list) =>
+                list.some((p) => p.variantId === product.variantId)
+                  ? list.filter((p) => p.variantId !== product.variantId)
+                  : [...list, product].slice(0, MAX_PRODUCTS),
+              );
+            }}
+          />
+        )}
 
         {onOpenTemplates && canReply && !contact.blockedAt && (
           <Button

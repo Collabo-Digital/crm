@@ -217,3 +217,30 @@ describe('catalog messages', () => {
         expect(outboundText(carousel)).toBe('Both sizes');
     });
 });
+
+describe('WhatsApp groups', () => {
+    it('address the group, not a person', () => {
+        expect(buildWhatsAppBody({ type: 'text', text: 'Hi all' }, { waId: null, userId: null, groupId: 'G1' })).toEqual({
+            messaging_product: 'whatsapp',
+            recipient_type: 'group',
+            to: 'G1',
+            type: 'text',
+            text: { body: 'Hi all', preview_url: true },
+        });
+        expect(buildWhatsAppBody({ type: 'text', text: 'Hi' }, { waId: '919800000001', userId: null })).toMatchObject({ recipient_type: 'individual', to: '919800000001' });
+    });
+
+    it('take text, files and templates only, and nothing once the group is gone', () => {
+        const open = { closed: null };
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: { type: 'text', text: 'Hi all' }, group: open }).ok).toBe(true);
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: { type: 'template', name: 'drop_alert', language: 'en' }, group: open }).ok).toBe(true);
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: { type: 'buttons', text: 'Pick', buttons: [{ id: 'a', title: 'A' }] }, group: open })).toMatchObject({ ok: false, code: 'unsupported_on_platform' });
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: { type: 'product', catalogId: 'CAT1', productRetailerId: 'v1' }, group: open })).toMatchObject({ ok: false, code: 'unsupported_on_platform' });
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: { type: 'reaction', targetExternalId: 'wamid.1', emoji: '👍' }, group: open })).toMatchObject({ ok: false, code: 'unsupported_on_platform' });
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: { type: 'text', text: 'Hi' }, group: { closed: 'This group no longer exists on WhatsApp.' } })).toMatchObject({
+            ok: false,
+            code: 'channel_unavailable',
+            message: 'This group no longer exists on WhatsApp.',
+        });
+    });
+});

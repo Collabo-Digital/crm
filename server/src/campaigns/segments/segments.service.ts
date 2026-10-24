@@ -110,7 +110,8 @@ export class SegmentsService {
     /** The contacts a definition selects, within the organization. RFM scores are refreshed first when a rule needs them. */
     async where(orgId: string, definition: SegmentDefinition): Promise<Prisma.ChannelContactWhereInput> {
         if (definition.rules.some((r) => r.field === 'rfm')) await this.rfm.ensureFresh(orgId);
-        return { AND: [{ organizationId: orgId }, definitionWhere(definition, new Date())] };
+        // A WhatsApp group's chat is never an audience member: Meta bills a group send per participant.
+        return { AND: [{ organizationId: orgId, isGroup: false }, definitionWhere(definition, new Date())] };
     }
 
     async load(orgId: string, id: string): Promise<Segment> {

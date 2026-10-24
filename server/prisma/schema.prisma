@@ -365,6 +365,7 @@ model Organization {
   apiKeys                ApiKey[]
   webhookEndpoints       WebhookEndpoint[]
   shopifySegments        ShopifySegment[]
+  whatsappGroups         WhatsAppGroup[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -623,6 +624,8 @@ model Channel {
   siteWidgets SiteWidget[]
 
   shopifySegments ShopifySegment[]
+
+  whatsappGroups WhatsAppGroup[]
 
   @@index([organizationId, platform])
   @@index([organizationId])
@@ -2108,6 +2111,8 @@ model ChannelContact {
   consecutiveFailures  Int             @default(0) @map("consecutive_failures")
   /// Manual or automatic cool-off; no sends while in the future.
   mutedUntil           DateTime?       @map("muted_until")
+  /// A WhatsApp group's chat, not a person: kept out of audiences and the contact list.
+  isGroup              Boolean         @default(false) @map("is_group")
   /// The member or team responsible for this contact.
   ownerUserId          String?         @map("owner_user_id")
   ownerTeamId          String?         @map("owner_team_id")
@@ -2127,6 +2132,7 @@ model ChannelContact {
   dailyStats          ContactDailyStat[]
   consentEvents       ConsentEvent[]
   broadcastRecipients BroadcastRecipient[]
+  whatsappGroup       WhatsAppGroup?
 
   @@unique([channelId, externalId])
   @@index([channelId, waId])
@@ -3528,4 +3534,90 @@ model ShopifySegmentMember {
   @@id([segmentId, customerId])
   @@index([customerId])
   @@map("shopify_segment_members")
+}
+
+// ─── WhatsApp groups (Cloud API Groups) ─────────────────────────────────────
+
+enum WhatsAppGroupStatus {
+  /// Asked for; Meta's group_create webhook brings the id and invite link.
+  CREATING
+  ACTIVE
+  SUSPENDED
+  DELETING
+  DELETED
+  FAILED
+}
+
+/// A WhatsApp group the business runs on one of its numbers: Official
+/// Business Accounts only, up to 8 participants besides the business, who join
+/// by invite link. Its chat is an inbox conversation of `contact`.
+model WhatsAppGroup {
+  id               String              @id @default(cuid())
+  organizationId   String              @map("organization_id")
+  channelId        String              @map("channel_id")
+  /// Meta's group id; null until the group_create webhook names it.
+  externalId       String?             @map("external_id")
+  /// From the create call, to match its group_create webhook.
+  requestId        String?             @map("request_id")
+  subject          String
+  description      String?
+  /// auto_approve, or approval_required for join requests the team approves.
+  joinApprovalMode String              @default("auto_approve") @map("join_approval_mode")
+  inviteLink       String?             @map("invite_link")
+  status           WhatsAppGroupStatus @default(CREATING)
+  statusReason     String?             @map("status_reason")
+  participantCount Int                 @default(0) @map("participant_count")
+  /// The contact that stands for the group in the inbox.
+  contactId        String?             @unique @map("contact_id")
+  createdByUserId  String?             @map("created_by_user_id")
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  organization Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel                    @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  contact      ChannelContact?            @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  participants WhatsAppGroupParticipant[]
+  joinRequests WhatsAppGroupJoinRequest[]
+
+  @@unique([channelId, externalId])
+  @@unique([channelId, requestId])
+  @@index([organizationId])
+  @@map("whatsapp_groups")
+}
+
+model WhatsAppGroupParticipant {
+  id        String    @id @default(cuid())
+  groupId   String    @map("group_id")
+  waId      String    @map("wa_id")
+  /// Their WhatsApp profile name, from their messages.
+  name      String?
+  joinedAt  DateTime  @default(now()) @map("joined_at")
+  leftAt    DateTime? @map("left_at")
+  /// business (removed) or participant (left).
+  leftBy    String?   @map("left_by")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  group WhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, waId])
+  @@map("whatsapp_group_participants")
+}
+
+model WhatsAppGroupJoinRequest {
+  id              String    @id @default(cuid())
+  groupId         String    @map("group_id")
+  /// Meta's join_request_id.
+  externalId      String    @map("external_id")
+  waId            String    @map("wa_id")
+  /// PENDING, APPROVED, REJECTED or REVOKED (withdrawn by the user).
+  status          String    @default("PENDING")
+  requestedAt     DateTime  @map("requested_at")
+  decidedAt       DateTime? @map("decided_at")
+  decidedByUserId String?   @map("decided_by_user_id")
+
+  group WhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, externalId])
+  @@index([groupId, status])
+  @@map("whatsapp_group_join_requests")
 }

@@ -101,6 +101,8 @@ export interface GateInput {
     /** onBusinessApp: a coexistence number, which cannot send catalog messages through the API. */
     channel: { status: ChannelStatus; isEnabled: boolean; sendsPaused: boolean; onBusinessApp?: boolean };
     contact: { blockedAt: Date | null; optedOutAt: Date | null };
+    /** A WhatsApp group's chat; `closed` says why it cannot be messaged, if it cannot. */
+    group?: { closed: string | null } | null;
     window: ReplyWindow;
     now?: Date;
 }
@@ -137,6 +139,13 @@ export function checkSend(input: GateInput): GateResult {
         return refuse('channel_unavailable', 'Sending is paused while WhatsApp reconnects this number.');
     }
     if (contact.blockedAt) return refuse('contact_blocked', 'This contact is blocked.');
+    if (input.group) {
+        if (input.group.closed) return refuse('channel_unavailable', input.group.closed);
+        // Meta: groups take text, media and templates; no interactive, commerce or reaction messages.
+        if (!['text', 'media', 'template'].includes(payload.type)) {
+            return refuse('unsupported_on_platform', 'WhatsApp groups take text, files and templates only.');
+        }
+    }
 
     const shape = checkShape(platform, payload);
     if (shape) return shape;
@@ -240,6 +249,8 @@ function checkShape(platform: ChannelPlatform, payload: OutboundPayload): GateRe
 export interface WhatsAppRecipient {
     waId: string | null;
     userId: string | null;
+    /** A WhatsApp group: the message goes to the group, not a person. */
+    groupId?: string | null;
 }
 
 /** The body for POST /{phone_number_id}/messages. */
@@ -250,10 +261,11 @@ export function buildWhatsAppBody(
 ): Record<string, unknown> {
     // Meta: when both are sent, `to` wins; phone numbers also keep phone
     // numbers flowing in later webhooks.
-    const address = recipient.waId ? { to: recipient.waId } : { recipient: recipient.userId };
+    const address = recipient.groupId
+        ? { recipient_type: 'group', to: recipient.groupId }
+        : { recipient_type: 'individual', ...(recipient.waId ? { to: recipient.waId } : { recipient: recipient.userId }) };
     const base = {
         messaging_product: 'whatsapp',
-        recipient_type: 'individual',
         ...address,
         ...(ctx.replyToExternalId ? { context: { message_id: ctx.replyToExternalId } } : {}),
     };

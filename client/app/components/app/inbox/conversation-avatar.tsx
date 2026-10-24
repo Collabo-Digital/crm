@@ -1,3 +1,5 @@
+import { Users } from "lucide-react";
+
 import { CHANNEL_ICON } from "~/components/app/channel-badge";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import { getInitials } from "~/lib/inbox-format";
@@ -16,12 +18,15 @@ export function ConversationAvatar({
   avatarUrl,
   platform,
   size = "default",
+  isGroup = false,
   className,
 }: {
   name: string;
   avatarUrl?: string | null;
   platform?: ChannelPlatform;
   size?: "default" | "sm" | "lg";
+  /** A WhatsApp group: a group mark instead of initials. */
+  isGroup?: boolean;
   className?: string;
 }) {
   const ChannelIcon = platform ? CHANNEL_ICON[platform] : undefined;
@@ -30,7 +35,7 @@ export function ConversationAvatar({
       <Avatar size={size}>
         {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
         <AvatarFallback className="bg-brand/30 text-caption font-semibold text-brand-strong">
-          {getInitials(name)}
+          {isGroup ? <Users className="size-1/2" aria-label="Group" /> : getInitials(name)}
         </AvatarFallback>
       </Avatar>
       {ChannelIcon && (

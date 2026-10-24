@@ -83,6 +83,7 @@ const PRODUCTS_CHILDREN: NavChild[] = [
 const INBOX_CHILDREN: NavChild[] = [
   { label: "Conversations", href: "/inbox", icon: MessageSquare },
   { label: "Contacts", href: "/inbox/contacts", icon: Contact },
+  { label: "Groups", href: "/inbox/groups", icon: Users },
 ];
 
 /** Sub-nav for Campaigns. Overview keeps the parent href, like "All orders". */

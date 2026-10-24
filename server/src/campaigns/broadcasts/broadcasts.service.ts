@@ -569,7 +569,7 @@ export class BroadcastsService {
         const include: Prisma.ChannelContactWhereInput = audience.everyone
             ? {}
             : { OR: [...(await segmentWhere(audience.segmentIds)), ...audience.tags.map((t) => ({ tags: { has: t } }))] };
-        const base: Prisma.ChannelContactWhereInput = { AND: [{ organizationId: orgId, channelId: b.channelId }, include] };
+        const base: Prisma.ChannelContactWhereInput = { AND: [{ organizationId: orgId, channelId: b.channelId, isGroup: false }, include] };
         const ex = audience.exclude;
         const excludeParts = [...(await segmentWhere(ex.segmentIds)), ...ex.tags.map((t) => ({ tags: { has: t } }))];
 
