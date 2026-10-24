@@ -68,8 +68,10 @@ export const inboxService = {
   send: (id: string, data: { payload: InboxSendPayload; replyToMessageId?: string; clientId?: string }) =>
     apiClient.post<InboxSendOutcome>(`/inbox/conversations/${id}/messages`, data).then((response) => response.data),
 
-  products: (id: string, search?: string) =>
-    apiClient.get<StoreProductsResponse>(`/inbox/conversations/${id}/products`, { params: search ? { search } : {} }).then((response) => response.data),
+  products: (id: string, search?: string, collectionId?: string) =>
+    apiClient
+      .get<StoreProductsResponse>(`/inbox/conversations/${id}/products`, { params: { ...(search ? { search } : {}), ...(collectionId ? { collectionId } : {}) } })
+      .then((response) => response.data),
   draftFromCart: (id: string, messageId: string) =>
     apiClient.post<DraftFromCart>(`/inbox/conversations/${id}/messages/${messageId}/draft-order`).then((response) => response.data),
   markRead: (id: string) =>

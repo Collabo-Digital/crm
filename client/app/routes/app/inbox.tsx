@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useSearchParams } from "react-router";
+import { toast } from "sonner";
 
 import { AvailabilityMenu } from "~/components/app/inbox/availability-menu";
+import { CatalogPanel, type CatalogDrop } from "~/components/app/inbox/catalog-panel";
+import { ChatDropZone } from "~/components/app/inbox/chat-drop-zone";
 import { ContactPanel } from "~/components/app/inbox/contact-panel";
 import { ConversationEmpty } from "~/components/app/inbox/conversation-empty";
 import { ConversationList } from "~/components/app/inbox/conversation-list";
 import { ThreadSkeleton } from "~/components/app/inbox/conversation-skeletons";
 import { ConversationThread } from "~/components/app/inbox/conversation-thread";
 import type { CommentReplyMode } from "~/components/app/inbox/message-bubble";
-import { MessageComposer } from "~/components/app/inbox/message-composer";
+import { MessageComposer, type ComposerHandle } from "~/components/app/inbox/message-composer";
+import { productsPayload } from "~/components/app/inbox/product-picker";
 import { SaveViewDialog } from "~/components/app/inbox/save-view-dialog";
 import { TemplatePickerDialog } from "~/components/app/inbox/template-picker-dialog";
 import { ThreadHeader } from "~/components/app/inbox/thread-header";
@@ -44,6 +48,7 @@ import { useInboxStream } from "~/hooks/use-inbox-stream";
 import { useDebounced } from "~/hooks/use-debounced";
 import { PANEL_DEFAULT_OPEN_QUERY, useMediaQuery } from "~/hooks/use-media-query";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
+import { replyBlockedReason } from "~/lib/inbox-format";
 import { cn } from "~/lib/utils";
 import { useAuthStore } from "~/stores/auth.store";
 import type {
@@ -108,6 +113,8 @@ export default function InboxPage() {
   const hasRoomForPanel = useMediaQuery("(min-width: 1024px)");
   const [isPanelOpen, setIsPanelOpen] = useState(panelOpensByDefault);
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
+  const [sidePanel, setSidePanel] = useState<"contact" | "products">("contact");
+  const composerRef = useRef<ComposerHandle>(null);
   const [selecting, setSelecting] = useState(false);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [quote, setQuote] = useState<InboxMessage | null>(null);
@@ -237,7 +244,45 @@ export default function InboxPage() {
     }
   }
 
+  /** A product, collection or link from the catalog panel, into the reply box. */
+  function addToReply(drop: CatalogDrop) {
+    const composer = composerRef.current;
+    if (!composer) return;
+    const reason = drop.kind === "link" ? composer.insertText(drop.text) : composer.addProducts(drop.items, drop.asCards, drop.header);
+    if (reason) toast.error(reason);
+    else if (!hasRoomForPanel) setMobileDetailsOpen(false);
+  }
+
+  function sendFromCatalog(drop: CatalogDrop) {
+    void sendPayload(drop.kind === "link" ? { type: "text", text: drop.text } : productsPayload(drop.items, "", drop.asCards, { header: drop.header }));
+  }
+
+  function attachDropped(file: File) {
+    const reason = composerRef.current?.attachFile(file);
+    if (reason) toast.error(reason);
+  }
+
   const showPanel = Boolean(conversation) && isPanelOpen;
+  const catalogBlocked = conversation ? replyBlockedReason(conversation, Date.now()) : null;
+  const sideTabs = (
+    <div role="tablist" aria-label="Beside the conversation" className="flex shrink-0 gap-1 border-b p-2">
+      {(["contact", "products"] as const).map((tab) => (
+        <button
+          key={tab}
+          type="button"
+          role="tab"
+          aria-selected={sidePanel === tab}
+          onClick={() => setSidePanel(tab)}
+          className={cn(
+            "flex-1 rounded-md px-2 py-1.5 text-caption max-md:min-h-11",
+            sidePanel === tab ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {tab === "contact" ? "Contact" : "Products"}
+        </button>
+      ))}
+    </div>
+  );
   const seesOthers = !!me?.access.seesAll;
 
   return (
@@ -371,48 +416,51 @@ export default function InboxPage() {
                 onReopen={() => update.mutate({ id: conversation.id, status: "OPEN", done: "Conversation reopened." })}
               />
 
-              {messagesQuery.isError ? (
-                <div className="flex-1 p-6">
-                  <QueryErrorState resource="messages" onRetry={() => void messagesQuery.refetch()} />
-                </div>
-              ) : messagesQuery.isLoading ? (
-                <ThreadSkeleton />
-              ) : (
-                <ConversationThread
-                  conversationId={conversation.id}
-                  messages={messages}
-                  notes={notes}
-                  canReply={conversation.reply.canReply}
-                  hasEarlier={!!messagesQuery.hasNextPage}
-                  isLoadingEarlier={messagesQuery.isFetchingNextPage}
-                  onLoadEarlier={() => void messagesQuery.fetchNextPage()}
-                  onQuote={(message) => {
-                    setCommentTarget(null);
-                    setQuote(message);
-                  }}
-                  onReact={(message, emoji) => void sendPayload({ type: "reaction", messageId: message.id, emoji })}
-                  onCommentReply={(message, mode) => {
-                    setQuote(null);
-                    setCommentTarget({ message, mode });
-                  }}
-                />
-              )}
+              <ChatDropZone className="flex min-h-0 flex-1 flex-col" disabled={!conversation.reply.canReply} onCatalog={addToReply} onFile={attachDropped}>
+                {messagesQuery.isError ? (
+                  <div className="flex-1 p-6">
+                    <QueryErrorState resource="messages" onRetry={() => void messagesQuery.refetch()} />
+                  </div>
+                ) : messagesQuery.isLoading ? (
+                  <ThreadSkeleton />
+                ) : (
+                  <ConversationThread
+                    conversationId={conversation.id}
+                    messages={messages}
+                    notes={notes}
+                    canReply={conversation.reply.canReply}
+                    hasEarlier={!!messagesQuery.hasNextPage}
+                    isLoadingEarlier={messagesQuery.isFetchingNextPage}
+                    onLoadEarlier={() => void messagesQuery.fetchNextPage()}
+                    onQuote={(message) => {
+                      setCommentTarget(null);
+                      setQuote(message);
+                    }}
+                    onReact={(message, emoji) => void sendPayload({ type: "reaction", messageId: message.id, emoji })}
+                    onCommentReply={(message, mode) => {
+                      setQuote(null);
+                      setCommentTarget({ message, mode });
+                    }}
+                  />
+                )}
 
-              <MessageComposer
-                key={conversation.id}
-                conversation={conversation}
-                quickReplies={quickReplies}
-                agentName={user?.firstName ?? ""}
-                quote={quote}
-                commentTarget={commentTarget}
-                isSending={send.isPending}
-                onClearQuote={() => setQuote(null)}
-                onClearCommentTarget={() => setCommentTarget(null)}
-                onSend={sendPayload}
-                onAddNote={(body) => addNote.mutateAsync(body)}
-                onUpload={(file) => upload.mutateAsync(file)}
-                onOpenTemplates={conversation.platform === "WHATSAPP" ? () => setTemplatesOpen(true) : undefined}
-              />
+                <MessageComposer
+                  key={conversation.id}
+                  conversation={conversation}
+                  quickReplies={quickReplies}
+                  agentName={user?.firstName ?? ""}
+                  quote={quote}
+                  commentTarget={commentTarget}
+                  isSending={send.isPending}
+                  onClearQuote={() => setQuote(null)}
+                  onClearCommentTarget={() => setCommentTarget(null)}
+                  onSend={sendPayload}
+                  onAddNote={(body) => addNote.mutateAsync(body)}
+                  onUpload={(file) => upload.mutateAsync(file)}
+                  onOpenTemplates={conversation.platform === "WHATSAPP" ? () => setTemplatesOpen(true) : undefined}
+                  ref={composerRef}
+                />
+              </ChatDropZone>
               <TemplatePickerDialog
                 open={templatesOpen}
                 onOpenChange={setTemplatesOpen}
@@ -426,21 +474,36 @@ export default function InboxPage() {
 
         {/* The docked desktop panel and mobile sheet leave the composer mounted. */}
         {conversation && (
-          <ContactPanel
-            key={conversation.contact.id}
-            contact={conversation.contact}
-            conversationId={conversation.id}
-            notes={notes}
-            members={members}
-            teams={teams}
-            canEdit={conversation.reply.canReply}
-            canAssignOthers={!!me?.access.canAssignOthers}
-            meId={me?.userId}
-            defaultCurrency={org?.currency ?? "INR"}
-            isSavingNote={addNote.isPending}
-            onAddNote={(body) => addNote.mutate(body)}
-            className={cn("border-l", showPanel ? "hidden lg:block" : "hidden")}
-          />
+          <div className={cn("min-h-0 flex-col border-l", showPanel ? "hidden lg:flex" : "hidden")}>
+            {sideTabs}
+            {sidePanel === "contact" ? (
+              <ContactPanel
+                key={conversation.contact.id}
+                contact={conversation.contact}
+                conversationId={conversation.id}
+                notes={notes}
+                members={members}
+                teams={teams}
+                canEdit={conversation.reply.canReply}
+                canAssignOthers={!!me?.access.canAssignOthers}
+                meId={me?.userId}
+                defaultCurrency={org?.currency ?? "INR"}
+                isSavingNote={addNote.isPending}
+                onAddNote={(body) => addNote.mutate(body)}
+                className="flex-1"
+              />
+            ) : (
+              <CatalogPanel
+                key={conversation.id}
+                conversationId={conversation.id}
+                blockedReason={catalogBlocked}
+                isSending={send.isPending}
+                onAdd={addToReply}
+                onSend={sendFromCatalog}
+                className="flex-1"
+              />
+            )}
+          </div>
         )}
       </div>
 
@@ -449,23 +512,36 @@ export default function InboxPage() {
           <SheetContent className="max-w-md pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] [&>button]:top-[max(1rem,env(safe-area-inset-top))] [&>button]:size-11 [&>button]:rounded-full">
             <SheetHeader className="shrink-0 px-5 py-6 pr-16">
               <SheetTitle className="text-xl">{conversation.contact.name}</SheetTitle>
-              <SheetDescription>Contact details, orders and team notes</SheetDescription>
+              <SheetDescription>{sidePanel === "contact" ? "Contact details, orders and team notes" : "Products to share in this chat"}</SheetDescription>
             </SheetHeader>
-            <ContactPanel
-              key={conversation.contact.id}
-              contact={conversation.contact}
-              conversationId={conversation.id}
-              notes={notes}
-              members={members}
-              teams={teams}
-              canEdit={conversation.reply.canReply}
-              canAssignOthers={!!me?.access.canAssignOthers}
-              meId={me?.userId}
-              defaultCurrency={org?.currency ?? "INR"}
-              isSavingNote={addNote.isPending}
-              onAddNote={(body) => addNote.mutate(body)}
-              className="min-h-0 flex-1 overscroll-contain bg-muted/30 [&>section]:mx-3 [&>section]:my-3 [&>section]:rounded-2xl [&>section]:border-0 [&>section]:bg-card [&>section]:p-5 [&_button]:min-h-11 [&_input]:min-h-11 [&_input]:text-base [&_h3]:text-xs [&_dl]:space-y-3 [&_dl]:text-sm"
-            />
+            {sideTabs}
+            {sidePanel === "products" ? (
+              <CatalogPanel
+                key={conversation.id}
+                conversationId={conversation.id}
+                blockedReason={catalogBlocked}
+                isSending={send.isPending}
+                onAdd={addToReply}
+                onSend={sendFromCatalog}
+                className="min-h-0 flex-1 [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_input]:text-base"
+              />
+            ) : (
+              <ContactPanel
+                key={conversation.contact.id}
+                contact={conversation.contact}
+                conversationId={conversation.id}
+                notes={notes}
+                members={members}
+                teams={teams}
+                canEdit={conversation.reply.canReply}
+                canAssignOthers={!!me?.access.canAssignOthers}
+                meId={me?.userId}
+                defaultCurrency={org?.currency ?? "INR"}
+                isSavingNote={addNote.isPending}
+                onAddNote={(body) => addNote.mutate(body)}
+                className="min-h-0 flex-1 overscroll-contain bg-muted/30 [&>section]:mx-3 [&>section]:my-3 [&>section]:rounded-2xl [&>section]:border-0 [&>section]:bg-card [&>section]:p-5 [&_button]:min-h-11 [&_input]:min-h-11 [&_input]:text-base [&_h3]:text-xs [&_dl]:space-y-3 [&_dl]:text-sm"
+              />
+            )}
           </SheetContent>
         </Sheet>
       )}

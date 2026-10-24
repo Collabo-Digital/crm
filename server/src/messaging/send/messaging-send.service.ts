@@ -59,6 +59,7 @@ function kindOf(payload: OutboundPayload): MessageKind {
             return MessageKind.COMMENT;
         case 'product':
         case 'product_list':
+        case 'product_carousel':
         case 'catalog':
             return MessageKind.PRODUCT;
         default:

@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useImperativeHandle, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import { FileText, LayoutTemplate, ListPlus, Lock, MessageCircle, Paperclip, Plus, Send, X, Zap } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
@@ -6,7 +6,7 @@ import { Input } from "~/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
 import { Textarea } from "~/components/ui/textarea";
 import { useMediaQuery } from "~/hooks/use-media-query";
-import { fillQuickReply, formatBytes, windowPhase } from "~/lib/inbox-format";
+import { fillQuickReply, formatBytes, replyBlockedReason, windowPhase } from "~/lib/inbox-format";
 import { cn } from "~/lib/utils";
 import type {
   InboxConversationDetail,
@@ -19,7 +19,7 @@ import type {
 } from "~/types/api";
 
 import type { CommentReplyMode } from "./message-bubble";
-import { MAX_PRODUCTS, ProductPickerButton, ProductTray, productsPayload } from "./product-picker";
+import { MAX_PRODUCTS, ProductPickerButton, ProductTray, productsPayload, type ProductsFormat } from "./product-picker";
 import { QuickReplyPicker, matchQuickReplies } from "./quick-reply-picker";
 import { ReplyWindowHint } from "./reply-window";
 
@@ -32,6 +32,16 @@ interface StagedFile {
   filename: string;
   size: number | null;
   mediaKind: InboxMediaKind;
+}
+
+/** What the catalog panel and drops onto the chat can put in the reply box. */
+export interface ComposerHandle {
+  /** Stages products for the next send; returns why it cannot, if it cannot. */
+  addProducts: (items: StoreProduct[], asCards: boolean, header?: string) => string | null;
+  /** Uploads and stages a file; returns why it cannot, if it cannot. */
+  attachFile: (file: File) => string | null;
+  /** Adds text (a link, say) to the reply; returns why it cannot, if it cannot. */
+  insertText: (text: string) => string | null;
 }
 
 /** WhatsApp reply buttons: up to 3. Messenger and Instagram quick replies: up to 13. */
@@ -62,6 +72,7 @@ export function MessageComposer({
   onAddNote,
   onUpload,
   onOpenTemplates,
+  ref,
 }: {
   conversation: InboxConversationDetail;
   quickReplies: QuickReply[];
@@ -77,6 +88,7 @@ export function MessageComposer({
   onUpload: (file: File) => Promise<InboxUpload>;
   /** WhatsApp only: open the approved-template picker. */
   onOpenTemplates?: () => void;
+  ref?: Ref<ComposerHandle>;
 }) {
   const [draft, setDraftState] = useState(() => drafts.get(conversation.id) ?? "");
   const [isNoteMode, setIsNoteMode] = useState(false);
@@ -87,6 +99,8 @@ export function MessageComposer({
   const [pickerDismissed, setPickerDismissed] = useState(false);
   const [products, setProducts] = useState<StoreProduct[]>([]);
   const [productsAsCards, setProductsAsCards] = useState(false);
+  const [productsHeader, setProductsHeader] = useState<string | undefined>();
+  const [productsFormat, setProductsFormat] = useState<ProductsFormat>("cards");
   const [toolsOpen, setToolsOpen] = useState(false);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -103,17 +117,7 @@ export function MessageComposer({
   const canReply = conversation.reply.canReply;
   const commentMode = !!commentTarget;
   /** Why free-form replies are not possible right now, if they are not. */
-  const blockedReason = !canReply
-    ? "You have view-only access to the inbox."
-    : contact.blockedAt
-      ? "This contact is blocked. Open contact details to unblock them."
-      : commentMode
-        ? null
-        : phase.phase === "template_only"
-          ? "The 24-hour reply window has closed. Only an approved template can restart this conversation."
-          : phase.phase === "closed" || phase.phase === "none"
-            ? "Messenger and Instagram allow replies for 7 days after the customer’s last message. Wait for them to write again."
-            : null;
+  const blockedReason = replyBlockedReason(conversation, Date.now(), commentMode);
   const replyLocked = !!blockedReason && !isNoteMode;
 
   const slash = !isNoteMode && !commentMode && draft.startsWith("/") && !draft.includes("\n") ? draft.slice(1) : null;
@@ -126,6 +130,62 @@ export function MessageComposer({
     !isSending &&
     !uploading &&
     (isNoteMode ? trimmed.length > 0 : !replyLocked && (trimmed.length > 0 || (!!staged && !commentMode) || (products.length > 0 && !commentMode)));
+
+  /** Why products or a file cannot join this message right now, if they cannot. */
+  const productsBlocked = replyLocked
+    ? blockedReason
+    : isNoteMode
+      ? "Notes cannot carry products."
+      : commentMode
+        ? "Products cannot go in a comment reply."
+        : staged
+          ? "A message carries a file or products, not both. Remove the file first."
+          : options.length
+            ? "Reply buttons cannot go with products. Remove them first."
+            : null;
+  const fileBlocked = replyLocked
+    ? blockedReason
+    : isNoteMode
+      ? "Notes cannot carry files."
+      : commentMode
+        ? "Files cannot go in a comment reply."
+        : uploading
+          ? "A file is still uploading."
+          : products.length
+            ? "A message carries a file or products, not both. Remove the products first."
+            : null;
+
+  useImperativeHandle(ref, () => ({
+    addProducts(items, asCards, header) {
+      if (productsBlocked) return productsBlocked;
+      setProductsAsCards(asCards);
+      setProducts((list) => [...list, ...items.filter((p) => !list.some((x) => x.variantId === p.variantId))].slice(0, MAX_PRODUCTS));
+      // A collection goes as a list under its name.
+      if (header !== undefined) {
+        setProductsHeader(header);
+        setProductsFormat("list");
+      }
+      return null;
+    },
+    attachFile(file) {
+      if (fileBlocked) return fileBlocked;
+      void attach(file);
+      return null;
+    },
+    insertText(text) {
+      if (replyLocked) return blockedReason;
+      if (commentMode) return "Finish or cancel the comment reply first.";
+      setDraft(draft.trim() ? `${draft.trimEnd()}\n${text}` : text);
+      textRef.current?.focus();
+      return null;
+    },
+  }));
+
+  function clearProducts() {
+    setProducts([]);
+    setProductsHeader(undefined);
+    setProductsFormat("cards");
+  }
 
   function pickQuickReply(reply: QuickReply) {
     setDraft(fillQuickReply(reply.body, { name: contact.name, agent: agentName }));
@@ -157,7 +217,7 @@ export function MessageComposer({
         text: trimmed,
       };
     }
-    if (products.length) return productsPayload(products, trimmed, productsAsCards);
+    if (products.length) return productsPayload(products, trimmed, productsAsCards, { header: productsHeader, format: productsFormat });
     if (staged) {
       return {
         type: "media",
@@ -188,7 +248,7 @@ export function MessageComposer({
     setDraft("");
     setStaged(null);
     setOptions([]);
-    setProducts([]);
+    clearProducts();
     onClearQuote();
     onClearCommentTarget();
   }
@@ -278,7 +338,15 @@ export function MessageComposer({
       )}
 
       {!isNoteMode && !commentMode && (
-        <ProductTray items={products} asCards={productsAsCards} onRemove={(id) => setProducts((list) => list.filter((p) => p.variantId !== id))} />
+        <ProductTray
+          items={products}
+          asCards={productsAsCards}
+          header={productsHeader}
+          format={productsFormat}
+          onFormat={setProductsFormat}
+          onRemove={(id) => (products.length === 1 ? clearProducts() : setProducts((list) => list.filter((p) => p.variantId !== id)))}
+          onClear={clearProducts}
+        />
       )}
 
       {options.length > 0 && !isNoteMode && !commentMode && !staged && (

@@ -18,7 +18,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover
 import { useDebounced } from "~/hooks/use-debounced";
 import { useRecordConsentMutation, useUpdateContactMutation } from "~/hooks/use-inbox-mutations";
 import { useCustomerCandidates } from "~/hooks/use-inbox-queries";
-import { formatBubbleTime, formatDateTime, formatRowTime } from "~/lib/inbox-format";
+import { formatBubbleTime, formatDateTime, formatRowTime, noteAuthor } from "~/lib/inbox-format";
 import { FINANCIAL_CLASSES, FINANCIAL_LABELS, FULFILLMENT_LABELS } from "~/lib/order-status";
 import { cn, formatCurrency } from "~/lib/utils";
 import type { InboxContactDetail, InboxCustomerMatch, InboxMember, InboxNote, InboxTeamRef } from "~/types/api";
@@ -475,7 +475,7 @@ export function ContactPanel({
             <div key={note.id} className="rounded-lg border-l-2 border-warning bg-warning-subtle px-2.5 py-2">
               <p className="text-caption whitespace-pre-wrap break-words text-foreground">{note.body}</p>
               <p className="mt-1 text-micro text-muted-foreground">
-                {note.author?.name ?? "Former member"} · {formatBubbleTime(note.createdAt)}
+                {noteAuthor(note)} · {formatBubbleTime(note.createdAt)}
               </p>
             </div>
           ))}

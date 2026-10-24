@@ -465,11 +465,22 @@ Per-account subscription happens at connect time and is undone at disconnect:
   system user needs `catalog_management` or a catalog assignment in Business
   Settings is **not yet verified** live.
 - **Product messages** from the inbox's product tray: one product as a product
-  card, two to thirty as a product list (text header), only for items already
-  synced. Elsewhere — Instagram, Messenger, a number without a catalog, or a
+  card; two to ten as product cards to swipe through (Meta's product
+  carousel, `interactive.type: carousel`, one body and no header, footer or
+  buttons) or as a product list; up to thirty as a product list (text header,
+  a section title of at most 24 characters). Only items already synced can go
+  as cards. Elsewhere — Instagram, Messenger, a number without a catalog, or a
   number shared with the WhatsApp Business app (which Meta does not allow to
   send catalog messages through the API) — products go as a message with
   names, prices and links.
+- **The catalog beside the chat** (the conversation's Products tab): search
+  the store or pick a Shopify collection (collections sync with their product
+  order), then drag a product into the chat, or use Add, to put it in the
+  reply, or Send it on its own. Products with options list each variant. A
+  whole collection goes as one product list under its name, or as a link to
+  the collection page where product cards cannot be sent. Files dragged in
+  from the computer attach to the reply too. On phones, Add and Send replace
+  dragging; the panel lists 100 variants at a time.
 - **Carts to orders.** A cart sent from the catalog starts “sends a cart”
   automations; the store action makes a draft order and mirrors it to Shopify
   (`draftOrderCreate`), whose `invoiceUrl` is the checkout link

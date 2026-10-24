@@ -68,6 +68,8 @@ const SendPayloadSchema = z.discriminatedUnion('type', [
         variantIds: z.array(z.string().min(1).max(40)).min(1).max(30),
         header: z.string().trim().max(60).optional(),
         text: z.string().trim().max(1024).optional(),
+        /** 2 to 10 products as swipeable cards instead of a list. */
+        format: z.enum(['list', 'cards']).optional(),
     }),
     /** WhatsApp: a button that opens the whole catalog. */
     z.object({ type: z.literal('catalog'), text: z.string().trim().min(1).max(1024) }),

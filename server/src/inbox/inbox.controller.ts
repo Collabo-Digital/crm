@@ -83,8 +83,8 @@ export class InboxController {
 
     /** The product tray: the store's products, and whether this chat can get catalog messages. */
     @Get('conversations/:id/products')
-    async products(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Query('search') search?: string) {
-        return this.inbox.products(user.orgId!, await this.teams.viewer(user), id, search?.slice(0, 100));
+    async products(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Query('search') search?: string, @Query('collectionId') collectionId?: string) {
+        return this.inbox.products(user.orgId!, await this.teams.viewer(user), id, search?.slice(0, 100), collectionId?.slice(0, 40) || undefined);
     }
 
     /** Payment links sent in this chat, and the customer's unpaid orders. */

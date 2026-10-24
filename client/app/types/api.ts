@@ -3751,6 +3751,8 @@ export interface InboxNote {
   body: string;
   mentions: string[];
   createdAt: string;
+  /** Set when no member wrote it. */
+  source: "automation" | "inbox_rule" | null;
   author: { id: string; name: string } | null;
 }
 
@@ -3873,7 +3875,7 @@ export type InboxSendPayload =
   | { type: "private_reply"; commentMessageId: string; text: string }
   | { type: "comment_reply"; commentMessageId: string; text: string }
   /** WhatsApp: one product, or a list of up to 30, from the number's catalog. */
-  | { type: "products"; variantIds: string[]; header?: string; text?: string }
+  | { type: "products"; variantIds: string[]; header?: string; text?: string; format?: "list" | "cards" }
   | { type: "catalog"; text: string }
   | {
       type: "template";
@@ -4461,6 +4463,10 @@ export interface StoreProductsResponse {
   catalog: { catalogId: string; name: string | null } | null;
   /** WhatsApp number with a catalog, not shared with the Business app. */
   canSendProducts: boolean;
+  /** Shopify collections with active products, for the product panel's filter. */
+  collections: Array<{ id: string; title: string; productCount: number; url: string | null }>;
+  /** More variants match than were returned; search or pick a collection. */
+  more: boolean;
   products: StoreProduct[];
 }
 

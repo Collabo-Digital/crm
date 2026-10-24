@@ -263,6 +263,7 @@ export class InboxService {
                 body: n.body,
                 mentions: n.mentions,
                 createdAt: n.createdAt,
+                source: n.source,
                 author: n.author ? { id: n.author.id, name: `${n.author.firstName} ${n.author.lastName}`.trim() } : null,
             })),
             nextCursor: rows.length > limit && oldest ? { beforeAt: oldest.createdAt.toISOString(), beforeId: oldest.id } : null,
@@ -306,9 +307,9 @@ export class InboxService {
     }
 
     /** The store's products for the composer's product tray, with what this conversation's channel can send. */
-    async products(orgId: string, viewer: InboxViewer, id: string, search: string | undefined) {
+    async products(orgId: string, viewer: InboxViewer, id: string, search: string | undefined, collectionId?: string) {
         const conversation = await this.loadConversation(orgId, viewer, id);
-        return this.catalog.products(orgId, conversation.channelId, search);
+        return this.catalog.products(orgId, conversation.channelId, search, collectionId);
     }
 
     /** A draft order from a cart the customer sent, with Shopify's checkout link when a store is connected. */
@@ -518,6 +519,7 @@ export class InboxService {
             body: note.body,
             mentions: note.mentions,
             createdAt: note.createdAt,
+            source: note.source,
             author: note.author ? { id: note.author.id, name: `${note.author.firstName} ${note.author.lastName}`.trim() } : null,
         };
     }

@@ -44,6 +44,11 @@ export function productUrl(storeUrl: string | null, handle: string | null): stri
     return `${storeUrl.replace(/\/+$/, '')}/products/${encodeURIComponent(handle)}`;
 }
 
+export function collectionUrl(storeUrl: string | null, handle: string | null): string | null {
+    if (!storeUrl || !handle) return null;
+    return `${storeUrl.replace(/\/+$/, '')}/collections/${encodeURIComponent(handle)}`;
+}
+
 export function buildCatalogItem(v: VariantForCatalog, currency: string, brandFallback: string): BuildResult {
     const link = productUrl(v.product.storeUrl, v.product.handle);
     if (!link) return { ok: false, reason: 'No product page link (products synced from Shopify have one).' };

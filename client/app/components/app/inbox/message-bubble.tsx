@@ -86,16 +86,18 @@ function MessageMedia({ message, isOutbound }: { message: InboxMessage; isOutbou
 
 /** Buttons, list rows, quick replies or catalog products that went out with an outbound message. */
 function SentOptions({ payload }: { payload: Record<string, unknown> }) {
-  if (payload.type === "product" || payload.type === "product_list" || payload.type === "catalog") {
+  if (payload.type === "product" || payload.type === "product_list" || payload.type === "product_carousel" || payload.type === "catalog") {
     const count =
       payload.type === "product_list"
         ? ((payload.sections as Array<{ productRetailerIds?: string[] }> | undefined) ?? []).reduce((n, s) => n + (s.productRetailerIds?.length ?? 0), 0)
-        : 1;
+        : payload.type === "product_carousel"
+          ? ((payload.productRetailerIds as string[] | undefined) ?? []).length
+          : 1;
     return (
       <div className="mt-2 flex flex-wrap gap-1">
         <span className="inline-flex items-center gap-1 rounded-full border border-brand-foreground/30 px-2.5 py-0.5 text-micro font-medium">
           <ShoppingCart className="size-3" />
-          {payload.type === "catalog" ? "Catalog" : payload.type === "product" ? "Product card" : `${count} products`}
+          {payload.type === "catalog" ? "Catalog" : payload.type === "product" ? "Product card" : payload.type === "product_carousel" ? `${count} product cards` : `${count} products`}
         </span>
       </div>
     );

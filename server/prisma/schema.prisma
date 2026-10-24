@@ -2689,6 +2689,8 @@ model ConversationNote {
   organizationId String   @map("organization_id")
   conversationId String   @map("conversation_id")
   authorUserId   String?  @map("author_user_id")
+  /// Who wrote it when no member did: "automation" or "inbox_rule". Null on members' notes.
+  source         String?
   body           String
   /// User ids mentioned in the note.
   mentions       String[] @default([])

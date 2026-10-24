@@ -238,7 +238,7 @@ export class AutomationRunner {
             case 'add_note': {
                 const conversationId = await this.conversationId(s);
                 const note = await this.prisma.conversationNote.create({
-                    data: { organizationId: run.organizationId, conversationId, body: `${interpolate(String(c.text ?? ''), s.vars)}`.slice(0, 2000) },
+                    data: { organizationId: run.organizationId, conversationId, source: 'automation', body: `${interpolate(String(c.text ?? ''), s.vars)}`.slice(0, 2000) },
                 });
                 this.inboxEvents.publish(run.organizationId, { type: 'note.created', conversationId, noteId: note.id });
                 return { kind: 'next', output: { noteId: note.id } };

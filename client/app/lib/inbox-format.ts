@@ -7,6 +7,7 @@
 
 import type {
   ChannelPlatform,
+  InboxConversationDetail,
   InboxMessage,
   InboxMessageKind,
   InboxMessageStatus,
@@ -40,6 +41,30 @@ export function formatRowTime(iso: string | null, now: number): string {
 }
 
 /** Bubble timestamp — always a clock time, since the day separator carries the date. */
+/**
+ * Why a free-form reply (text, file, products) cannot go in this conversation
+ * now, if it cannot. A comment reply is not bound by the messaging window.
+ */
+export function replyBlockedReason(
+  conversation: Pick<InboxConversationDetail, "platform" | "window" | "reply"> & { contact: Pick<InboxConversationDetail["contact"], "blockedAt"> },
+  now: number,
+  commentReply = false,
+): string | null {
+  if (!conversation.reply.canReply) return "You have view-only access to the inbox.";
+  if (conversation.contact.blockedAt) return "This contact is blocked. Open contact details to unblock them.";
+  if (commentReply) return null;
+  const { phase } = windowPhase(conversation.platform, conversation.window, now);
+  if (phase === "template_only") return "The 24-hour reply window has closed. Only an approved template can restart this conversation.";
+  if (phase === "closed" || phase === "none") return "Messenger and Instagram allow replies for 7 days after the customer’s last message. Wait for them to write again.";
+  return null;
+}
+
+/** Who wrote a note: the member, an automation, an inbox rule, or a member who has since left. */
+export function noteAuthor(note: Pick<InboxNote, "author" | "source">): string {
+  if (note.author) return note.author.name;
+  return note.source === "automation" ? "Automation" : note.source === "inbox_rule" ? "Inbox rule" : "Former member";
+}
+
 export function formatBubbleTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";

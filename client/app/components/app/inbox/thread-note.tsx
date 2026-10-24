@@ -1,6 +1,6 @@
 import { Lock } from "lucide-react";
 
-import { formatBubbleTime } from "~/lib/inbox-format";
+import { formatBubbleTime, noteAuthor } from "~/lib/inbox-format";
 import { cn } from "~/lib/utils";
 import type { InboxNote } from "~/types/api";
 
@@ -21,7 +21,7 @@ export function ThreadNote({ note, className }: { note: InboxNote; className?: s
       </div>
       <p className="mt-1 text-body whitespace-pre-wrap break-words text-foreground">{note.body}</p>
       <p className="mt-1 text-micro text-muted-foreground">
-        {note.author?.name ?? "Former member"} · {formatBubbleTime(note.createdAt)}
+        {noteAuthor(note)} · {formatBubbleTime(note.createdAt)}
       </p>
     </div>
   );

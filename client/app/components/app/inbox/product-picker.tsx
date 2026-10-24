@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Loader2, Package, Search, X } from "lucide-react";
+import { Check, ChevronDown, Loader2, Package, Search, X } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -10,6 +10,11 @@ import { cn } from "~/lib/utils";
 import type { InboxSendPayload, StoreProduct } from "~/types/api";
 
 export const MAX_PRODUCTS = 30;
+/** WhatsApp product cards: 2 to 10 in one message. */
+export const MAX_CARDS = 10;
+
+/** How several catalog products go: one list message, or cards to swipe through. */
+export type ProductsFormat = "list" | "cards";
 
 export function formatPrice(p: Pick<StoreProduct, "price" | "currency">): string {
   const n = Number(p.price);
@@ -27,9 +32,20 @@ const label = (p: StoreProduct) => `${p.title}${p.variantTitle ? ` (${p.variantT
  * a synced catalog; anywhere else they go as a message with each product's
  * name, price and link.
  */
-export function productsPayload(items: StoreProduct[], text: string, asCards: boolean): InboxSendPayload {
+export function productsPayload(
+  items: StoreProduct[],
+  text: string,
+  asCards: boolean,
+  opts: { header?: string; format?: ProductsFormat } = {},
+): InboxSendPayload {
   if (asCards && items.every((p) => p.inCatalog)) {
-    return { type: "products", variantIds: items.map((p) => p.variantId), ...(text ? { text } : {}) };
+    return {
+      type: "products",
+      variantIds: items.map((p) => p.variantId),
+      ...(text ? { text } : {}),
+      ...(opts.header ? { header: opts.header.slice(0, 60) } : {}),
+      ...(opts.format === "cards" && items.length >= 2 && items.length <= MAX_CARDS ? { format: "cards" as const } : {}),
+    };
   }
   const lines = items.map((p) => `• ${label(p)} — ${formatPrice(p)}${p.url ? `\n  ${p.url}` : ""}`);
   return { type: "text", text: [text, ...lines].filter(Boolean).join("\n") };
@@ -131,13 +147,41 @@ export function ProductPickerButton({
 }
 
 /** Products staged above the reply box. Nothing goes out until Send. */
-export function ProductTray({ items, asCards, onRemove }: { items: StoreProduct[]; asCards: boolean; onRemove: (variantId: string) => void }) {
+export function ProductTray({
+  items,
+  asCards,
+  header,
+  format,
+  onFormat,
+  onRemove,
+  onClear,
+}: {
+  items: StoreProduct[];
+  asCards: boolean;
+  /** A collection's name, for the list's title. */
+  header?: string;
+  format: ProductsFormat;
+  onFormat: (format: ProductsFormat) => void;
+  onRemove: (variantId: string) => void;
+  onClear: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
   if (!items.length) return null;
-  const cards = asCards && items.every((p) => p.inCatalog);
+  const catalog = asCards && items.every((p) => p.inCatalog);
+  const canCards = catalog && items.length >= 2 && items.length <= MAX_CARDS;
+  const shown = expanded || items.length <= 3 ? items : items.slice(0, 2);
   return (
     <div className="mb-2 space-y-1.5">
+      {(header || items.length > 3) && (
+        <div className="flex items-center justify-between gap-2 text-micro text-muted-foreground">
+          <span className="truncate">{header ? `${header} · ${items.length} products` : `${items.length} products`}</span>
+          <Button variant="ghost" size="xs" onClick={onClear}>
+            Remove all
+          </Button>
+        </div>
+      )}
       <ul className="flex flex-col gap-1.5">
-        {items.map((p) => (
+        {shown.map((p) => (
           <li key={p.variantId} className="flex items-center gap-2.5 rounded-lg border bg-muted/40 p-2">
             <span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-card">
               {p.image ? <img src={p.image} alt="" className="size-full object-cover" /> : <Package className="size-4 text-muted-foreground" />}
@@ -152,9 +196,39 @@ export function ProductTray({ items, asCards, onRemove }: { items: StoreProduct[
           </li>
         ))}
       </ul>
-      <p className="text-micro text-muted-foreground">
-        {cards ? (items.length === 1 ? "Goes as a product card." : "Goes as a product list; your message becomes its text.") : "Goes as one message with names, prices and links."}
-      </p>
+      {shown.length < items.length && (
+        <Button variant="ghost" size="xs" onClick={() => setExpanded(true)}>
+          <ChevronDown />
+          {items.length - shown.length} more
+        </Button>
+      )}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {canCards && (
+          <div className="flex rounded-md border p-0.5 text-micro" role="radiogroup" aria-label="Send the products as">
+            {(["cards", "list"] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                role="radio"
+                aria-checked={format === f}
+                onClick={() => onFormat(f)}
+                className={cn("rounded px-2 py-0.5", format === f ? "bg-muted font-medium text-foreground" : "text-muted-foreground")}
+              >
+                {f === "cards" ? "Cards" : "List"}
+              </button>
+            ))}
+          </div>
+        )}
+        <p className="text-micro text-muted-foreground">
+          {!catalog
+            ? "Goes as one message with names, prices and links."
+            : items.length === 1
+              ? "Goes as a product card."
+              : canCards && format === "cards"
+                ? "Goes as cards to swipe through; your message goes above them."
+                : "Goes as a product list; your message becomes its text."}
+        </p>
+      </div>
     </div>
   );
 }

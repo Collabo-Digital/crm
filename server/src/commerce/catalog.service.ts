@@ -6,11 +6,13 @@ import { MetaGraphError } from '../channel/meta-graph.types';
 import { patchChannelMetadataSql } from '../channel/channel-metadata.util';
 import { Priority } from '../rate-limit/rate-limit.types';
 import { ChannelAccessService } from '../messaging/channel-access.service';
-import { buildCatalogItem, productUrl } from './catalog.util';
+import { buildCatalogItem, collectionUrl, productUrl } from './catalog.util';
 import type { OutboundPayload } from '../messaging/outbound';
 
 /** Meta accepts up to 5,000 records a call and suggests staying under 3,000. */
 const BATCH_SIZE = 1000;
+/// Variants the inbox's product panel lists at once; search or a collection narrows it.
+const PRODUCTS_SHOWN = 100;
 
 export interface CatalogState {
     catalogId: string;
@@ -246,21 +248,33 @@ export class CatalogService {
         return { ...lastSync, view: await this.view(orgId, channelId) };
     }
 
-    /** Products for the inbox's product tray, with what can be sent where. */
-    async products(orgId: string, channelId: string | null, search: string | undefined) {
+    /**
+     * Products for the inbox's product panel and tray, with what can be sent
+     * where: one collection's in its Shopify order, or all of them by title.
+     */
+    async products(orgId: string, channelId: string | null, search: string | undefined, collectionId?: string) {
         const channel = channelId ? await this.prisma.channel.findFirst({ where: { id: channelId, organizationId: orgId }, select: { id: true, platform: true, metadata: true, credentials: true } }) : null;
         const catalog = channel?.platform === ChannelPlatform.WHATSAPP ? this.state(channel.metadata) : null;
         const term = search?.trim();
         const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: orgId }, select: { currency: true, website: true, settings: { select: { storeProfileSettings: true } } } });
         const profileSite = ((org.settings?.storeProfileSettings ?? {}) as { website?: string }).website || org.website || null;
-        const rows = await this.prisma.productVariant.findMany({
-            where: {
-                product: {
-                    organizationId: orgId,
-                    status: ProductStatus.ACTIVE,
-                    ...(term ? { OR: [{ title: { contains: term, mode: 'insensitive' } }, { vendor: { contains: term, mode: 'insensitive' } }] } : {}),
-                },
-            },
+        const matching: Prisma.ProductWhereInput = {
+            organizationId: orgId,
+            status: ProductStatus.ACTIVE,
+            ...(term ? { OR: [{ title: { contains: term, mode: 'insensitive' } }, { vendor: { contains: term, mode: 'insensitive' } }] } : {}),
+        };
+        const place = collectionId
+            ? new Map(
+                (await this.prisma.productCollection.findMany({
+                    where: { collectionId, collection: { organizationId: orgId }, product: matching },
+                    orderBy: { position: 'asc' },
+                    select: { productId: true },
+                    take: PRODUCTS_SHOWN + 1,
+                })).map((l, i) => [l.productId, i]),
+            )
+            : null;
+        const found = await this.prisma.productVariant.findMany({
+            where: { product: place ? { ...matching, id: { in: [...place.keys()] } } : matching },
             include: {
                 image: { select: { src: true } },
                 product: {
@@ -275,12 +289,34 @@ export class CatalogService {
                 ...(channel ? { catalogItems: { where: { channelId: channel.id }, select: { status: true } } } : {}),
             },
             orderBy: [{ product: { title: 'asc' } }, { position: 'asc' }],
-            take: 60,
+            // A collection's products are already capped; their order is the collection's, sorted below.
+            ...(place ? {} : { take: PRODUCTS_SHOWN + 1 }),
+        });
+        if (place) found.sort((a, b) => place.get(a.productId)! - place.get(b.productId)! || a.position - b.position);
+        const rows = found.slice(0, PRODUCTS_SHOWN);
+        const collections = await this.prisma.collection.findMany({
+            where: { organizationId: orgId, products: { some: { product: { status: ProductStatus.ACTIVE } } } },
+            select: {
+                id: true,
+                title: true,
+                handle: true,
+                channel: { select: { externalStoreUrl: true } },
+                _count: { select: { products: { where: { product: { status: ProductStatus.ACTIVE } } } } },
+            },
+            orderBy: { title: 'asc' },
+            take: 100,
         });
         const onBusinessApp = (channel?.credentials as { isOnBizApp?: boolean } | null)?.isOnBizApp === true;
         return {
             catalog: catalog ? { catalogId: catalog.catalogId, name: catalog.name } : null,
             canSendProducts: !!catalog && !onBusinessApp,
+            collections: collections.map((c) => ({
+                id: c.id,
+                title: c.title,
+                productCount: c._count.products,
+                url: collectionUrl(profileSite ?? c.channel.externalStoreUrl, c.handle),
+            })),
+            more: found.length > PRODUCTS_SHOWN || (place?.size ?? 0) > PRODUCTS_SHOWN,
             products: rows.map((v) => {
                 const storeUrl = v.product.channel.platform === ChannelPlatform.SHOPIFY ? (profileSite ?? v.product.channel.externalStoreUrl) : profileSite;
                 const inCatalog = ((v as { catalogItems?: Array<{ status: string }> }).catalogItems ?? [])[0]?.status === 'SYNCED';
@@ -305,7 +341,11 @@ export class CatalogService {
      * catalog. Only items already synced can be sent: Meta drops ids it does
      * not know.
      */
-    async productPayload(orgId: string, channelId: string, input: { variantIds: string[]; header?: string; text?: string }): Promise<OutboundPayload> {
+    async productPayload(
+        orgId: string,
+        channelId: string,
+        input: { variantIds: string[]; header?: string; text?: string; format?: 'list' | 'cards' },
+    ): Promise<OutboundPayload> {
         const channel = await this.prisma.channel.findFirst({ where: { id: channelId, organizationId: orgId }, select: { platform: true, metadata: true } });
         if (channel?.platform !== ChannelPlatform.WHATSAPP) throw new BadRequestException('Products from the catalog can be sent on WhatsApp only. Share a link instead.');
         const catalog = this.state(channel.metadata);
@@ -322,12 +362,17 @@ export class CatalogService {
             const one = synced.get(ids[0])!;
             return { type: 'product', catalogId: catalog.catalogId, productRetailerId: ids[0], text: input.text?.trim() || undefined, name: one.variant.product.title };
         }
+        if (input.format === 'cards' && ids.length <= 10) {
+            return { type: 'product_carousel', catalogId: catalog.catalogId, text: input.text?.trim() || 'Have a look at these.', productRetailerIds: ids };
+        }
+        const header = input.header?.trim() || 'Picked for you';
         return {
             type: 'product_list',
             catalogId: catalog.catalogId,
-            header: input.header?.trim() || 'Picked for you',
+            header,
             text: input.text?.trim() || 'Tap to see the products.',
-            sections: [{ title: 'Products', productRetailerIds: ids }],
+            // Meta: a section title is at most 24 characters.
+            sections: [{ title: (input.header?.trim() || 'Products').slice(0, 24).trim(), productRetailerIds: ids }],
         };
     }
 

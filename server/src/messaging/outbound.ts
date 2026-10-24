@@ -79,6 +79,8 @@ export type OutboundPayload =
         footer?: string;
         sections: Array<{ title: string; productRetailerIds: string[] }>;
     }
+    /** WhatsApp: 2 to 10 product cards to swipe through, all from one catalog. */
+    | { type: 'product_carousel'; catalogId: string; text: string; productRetailerIds: string[] }
     /** WhatsApp: a button that opens the whole catalog. */
     | { type: 'catalog'; text: string; footer?: string; thumbnailRetailerId?: string }
     /**
@@ -138,7 +140,7 @@ export function checkSend(input: GateInput): GateResult {
 
     const shape = checkShape(platform, payload);
     if (shape) return shape;
-    if (channel.onBusinessApp && (payload.type === 'product' || payload.type === 'product_list' || payload.type === 'catalog')) {
+    if (channel.onBusinessApp && (payload.type === 'product' || payload.type === 'product_list' || payload.type === 'product_carousel' || payload.type === 'catalog')) {
         return refuse('unsupported_on_platform', 'Products cannot be sent from a number shared with the WhatsApp Business app. Share a link instead.');
     }
 
@@ -215,6 +217,11 @@ function checkShape(platform: ChannelPlatform, payload: OutboundPayload): GateRe
             if (!payload.header.trim() || !payload.text.trim()) return refuse('invalid_payload', 'A product list needs a header and a message.');
             return null;
         }
+        case 'product_carousel':
+            if (!wa) return refuse('unsupported_on_platform', 'Products from the catalog can be sent on WhatsApp only.');
+            if (payload.productRetailerIds.length < 2 || payload.productRetailerIds.length > 10) return refuse('invalid_payload', 'Product cards take 2 to 10 products.');
+            if (!payload.text.trim() || payload.text.length > 1024) return refuse('invalid_payload', 'Write a message of up to 1,024 characters.');
+            return null;
         case 'order_details':
         case 'order_status':
             if (!wa) return refuse('unsupported_on_platform', 'WhatsApp Pay requests go on WhatsApp only.');
@@ -329,6 +336,22 @@ export function buildWhatsAppBody(
                         sections: payload.sections.map((sec) => ({
                             title: sec.title,
                             product_items: sec.productRetailerIds.map((id) => ({ product_retailer_id: id })),
+                        })),
+                    },
+                },
+            };
+        case 'product_carousel':
+            return {
+                ...base,
+                type: 'interactive',
+                interactive: {
+                    type: 'carousel',
+                    body: { text: payload.text },
+                    action: {
+                        cards: payload.productRetailerIds.map((id, index) => ({
+                            card_index: index,
+                            type: 'product',
+                            action: { product_retailer_id: id, catalog_id: payload.catalogId },
                         })),
                     },
                 },
@@ -462,6 +485,8 @@ export function outboundText(payload: OutboundPayload): string | null {
             return payload.text || (payload.name ? `Product: ${payload.name}` : 'Product');
         case 'product_list':
             return `${payload.header}\n${payload.text}`;
+        case 'product_carousel':
+            return payload.text;
         case 'catalog':
             return payload.text;
         case 'order_details':

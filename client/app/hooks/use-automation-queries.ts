@@ -15,7 +15,7 @@ export const automationKeys = {
   starters: (channelId: string) => [...automationKeys.all, "starters", channelId] as const,
   inboxRules: () => ["inbox", "rules"] as const,
   catalog: (channelId: string) => ["commerce", "catalog", channelId] as const,
-  products: (conversationId: string, search: string) => ["commerce", "products", conversationId, search] as const,
+  products: (conversationId: string, search: string, collectionId = "") => ["commerce", "products", conversationId, search, collectionId] as const,
 };
 
 // Module-level on purpose (see poll-while.ts): runs keep moving while people reply or waits run out.
@@ -68,10 +68,10 @@ export function useCatalog(channelId: string | undefined) {
 }
 
 /** The product tray's list, for one conversation's channel. */
-export function useInboxProducts(conversationId: string, search: string, enabled: boolean) {
+export function useInboxProducts(conversationId: string, search: string, enabled: boolean, collectionId?: string) {
   return useQuery({
-    queryKey: automationKeys.products(conversationId, search),
-    queryFn: () => inboxService.products(conversationId, search || undefined),
+    queryKey: automationKeys.products(conversationId, search, collectionId),
+    queryFn: () => inboxService.products(conversationId, search || undefined, collectionId),
     enabled,
     placeholderData: keepPreviousData,
     staleTime: 60_000,

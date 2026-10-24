@@ -101,6 +101,7 @@ export class InboxRulesService {
                         data: {
                             organizationId: event.organizationId,
                             conversationId: conversation.id,
+                            source: 'inbox_rule',
                             body: `Marked as spam and blocked here. WhatsApp did not block the number: ${reason}`,
                         },
                     });

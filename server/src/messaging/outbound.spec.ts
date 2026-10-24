@@ -1,5 +1,5 @@
 import { ChannelPlatform, ChannelStatus } from '@prisma/client';
-import { buildMessengerBody, buildWhatsAppBody, checkSend, replyWindow, type GateInput } from './outbound';
+import { buildMessengerBody, buildWhatsAppBody, checkSend, outboundText, replyWindow, type GateInput } from './outbound';
 
 const now = new Date('2026-10-23T12:00:00Z');
 const hoursBefore = (h: number) => new Date(now.getTime() - h * 3600_000);
@@ -191,5 +191,29 @@ describe('catalog messages', () => {
             body: { text: 'Browse' },
             action: { name: 'catalog_message', parameters: { thumbnail_product_retailer_id: 'v2' } },
         });
+    });
+
+    it('send 2 to 10 products as cards, with a message and nothing else (Meta: no header, footer or buttons)', () => {
+        const carousel = { type: 'product_carousel' as const, catalogId: 'CAT1', text: 'Both sizes', productRetailerIds: ['v1', 'v2'] };
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: carousel }).ok).toBe(true);
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: { ...carousel, productRetailerIds: ['v1'] } })).toMatchObject({ ok: false, code: 'invalid_payload' });
+        const eleven = Array.from({ length: 11 }, (_, i) => `v${i}`);
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: { ...carousel, productRetailerIds: eleven } })).toMatchObject({ ok: false, code: 'invalid_payload' });
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: { ...carousel, text: ' ' } })).toMatchObject({ ok: false, code: 'invalid_payload' });
+        expect(gate({ platform: ChannelPlatform.FACEBOOK, payload: carousel })).toMatchObject({ ok: false, code: 'unsupported_on_platform' });
+        expect(
+            gate({ platform: ChannelPlatform.WHATSAPP, payload: carousel, channel: { status: ChannelStatus.CONNECTED, isEnabled: true, sendsPaused: false, onBusinessApp: true } }),
+        ).toMatchObject({ ok: false, code: 'unsupported_on_platform' });
+        expect(buildWhatsAppBody(carousel, { waId: '919800000001', userId: null }).interactive).toEqual({
+            type: 'carousel',
+            body: { text: 'Both sizes' },
+            action: {
+                cards: [
+                    { card_index: 0, type: 'product', action: { product_retailer_id: 'v1', catalog_id: 'CAT1' } },
+                    { card_index: 1, type: 'product', action: { product_retailer_id: 'v2', catalog_id: 'CAT1' } },
+                ],
+            },
+        });
+        expect(outboundText(carousel)).toBe('Both sizes');
     });
 });
