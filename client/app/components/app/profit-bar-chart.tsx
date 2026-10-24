@@ -11,6 +11,7 @@ import {
 import { Link } from "react-router";
 import { TrendingUp, TrendingDown, Loader2 } from "lucide-react";
 import { useSalesAndProfit } from "~/hooks/use-dashboard-queries";
+import { QueryErrorState } from "~/components/app/query-error-state";
 import { cn, formatCurrency } from "~/lib/utils";
 import type { DashboardQueryParams } from "~/types/api";
 
@@ -85,7 +86,7 @@ export function ProfitBarChart({
   currency: string;
   params?: DashboardQueryParams;
 }) {
-  const { data: sales, isLoading, isPlaceholderData } = useSalesAndProfit(params);
+  const { data: sales, isLoading, isError, refetch, isPlaceholderData } = useSalesAndProfit(params);
 
   const chartData = sales?.data ?? [];
   const totals = sales?.totals;
@@ -129,6 +130,8 @@ export function ProfitBarChart({
         <div className="flex items-center justify-center py-16">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
+      ) : isError && !sales ? (
+        <QueryErrorState resource="sales" onRetry={() => void refetch()} />
       ) : (
         // Dimmed while a new range loads: the previous window's figures stay
         // readable instead of being replaced by a spinner.

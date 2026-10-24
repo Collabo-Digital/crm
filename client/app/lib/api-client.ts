@@ -57,11 +57,26 @@ class SessionChangedError extends Error {
   }
 }
 
+/**
+ * The server refused the refresh token itself (401 / 403), or there is none:
+ * this session is over. Anything else — no response, a 5xx while the API
+ * restarts or Redis is down, a 429 — says nothing about the session, so the
+ * tokens stay and the next request tries the refresh again.
+ */
+class SessionEndedError extends Error {
+  constructor() {
+    super("Session ended");
+  }
+}
+
+/** A refresh that hangs must not hold every waiting request with it. */
+const REFRESH_TIMEOUT_MS = 15_000;
+
 /** Refresh the access token using the stored refresh token. Returns the new access token. */
 async function refreshAccessToken(): Promise<string> {
   const { refreshToken, setTokens } = useAuthStore.getState();
   if (!refreshToken) {
-    throw new Error("No refresh token");
+    throw new SessionEndedError();
   }
   const sessionChanged = () =>
     useAuthStore.getState().refreshToken !== refreshToken;
@@ -70,10 +85,12 @@ async function refreshAccessToken(): Promise<string> {
   let res;
   try {
     // Use a raw axios call to avoid interceptor loops
-    res = await axios.post(`${baseURL}/auth/refresh`, { refreshToken });
+    res = await axios.post(`${baseURL}/auth/refresh`, { refreshToken }, { timeout: REFRESH_TIMEOUT_MS });
   } catch (error) {
     // A failure for the old session says nothing about the new one.
     if (sessionChanged()) throw new SessionChangedError();
+    const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+    if (status === 401 || status === 403) throw new SessionEndedError();
     throw error;
   }
 
@@ -109,10 +126,11 @@ apiClient.interceptors.response.use(
         originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
         return apiClient(originalRequest);
       } catch (refreshError) {
-        // Only end the session the failed refresh belonged to. If it has
-        // already been replaced, this request is simply abandoned.
-        if (!(refreshError instanceof SessionChangedError)) {
-          useAuthStore.getState().logout();
+        // Only a refused refresh ends the session, and only the one it
+        // belonged to (a replaced session throws SessionChangedError). The
+        // page is kept to return to after signing in again.
+        if (refreshError instanceof SessionEndedError) {
+          useAuthStore.getState().logout(window.location.pathname + window.location.search);
         }
         return Promise.reject(error);
       } finally {

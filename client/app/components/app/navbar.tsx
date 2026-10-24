@@ -45,7 +45,7 @@ import { MobileNavigation } from "~/components/app/mobile-navigation";
 import { BrandLogo } from "~/components/app/brand-logo";
 import { Tip } from "~/components/ui/tooltip";
 import { useAuthStore, normalizeOrganizations } from "~/stores/auth.store";
-import { apiClient } from "~/lib/api-client";
+import { signOut } from "~/lib/sign-out";
 import { authService } from "~/services/auth.service";
 import { useStopImpersonating } from "~/hooks/use-admin-queries";
 import { useSectionAccess } from "~/hooks/use-section-access";
@@ -134,7 +134,7 @@ function matchNav<T extends { href: string }>(items: T[], pathname: string): T |
 export function Navbar({ immersive = false }: { immersive?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, organizations, currentOrgId, impersonatedBy, logout, refreshToken, setCurrentOrg, setTokens, setOrganizations } =
+  const { user, organizations, currentOrgId, impersonatedBy, setCurrentOrg, setTokens, setOrganizations } =
     useAuthStore();
   const stopImpersonating = useStopImpersonating();
 
@@ -200,16 +200,8 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
   }
 
   async function handleSignOut() {
-    try {
-      if (refreshToken) {
-        await apiClient.post("/auth/logout", { refreshToken });
-      }
-    } catch {
-      // silent
-    } finally {
-      logout();
-      navigate("/auth/login");
-    }
+    await signOut();
+    navigate("/auth/login");
   }
 
   const initials = user ? `${user.firstName[0]}${user.lastName[0]}`.toUpperCase() : "?";

@@ -5,6 +5,7 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLocation,
   useNavigate,
 } from "react-router";
 
@@ -17,6 +18,7 @@ import { useAuthStore } from "~/stores/auth.store";
 import { useEffect, useRef } from "react";
 import "./app.css";
 import { META_SDK_VERSION } from "~/lib/meta-sdk";
+import { loginPath } from "~/lib/return-path";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", sizes: "32x32" },
@@ -112,19 +114,23 @@ function ThemeInit() {
 /**
  * Watches for auth state transitions: authenticated → unauthenticated.
  * Redirects to /auth/login when logout occurs (covers API interceptor logout,
- * manual sign-out, and token refresh failure).
+ * manual sign-out, and token refresh failure). A session that ended on its own
+ * comes back to the page it was on after signing in again.
  */
 function LogoutRedirect() {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const prevAuth = useRef(isAuthenticated);
 
   useEffect(() => {
-    if (prevAuth.current && !isAuthenticated) {
-      navigate("/auth/login", { replace: true });
+    // Auth pages are already for signed-out visitors: signing out on the
+    // invite page keeps it open, to accept as the invitee.
+    if (prevAuth.current && !isAuthenticated && !pathname.startsWith("/auth/")) {
+      navigate(loginPath(useAuthStore.getState().returnTo), { replace: true });
     }
     prevAuth.current = isAuthenticated;
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, navigate, pathname]);
 
   return null;
 }
@@ -158,10 +164,17 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
     stack = error.stack;
   }
 
+  // Outside every provider, so plain links: a full load starts the app afresh.
   return (
     <main className="pt-16 p-4 container mx-auto">
       <h1>{message}</h1>
       <p>{details}</p>
+      <p className="mt-4 flex gap-4 text-sm">
+        <a href="/" className="font-semibold underline">Go to your workspace</a>
+        <button type="button" className="font-semibold underline" onClick={() => window.location.reload()}>
+          Reload page
+        </button>
+      </p>
       {stack && (
         <pre className="w-full p-4 overflow-x-auto">
           <code>{stack}</code>

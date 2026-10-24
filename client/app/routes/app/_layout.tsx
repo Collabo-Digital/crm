@@ -1,7 +1,11 @@
-import { Outlet, Navigate, useLocation, useMatches } from "react-router";
+import { Outlet, Navigate, Link, isRouteErrorResponse, useLocation, useMatches } from "react-router";
+import { AlertTriangle } from "lucide-react";
+import type { Route } from "./+types/_layout";
 import { CallDock } from "~/components/app/calls/call-dock";
+import { EmptyState } from "~/components/app/empty-state";
 import { Navbar } from "~/components/app/navbar";
 import { ImpersonationBanner } from "~/components/app/impersonation-banner";
+import { Button } from "~/components/ui/button";
 import { AuthGuard } from "~/components/guards/auth-guard";
 import { useMembershipSync, useSectionAccess } from "~/hooks/use-section-access";
 import { cn } from "~/lib/utils";
@@ -99,6 +103,65 @@ export default function AppLayout() {
         </main>
         {/* WhatsApp calls ring on every page for members who work the inbox. */}
         {canAccess("/inbox") && <CallDock />}
+      </div>
+    </AuthGuard>
+  );
+}
+
+/** A code chunk from before a deploy is gone; only a reload fetches the new one. */
+const STALE_CHUNK =
+  /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|Unable to preload CSS/i;
+
+/**
+ * A page that crashed, shown inside the app's chrome so the navbar stays and
+ * there is a way on. An error in the chrome itself falls through to root's
+ * boundary.
+ */
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  const { landingPath } = useSectionAccess();
+  const stale = error instanceof Error && STALE_CHUNK.test(error.message);
+  const notFound = isRouteErrorResponse(error) && error.status === 404;
+  const reload = (
+    <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+      Reload page
+    </Button>
+  );
+  return (
+    <AuthGuard>
+      <div className="app-shell min-h-screen bg-surface-sunken">
+        <ImpersonationBanner />
+        <Navbar />
+        <main className="app-main mx-auto w-full max-w-screen-xl px-4 py-16 lg:px-6">
+          {stale ? (
+            <EmptyState
+              icon={AlertTriangle}
+              title="Collabo has been updated"
+              description="Reload the page to get the latest version."
+              action={reload}
+            />
+          ) : (
+            <EmptyState
+              icon={AlertTriangle}
+              title={notFound ? "Page not found" : "This page ran into a problem"}
+              description={
+                notFound
+                  ? "This link is mistyped, or the page it pointed to has moved or been removed."
+                  : "Reload to try again. If it keeps happening, let us know which page and what you clicked."
+              }
+              action={
+                <div className="flex flex-wrap justify-center gap-2">
+                  {!notFound && reload}
+                  <Button variant="outline" size="sm" asChild>
+                    <Link to={landingPath}>Go to your workspace</Link>
+                  </Button>
+                </div>
+              }
+            />
+          )}
+          {import.meta.env.DEV && error instanceof Error && (
+            <pre className="mx-auto mt-6 max-w-3xl overflow-x-auto rounded-lg bg-muted p-4 text-xs">{error.stack}</pre>
+          )}
+        </main>
       </div>
     </AuthGuard>
   );

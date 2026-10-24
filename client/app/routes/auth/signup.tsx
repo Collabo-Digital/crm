@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { isAxiosError } from "axios";
@@ -8,6 +8,7 @@ import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { signupSchema } from "~/lib/schemas/auth.schemas";
 import type { SignupFormValues } from "~/lib/schemas/auth.schemas";
 import { useSignupMutation } from "~/hooks/use-auth-mutations";
+import { withNext } from "~/lib/return-path";
 
 export function meta() {
   return [
@@ -22,7 +23,11 @@ export function meta() {
  */
 export default function SignupPage() {
   const [showPassword, setShowPassword] = useState(false);
-  const signup = useSignupMutation();
+  // The page sign-in was asked for on the way here (the Shopify install link,
+  // say), opened once the new account is verified and has a workspace.
+  const [searchParams] = useSearchParams();
+  const next = searchParams.get("next");
+  const signup = useSignupMutation(next);
 
   const {
     register,
@@ -175,7 +180,7 @@ export default function SignupPage() {
       <p className="mt-3 text-center text-sm text-gray-500">
         Already have an account?{" "}
         <Link
-          to="/auth/login"
+          to={withNext("/auth/login", next)}
           className="font-semibold text-[#084734] hover:text-[#3d6000] transition-colors"
         >
           Sign in

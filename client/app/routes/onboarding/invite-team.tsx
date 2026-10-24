@@ -13,7 +13,9 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { useSendInviteMutation } from "~/hooks/use-org-mutations";
-import { AVAILABLE_SECTIONS, isSectionScopedRole, sectionKey } from "~/lib/sections";
+import { AVAILABLE_SECTIONS, isSectionScopedRole } from "~/lib/sections";
+import { accessGrants, DEFAULT_CAPABILITIES } from "~/components/app/settings/section-access-picker";
+import { takeAfterOnboarding } from "~/lib/return-path";
 import type { UserRole } from "~/types/api";
 
 export function meta() {
@@ -35,10 +37,7 @@ const ROLES: { value: UserRole; label: string; description: string }[] = [
   { value: "VIEWER", label: "Viewer", description: "Read-only access" },
 ];
 
-/** Delay (in ms) before checking if all invites were sent and redirecting. */
-const REDIRECT_CHECK_DELAY = 300;
-
-/** Delay (in ms) after success toast before navigating to the dashboard. */
+/** Delay (in ms) after the success toast before leaving onboarding. */
 const REDIRECT_NAVIGATE_DELAY = 1200;
 
 /**
@@ -90,11 +89,12 @@ export default function InviteTeamPage() {
     );
 
     if (pendingRows.length === 0) {
-      navigate("/dashboard");
+      finish();
       return;
     }
 
     setIsSendingAll(true);
+    let failed = false;
 
     for (const inviteRow of pendingRows) {
       // Mark as sending
@@ -106,16 +106,18 @@ export default function InviteTeamPage() {
         await sendInvite.mutateAsync({
           email: inviteRow.email.trim(),
           role: inviteRow.role,
-          // No per-section picker during onboarding: start with every section,
-          // narrowed later from Settings → Team Members.
+          // No per-section picker during onboarding: start with every section
+          // and the same defaults as the Settings invite, narrowed later from
+          // Settings → Team Members.
           grants: isSectionScopedRole(inviteRow.role)
-            ? AVAILABLE_SECTIONS.map((s) => sectionKey(s.id))
+            ? accessGrants(inviteRow.role, AVAILABLE_SECTIONS.map((s) => s.id), DEFAULT_CAPABILITIES)
             : undefined,
         });
         setRows((previousRows) =>
           previousRows.map((row) => (row.id === inviteRow.id ? { ...row, status: "sent" } : row))
         );
       } catch (error) {
+        failed = true;
         const errorMessage =
           isAxiosError(error)
             ? error.response?.data?.message || "Failed to send"
@@ -130,23 +132,21 @@ export default function InviteTeamPage() {
 
     setIsSendingAll(false);
 
-    // Check if all sent successfully and redirect
-    setTimeout(() => {
-      setRows((currentRows) => {
-        const allDone = currentRows.every(
-          (row) => row.status === "sent" || !row.email.trim()
-        );
-        if (allDone) {
-          toast.success("All invitations sent! Redirecting to dashboard…");
-          setTimeout(() => navigate("/dashboard"), REDIRECT_NAVIGATE_DELAY);
-        }
-        return currentRows;
-      });
-    }, REDIRECT_CHECK_DELAY);
+    // Every row was sent before or just now: move on. A failed row stays on
+    // screen with its error.
+    if (!failed) {
+      toast.success("All invitations sent!");
+      setTimeout(finish, REDIRECT_NAVIGATE_DELAY);
+    }
+  }
+
+  /** Onboarding is done: the page they were headed to, else the dashboard. */
+  function finish() {
+    navigate(takeAfterOnboarding() ?? "/dashboard");
   }
 
   function handleSkip() {
-    navigate("/dashboard");
+    finish();
   }
 
   /* ── Derived state ───────────────────────────────────── */

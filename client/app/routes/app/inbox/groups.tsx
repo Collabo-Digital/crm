@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Copy, Download, Link2, Loader2, MessageSquare, RefreshCw, Trash2, UserMinus, Users } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
 
+import { QueryErrorState } from "~/components/app/query-error-state";
 import { SectionCard } from "~/components/app/section-card";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -129,11 +130,12 @@ function InviteQr({ group }: { group: WhatsAppGroupSummary }) {
 }
 
 function ManageGroup({ id, canManage }: { id: string; canManage: boolean }) {
-  const { data: group, isLoading } = useGroup(id);
+  const { data: group, isLoading, isError, refetch } = useGroup(id);
   const act = useGroupAction(id);
   const [editing, setEditing] = useState(false);
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
+  if (isError && !group) return <QueryErrorState resource="this group" onRetry={() => void refetch()} />;
   if (isLoading || !group) return <Skeleton className="h-40 w-full" />;
   const live = group.status === "ACTIVE" || group.status === "SUSPENDED";
   return (
@@ -256,7 +258,7 @@ function ManageGroup({ id, canManage }: { id: string; canManage: boolean }) {
  * lives in the inbox; this page makes groups and manages who is in them.
  */
 export default function WhatsAppGroupsPage() {
-  const { data, isLoading } = useGroups();
+  const { data, isLoading, isError, refetch } = useGroups();
   const { role } = useCurrentRole();
   const canManage = role === "OWNER" || role === "ADMIN" || role === "MANAGER";
   const [params, setParams] = useSearchParams();
@@ -272,7 +274,9 @@ export default function WhatsAppGroupsPage() {
         </PageHeaderContent>
       </PageHeader>
 
-      {isLoading || !data ? (
+      {isError && !data ? (
+        <QueryErrorState resource="your WhatsApp groups" onRetry={() => void refetch()} />
+      ) : isLoading || !data ? (
         <Skeleton className="h-40 w-full" />
       ) : (
         <>

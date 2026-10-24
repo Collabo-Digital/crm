@@ -52,7 +52,13 @@ import { DevelopersIcon, DevelopersTab } from "~/components/app/settings/develop
 import { useSectionAccess } from "~/hooks/use-section-access";
 import { StoreProfileTab } from "~/components/app/settings/store-profile-tab";
 import { UpgradeOrganizationDialog } from "~/components/app/settings/upgrade-organization-dialog";
-import { SectionAccessPicker } from "~/components/app/settings/section-access-picker";
+import {
+  CapabilityPicker,
+  DEFAULT_CAPABILITIES,
+  MANAGED_CAPABILITY_KEYS,
+  SectionAccessPicker,
+  accessGrants,
+} from "~/components/app/settings/section-access-picker";
 import { AVAILABLE_SECTIONS, isSectionScopedRole, sectionKey, sectionsInGrants, type SectionId } from "~/lib/sections";
 import { formatCurrency } from "~/lib/utils";
 import type { UserRole, OrgMember, OrganizationGstin, CreateGstinRequest, StateTaxRate, ProductTypeTaxRate, CollectionTaxOverride, ShopifyCollection, LoyaltyMetric, OrgResponse, Warehouse } from "~/types/api";
@@ -61,6 +67,7 @@ import { useWarehouses } from "~/hooks/use-inventory-queries";
 import { GstReturnSettings } from "~/components/app/settings/gst-return-settings";
 import { InvoiceSeriesSetting } from "~/components/app/settings/invoice-series-setting";
 import { platformOffered } from "~/lib/channel-providers";
+import { roleLabel } from "~/lib/labels";
 
 export function meta() {
   return [{ title: "Settings | Collabo CRM" }];
@@ -123,6 +130,8 @@ const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
   { value: "VIEWER", label: "Viewer" },
   { value: "VENDOR", label: "Vendor" },
 ];
+
+const OWNER_ADMIN_ONLY = "Only the workspace owner and admins can change these settings.";
 
 const AVATAR_COLORS = [
   "bg-[#CEF17B] text-gray-900",
@@ -230,6 +239,7 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
   const [vendorScope, setVendorScope] = useState("");
   // Sections an Agent / Viewer starts with — everything, until unticked.
   const [sections, setSections] = useState<SectionId[]>(() => AVAILABLE_SECTIONS.map((s) => s.id));
+  const [capabilities, setCapabilities] = useState<string[]>(DEFAULT_CAPABILITIES);
   const sendInvite = useSendInviteMutation(orgId);
 
   const needsVendor = role === "VENDOR";
@@ -251,7 +261,7 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
         email: email.trim(),
         role,
         vendorScope: needsVendor ? vendorScope : undefined,
-        grants: needsSections ? sections.map(sectionKey) : undefined,
+        grants: needsSections ? accessGrants(role, sections, capabilities) : undefined,
       },
       { onSuccess: () => { setEmail(""); setVendorScope(""); onDone(); } },
     );
@@ -320,6 +330,7 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
             Sections this {role === "VIEWER" ? "viewer" : "agent"} can open — the rest show as locked
           </p>
           <SectionAccessPicker value={sections} onChange={setSections} />
+          <CapabilityPicker role={role} sections={sections} value={capabilities} onChange={setCapabilities} />
         </div>
       )}
     </div>
@@ -347,14 +358,15 @@ function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: 
       ? AVAILABLE_SECTIONS.map((s) => s.id)
       : configured.filter((id) => AVAILABLE_SECTION_KEYS.has(sectionKey(id))),
   );
+  const [capabilities, setCapabilities] = useState<string[]>(() => grants.filter((g) => MANAGED_CAPABILITY_KEYS.has(g)));
   const updatePermissions = useUpdateMemberPermissionsMutation(orgId);
 
   function handleSave() {
-    // The endpoint replaces the whole list: keep every grant this picker does
+    // The endpoint replaces the whole list: keep every grant this editor does
     // not manage (inventory.*, and sections this build does not show).
-    const kept = grants.filter((g) => !AVAILABLE_SECTION_KEYS.has(g));
+    const kept = grants.filter((g) => !AVAILABLE_SECTION_KEYS.has(g) && !MANAGED_CAPABILITY_KEYS.has(g));
     updatePermissions.mutate(
-      { memberId: member.id, data: { grants: [...kept, ...sections.map(sectionKey)] } },
+      { memberId: member.id, data: { grants: [...kept, ...accessGrants(member.role, sections, capabilities)] } },
       { onSuccess: onDone },
     );
   }
@@ -366,6 +378,13 @@ function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: 
         {configured.length === 0 && " (currently full access)"}
       </p>
       <SectionAccessPicker value={sections} onChange={setSections} disabled={updatePermissions.isPending} />
+      <CapabilityPicker
+        role={member.role}
+        sections={sections}
+        value={capabilities}
+        onChange={setCapabilities}
+        disabled={updatePermissions.isPending}
+      />
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -1512,15 +1531,16 @@ export default function SettingsPage() {
   const { role: memberRole, isInfluencer } = useCurrentRole();
   const { data: invites } = useOrgInvites(currentOrgId, memberRole === "OWNER" || memberRole === "ADMIN");
   const { canAccess } = useSectionAccess();
-  // Inbox settings are for members who can open the Inbox, and billing for
-  // owners and admins; the API refuses the rest.
+  // Who may change the workspace (name, localization) and its team (invites,
+  // roles, removal), and see billing and developer keys. The server is the
+  // real boundary (`requireRole` / @Roles on each route); this hides
+  // affordances that would only be refused.
+  const canManageTeam = memberRole === "OWNER" || memberRole === "ADMIN";
+  // Inbox settings are for members who can open the Inbox; billing and
+  // developers for owners and admins.
   const visibleTabs = isInfluencer
     ? TABS.filter((t) => INFLUENCER_TABS.includes(t.id))
-    : TABS.filter((t) => (t.id !== "inbox" || canAccess("/inbox")) && (t.id !== "billing" || memberRole === "OWNER" || memberRole === "ADMIN"));
-  // Who may invite, resend and cancel. The server is the real boundary
-  // (`requireRole` on every invite route); this hides affordances that would
-  // only be refused.
-  const canManageTeam = memberRole === "OWNER" || memberRole === "ADMIN";
+    : TABS.filter((t) => (t.id !== "inbox" || canAccess("/inbox")) && ((t.id !== "billing" && t.id !== "developers") || canManageTeam));
   // Staff only. Influencers hold a membership like anyone else, but they are an
   // outside party managed in their own section, with their own lifecycle.
   const staffMembers = (members ?? []).filter((m) => m.role !== "INFLUENCER");
@@ -1616,7 +1636,7 @@ export default function SettingsPage() {
       {!tab && <div className="space-y-5 md:hidden">
         <div className="flex items-center gap-4 rounded-3xl bg-brand/35 p-5"><span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-card"><Building2 className="size-6 text-brand-strong" strokeWidth={1.7} /></span><div className="min-w-0"><p className="text-xs text-muted-foreground">Your workspace</p><p className="mt-1 truncate text-base font-semibold">{org?.name || "Workspace settings"}</p></div></div>
         {[
-          { label: "Workspace", ids: ["general", "store-profile", "members"] },
+          { label: "Workspace", ids: ["general", "store-profile", "members", "billing", "developers"] },
           { label: "Commerce & conversations", ids: ["channels", "inbox", "products", "orders", "tax-gst", "loyalty"] },
           { label: "Account", ids: ["security"] },
         ].map((group) => {
@@ -1668,12 +1688,13 @@ export default function SettingsPage() {
                         <input
                           value={displayName}
                           onChange={(e) => setOrgName(e.target.value)}
-                          className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                          disabled={!canManageTeam}
+                          className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </Field>
                       <div className="pt-4">
                         <Field label="Industry" hint="Your primary business vertical.">
-                          <Select value={displayIndustry || undefined} onValueChange={setOrgIndustry}>
+                          <Select value={displayIndustry || undefined} onValueChange={setOrgIndustry} disabled={!canManageTeam}>
                             <SelectTrigger className="w-full h-9 border-input bg-transparent">
                               <SelectValue placeholder="Select industry" />
                             </SelectTrigger>
@@ -1691,7 +1712,8 @@ export default function SettingsPage() {
                             value={displayWebsite}
                             onChange={(e) => setOrgWebsite(e.target.value)}
                             placeholder="https://yourstore.com"
-                            className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                            disabled={!canManageTeam}
+                            className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </Field>
                       </div>
@@ -1732,16 +1754,20 @@ export default function SettingsPage() {
                         </div>
                       )}
                     </div>
-                    <div className="mt-5 flex justify-end">
-                      <button
-                        onClick={handleSaveGeneral}
-                        disabled={updateOrg.isPending}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-4 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors disabled:opacity-50"
-                      >
-                        {updateOrg.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                        Save Changes
-                      </button>
-                    </div>
+                    {canManageTeam ? (
+                      <div className="mt-5 flex justify-end">
+                        <button
+                          onClick={handleSaveGeneral}
+                          disabled={updateOrg.isPending}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-4 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors disabled:opacity-50"
+                        >
+                          {updateOrg.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                          Save Changes
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="mt-5 text-xs text-muted-foreground">{OWNER_ADMIN_ONLY}</p>
+                    )}
                   </>
                 )}
               </Section>
@@ -1749,7 +1775,7 @@ export default function SettingsPage() {
               <Section title="Localization" description="Timezone, currency, and regional settings.">
                 <div className="space-y-4 divide-y divide-border">
                   <Field label="Timezone">
-                    <Select value={displayTimezone} onValueChange={setOrgTimezone}>
+                    <Select value={displayTimezone} onValueChange={setOrgTimezone} disabled={!canManageTeam}>
                       <SelectTrigger className="w-full h-9 border-input bg-transparent">
                         <SelectValue />
                       </SelectTrigger>
@@ -1762,7 +1788,7 @@ export default function SettingsPage() {
                   </Field>
                   <div className="pt-4">
                     <Field label="Currency">
-                      <Select value={displayCurrency} onValueChange={setOrgCurrency}>
+                      <Select value={displayCurrency} onValueChange={setOrgCurrency} disabled={!canManageTeam}>
                         <SelectTrigger className="w-full h-9 border-input bg-transparent">
                           <SelectValue />
                         </SelectTrigger>
@@ -1775,39 +1801,46 @@ export default function SettingsPage() {
                     </Field>
                   </div>
                 </div>
-                <div className="mt-5 flex justify-end">
-                  <button
-                    onClick={handleSaveLocalization}
-                    disabled={updateOrg.isPending}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-4 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors disabled:opacity-50"
-                  >
-                    {updateOrg.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                    Save Changes
-                  </button>
-                </div>
-              </Section>
-
-              <div className="rounded-xl bg-white dark:bg-gray-900 p-6 shadow-sm ring-1 ring-red-100">
-                <div className="flex items-start gap-3">
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-red-100">
-                    <AlertTriangle className="size-4 text-red-600" />
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Danger Zone</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      Permanently delete this workspace and all its data. This action cannot be undone.
-                    </p>
+                {canManageTeam ? (
+                  <div className="mt-5 flex justify-end">
                     <button
-                      onClick={handleDeleteOrg}
-                      disabled={deleteOrg.isPending}
-                      className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 px-4 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                      onClick={handleSaveLocalization}
+                      disabled={updateOrg.isPending}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-4 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors disabled:opacity-50"
                     >
-                      {deleteOrg.isPending && <Loader2 className="size-3.5 animate-spin" />}
-                      Delete Workspace
+                      {updateOrg.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                      Save Changes
                     </button>
                   </div>
+                ) : (
+                  <p className="mt-5 text-xs text-muted-foreground">{OWNER_ADMIN_ONLY}</p>
+                )}
+              </Section>
+
+              {/* Only the owner may delete the workspace. */}
+              {memberRole === "OWNER" && (
+                <div className="rounded-xl bg-white dark:bg-gray-900 p-6 shadow-sm ring-1 ring-red-100">
+                  <div className="flex items-start gap-3">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-red-100">
+                      <AlertTriangle className="size-4 text-red-600" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Danger Zone</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Permanently delete this workspace and all its data. This action cannot be undone.
+                      </p>
+                      <button
+                        onClick={handleDeleteOrg}
+                        disabled={deleteOrg.isPending}
+                        className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 px-4 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                      >
+                        {deleteOrg.isPending && <Loader2 className="size-3.5 animate-spin" />}
+                        Delete Workspace
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
             </>
           )}
 
@@ -1937,15 +1970,17 @@ export default function SettingsPage() {
                   <p className="text-xs text-muted-foreground">
                     {membersLoading ? "Loading…" : `${staffMembers.length} member${staffMembers.length !== 1 ? "s" : ""}`}
                   </p>
-                  <button
-                    onClick={() => setShowInvite(true)}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-3 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors"
-                  >
-                    <Plus className="size-3.5" /> Invite Member
-                  </button>
+                  {canManageTeam && (
+                    <button
+                      onClick={() => setShowInvite(true)}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-3 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors"
+                    >
+                      <Plus className="size-3.5" /> Invite Member
+                    </button>
+                  )}
                 </div>
 
-                {showInvite && currentOrgId && (
+                {showInvite && canManageTeam && currentOrgId && (
                   <div className="mb-4">
                     <InviteForm orgId={currentOrgId} onDone={() => setShowInvite(false)} />
                   </div>
@@ -1996,6 +2031,10 @@ export default function SettingsPage() {
                             <span className="shrink-0 rounded-full bg-[#CEF17B]/30 px-2 py-0.5 text-[10px] font-semibold text-[#084734]">
                               Owner
                             </span>
+                          ) : !canManageTeam ? (
+                            <span className="shrink-0 rounded-full bg-white dark:bg-gray-900 px-2 py-0.5 text-[10px] font-medium text-gray-600 dark:text-gray-300 ring-1 ring-border">
+                              {roleLabel(member.role)}
+                            </span>
                           ) : (
                             <Select
                               value={member.role}
@@ -2021,14 +2060,18 @@ export default function SettingsPage() {
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
-                                {ROLE_OPTIONS.map((roleOption) => (
-                                  <SelectItem key={roleOption.value} value={roleOption.value}>{roleOption.label}</SelectItem>
+                                {/* A vendor needs the vendor they are scoped to, which only
+                                    the invite asks for: a member switched to Vendor here
+                                    would be refused everywhere. Listed only so a current
+                                    vendor's role still shows. */}
+                                {ROLE_OPTIONS.filter((roleOption) => roleOption.value !== "VENDOR" || member.role === "VENDOR").map((roleOption) => (
+                                  <SelectItem key={roleOption.value} value={roleOption.value} disabled={roleOption.value === "VENDOR"}>{roleOption.label}</SelectItem>
                                 ))}
                               </SelectContent>
                             </Select>
                           )}
 
-                          {!isOwner && !isCurrentUser && (
+                          {canManageTeam && !isOwner && !isCurrentUser && (
                             <button
                               onClick={() => {
                                 if (window.confirm(`Remove ${member.user.firstName} from this workspace?`)) {
@@ -2115,7 +2158,10 @@ export default function SettingsPage() {
           {activeTab === "channels" && <ChannelSettingsTab />}
 
           {activeTab === "inbox" && <InboxSettingsTab />}
-          {activeTab === "developers" && <DevelopersTab />}
+          {activeTab === "developers" && canManageTeam && <DevelopersTab />}
+          {activeTab === "developers" && memberRole && !canManageTeam && (
+            <p className="rounded-2xl bg-card p-6 text-sm text-muted-foreground shadow-sm ring-1 ring-border">Only the workspace owner and admins can manage API keys and webhooks.</p>
+          )}
 
           {/* ─── TAX & GST ─── */}
           {activeTab === "tax-gst" && org && (

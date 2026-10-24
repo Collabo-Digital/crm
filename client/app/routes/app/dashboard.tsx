@@ -18,6 +18,7 @@ import { TopProductsPanel } from "~/components/app/top-products-panel";
 import { LowStockProductsPanel } from "~/components/app/low-stock-products-panel";
 import { TableSkeleton } from "~/components/app/table-skeleton";
 import { EmptyState } from "~/components/app/empty-state";
+import { QueryErrorState } from "~/components/app/query-error-state";
 import {
   useDashboard,
   useExportDashboard,
@@ -87,6 +88,8 @@ export default function DashboardPage() {
   const {
     data: dashboard,
     isLoading,
+    isError: overviewFailed,
+    refetch: refetchOverview,
     isPlaceholderData: overviewStale,
   } = useDashboard(params);
   const { downloadReport, exportJson, exporting } = useExportDashboard();
@@ -291,6 +294,10 @@ export default function DashboardPage() {
             <div className="p-4">
               <TableSkeleton rows={5} columns={7} />
             </div>
+          ) : overviewFailed && !dashboard ? (
+            <div className="flex flex-1 items-center justify-center p-8">
+              <QueryErrorState resource="your recent orders" onRetry={() => refetchOverview()} />
+            </div>
           ) : recentOrders.length === 0 ? (
             <div className="flex flex-1 items-center justify-center p-8">
               <EmptyState
@@ -311,6 +318,7 @@ export default function DashboardPage() {
             lowStockVariants={dashboard?.lowStockVariants}
             periodLabel={range.label}
             isLoading={isLoading}
+            onRetry={overviewFailed && !dashboard ? () => void refetchOverview() : undefined}
             currency={orgCurrency}
             className="flex-1"
           />

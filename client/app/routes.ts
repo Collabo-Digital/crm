@@ -99,5 +99,8 @@ export default [
     // Super admin (Collabo team only) — guarded inside the route components.
     route("admin/users", "routes/app/admin/users.tsx"),
     route("admin/users/:userId", "routes/app/admin/user-detail.tsx"),
+    // Any other URL: a not-found page that keeps the navbar, rather than the
+    // root error page with nowhere to go.
+    route("*", "routes/app/not-found.tsx"),
   ]),
 ] satisfies RouteConfig;
