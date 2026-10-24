@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ChannelPlatform, ChannelStatus, ConsentType, Prisma } from '@prisma/client';
 import * as QRCode from 'qrcode';
@@ -15,6 +15,9 @@ import { widgetScript } from './widget-script';
 const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 const CHAT_PLATFORMS: ChannelPlatform[] = [ChannelPlatform.WHATSAPP, ChannelPlatform.FACEBOOK, ChannelPlatform.INSTAGRAM];
 const BUTTON_LINK_NAME = 'Website chat button';
+/// Sign-ups one store accepts in an hour. The form can be posted by scripts that
+/// fake the Origin header, and every sign-up can start a template send.
+const SIGNUPS_PER_HOUR = 200;
 
 /**
  * Growth tools (Campaigns → Growth): chat links with QR codes, counted
@@ -217,12 +220,13 @@ export class GrowthService {
     /**
      * A number from the pop-up, with the visitor's explicit consent. Only
      * from the merchant's own sites (Origin/Referer), and a filled honeypot
-     * is answered as if it worked. The contact is opted in with the consent
-     * text as evidence, tagged, and "Someone signs up on your website"
-     * automations start (they must send a template: the person has not
-     * written).
+     * is answered as if it worked. The contact is opted in with the pop-up's
+     * consent text as evidence, tagged, and "Someone signs up on your
+     * website" automations start (they must send a template: the person has
+     * not written). Nothing here proves who typed the number, so a contact who
+     * opted out is not opted back in: they do that by writing START.
      */
-    async signup(key: string, input: { phone?: string; name?: string; consent?: string; consentText?: string; page?: string; website?: string }, origin: string | undefined): Promise<{ ok: true }> {
+    async signup(key: string, input: { phone?: string; name?: string; consent?: string; page?: string; website?: string }, origin: string | undefined): Promise<{ ok: true }> {
         const widget = await this.prisma.siteWidget.findUnique({ where: { key }, include: { channel: { select: { id: true, organizationId: true, platform: true, status: true } } } });
         if (!widget?.enabled) throw new NotFoundException();
         const settings = parseWidgetSettings(widget.settings);
@@ -234,15 +238,24 @@ export class GrowthService {
         const digits = e164?.replace(/\D/g, '') ?? '';
         if (!e164 || digits.length < 8 || digits.length > 15) throw new BadRequestException('Enter your WhatsApp number with its country code.');
         if (widget.channel.status !== ChannelStatus.CONNECTED) throw new BadRequestException('Sign-ups are paused right now. Please try again later.');
+        const lastHour = await this.prisma.consentEvent.count({
+            where: { organizationId: widget.organizationId, source: 'widget', occurredAt: { gt: new Date(Date.now() - 3600_000) } },
+        });
+        if (lastHour >= SIGNUPS_PER_HOUR) {
+            this.logger.warn(`Widget ${widget.id}: sign-up refused, ${lastHour} in the last hour`);
+            throw new HttpException('Too many sign-ups right now. Please try again in a little while.', HttpStatus.TOO_MANY_REQUESTS);
+        }
         const name = input.name?.trim().slice(0, 80) || null;
         const page = input.page?.slice(0, 500) ?? null;
 
         const result = await this.prisma.$transaction(async (tx) => {
             const contact = await this.identity.resolve(tx, { id: widget.channel.id, organizationId: widget.organizationId }, { platform: ChannelPlatform.WHATSAPP, waId: digits, profileName: name }, { kind: 'none' });
+            if (contact.optedOutAt) return null;
             // Repeated sign-ups within a day change nothing.
             const recent = await tx.consentEvent.findFirst({ where: { contactId: contact.id, source: 'widget', occurredAt: { gt: new Date(Date.now() - 86_400_000) } }, select: { id: true } });
             if (recent) return null;
-            await this.consent.record(tx, contact, ConsentType.OPT_IN, 'widget', { page, consentText: (input.consentText ?? settings.popup.consentText).slice(0, 300), widgetId: widget.id });
+            // The pop-up's own wording, never text the request brings.
+            await this.consent.record(tx, contact, ConsentType.OPT_IN, 'widget', { page, consentText: settings.popup.consentText.slice(0, 300), widgetId: widget.id });
             const customerId = contact.customerId ?? (await this.identity.linkCustomerByPhone(tx, contact));
             const tag = settings.popup.tag && !contact.tags.some((t) => t.toLowerCase() === settings.popup.tag.toLowerCase()) ? settings.popup.tag : null;
             if (tag) await tx.channelContact.update({ where: { id: contact.id }, data: { tags: [...contact.tags, tag] } });

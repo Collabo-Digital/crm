@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ChannelPlatform, ChannelStatus, MessageTemplate, Prisma, TemplateCategory } from '@prisma/client';
+import { BroadcastStatus, ChannelPlatform, ChannelStatus, MessageTemplate, Prisma, TemplateCategory } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MetaGraphClient } from '../../channel/meta-graph.client';
 import { MetaGraphError } from '../../channel/meta-graph.types';
@@ -85,10 +85,22 @@ export class TemplatesService {
         return { id: channel.id, wabaId: channel.externalStoreId, metadata: channel.metadata };
     }
 
+    /** The WhatsApp account connected now, if any; templates of one connected before are not offered. */
+    private async currentWabaId(orgId: string): Promise<string | null> {
+        const channel = await this.prisma.channel.findFirst({
+            where: { organizationId: orgId, platform: ChannelPlatform.WHATSAPP, status: { not: ChannelStatus.DISCONNECTED } },
+            select: { externalStoreId: true },
+        });
+        return channel?.externalStoreId ?? null;
+    }
+
     async list(orgId: string, filter: { status?: string; category?: string; search?: string } = {}) {
+        const wabaId = await this.currentWabaId(orgId);
+        if (!wabaId) return [];
         const rows = await this.prisma.messageTemplate.findMany({
             where: {
                 organizationId: orgId,
+                wabaId,
                 ...(filter.status ? { status: filter.status } : {}),
                 ...(filter.category ? { category: filter.category as TemplateCategory } : {}),
                 ...(filter.search?.trim() ? { name: { contains: filter.search.trim().toLowerCase() } } : {}),
@@ -126,6 +138,9 @@ export class TemplatesService {
             next = res.data.paging?.next ? { url: res.data.paging.next } : null;
         }
         const now = new Date();
+        // Rows are keyed by account, not organization: ones left by an organization that
+        // connected this account before are dropped, so they are not updated across tenants.
+        await this.prisma.messageTemplate.deleteMany({ where: { wabaId: channel.wabaId, organizationId: { not: orgId } } });
         for (const t of found) {
             const data = {
                 externalId: t.id,
@@ -161,7 +176,7 @@ export class TemplatesService {
         });
         if (exists) throw new ConflictException(`A template called ${draft.name} already exists in this language.`);
         const { token } = await this.accounts.load(channel.id);
-        const components = await this.componentsFor(draft, token);
+        const components = await this.componentsFor(orgId, draft, token);
 
         let res: { data: { id?: string; status?: string; category?: string } };
         try {
@@ -228,7 +243,7 @@ export class TemplatesService {
         }
         const channel = await this.channelFor(orgId);
         const { token } = await this.accounts.load(channel.id);
-        const components = await this.componentsFor({ ...draft, name: template.name, language: template.language, category: template.category }, token);
+        const components = await this.componentsFor(orgId, { ...draft, name: template.name, language: template.language, category: template.category }, token);
         try {
             await this.metaGraph.request({
                 method: 'POST',
@@ -256,6 +271,17 @@ export class TemplatesService {
     /** Delete this language of the template at Meta and here. */
     async remove(orgId: string, id: string) {
         const template = await this.load(orgId, id);
+        const sending = await this.prisma.broadcast.findFirst({
+            where: { templateId: template.id, status: { in: [BroadcastStatus.SCHEDULED, BroadcastStatus.SENDING] } },
+            select: { name: true, status: true },
+        });
+        if (sending) {
+            throw new BadRequestException(
+                sending.status === BroadcastStatus.SENDING
+                    ? `The broadcast “${sending.name}” is sending this template. You can delete the template once it has finished or been stopped.`
+                    : `The broadcast “${sending.name}” is scheduled to send this template. You can delete the template once it has been sent or its schedule cancelled.`,
+            );
+        }
         const channel = await this.channelFor(orgId);
         const { token } = await this.accounts.load(channel.id);
         if (template.externalId) {
@@ -294,9 +320,16 @@ export class TemplatesService {
         const v = e.value;
         const data: Prisma.MessageTemplateUpdateInput = {};
         if (e.field === 'message_template_status_update' && e.event) {
-            data.status = e.event;
-            const reason = (v.reason as string | undefined) ?? (v.other_info as { title?: string } | undefined)?.title;
-            data.statusReason = reason && reason !== 'NONE' ? reason : null;
+            // Events, not statuses: Meta's API reads a reinstated template as APPROVED, and a
+            // flagged one stays approved and sendable (its quality webhook carries the warning).
+            if (e.event === 'REINSTATED') {
+                data.status = 'APPROVED';
+                data.statusReason = null;
+            } else if (e.event !== 'FLAGGED') {
+                data.status = e.event;
+                const reason = (v.reason as string | undefined) ?? (v.other_info as { title?: string } | undefined)?.title;
+                data.statusReason = reason && reason !== 'NONE' ? reason : null;
+            }
         } else if (e.field === 'message_template_quality_update') {
             data.qualityScore = (v.new_quality_score as string | undefined) ?? null;
         } else if (e.field === 'template_category_update') {
@@ -315,8 +348,10 @@ export class TemplatesService {
 
     /** Approved templates, for the inbox's template picker. */
     async approved(orgId: string) {
+        const wabaId = await this.currentWabaId(orgId);
+        if (!wabaId) return [];
         const rows = await this.prisma.messageTemplate.findMany({
-            where: { organizationId: orgId, status: 'APPROVED' },
+            where: { organizationId: orgId, wabaId, status: 'APPROVED' },
             orderBy: { name: 'asc' },
         });
         return rows.map((t) => this.view(t));
@@ -355,11 +390,13 @@ export class TemplatesService {
     }
 
     /** Components for Meta, uploading a media header first when there is one. */
-    private async componentsFor(draft: TemplateDraft, token: string) {
+    private async componentsFor(orgId: string, draft: TemplateDraft, token: string) {
         const header = draft.header;
         let handle: string | null = null;
         if (header && header.format !== 'TEXT' && header.format !== 'LOCATION') {
             if (!header.storageKey || !header.mime) throw new BadRequestException('Upload the header image, video or document first.');
+            // Uploads are stored under the organization's id.
+            if (!header.storageKey.startsWith(`${orgId}/`)) throw new BadRequestException('Upload the header file again.');
             handle = await this.uploadHeaderSample(header.storageKey, header.mime, header.filename ?? 'header', token);
         }
         try {

@@ -144,13 +144,16 @@ export default function BroadcastPage() {
               variant="outline"
               size="sm"
               disabled={cancel.isPending}
-              onClick={() => window.confirm(broadcast.status === "SENDING" ? "Stop sending? Messages already on their way still arrive." : "Cancel the schedule?") && cancel.mutate()}
+              onClick={() =>
+                window.confirm(broadcast.status === "SENDING" ? "Stop sending? Messages not yet sent are cancelled; the few being sent right now may still arrive." : "Cancel the schedule?") &&
+                cancel.mutate()
+              }
             >
               <XCircle />
               {broadcast.status === "SENDING" ? "Stop" : "Cancel schedule"}
             </Button>
           )}
-          {canSend && (broadcast.status === "COMPLETED" || broadcast.status === "CANCELLED") && broadcast.stats.failed > 0 && (
+          {canSend && (broadcast.status === "COMPLETED" || broadcast.status === "CANCELLED" || broadcast.status === "FAILED") && broadcast.stats.failed > 0 && (
             <Button variant="outline" size="sm" disabled={retry.isPending} onClick={() => retry.mutate()}>
               <RotateCcw />
               Retry failed

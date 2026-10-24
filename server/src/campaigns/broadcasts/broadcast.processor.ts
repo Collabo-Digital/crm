@@ -21,7 +21,7 @@ export class BroadcastProcessor extends WorkerHost {
                 case 'send':
                     return await this.broadcasts.sendBatch(data.broadcastId, data.recipientIds, data.batch ?? 0);
                 case 'finish':
-                    return await this.broadcasts.finishIfDone(data.broadcastId, data.attempt);
+                    return await this.broadcasts.finishIfDone(data.broadcastId, data.attempt, data.waiting);
             }
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);

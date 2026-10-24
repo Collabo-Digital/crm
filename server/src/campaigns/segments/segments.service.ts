@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, Segment } from '@prisma/client';
+import { BroadcastStatus, Prisma, Segment } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { contactName } from '../../messaging/contact-name';
 import { RfmService } from './rfm.service';
@@ -75,8 +75,33 @@ export class SegmentsService {
         }
     }
 
+    /**
+     * Refused while a draft or scheduled broadcast includes or leaves out this
+     * segment: its audience is worked out when it starts, and would fail then.
+     */
     async remove(orgId: string, id: string) {
         const segment = await this.load(orgId, id);
+        const using = await this.prisma.broadcast.findMany({
+            where: {
+                organizationId: orgId,
+                status: { in: [BroadcastStatus.DRAFT, BroadcastStatus.SCHEDULED] },
+                OR: [
+                    { audience: { path: ['segmentIds'], array_contains: [segment.id] } },
+                    { audience: { path: ['exclude', 'segmentIds'], array_contains: [segment.id] } },
+                ],
+            },
+            select: { name: true },
+            orderBy: { createdAt: 'desc' },
+            take: 3,
+        });
+        if (using.length) {
+            const names = using.map((b) => `“${b.name}”`).join(', ');
+            throw new ConflictException(
+                using.length === 1
+                    ? `The broadcast ${names} uses this segment and has not been sent yet. Take the segment out of its audience first.`
+                    : `The broadcasts ${names} use this segment and have not been sent yet. Take the segment out of their audiences first.`,
+            );
+        }
         await this.prisma.segment.delete({ where: { id: segment.id } });
         return { deleted: true };
     }

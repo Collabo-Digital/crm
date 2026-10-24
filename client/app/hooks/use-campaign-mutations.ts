@@ -4,7 +4,7 @@ import { campaignKeys } from "~/hooks/use-campaign-queries";
 import { inboxKeys } from "~/hooks/use-inbox-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { campaignsService, type SaveBroadcastRequest } from "~/services/campaigns.service";
-import type { ContactImportMapping, MessageRate, SegmentDefinition, TemplateDraft, WriteTemplateRequest } from "~/types/api";
+import type { BroadcastDetail, ContactImportMapping, MessageRate, SegmentDefinition, TemplateDraft, WriteTemplateRequest } from "~/types/api";
 
 export function useSyncTemplatesMutation() {
   const queryClient = useQueryClient();
@@ -103,17 +103,40 @@ export function useCreateBroadcastMutation() {
   });
 }
 
-/** Saves the draft quietly as the composer changes; only failures speak up. */
+/**
+ * Saves the draft quietly as the composer changes; only failures speak up.
+ * `save` builds each change from the draft as it stands, shows it at once,
+ * and sends the saves one at a time in order, so a change made before the
+ * last one is saved builds on it instead of overwriting it.
+ */
 export function useUpdateBroadcastMutation(id: string) {
   const queryClient = useQueryClient();
-  return useMutation({
+  const key = campaignKeys.broadcast(id);
+  const mutationKey = ["broadcast-save", id];
+  const mutation = useMutation({
+    mutationKey,
+    scope: { id: `broadcast-save:${id}` },
     mutationFn: (data: SaveBroadcastRequest) => campaignsService.updateBroadcast(id, data),
     onSuccess: (broadcast) => {
-      queryClient.setQueryData(campaignKeys.broadcast(id), broadcast);
+      // A later save is still queued: its answer includes this one, and showing this one would undo it on screen.
+      if (queryClient.isMutating({ mutationKey }) > 1) return;
+      queryClient.setQueryData(key, broadcast);
       void queryClient.invalidateQueries({ queryKey: campaignKeys.broadcastPreview(id) });
     },
-    onError: (error) => handleMutationError(error, "Your changes were not saved."),
+    onError: (error) => {
+      handleMutationError(error, "Your changes were not saved.");
+      void queryClient.invalidateQueries({ queryKey: key });
+    },
   });
+  const save = (change: (draft: BroadcastDetail) => SaveBroadcastRequest) => {
+    const draft = queryClient.getQueryData<BroadcastDetail>(key);
+    if (!draft) return;
+    const data = change(draft);
+    void queryClient.cancelQueries({ queryKey: key });
+    queryClient.setQueryData<BroadcastDetail>(key, { ...draft, ...data });
+    mutation.mutate(data);
+  };
+  return { save, isPending: mutation.isPending };
 }
 
 export function useDeleteBroadcastMutation() {

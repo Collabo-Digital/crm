@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Header, Headers, HttpCode, NotFoundException, Param, Post, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { Public } from '../auth/decorators/public.decorator';
 import { WidgetEventDto, WidgetSignupDto } from './dto/growth.dto';
 import { GrowthService } from './growth.service';
@@ -55,7 +55,9 @@ export class GrowthPublicController {
         await this.growth.widgetEvent(key, dto.type);
     }
 
+    /** A visitor signs up once; more from one address is a script working through numbers. */
     @Public()
+    @Throttle({ default: { ttl: 600_000, limit: 10 } })
     @Post('widget/:key/signup')
     @HttpCode(200)
     @Header('Cross-Origin-Resource-Policy', 'cross-origin')
