@@ -1,13 +1,14 @@
 import { useEffect } from "react";
-import { Navigate } from "react-router";
+import { Navigate, useLocation } from "react-router";
 import { useAuthStore } from "~/stores/auth.store";
 import { readTokenOrgId } from "~/lib/jwt";
+import { loginPath, rememberAfterOnboarding } from "~/lib/return-path";
 
 /**
  * Protects /app/* routes.
  *
- * - Not authenticated → /auth/login
- * - No organizations → /onboarding/account-type
+ * - Not authenticated → /auth/login, coming back here after signing in
+ * - No organizations → /onboarding/account-type, coming back here after it
  * - No currentOrgId → adopt the org the ACCESS TOKEN names (falling back to
  *   the first membership), so the UI and the server agree on the tenant
  * - All checks pass → render children
@@ -20,6 +21,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const organizations = useAuthStore((s) => s.organizations);
   const currentOrgId = useAuthStore((s) => s.currentOrgId);
   const setCurrentOrg = useAuthStore((s) => s.setCurrentOrg);
+  const location = useLocation();
+  const here = location.pathname + location.search;
+  const needsWorkspace = isAuthenticated && !!accessToken && organizations.length === 0;
 
   // Adopt an org when none is selected yet.
   //
@@ -42,11 +46,17 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }, [currentOrgId, organizations, accessToken, setCurrentOrg]);
 
+  // A new account arriving from the Shopify install link has to make its
+  // workspace first; the link is opened once that is done.
+  useEffect(() => {
+    if (needsWorkspace) rememberAfterOnboarding(here);
+  }, [needsWorkspace, here]);
+
   if (!isAuthenticated || !accessToken) {
-    return <Navigate to="/auth/login" replace />;
+    return <Navigate to={loginPath(here)} replace />;
   }
 
-  if (organizations.length === 0) {
+  if (needsWorkspace) {
     return <Navigate to="/onboarding/account-type" replace />;
   }
 

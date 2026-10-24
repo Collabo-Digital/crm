@@ -62,6 +62,10 @@ export const authService = {
       .post<AcceptInviteResponse>("/auth/invite/accept", data)
       .then((response) => response.data),
 
+  /** Revoke this session's refresh token on the server. */
+  logout: (refreshToken: string) =>
+    apiClient.post("/auth/logout", { refreshToken }).then((response) => response.data),
+
   /** Switch to a different organization — returns new JWT tokens scoped to the selected org. */
   switchOrg: (data: SwitchOrgRequest) =>
     apiClient

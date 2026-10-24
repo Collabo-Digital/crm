@@ -10,6 +10,7 @@ import { useNow } from "~/hooks/use-now";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { CallSession, microphoneProblem } from "~/lib/whatsapp-call";
 import { callsService } from "~/services/calls.service";
+import { useAuthStore } from "~/stores/auth.store";
 import { useCallStore } from "~/stores/call.store";
 import type { WhatsAppCallView } from "~/types/api";
 
@@ -96,6 +97,51 @@ function ActiveCall({ call }: { call: WhatsAppCallView }) {
   );
 }
 
+/// A call this browser is starting or answering is on the server a moment
+/// before it is in the call store; it is not "elsewhere" until it stays so.
+const DETACHED_AFTER_MS = 15_000;
+
+/**
+ * The member's own call that has no connection in this tab: the page was
+ * reloaded during it, or it is on in another tab. Without this nobody could
+ * hang it up from the app.
+ */
+function DetachedCall({ call }: { call: WhatsAppCallView }) {
+  const now = useNow(5000);
+  const queryClient = useQueryClient();
+  const [ending, setEnding] = useState(false);
+  if (now - new Date(call.startedAt).getTime() < DETACHED_AFTER_MS) return null;
+  return (
+    <div role="status" aria-label={`Call with ${call.contactName}`} className="flex items-center gap-3 rounded-2xl border bg-card p-3 shadow-lg">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <Phone className="size-5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-body font-semibold">{call.contactName}</p>
+        <p className="text-caption text-muted-foreground">Your call, not connected in this tab</p>
+      </div>
+      <Button
+        size="sm"
+        variant="destructive"
+        disabled={ending}
+        onClick={() => {
+          setEnding(true);
+          void callsService
+            .terminate(call.id)
+            .catch((err) => handleMutationError(err, "The call could not be ended."))
+            .finally(() => {
+              setEnding(false);
+              void queryClient.invalidateQueries({ queryKey: callKeys.live });
+            });
+        }}
+      >
+        {ending ? <Loader2 className="animate-spin" /> : <PhoneOff />}
+        End call
+      </Button>
+    </div>
+  );
+}
+
 /**
  * WhatsApp calls in the corner of every page: a person's call rings for the
  * whole team and the first to answer takes it in their browser; the call this
@@ -105,12 +151,14 @@ export function CallDock() {
   const queryClient = useQueryClient();
   const { data: calls = [] } = useLiveCalls(true);
   const { callId, session, set, clear } = useCallStore();
+  const me = useAuthStore((s) => s.user?.id);
   const [answering, setAnswering] = useState<string | null>(null);
   const seen = useRef<string | null>(null);
   const applied = useRef<string | null>(null);
 
   const mine = callId ? calls.find((c) => c.id === callId) ?? null : null;
   const ringing = calls.filter((c) => c.direction === "USER_INITIATED" && c.status === "RINGING");
+  const detached = calls.filter((c) => c.agentUserId === me && c.id !== callId && c.status !== "RINGING");
   useRing(ringing.length > 0 && !callId);
 
   // A business call: Meta's answer arrives on the calls webhook.
@@ -155,10 +203,11 @@ export function CallDock() {
     }
   }
 
-  if (!mine && ringing.length === 0) return null;
+  if (!mine && ringing.length === 0 && detached.length === 0) return null;
   return (
     <div className="fixed bottom-4 right-4 z-50 w-[min(22rem,calc(100vw-2rem))] space-y-2 max-md:bottom-[calc(var(--mobile-nav-height)+12px)]">
       {mine && <ActiveCall call={mine} />}
+      {detached.map((call) => <DetachedCall key={call.id} call={call} />)}
       {!callId &&
         ringing.slice(0, 2).map((call) => (
           <div key={call.id} role="alertdialog" aria-label={`WhatsApp call from ${call.contactName}`} className="rounded-2xl border border-success/40 bg-card p-3 shadow-lg">

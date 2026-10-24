@@ -6,6 +6,7 @@ import { authService } from "~/services/auth.service";
 import { useAuthStore } from "~/stores/auth.store";
 import { orgKeys } from "~/hooks/use-org-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
+import { takeAfterOnboarding } from "~/lib/return-path";
 import type {
   CreateOrganizationRequest,
   CreatePersonalRequest,
@@ -79,7 +80,7 @@ export function useCreatePersonalMutation() {
       setOrganizations([...existingOrgs, newMembership]);
       setCurrentOrg(org.id);
       clearPendingPlan();
-      navigate("/dashboard");
+      navigate(takeAfterOnboarding() ?? "/dashboard");
     },
     onError: (error) => handleMutationError(error, "Failed to create workspace."),
   });

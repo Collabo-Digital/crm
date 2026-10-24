@@ -12,6 +12,7 @@ import {
 import { authService } from "~/services/auth.service";
 import { useAuthStore } from "~/stores/auth.store";
 import { useAcceptInviteMutation } from "~/hooks/use-auth-mutations";
+import { signOut } from "~/lib/sign-out";
 
 export function meta() {
   return [
@@ -37,6 +38,7 @@ export default function InvitePage() {
   const token = searchParams.get("token") ?? "";
   const [showPassword, setShowPassword] = useState(false);
   const [existingPassword, setExistingPassword] = useState("");
+  const [signingOut, setSigningOut] = useState(false);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const authEmail = useAuthStore((state) => state.user?.email);
 
@@ -139,8 +141,16 @@ export default function InvitePage() {
   // "an influencer", "an admin", "an agent" — every other role takes "a".
   const roleArticle = /^[aeiou]/.test(roleLabel) ? "an" : "a";
   // Holding the link is not proof of owning an existing account: the server
-  // accepts it only for that account signed in, or with its password.
-  const wrongAccount = userExists && isAuthenticated && authEmail !== email;
+  // accepts it only for that account signed in, or with its password. A new
+  // invitee must not sign up on top of someone else's session either.
+  const wrongAccount = isAuthenticated && authEmail?.toLowerCase() !== email.toLowerCase();
+
+  /* Sign out here, staying on this page to accept as the invitee */
+  async function handleSignOut() {
+    setSigningOut(true);
+    await signOut();
+    setSigningOut(false);
+  }
 
   /* ── Invite loaded ── */
   return (
@@ -186,15 +196,18 @@ export default function InvitePage() {
           <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
             <p className="text-sm text-red-600">
               This invitation was sent to {email}, but you are signed in as{" "}
-              {authEmail}. Sign out and open the invitation link again to accept it.
+              {authEmail}. Sign out to accept it as {email}.
             </p>
           </div>
-          <Link
-            to="/auth/login"
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#CEF17B] px-4 py-2.5 text-sm font-semibold text-gray-900 shadow-sm transition hover:bg-[#BADE6F]"
+          <button
+            type="button"
+            onClick={() => void handleSignOut()}
+            disabled={signingOut}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#CEF17B] px-4 py-2.5 text-sm font-semibold text-gray-900 shadow-sm transition hover:bg-[#BADE6F] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Go to sign in
-          </Link>
+            {signingOut && <Loader2 className="size-4 animate-spin" />}
+            Sign out of {authEmail}
+          </button>
         </div>
       ) : userExists ? (
         /* ── Existing account: signed in as them, or confirm with their password ── */

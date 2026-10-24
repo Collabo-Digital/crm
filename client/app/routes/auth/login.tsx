@@ -8,6 +8,7 @@ import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { loginSchema } from "~/lib/schemas/auth.schemas";
 import type { LoginFormValues } from "~/lib/schemas/auth.schemas";
 import { useLoginMutation } from "~/hooks/use-auth-mutations";
+import { withNext } from "~/lib/return-path";
 
 export function meta() {
   return [
@@ -22,10 +23,12 @@ export function meta() {
  */
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
-  // Set when an invitation sent the visitor here to prove who they are; they
-  // are returned to it afterwards rather than dropped on the dashboard.
+  // The page that sent the visitor here (a signed-out link, an expired
+  // session, an invitation); they are returned to it afterwards rather than
+  // dropped on the dashboard.
   const [searchParams] = useSearchParams();
-  const login = useLoginMutation(searchParams.get("next"));
+  const next = searchParams.get("next");
+  const login = useLoginMutation(next);
 
   const {
     register,
@@ -146,7 +149,7 @@ export default function LoginPage() {
       <p className="mt-6 text-center text-sm text-gray-500">
         Don&apos;t have an account?{" "}
         <Link
-          to="/auth/signup"
+          to={withNext("/auth/signup", next)}
           className="font-semibold text-[#084734] hover:text-[#3d6000] transition-colors"
         >
           Create one

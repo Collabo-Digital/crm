@@ -12,6 +12,7 @@ import {
   useVerifyEmailMutation,
   useResendVerificationMutation,
 } from "~/hooks/use-auth-mutations";
+import { withNext } from "~/lib/return-path";
 
 export function meta() {
   return [
@@ -33,11 +34,13 @@ export default function VerifyEmailPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const userId = searchParams.get("userId");
+  // Where sign-in was headed before signup; opened once verified.
+  const next = searchParams.get("next");
 
   const [code, setCode] = useState("");
   const [cooldown, setCooldown] = useState(0);
 
-  const verify = useVerifyEmailMutation();
+  const verify = useVerifyEmailMutation(next);
   const resend = useResendVerificationMutation();
 
   // Cooldown timer
@@ -157,7 +160,7 @@ export default function VerifyEmailPage() {
       {/* Back link */}
       <div className="mt-6 flex justify-center">
         <Link
-          to="/auth/signup"
+          to={withNext("/auth/signup", next)}
           className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors"
         >
           <ArrowLeft className="size-3.5" /> Back to sign up

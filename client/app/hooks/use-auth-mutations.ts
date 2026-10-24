@@ -8,6 +8,7 @@ import { handleMutationError } from "~/lib/handle-mutation-error";
 import { readTokenOrgId } from "~/lib/jwt";
 import { getLandingPath } from "~/lib/sections";
 import { defaultGrantsForRole } from "~/lib/permissions";
+import { safeNext, withNext } from "~/lib/return-path";
 import type {
   SignupRequest,
   LoginRequest,
@@ -46,15 +47,20 @@ function initialOrgId(
 
 // ─── Signup ──────────────────────────────────────────────────────────────────
 
+/** The verification page for `userId`, keeping the page to return to after it. */
+function verifyEmailPath(userId: string, next: string | null | undefined) {
+  return withNext(`/auth/verify-email?userId=${encodeURIComponent(userId)}`, next);
+}
+
 /** Mutation hook for new user registration. Navigates to email verification on success. */
-export function useSignupMutation() {
+export function useSignupMutation(next?: string | null) {
   const navigate = useNavigate();
 
   return useMutation({
     mutationFn: (data: SignupRequest) => authService.signup(data),
     onSuccess: (data) => {
       toast.success("Account created! Please verify your email.");
-      navigate(`/auth/verify-email?userId=${data.userId}`);
+      navigate(verifyEmailPath(data.userId, next));
     },
     onError: (error) => handleMutationError(error),
   });
@@ -63,18 +69,6 @@ export function useSignupMutation() {
 // ─── Login ───────────────────────────────────────────────────────────────────
 
 /** Mutation hook for user login. Sets auth state and navigates to the appropriate post-auth route. */
-/**
- * Where to go after signing in, honouring a `next` the caller asked for.
- *
- * Only same-site paths are accepted: an absolute URL or a protocol-relative
- * `//evil.example` would turn our own login into an open redirect.
- */
-function safeNext(next: string | null | undefined): string | null {
-  if (!next) return null;
-  if (!next.startsWith("/") || next.startsWith("//")) return null;
-  return next;
-}
-
 export function useLoginMutation(next?: string | null) {
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
@@ -99,7 +93,7 @@ export function useLoginMutation(next?: string | null) {
           const userId = error.response.data?.userId;
           if (userId) {
             toast.info("Please verify your email first.");
-            navigate(`/auth/verify-email?userId=${userId}`);
+            navigate(verifyEmailPath(userId, next));
             return;
           }
         }
@@ -118,7 +112,7 @@ export function useLoginMutation(next?: string | null) {
 // ─── Email Verification ─────────────────────────────────────────────────────
 
 /** Mutation hook for email verification via OTP code. Sets auth state on success. */
-export function useVerifyEmailMutation() {
+export function useVerifyEmailMutation(next?: string | null) {
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
 
@@ -130,7 +124,9 @@ export function useVerifyEmailMutation() {
       const orgId = initialOrgId(data.accessToken, data.organizations);
       if (orgId) useAuthStore.getState().setCurrentOrg(orgId);
       toast.success("Email verified successfully!");
-      navigate(resolvePostAuthRoute(data.nextStep));
+      // Without a workspace yet, AuthGuard sends them through onboarding and
+      // opens this page after it.
+      navigate(safeNext(next) ?? resolvePostAuthRoute(data.nextStep));
     },
     onError: (error) => handleMutationError(error),
   });
@@ -187,8 +183,11 @@ export function useAcceptInviteMutation() {
     mutationFn: (data: AcceptInviteRequest) =>
       authService.acceptInvite(data),
     onSuccess: (data) => {
+      // The session now belongs to the invitee. Another account's profile and
+      // workspaces (left signed in on this browser) must not carry over.
+      const sameUser = existingUser?.id === data.user.id;
       // Build user from response (use existing user data if available for richer profile)
-      const user = existingUser
+      const user = sameUser && existingUser
         ? { ...existingUser, ...data.user }
         : {
             id: data.user.id,
@@ -234,15 +233,18 @@ export function useAcceptInviteMutation() {
         },
       };
 
-      // Merge with existing orgs (don't replace — user may already belong to other orgs)
-      const alreadyHasOrg = existingOrgs.some(
+      // Merge with the same user's orgs (don't replace — they may already
+      // belong to others).
+      const ownOrgs = sameUser ? existingOrgs : [];
+      const alreadyHasOrg = ownOrgs.some(
         (o) => o.organization.id === data.organization.id,
       );
       const mergedOrgs = alreadyHasOrg
-        ? existingOrgs
-        : [...existingOrgs, invitedOrgMembership];
+        ? ownOrgs
+        : [...ownOrgs, invitedOrgMembership];
 
       setAuth(user, data.accessToken, data.refreshToken, mergedOrgs);
+      if (!sameUser) useAuthStore.getState().setImpersonation(null);
       useAuthStore.getState().setCurrentOrg(data.organization.id);
       toast.success(`Joined ${data.organization.name} successfully!`);
       // An influencer has no dashboard: it is one of the sections their role

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, MessageCircle, ExternalLink } from "lucide-react";
 import {
   Dialog,
@@ -15,6 +15,7 @@ import {
   useCompleteWhatsAppInstallMutation,
 } from "~/hooks/use-whatsapp-mutations";
 import { ensureMetaSdk, readEmbeddedSignupMessage, type EmbeddedSignupEvent } from "~/lib/meta-sdk";
+import type { WhatsAppInstallResponse } from "~/types/api";
 
 interface WhatsAppConnectDialogProps {
   open: boolean;
@@ -33,14 +34,38 @@ type NumberChoice = "business-app" | "new-number";
 /// returns the code. The two race; the code lives 30 seconds.
 const SESSION_INFO_WAIT_MS = 2_000;
 
+/// How long to wait for a CANCEL message after FB.login returns no code.
+const CANCEL_WAIT_MS = 1_000;
+
+/// The server keeps a signup state for ten minutes; renew it well before.
+const STATE_RENEW_MS = 8 * 60_000;
+
+const NO_WINDOW =
+  "Meta's window closed before signup finished. If no window opened, allow pop-ups for this site in your browser, then try again.";
+
+/** Poll `read` until it has a value or `ms` pass. */
+function waitFor<T>(read: () => T | null, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const tick = () => {
+      const value = read();
+      if (value || Date.now() - started > ms) resolve(value);
+      else setTimeout(tick, 100);
+    };
+    tick();
+  });
+}
+
 /**
  * Dialog that kicks off Meta's WhatsApp Embedded Signup flow (v5).
  *
  * Flow:
- *   1. Click "Continue with Meta" → backend returns { configId, state }.
- *   2. Launch FB.login with that configId. By default Meta offers to connect
- *      the business's existing WhatsApp Business app number (coexistence);
- *      "A new number" opts out of that.
+ *   1. When the dialog opens, load the Meta SDK and ask the backend for
+ *      { configId, state }. Browsers open a popup only from the click itself,
+ *      not after an awaited request, so this cannot wait for the click.
+ *   2. "Continue with Meta" launches FB.login with that configId. By default
+ *      Meta offers to connect the business's existing WhatsApp Business app
+ *      number (coexistence); "A new number" opts out of that.
  *   3. The popup posts session info (which account and number, whether it is
  *      a Business app number) and returns a short-lived `code`.
  *   4. Forward both to the backend, which exchanges the code, subscribes to
@@ -54,92 +79,112 @@ export function WhatsAppConnectDialog({
 }: WhatsAppConnectDialogProps) {
   const [launching, setLaunching] = useState(false);
   const [choice, setChoice] = useState<NumberChoice>("business-app");
+  const [signup, setSignup] = useState<WhatsAppInstallResponse | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  // Bumped to fetch a new state: after a failed try (the server spends the
+  // state on every callback), or from "Try again".
+  const [attempt, setAttempt] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
   const sessionRef = useRef<Extract<EmbeddedSignupEvent, { kind: "finish" }> | null>(null);
+  const cancelRef = useRef<Extract<EmbeddedSignupEvent, { kind: "cancel" }> | null>(null);
 
-  const startInstall = useWhatsAppInstallMutation();
+  const { mutateAsync: requestSignup } = useWhatsAppInstallMutation();
   const completeInstall = useCompleteWhatsAppInstallMutation();
 
-  async function handleConnect() {
-    setLaunching(true);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    const load = async () => {
+      const ready = await ensureMetaSdk();
+      if (!ready || !live) return;
+      try {
+        const next = await requestSignup({ reconnectChannelId });
+        if (live) setSignup(next);
+      } catch {
+        // The mutation shows the server's reason.
+      }
+    };
+    setSignup(null);
+    setNotice(null);
+    setPreparing(true);
+    void load().finally(() => live && setPreparing(false));
+    const renew = setInterval(() => void load(), STATE_RENEW_MS);
+    return () => {
+      live = false;
+      clearInterval(renew);
+    };
+  }, [open, reconnectChannelId, requestSignup, attempt]);
 
-    const ready = await ensureMetaSdk();
-    if (!ready || !window.FB) {
-      setLaunching(false);
-      return;
-    }
+  // Synchronous to FB.login on purpose: see step 1 above.
+  function handleConnect() {
+    if (!signup || !window.FB) return;
+    const { configId, state } = signup;
+    setLaunching(true);
+    setNotice(null);
 
     sessionRef.current = null;
+    cancelRef.current = null;
     const onMessage = (event: MessageEvent) => {
       const parsed = readEmbeddedSignupMessage(event);
       if (parsed?.kind === "finish") sessionRef.current = parsed;
+      else if (parsed?.kind === "cancel") cancelRef.current = parsed;
     };
     window.addEventListener("message", onMessage);
     const stopListening = () => window.removeEventListener("message", onMessage);
 
-    try {
-      const { configId, state } = await startInstall.mutateAsync({ reconnectChannelId });
-
-      window.FB.login(
-        (response) => {
-          const code = response.authResponse?.code;
-          if (!code) {
+    window.FB.login(
+      (response) => {
+        const code = response.authResponse?.code;
+        if (!code) {
+          // Embedded Signup posts CANCEL when someone leaves the flow; with
+          // no CANCEL the window most likely never opened.
+          void waitFor(() => cancelRef.current, CANCEL_WAIT_MS).then((cancel) => {
             stopListening();
             setLaunching(false);
-            // User closed the popup or denied — not an error worth toasting.
-            return;
-          }
-          void waitForSession().then((session) => {
-            stopListening();
-            completeInstall.mutate(
-              {
-                code,
-                state,
-                phoneNumberId: session?.phoneNumberId,
-                wabaId: session?.wabaId,
-                isOnBizApp: session?.isOnBizApp,
-                businessId: session?.businessId,
-              },
-              {
-                onSuccess: () => {
-                  setLaunching(false);
-                  onOpenChange(false);
-                },
-                onError: () => setLaunching(false),
-              },
-            );
+            if (cancel?.error) setNotice(`Meta stopped the signup: ${cancel.error}`);
+            else if (!cancel) setNotice(NO_WINDOW);
           });
+          return;
+        }
+        void waitFor(() => sessionRef.current, SESSION_INFO_WAIT_MS).then((session) => {
+          stopListening();
+          completeInstall.mutate(
+            {
+              code,
+              state,
+              phoneNumberId: session?.phoneNumberId,
+              wabaId: session?.wabaId,
+              isOnBizApp: session?.isOnBizApp,
+              businessId: session?.businessId,
+            },
+            {
+              onSuccess: () => {
+                setLaunching(false);
+                onOpenChange(false);
+              },
+              onError: () => {
+                setLaunching(false);
+                setAttempt((n) => n + 1);
+              },
+            },
+          );
+        });
+      },
+      {
+        config_id: configId,
+        response_type: "code",
+        override_default_response_type: true,
+        extras: {
+          version: "v5",
+          setup: {},
+          // v5 offers the Business app number by default; opt out for a
+          // number that will run on the Cloud API alone.
+          ...(choice === "new-number"
+            ? { features: [{ name: "whatsapp_business_app_onboarding", enabled: false }] }
+            : {}),
         },
-        {
-          config_id: configId,
-          response_type: "code",
-          override_default_response_type: true,
-          extras: {
-            version: "v5",
-            setup: {},
-            // v5 offers the Business app number by default; opt out for a
-            // number that will run on the Cloud API alone.
-            ...(choice === "new-number"
-              ? { features: [{ name: "whatsapp_business_app_onboarding", enabled: false }] }
-              : {}),
-          },
-        },
-      );
-    } catch {
-      stopListening();
-      setLaunching(false);
-    }
-  }
-
-  function waitForSession(): Promise<typeof sessionRef.current> {
-    if (sessionRef.current) return Promise.resolve(sessionRef.current);
-    return new Promise((resolve) => {
-      const started = Date.now();
-      const tick = () => {
-        if (sessionRef.current || Date.now() - started > SESSION_INFO_WAIT_MS) resolve(sessionRef.current);
-        else setTimeout(tick, 100);
-      };
-      tick();
-    });
+      },
+    );
   }
 
   const isPending = launching || completeInstall.isPending;
@@ -222,14 +267,27 @@ export function WhatsAppConnectDialog({
           replies once the free monthly allowance is used.
         </p>
 
+        {notice && (
+          <p role="alert" className="text-caption text-destructive">
+            {notice}
+          </p>
+        )}
+
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>
             Cancel
           </Button>
-          <Button variant="accent" onClick={handleConnect} disabled={isPending}>
-            {isPending && <Loader2 className="animate-spin" />}
-            {isPending ? "Connecting…" : "Continue with Meta"}
-          </Button>
+          {signup || isPending || preparing ? (
+            <Button variant="accent" onClick={handleConnect} disabled={isPending || !signup}>
+              {(isPending || !signup) && <Loader2 className="animate-spin" />}
+              {isPending ? "Connecting…" : signup ? "Continue with Meta" : "Getting ready…"}
+            </Button>
+          ) : (
+            // Getting ready failed; the reason was shown as it happened.
+            <Button variant="accent" onClick={() => setAttempt((n) => n + 1)}>
+              Try again
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
