@@ -183,6 +183,12 @@ export function zonedParts(date: Date, timeZone: string): ZonedParts {
   return { year: pick('year'), month: pick('month'), day: pick('day') };
 }
 
+/** `YYYY-MM-DD` as observed in `timeZone` — not `toISOString()`, which is the UTC date. */
+export function zonedDateString(date: Date, timeZone: string): string {
+  const { year, month, day } = zonedParts(date, timeZone);
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 /** Offset (ms) to add to a UTC instant to get `timeZone`'s wall clock. */
 function zoneOffsetMs(date: Date, timeZone: string): number {
   const parts = new Intl.DateTimeFormat('en-US', {

@@ -50,6 +50,7 @@ import {
   INDIA_TZ,
   resolveGstTimeZone,
   zonedDayEndExclusive,
+  zonedDateString,
   zonedDayStart,
   zonedParts,
 } from '../common/utils/zoned-date.util';
@@ -622,10 +623,19 @@ export class InvoiceService {
     const lineItemResults: Array<{
       orderLineItem: (typeof order.lineItems)[0];
       calculation: GstCalculationResult;
+      /** Per unit and for the line, before tax: what the invoice row prints. */
+      unitPrice: number;
+      discount: number;
       hsnCode: string | null;
       unitOfMeasure: string;
       supplyType: GstSupplyType;
     }> = [];
+
+    // A Shopify store priced "taxes included" sends line prices (and shipping)
+    // that already contain GST. Adding GST on top declared about 18% more
+    // taxable value and tax than was collected, so those amounts are split
+    // into taxable value and tax instead.
+    const pricesIncludeTax = order.taxesIncluded === true;
 
     // Rates for EVERY line in at most four queries, run on this transaction.
     //
@@ -680,19 +690,41 @@ export class InvoiceService {
       // Resolved above, before the rates — see the note there.
       const { hsnCode, unitOfMeasure, supplyType } = lineClassifications[index];
 
-      const calculation = this.calculator.calculateLineItem(
-        {
-          unitPrice: this.calculator.toNumber(item.price),
-          quantity: item.quantity,
-          discount: this.calculator.toNumber(item.totalDiscount),
-          gstRate,
-        },
-        isIntraState,
-      );
+      const input = {
+        unitPrice: this.calculator.toNumber(item.price),
+        quantity: item.quantity,
+        discount: this.calculator.toNumber(item.totalDiscount),
+        gstRate,
+      };
 
+      if (!pricesIncludeTax) {
+        lineItemResults.push({
+          orderLineItem: item,
+          calculation: this.calculator.calculateLineItem(input, isIntraState),
+          unitPrice: input.unitPrice,
+          discount: input.discount,
+          hsnCode,
+          unitOfMeasure,
+          supplyType,
+        });
+        continue;
+      }
+
+      // The row prints pre-tax figures so unit price × quantity − discount is
+      // still its taxable value (to the paisa).
+      const calculation = this.calculator.calculateInclusiveLineItem(input, isIntraState);
+      const unitPrice = this.calculator.round2((input.unitPrice * 100) / (100 + gstRate));
       lineItemResults.push({
         orderLineItem: item,
         calculation,
+        unitPrice,
+        discount:
+          input.discount > 0
+            ? Math.max(
+                0,
+                this.calculator.round2(unitPrice * input.quantity - calculation.taxableValue),
+              )
+            : 0,
         hsnCode,
         unitOfMeasure,
         supplyType,
@@ -710,9 +742,11 @@ export class InvoiceService {
     // taxable values, so it flows into the rate buckets, table 12 and the HSN
     // summary automatically rather than needing a parallel code path.
     const shippingAmount = this.calculator.toNumber(order.totalShippingPrice);
-    const taxShipping = taxSettings.taxShipping && shippingAmount > 0;
+    // True only once the charge has actually been folded into the lines; with
+    // no taxable line to carry it, shipping stays an untaxed add-on.
+    let shippingApportioned = false;
 
-    if (taxShipping) {
+    if (taxSettings.taxShipping && shippingAmount > 0) {
       const shares = apportionShipping(
         lineItemResults.map((r) => ({
           taxableValue: r.calculation.taxableValue,
@@ -725,19 +759,33 @@ export class InvoiceService {
 
       lineItemResults.forEach((r, i) => {
         if (!shares[i]) return;
+        shippingApportioned = true;
         // Recompute from the augmented base so CGST/SGST/IGST all move together
-        // rather than being patched individually.
-        r.calculation = this.calculator.calculateLineItem(
-          {
-            unitPrice: r.calculation.taxableValue + shares[i],
-            quantity: 1,
-            discount: 0,
-            gstRate: r.calculation.gstRate,
-          },
-          isIntraState,
-        );
+        // rather than being patched individually. A tax-inclusive charge joins
+        // the line's tax-inclusive amount.
+        r.calculation = pricesIncludeTax
+          ? this.calculator.calculateInclusiveLineItem(
+              {
+                unitPrice: r.calculation.totalAmount + shares[i],
+                quantity: 1,
+                discount: 0,
+                gstRate: r.calculation.gstRate,
+              },
+              isIntraState,
+            )
+          : this.calculator.calculateLineItem(
+              {
+                unitPrice: r.calculation.taxableValue + shares[i],
+                quantity: 1,
+                discount: 0,
+                gstRate: r.calculation.gstRate,
+              },
+              isIntraState,
+            );
       });
     }
+    // What the invoice adds on top of the lines, untaxed.
+    const untaxedShipping = shippingApportioned ? 0 : shippingAmount;
 
     // 7. Calculate invoice totals.
     //    The discount reported is the sum of the discounts ACTUALLY applied to
@@ -749,18 +797,15 @@ export class InvoiceService {
     //    with the order total.
     const calculations = lineItemResults.map((r) => r.calculation);
     const appliedDiscount = this.calculator.round2(
-      lineItemResults.reduce(
-        (sum, r) => sum + this.calculator.toNumber(r.orderLineItem.totalDiscount),
-        0,
-      ),
+      lineItemResults.reduce((sum, r) => sum + r.discount, 0),
     );
     const totals = this.calculator.calculateInvoiceTotals(
       calculations,
       appliedDiscount,
       // Zero when shipping was apportioned: it is already inside the line
       // taxable values, and adding it again would double-count it in the grand
-      // total. `shippingCharge` is still persisted for the totals ladder.
-      taxShipping ? 0 : shippingAmount,
+      // total.
+      untaxedShipping,
     );
 
     // 7b. Reconcile what the SALES CHANNEL charged against what this invoice
@@ -949,8 +994,9 @@ export class InvoiceService {
         // Persisted, not just folded into grandTotal. `calculateInvoiceTotals`
         // adds shipping to the grand total; storing the addend is what lets the
         // detail dialog, the printed invoice and the CSV show a totals ladder
-        // that actually sums to `grandTotal`.
-        shippingCharge: this.calculator.toNumber(order.totalShippingPrice),
+        // that actually sums to `grandTotal`. Zero when the charge was taxed
+        // into the lines, or the ladder would list it a second time.
+        shippingCharge: untaxedShipping,
         // Reconciliation snapshot. `chargedTax: null` reads as "never compared",
         // which is not the same as "compared and equal".
         // Counts BOTH a null and the legacy '0000' as missing, because issued
@@ -979,14 +1025,14 @@ export class InvoiceService {
             unitOfMeasure: r.unitOfMeasure,
             supplyType: r.supplyType,
             quantity: r.orderLineItem.quantity,
-            // The gross per-unit price. (This previously read as
+            // The pre-discount, pre-tax per-unit price. (This previously read as
             // `taxable/qty + taxable === 0 ? 0 : price` — `+` and `===` bind
             // tighter than `?:`, so the division was computed and discarded and
             // a fully-discounted line was written with unitPrice 0 while
             // `discount` still held the full amount, breaking the row's own
             // invariant taxableValue = unitPrice*qty - discount.)
-            unitPrice: this.calculator.toNumber(r.orderLineItem.price),
-            discount: this.calculator.toNumber(r.orderLineItem.totalDiscount),
+            unitPrice: r.unitPrice,
+            discount: r.discount,
             taxableValue: r.calculation.taxableValue,
             gstRate: r.calculation.gstRate,
             cgstRate: r.calculation.cgstRate,
@@ -1231,11 +1277,16 @@ export class InvoiceService {
       );
     }
 
+    // A live credit note keeps reducing tax in the return whatever happens to
+    // the invoice it reverses, so cancelling (and reissuing) the invoice would
+    // net the same sale out twice. The notes have to go first. Part of the
+    // WHERE so a note raised between the check and the write still blocks it.
     const claimed = await this.prisma.invoice.updateMany({
       where: {
         id,
         organizationId: orgId,
         status: { not: InvoiceStatus.CANCELLED },
+        creditNotes: { none: { status: InvoiceStatus.CREDIT_NOTE } },
       },
       data: {
         status: InvoiceStatus.CANCELLED,
@@ -1244,14 +1295,29 @@ export class InvoiceService {
     });
 
     if (claimed.count === 0) {
-      // Zero rows means one of two very different things. Distinguish them so
-      // a cross-tenant id still 404s rather than reporting the invoice as
+      // Zero rows means one of several very different things. Distinguish them
+      // so a cross-tenant id still 404s rather than reporting the invoice as
       // already cancelled (which would confirm that it exists).
       const existing = await this.prisma.invoice.findFirst({
         where: { id, organizationId: orgId },
-        select: { id: true },
+        select: {
+          invoiceNumber: true,
+          status: true,
+          creditNotes: {
+            where: { status: InvoiceStatus.CREDIT_NOTE },
+            select: { invoiceNumber: true },
+            orderBy: { invoiceNumber: 'asc' },
+          },
+        },
       });
       if (!existing) throw new NotFoundException('Invoice not found');
+      if (existing.status !== InvoiceStatus.CANCELLED && existing.creditNotes.length > 0) {
+        const notes = existing.creditNotes.map((n) => n.invoiceNumber).join(', ');
+        throw new ConflictException(
+          `Invoice ${existing.invoiceNumber} has credit ${existing.creditNotes.length === 1 ? 'note' : 'notes'} ${notes} against it. ` +
+            `Cancel ${existing.creditNotes.length === 1 ? 'that credit note' : 'those credit notes'} first, then cancel the invoice.`,
+        );
+      }
       throw new ConflictException('Invoice is already cancelled');
     }
 
@@ -1758,11 +1824,17 @@ export class InvoiceService {
         creditNoteForId: invoiceId,
         status: InvoiceStatus.CREDIT_NOTE,
       },
-      _sum: { grandTotal: true },
+      _sum: { grandTotal: true, subtotal: true, totalTax: true },
     });
 
-    const originalTotal = new Prisma.Decimal(original.grandTotal);
-    const credited = new Prisma.Decimal(alreadyCredited._sum.grandTotal ?? 0);
+    const dec = (value: Prisma.Decimal.Value | null | undefined) =>
+      new Prisma.Decimal(value ?? 0);
+    const money = (value: Prisma.Decimal) =>
+      value.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+
+    const originalTotal = dec(original.grandTotal);
+    const originalTax = dec(original.totalTax);
+    const credited = dec(alreadyCredited._sum.grandTotal);
     const remaining = originalTotal.minus(credited);
 
     if (remaining.lessThanOrEqualTo(0)) {
@@ -1771,11 +1843,18 @@ export class InvoiceService {
       );
     }
 
-    // Full reversal unless an amount is given. A partial credit is apportioned
-    // pro-rata across the original lines by taxable value, so every line keeps
-    // its own rate and the reversed tax stays proportional — the alternative,
-    // guessing which lines were returned, is not knowable from an amount.
-    const requested = dto.amount ? new Prisma.Decimal(dto.amount) : remaining;
+    // The invoice in two parts: its lines with their GST (shipping taxed into
+    // them included), and whatever it adds on top untaxed (shipping). A
+    // partial credit used to scale every figure by amount / grand total, so a
+    // returned item reversed part of the untaxed shipping and too little GST.
+    const goodsTotal = dec(original.subtotal).plus(originalTax);
+    const goodsRemaining = Prisma.Decimal.max(
+      0,
+      goodsTotal.minus(dec(alreadyCredited._sum.subtotal).plus(dec(alreadyCredited._sum.totalTax))),
+    );
+    const untaxedRemaining = Prisma.Decimal.max(0, remaining.minus(goodsRemaining));
+
+    const requested = dto.amount ? money(dec(dto.amount)) : remaining;
     if (requested.greaterThan(remaining)) {
       throw new BadRequestException(
         `Cannot credit ${requested.toFixed(2)}: only ${remaining.toFixed(2)} of ` +
@@ -1783,15 +1862,63 @@ export class InvoiceService {
       );
     }
 
+    // How much of the credit is goods (with their GST). The rest is untaxed
+    // shipping. Every line is scaled by the same share, so each keeps its own
+    // rate — which items came back is not knowable from an amount.
+    let goodsPart: Prisma.Decimal;
+    if (requested.equals(remaining)) {
+      goodsPart = goodsRemaining;
+    } else if (dto.tax !== undefined && dto.tax !== null) {
+      // The refund's own GST says how much of it was goods. Paise of
+      // rounding across lines are tolerated; anything more is a figure that
+      // does not belong to this invoice.
+      const tolerance = new Prisma.Decimal('0.10');
+      const tax = money(dec(dto.tax));
+      if (tax.greaterThan(requested)) {
+        throw new BadRequestException(
+          `The GST (${tax.toFixed(2)}) cannot be more than the amount credited (${requested.toFixed(2)}).`,
+        );
+      }
+      if (originalTax.isZero() && tax.greaterThan(0)) {
+        throw new BadRequestException(
+          `Invoice ${original.invoiceNumber} carries no GST, so a credit note against it cannot reverse any. Leave the GST blank.`,
+        );
+      }
+      goodsPart = originalTax.isZero()
+        ? Prisma.Decimal.min(requested, goodsRemaining)
+        : money(goodsTotal.times(tax).dividedBy(originalTax));
+      if (goodsPart.greaterThan(goodsRemaining.plus(tolerance))) {
+        throw new BadRequestException(
+          `${tax.toFixed(2)} of GST is more than invoice ${original.invoiceNumber} has left to credit. ` +
+            `Check the GST figure, or leave it blank to work it out from the invoice.`,
+        );
+      }
+      if (goodsPart.greaterThan(requested.plus(tolerance))) {
+        throw new BadRequestException(
+          `${tax.toFixed(2)} of GST is more than a credit of ${requested.toFixed(2)} can include at ` +
+            `invoice ${original.invoiceNumber}'s GST rates. Check the amount and the GST.`,
+        );
+      }
+      if (requested.minus(goodsPart).greaterThan(untaxedRemaining.plus(tolerance))) {
+        throw new BadRequestException(
+          `A credit of ${requested.toFixed(2)} with ${tax.toFixed(2)} of GST does not match ` +
+            `invoice ${original.invoiceNumber}: the goods that GST was charged on come to ` +
+            `${goodsPart.toFixed(2)}, and only ${untaxedRemaining.toFixed(2)} of untaxed shipping is left ` +
+            `to credit. Check the GST figure, or leave it blank to work it out from the invoice.`,
+        );
+      }
+      goodsPart = Prisma.Decimal.min(goodsPart, goodsRemaining, requested);
+    } else {
+      // Goods first: a refund is far more often a returned item than a
+      // refunded delivery charge.
+      goodsPart = Prisma.Decimal.min(requested, goodsRemaining);
+    }
+
     const isFull = requested.equals(remaining) && credited.isZero();
-    const ratio = originalTotal.isZero()
-      ? new Prisma.Decimal(0)
-      : requested.dividedBy(originalTotal);
+    const ratio = goodsTotal.isZero() ? new Prisma.Decimal(0) : goodsPart.dividedBy(goodsTotal);
 
     const scale = (value: Prisma.Decimal.Value) =>
-      isFull
-        ? new Prisma.Decimal(value)
-        : new Prisma.Decimal(value).times(ratio).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+      isFull ? dec(value) : money(dec(value).times(ratio));
 
     const financialYear = this.calculator.getFinancialYear(noteDate, timeZone);
     const noteNumber = await this.invoiceNumber.getNextCreditNoteNumber(
@@ -1800,26 +1927,47 @@ export class InvoiceService {
       tx,
     );
 
-    const lines = original.lineItems.map((li) => ({
-      orderLineItemId: li.orderLineItemId,
-      description: li.description,
-      hsnCode: li.hsnCode,
-      unitOfMeasure: li.unitOfMeasure,
-      supplyType: li.supplyType,
-      quantity: isFull ? li.quantity : 0,
-      unitPrice: li.unitPrice,
-      discount: scale(li.discount),
-      taxableValue: scale(li.taxableValue),
-      gstRate: li.gstRate,
-      cgstRate: li.cgstRate,
-      cgstAmount: scale(li.cgstAmount),
-      sgstRate: li.sgstRate,
-      sgstAmount: scale(li.sgstAmount),
-      igstRate: li.igstRate,
-      igstAmount: scale(li.igstAmount),
-      totalTax: scale(li.totalTax),
-      totalAmount: scale(li.totalAmount),
-    }));
+    const lines = original.lineItems.map((li) => {
+      const taxableValue = scale(li.taxableValue);
+      const cgstAmount = scale(li.cgstAmount);
+      const sgstAmount = scale(li.sgstAmount);
+      const igstAmount = scale(li.igstAmount);
+      const totalTax = cgstAmount.plus(sgstAmount).plus(igstAmount);
+      return {
+        orderLineItemId: li.orderLineItemId,
+        description: li.description,
+        hsnCode: li.hsnCode,
+        unitOfMeasure: li.unitOfMeasure,
+        supplyType: li.supplyType,
+        quantity: isFull ? li.quantity : 0,
+        unitPrice: li.unitPrice,
+        discount: scale(li.discount),
+        taxableValue,
+        gstRate: li.gstRate,
+        cgstRate: li.cgstRate,
+        cgstAmount,
+        sgstRate: li.sgstRate,
+        sgstAmount,
+        igstRate: li.igstRate,
+        igstAmount,
+        totalTax,
+        totalAmount: taxableValue.plus(totalTax),
+      };
+    });
+
+    // Per-line rounding can leave the goods a paisa or two off the share
+    // credited; the largest line takes the difference in taxable value, so
+    // the note's parts add up to exactly what it credits.
+    const sum = (pick: (line: (typeof lines)[number]) => Prisma.Decimal) =>
+      lines.reduce((acc, line) => acc.plus(pick(line)), new Prisma.Decimal(0));
+    const drift = goodsPart.minus(sum((l) => l.totalAmount));
+    if (!isFull && !drift.isZero() && lines.length > 0) {
+      const largest = lines.reduce((a, b) => (b.taxableValue.greaterThan(a.taxableValue) ? b : a));
+      largest.taxableValue = largest.taxableValue.plus(drift);
+      largest.totalAmount = largest.totalAmount.plus(drift);
+    }
+    const noteSubtotal = sum((l) => l.taxableValue);
+    const noteTax = sum((l) => l.totalTax);
 
     const note = await tx.invoice.create({
       data: {
@@ -1855,13 +2003,14 @@ export class InvoiceService {
         placeOfSupply: original.placeOfSupply,
         placeOfSupplyName: original.placeOfSupplyName,
         gstType: original.gstType,
-        subtotal: scale(original.subtotal),
-        totalCgst: scale(original.totalCgst),
-        totalSgst: scale(original.totalSgst),
-        totalIgst: scale(original.totalIgst),
-        totalTax: scale(original.totalTax),
+        subtotal: noteSubtotal,
+        totalCgst: sum((l) => l.cgstAmount),
+        totalSgst: sum((l) => l.sgstAmount),
+        totalIgst: sum((l) => l.igstAmount),
+        totalTax: noteTax,
         totalDiscount: scale(original.totalDiscount),
-        shippingCharge: scale(original.shippingCharge),
+        // Whatever of the credit is not goods: untaxed shipping.
+        shippingCharge: requested.minus(noteSubtotal).minus(noteTax),
         grandTotal: requested,
         currency: original.currency,
         reverseCharge: original.reverseCharge,
@@ -1874,7 +2023,7 @@ export class InvoiceService {
     this.logger.log(
       `Credit note ${noteNumber} raised against ${original.invoiceNumber} ` +
         `for ${requested.toFixed(2)} ${original.currency}` +
-        (isFull ? ' (full reversal)' : ' (partial, apportioned pro-rata)'),
+        (isFull ? ' (full reversal)' : ` (partial: ${noteTax.toFixed(2)} GST reversed)`),
     );
 
     return note;
@@ -2087,8 +2236,9 @@ export class InvoiceService {
         where,
         include: {
           lineItems: true,
-          // Table 9B reports the number of the invoice being reversed.
-          creditNoteFor: { select: { invoiceNumber: true } },
+          // Table 9B reports the number of the invoice being reversed; its
+          // value decides whether a B2C note is CDNUR or nets out of B2CS.
+          creditNoteFor: { select: { invoiceNumber: true, grandTotal: true } },
         },
         orderBy: { id: 'asc' },
         take: GST_RETURN_PAGE_SIZE,
@@ -2099,6 +2249,7 @@ export class InvoiceService {
         fold({
           ...invoice,
           creditNoteForNumber: invoice.creditNoteFor?.invoiceNumber ?? null,
+          creditNoteForGrandTotal: invoice.creditNoteFor?.grandTotal ?? null,
         } as unknown as ReturnInvoice);
       }
 
@@ -2416,6 +2567,15 @@ export class InvoiceService {
       query,
       await this.listTimeZone(orgId, query),
     );
+    // Dates print in the GST timezone, as on the PDF and in the return. The
+    // UTC date is a day early for anything issued between midnight and 05:30 IST.
+    const dateZone = this.gstTimeZone(
+      orgId,
+      await this.prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { timezone: true, gstEnabled: true },
+      }),
+    );
 
     const invoices = await this.prisma.invoice.findMany({
       where,
@@ -2431,7 +2591,7 @@ export class InvoiceService {
 
     return invoices.map((inv) => ({
       invoiceNumber: inv.invoiceNumber,
-      invoiceDate: inv.invoiceDate.toISOString().split('T')[0],
+      invoiceDate: zonedDateString(inv.invoiceDate, dateZone),
       financialYear: inv.financialYear,
       orderNumber: inv.order.name,
       buyerName: inv.buyerName,
@@ -2449,7 +2609,15 @@ export class InvoiceService {
       totalTax: inv.totalTax.toString(),
       // Included so a reader can reconcile the row: subtotal + totalTax +
       // shipping = grandTotal. Without it the last two columns look wrong.
-      shipping: inv.shippingCharge.toString(),
+      // Only the untaxed add-on: older invoices that taxed shipping into the
+      // lines still store the full charge.
+      shipping: Prisma.Decimal.max(
+        0,
+        Prisma.Decimal.min(
+          inv.shippingCharge,
+          inv.grandTotal.minus(inv.subtotal).minus(inv.totalTax),
+        ),
+      ).toString(),
       grandTotal: inv.grandTotal.toString(),
       status: inv.status,
       // Appended AFTER status so existing column positions do not shift for
@@ -2472,12 +2640,18 @@ export class InvoiceService {
     query: QueryGstReturnDto,
     actor?: { email?: string },
   ): Promise<CsvSection[]> {
-    const returnData = await this.getGstReturn(orgId, query);
+    const [returnData, org] = await Promise.all([
+      this.getGstReturn(orgId, query),
+      this.prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { timezone: true, gstEnabled: true },
+      }),
+    ]);
 
     const sections =
       query.returnType === GstReturnType.GSTR3B
         ? buildGstr3bSections(returnData as Gstr3bReturn)
-        : buildGstr1Sections(returnData as Gstr1Return);
+        : buildGstr1Sections(returnData as Gstr1Return, this.gstTimeZone(orgId, org));
 
     // Provenance block, first. A filing pack has to say which registration and
     // period it covers, when it was produced and by whom — otherwise two

@@ -57,6 +57,7 @@ export function CreditNoteDialog({
   const [reason, setReason] = useState("");
   const [partial, setPartial] = useState(false);
   const [amount, setAmount] = useState("");
+  const [tax, setTax] = useState("");
   const mutation = useCreateCreditNoteMutation();
 
   useEffect(() => {
@@ -66,6 +67,7 @@ export function CreditNoteDialog({
     setReason(prefill?.reason ?? "");
     setPartial(!!prefill);
     setAmount(prefill ? String(prefill.amount) : "");
+    setTax(prefill?.tax != null ? String(prefill.tax) : "");
   }, [invoice, prefill]);
 
   if (!invoice) return null;
@@ -77,9 +79,16 @@ export function CreditNoteDialog({
     (!Number.isFinite(parsedAmount) ||
       parsedAmount <= 0 ||
       parsedAmount > invoiceTotal);
+  const taxGiven = partial && tax.trim() !== "";
+  const parsedTax = Number(tax);
+  const taxInvalid =
+    taxGiven &&
+    (!Number.isFinite(parsedTax) ||
+      parsedTax < 0 ||
+      (!amountInvalid && parsedTax > parsedAmount));
 
   function submit() {
-    if (!reason.trim() || amountInvalid) return;
+    if (!reason.trim() || amountInvalid || taxInvalid) return;
     mutation.mutate(
       {
         id: invoice!.id,
@@ -87,6 +96,8 @@ export function CreditNoteDialog({
           reason: reason.trim(),
           // Omitted means a FULL reversal of whatever remains uncredited.
           amount: partial ? parsedAmount : undefined,
+          // Blank lets the server work it out from the invoice: goods first.
+          tax: taxGiven ? parsedTax : undefined,
         },
       },
       { onSuccess: onClose },
@@ -134,8 +145,8 @@ export function CreditNoteDialog({
                 Credit part of this invoice
               </span>
               <br />
-              Apportioned pro-rata across the original lines, so each keeps its
-              own GST rate. Leave unticked to reverse the invoice in full.
+              Spread across the original lines, so each keeps its own GST
+              rate. Leave unticked to reverse the invoice in full.
             </span>
           </label>
 
@@ -145,9 +156,9 @@ export function CreditNoteDialog({
             // all of its output tax declared, so say so rather than let the
             // apportionment quietly guess.
             <p className="rounded-lg bg-warning-subtle px-3 py-2 text-micro">
-              The sales channel did not report how much tax was refunded, so this
-              note apportions it pro-rata from the original invoice. Check the
-              figure against your channel before filing.
+              The sales channel did not report how much tax was refunded. Enter
+              the GST from your channel, or leave it blank to work it out from
+              the invoice (items first, then shipping).
             </p>
           )}
 
@@ -178,6 +189,38 @@ export function CreditNoteDialog({
               )}
             </div>
           )}
+
+          {partial && (
+            <div>
+              <label
+                htmlFor="cn-tax"
+                className="text-micro font-medium text-muted-foreground"
+              >
+                GST included in this amount (optional)
+              </label>
+              <input
+                id="cn-tax"
+                type="number"
+                min="0"
+                step="0.01"
+                value={tax}
+                onChange={(e) => setTax(e.target.value)}
+                aria-invalid={taxInvalid}
+                placeholder="Work it out from the invoice"
+                className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+              />
+              {taxInvalid ? (
+                <p className="mt-1 text-micro text-destructive">
+                  The GST cannot be negative or more than the amount.
+                </p>
+              ) : (
+                <p className="mt-1 text-micro text-muted-foreground">
+                  Blank credits the items first, at the invoice's GST rates,
+                  then any untaxed shipping.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         <DialogFooter>
@@ -186,7 +229,7 @@ export function CreditNoteDialog({
           </Button>
           <Button
             onClick={submit}
-            disabled={!reason.trim() || amountInvalid || mutation.isPending}
+            disabled={!reason.trim() || amountInvalid || taxInvalid || mutation.isPending}
           >
             {mutation.isPending && (
               <Loader2 className="mr-1.5 size-3.5 animate-spin" />

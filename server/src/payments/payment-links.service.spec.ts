@@ -16,15 +16,27 @@ function link(over: Record<string, unknown> = {}) {
     };
 }
 
-function build(opts: { link?: ReturnType<typeof link> | null; claim?: number; financialStatus?: string } = {}) {
+function build(
+    opts: {
+        link?: ReturnType<typeof link> | null;
+        claim?: number;
+        financialStatus?: string;
+        cancelledAt?: Date | null;
+        earlier?: ReturnType<typeof link> | null;
+        siblings?: Array<ReturnType<typeof link>>;
+    } = {},
+) {
     const updates: any[] = [];
+    const account = { id: 'acc_1', organizationId: ORG, keyId: 'rzp_test_x', credentials: 'c', disconnectedAt: null };
     const prisma = {
         paymentAccount: {
-            findUnique: jest.fn(async ({ where }: any) => (where.webhookToken === 'tok_1' ? { id: 'acc_1', organizationId: ORG, credentials: 'c', disconnectedAt: null } : null)),
+            findUnique: jest.fn(async ({ where }: any) => (where.webhookToken === 'tok_1' || where.id === 'acc_1' ? account : null)),
             update: jest.fn(async () => ({})),
         },
         paymentLink: {
             findUnique: jest.fn(async ({ where }: any) => (where.accountId_externalId?.accountId === 'acc_1' ? opts.link ?? null : null)),
+            findFirst: jest.fn(async () => opts.earlier ?? null),
+            findMany: jest.fn(async () => opts.siblings ?? []),
             updateMany: jest.fn(async (args: any) => {
                 updates.push(args);
                 return { count: args.data.status === 'PAID' ? opts.claim ?? 1 : 1 };
@@ -34,15 +46,20 @@ function build(opts: { link?: ReturnType<typeof link> | null; claim?: number; fi
                 return {};
             }),
         },
-        order: { findUnique: jest.fn(async () => ({ financialStatus: opts.financialStatus ?? 'PENDING' })) },
+        order: { findUnique: jest.fn(async () => ({ name: '#1801', financialStatus: opts.financialStatus ?? 'PENDING', cancelledAt: opts.cancelledAt ?? null })) },
+        draftOrder: { findUnique: jest.fn(async () => null) },
+        orderTimelineEvent: { create: jest.fn(async () => ({})) },
+    };
+    const razorpay = {
+        cancel: jest.fn(async (_keys: unknown, id: string) => ({ id, status: 'cancelled', amount: 239800, amount_paid: 0, currency: 'INR' })),
     };
     const accounts = { webhookSecret: jest.fn(() => 'whsec'), keys: jest.fn(() => ({ keyId: 'rzp_test_x', keySecret: 's' })) };
     const orders = { markPaid: jest.fn(async () => ({})) };
     const store = { actorFor: jest.fn(async () => 'u_owner'), tagOrder: jest.fn(async () => ({ tags: [] })) };
     const events = { paymentReceived: jest.fn(async () => undefined) };
     const drafts = { complete: jest.fn() };
-    const service = new PaymentLinksService(prisma as any, accounts as any, {} as any, orders as any, drafts as any, store as any, events as any);
-    return { service, prisma, orders, store, events, updates };
+    const service = new PaymentLinksService(prisma as any, accounts as any, razorpay as any, orders as any, drafts as any, store as any, events as any);
+    return { service, prisma, orders, store, events, updates, razorpay };
 }
 
 const paidBody = (amountPaid = 239800, id = 'plink_1') =>
@@ -99,6 +116,47 @@ describe('PaymentLinksService webhook', () => {
         await service.webhook('tok_1', body, sign(body));
         await service.idle();
         expect(updates.some((u) => u.data?.followUpError === 'Shopify said no')).toBe(true);
+        expect(events.paymentReceived).toHaveBeenCalled();
+    });
+
+    it('flags a second payment for the same order for a refund, and does not act on it', async () => {
+        const { service, orders, store, events, updates, prisma } = build({
+            link: link({ id: 'pl_2', externalId: 'plink_1' }),
+            financialStatus: 'PAID',
+            earlier: link({ id: 'pl_1', provider: 'WHATSAPP_PAY', status: 'PAID', paymentId: 'pay_first', paidAt: new Date() }),
+        });
+        const body = paidBody();
+        await service.webhook('tok_1', body, sign(body));
+        await service.idle();
+        expect(orders.markPaid).not.toHaveBeenCalled();
+        expect(store.tagOrder).not.toHaveBeenCalled();
+        expect(events.paymentReceived).not.toHaveBeenCalled();
+        const error = updates.find((u) => u.data?.followUpError)?.data.followUpError;
+        expect(error).toMatch(/^This is a second payment: a WhatsApp Pay bill for this order was already paid \(pay_first\)\. Refund ₹2,398/);
+        expect(prisma.orderTimelineEvent.create).toHaveBeenCalledWith(
+            expect.objectContaining({ data: expect.objectContaining({ orderId: 'order_1', action: 'payment_refund_needed' }) }),
+        );
+    });
+
+    it('flags a payment that lands after the order was cancelled', async () => {
+        const { service, orders, events, updates } = build({ link: link(), cancelledAt: new Date() });
+        const body = paidBody();
+        await service.webhook('tok_1', body, sign(body));
+        await service.idle();
+        expect(orders.markPaid).not.toHaveBeenCalled();
+        expect(events.paymentReceived).not.toHaveBeenCalled();
+        expect(updates.find((u) => u.data?.followUpError)?.data.followUpError).toMatch(/^Order #1801 was cancelled before this payment came in\. Refund/);
+    });
+
+    it('closes the other open links and bills for the order once one is paid', async () => {
+        const { service, razorpay, events } = build({ link: link(), siblings: [link({ id: 'pl_2', externalId: 'plink_2' })] });
+        const closed = jest.fn(async () => undefined);
+        service.onClose(closed);
+        const body = paidBody();
+        await service.webhook('tok_1', body, sign(body));
+        await service.idle();
+        expect(razorpay.cancel).toHaveBeenCalledWith(expect.anything(), 'plink_2');
+        expect(closed).toHaveBeenCalledWith(expect.objectContaining({ id: 'pl_1', orderId: 'order_1' }), 'paid');
         expect(events.paymentReceived).toHaveBeenCalled();
     });
 

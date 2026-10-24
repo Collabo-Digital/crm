@@ -113,7 +113,16 @@ function InvoiceDocument({ rp, invoice }: { rp: typeof ReactPdf; invoice: Invoic
     const isIntra = invoice.gstType === 'CGST_SGST';
     const isCancelled = invoice.status === 'CANCELLED';
     const discount = num(invoice.totalDiscount);
-    const shipping = num(invoice.shippingCharge);
+    // Only the part added on top of the lines. Invoices that taxed shipping
+    // into the lines still store the full charge, and printing it here listed
+    // it twice.
+    const shipping = Math.max(
+        0,
+        Math.min(
+            num(invoice.shippingCharge),
+            Math.round((num(invoice.grandTotal) - num(invoice.subtotal) - num(invoice.totalCgst) - num(invoice.totalSgst) - num(invoice.totalIgst)) * 100) / 100,
+        ),
+    );
     // Pre-discount value of the goods, so "less discount" has something to be subtracted from.
     const grossValue = num(invoice.subtotal) + discount;
 
@@ -262,7 +271,7 @@ function InvoiceDocument({ rp, invoice }: { rp: typeof ReactPdf; invoice: Invoic
                     ) : (
                         totalRow('IGST', money(invoice.totalIgst))
                     )}
-                    {shipping > 0 && totalRow('Shipping (not taxed)', money(invoice.shippingCharge))}
+                    {shipping > 0 && totalRow('Shipping (not taxed)', money(shipping))}
                     <View style={s.grand}>{totalRow('Grand total', money(invoice.grandTotal), true)}</View>
                 </View>
 

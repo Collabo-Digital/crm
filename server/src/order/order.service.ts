@@ -1394,12 +1394,14 @@ export class OrderService {
           // which no tax path read before this remediation.
           const gstRate = lineGstRates[lineIndex];
 
-          const calc = this.calculator.calculateLineItem(
-            { unitPrice, quantity: li.quantity, discount, gstRate },
-            isIntraState,
-          );
+          const input = { unitPrice, quantity: li.quantity, discount, gstRate };
+          const calc = dto.pricesIncludeTax
+            ? this.calculator.calculateInclusiveLineItem(input, isIntraState)
+            : this.calculator.calculateLineItem(input, isIntraState);
 
-          subtotal += calc.taxableValue;
+          // Shopify's convention, which the dashboard and the rebadge read:
+          // with taxes included, the subtotal carries the tax too.
+          subtotal += dto.pricesIncludeTax ? calc.totalAmount : calc.taxableValue;
           totalTax += calc.totalTax;
 
           lineItemsToCreate.push({
@@ -1432,7 +1434,7 @@ export class OrderService {
         const round = (n: number) => Math.round(n * 100) / 100;
         subtotal = round(subtotal);
         totalTax = round(totalTax);
-        const grandTotal = round(subtotal + totalTax);
+        const grandTotal = dto.pricesIncludeTax ? subtotal : round(subtotal + totalTax);
 
         // 6. Generate the next sequential orderNumber for the MANUAL channel.
         //    Scoped to this channel so offline sales run their own sequence
@@ -1531,8 +1533,9 @@ export class OrderService {
             dispatchWarehouseId,
             // Unit prices are pre-tax and the tax is on the lines — the same
             // convention a Shopify order with `taxes_included: false` carries,
-            // so the push and the eventual rebadge agree on every total.
-            taxesIncluded: false,
+            // so the push and the eventual rebadge agree on every total. A
+            // draft priced with tax included keeps that, as Shopify would.
+            taxesIncluded: dto.pricesIncludeTax === true,
             note: dto.note,
             metadata: {
               source: 'offline',

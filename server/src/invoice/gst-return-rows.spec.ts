@@ -10,6 +10,7 @@ import {
   type CsvSection,
 } from './gst-return-rows';
 import type { Gstr1Return, Gstr3bReturn } from './gst-return.accumulator';
+import { INDIA_TZ } from '../common/utils/zoned-date.util';
 
 /**
  * These sections ARE the filed artefact — the CSV a merchant downloads and
@@ -316,7 +317,7 @@ const gstr1: Gstr1Return = {
 
 describe('buildGstr1Sections', () => {
   it('emits every statutory table, each with its own header block', () => {
-    const titles = buildGstr1Sections(gstr1).map((s) => s.title);
+    const titles = buildGstr1Sections(gstr1, INDIA_TZ).map((s) => s.title);
 
     expect(titles[0]).toContain('4A');
     expect(titles[1]).toContain('5 —');
@@ -335,7 +336,7 @@ describe('buildGstr1Sections', () => {
 
   it('emits Table 13 only when documents issued were attached', () => {
     expect(
-      buildGstr1Sections(gstr1).some((s) => s.title.startsWith('13')),
+      buildGstr1Sections(gstr1, INDIA_TZ).some((s) => s.title.startsWith('13')),
     ).toBe(false);
 
     const withDocs = buildGstr1Sections({
@@ -356,7 +357,7 @@ describe('buildGstr1Sections', () => {
           },
         ],
       },
-    });
+    }, INDIA_TZ);
 
     const section = find(withDocs, '13');
     expect(section.headers).toContain('Sr. No. from');
@@ -380,7 +381,7 @@ describe('buildGstr1Sections', () => {
         { ...gstr1.hsnSummary[0], recipientType: 'B2B' as const },
         gstr1.hsnSummary[1],
       ],
-    });
+    }, INDIA_TZ);
 
     expect(find(sections, '12 — HSN summary (B2B)').rows).toHaveLength(1);
     expect(find(sections, '12 — HSN summary (B2B)').rows[0][0]).toBe('6109');
@@ -392,7 +393,7 @@ describe('buildGstr1Sections', () => {
     // These could not exist in the old shared 12-column row — there was no
     // spare column, and the quantity was already being smuggled into
     // `grandTotal` as a formatted string.
-    const section = find(buildGstr1Sections(gstr1), '12 — HSN summary (B2C)');
+    const section = find(buildGstr1Sections(gstr1, INDIA_TZ), '12 — HSN summary (B2C)');
 
     expect(section.headers).toContain('UQC');
     expect(section.headers).toContain('Rate');
@@ -414,14 +415,14 @@ describe('buildGstr1Sections', () => {
   it('names a missing HSN instead of inventing one or leaving it blank', () => {
     // The old code wrote the literal '0000', which is not a valid HSN and went
     // onto a statutory document. A blank would read as an export bug.
-    const section = find(buildGstr1Sections(gstr1), '12 — HSN summary (B2C)');
+    const section = find(buildGstr1Sections(gstr1, INDIA_TZ), '12 — HSN summary (B2C)');
 
     expect(section.rows[1][0]).toBe('MISSING');
     expect(section.rows.some((r) => r[0] === '0000')).toBe(false);
   });
 
   it('reports B2CL invoice-wise and B2CS rate-wise', () => {
-    const sections = buildGstr1Sections(gstr1);
+    const sections = buildGstr1Sections(gstr1, INDIA_TZ);
 
     expect(find(sections, '5 —').headers).toContain('Invoice number');
     expect(find(sections, '5 —').rows[0][0]).toBe('INV-2025-26/000009');
@@ -432,10 +433,54 @@ describe('buildGstr1Sections', () => {
   });
 
   it('formats dates and place of supply consistently', () => {
-    const b2b = find(buildGstr1Sections(gstr1), '4A');
+    const b2b = find(buildGstr1Sections(gstr1, INDIA_TZ), '4A');
 
     expect(b2b.rows[0][3]).toBe('2025-04-10');
     expect(b2b.rows[0][4]).toBe('29 - Karnataka');
+  });
+
+  it('gives every CDNUR row the UR type the portal requires', () => {
+    const withNote = {
+      ...gstr1,
+      creditNotes: [
+        {
+          section: 'CDNUR' as const,
+          urType: 'B2CL' as const,
+          noteNumber: 'CN-26-27/000001',
+          noteDate: new Date('2026-10-12T06:00:00.000Z'),
+          buyerGstin: null,
+          buyerName: 'Guest Customer',
+          originalInvoiceNumber: 'INV-26-27/000009',
+          placeOfSupply: '27',
+          placeOfSupplyName: 'Maharashtra',
+          reason: 'Goods returned',
+          taxableValue: 150000,
+          cgst: 0,
+          sgst: 0,
+          igst: 27000,
+          noteValue: 177000,
+        },
+      ],
+    };
+
+    const cdnur = find(buildGstr1Sections(withNote, INDIA_TZ), '9B — Credit notes against unregistered');
+    expect(cdnur.headers[0]).toBe('UR type');
+    expect(cdnur.rows[0].slice(0, 3)).toEqual(['B2CL', 'CN-26-27/000001', '2026-10-12']);
+  });
+
+  it('prints the invoice date in the GST timezone, not in UTC', () => {
+    // 02:00 IST on 1 November is still 31 October in UTC.
+    const lateNight = {
+      ...gstr1,
+      b2b: [
+        {
+          ...gstr1.b2b[0],
+          invoices: [{ ...gstr1.b2b[0].invoices[0], invoiceDate: new Date('2026-10-31T20:30:00.000Z') }],
+        },
+      ],
+    };
+
+    expect(find(buildGstr1Sections(lateNight, INDIA_TZ), '4A').rows[0][3]).toBe('2026-11-01');
   });
 });
 
@@ -475,9 +520,17 @@ describe('renderCsvSections', () => {
     expect(csv).toContain('"Line1\nLine2"');
   });
 
+  it('keeps a buyer name from running as a spreadsheet formula', () => {
+    const csv = renderCsvSections([
+      { title: 'T', headers: ['Name', 'Amount'], rows: [['=HYPERLINK("https://evil.example","Click")', -180]] },
+    ]);
+
+    expect(csv).toContain(`"'=HYPERLINK(""https://evil.example"",""Click"")",-180`);
+  });
+
   it('renders a real buyer name from the B2B section safely', () => {
     // End to end: the fixture buyer is "Acme, Retail Pvt Ltd".
-    const csv = renderCsvSections(buildGstr1Sections(gstr1));
+    const csv = renderCsvSections(buildGstr1Sections(gstr1, INDIA_TZ));
 
     expect(csv).toContain('"Acme, Retail Pvt Ltd"');
   });

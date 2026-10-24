@@ -1,4 +1,6 @@
 import { formatPlaceOfSupply } from '../gst/constants/indian-states';
+import { neutraliseCsvFormula } from '../common/utils/csv-formula.util';
+import { zonedDateString } from '../common/utils/zoned-date.util';
 import type { Gstr1Return, Gstr3bReturn } from './gst-return.accumulator';
 
 /**
@@ -28,9 +30,14 @@ export interface CsvSection {
   rows: Array<Array<string | number>>;
 }
 
-/** RFC-4180 field escaping. */
+/** RFC-4180 field escaping, with free text kept from running as a formula. */
 function escapeCsv(value: string | number): string {
-  const text = value === null || value === undefined ? '' : String(value);
+  const text =
+    value === null || value === undefined
+      ? ''
+      : typeof value === 'number'
+        ? String(value)
+        : neutraliseCsvFormula(value);
   // Quote when the value contains a delimiter, a quote, or a line break —
   // buyer names and addresses routinely contain commas.
   if (/[",\r\n]/.test(text)) {
@@ -61,13 +68,19 @@ export function renderCsvSections(sections: CsvSection[]): string {
 
 const HSN_MISSING = 'MISSING';
 
-function toDateOnly(value: Date | string): string {
+/**
+ * The calendar date in the org's GST timezone. A UTC date puts an invoice
+ * dated 02:00 IST on the 1st on the previous day, and in the previous month's
+ * return, while the PDF and the period window both read it in IST.
+ */
+function toDateOnly(value: Date | string, timeZone: string): string {
   const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : date.toISOString().split('T')[0];
+  return Number.isNaN(date.getTime()) ? '' : zonedDateString(date, timeZone);
 }
 
-export function buildGstr1Sections(data: Gstr1Return): CsvSection[] {
+export function buildGstr1Sections(data: Gstr1Return, timeZone: string): CsvSection[] {
   const sections: CsvSection[] = [];
+  const dateOnly = (value: Date | string) => toDateOnly(value, timeZone);
 
   sections.push({
     title: '4A — B2B invoices (supplies to registered persons)',
@@ -93,7 +106,7 @@ export function buildGstr1Sections(data: Gstr1Return): CsvSection[] {
         group.buyerGstin,
         group.buyerName,
         inv.invoiceNumber,
-        toDateOnly(inv.invoiceDate),
+        dateOnly(inv.invoiceDate),
         formatPlaceOfSupply(inv.placeOfSupply, inv.placeOfSupplyName),
         inv.gstType === 'IGST' ? 'Inter-State' : 'Intra-State',
         inv.reverseCharge ? 'Y' : 'N',
@@ -120,7 +133,7 @@ export function buildGstr1Sections(data: Gstr1Return): CsvSection[] {
     ],
     rows: (data.b2cl ?? []).map((row) => [
       row.invoiceNumber,
-      toDateOnly(row.invoiceDate),
+      dateOnly(row.invoiceDate),
       formatPlaceOfSupply(row.placeOfSupply, row.placeOfSupplyName),
       `${row.gstRate}%`,
       row.taxableValue,
@@ -183,7 +196,7 @@ export function buildGstr1Sections(data: Gstr1Return): CsvSection[] {
       .filter((n) => n.section === 'CDNR')
       .map((n) => [
         n.noteNumber,
-        toDateOnly(n.noteDate),
+        dateOnly(n.noteDate),
         n.buyerGstin ?? '',
         n.originalInvoiceNumber ?? '',
         formatPlaceOfSupply(n.placeOfSupply, n.placeOfSupplyName),
@@ -199,6 +212,8 @@ export function buildGstr1Sections(data: Gstr1Return): CsvSection[] {
   sections.push({
     title: '9B — Credit notes against unregistered persons (CDNUR)',
     headers: [
+      // B2CL, EXPWP or EXPWOP: the portal needs it on every CDNUR row.
+      'UR type',
       'Note number',
       'Note date',
       'Original invoice',
@@ -213,8 +228,9 @@ export function buildGstr1Sections(data: Gstr1Return): CsvSection[] {
     rows: (data.creditNotes ?? [])
       .filter((n) => n.section === 'CDNUR')
       .map((n) => [
+        n.urType ?? '',
         n.noteNumber,
-        toDateOnly(n.noteDate),
+        dateOnly(n.noteDate),
         n.originalInvoiceNumber ?? '',
         formatPlaceOfSupply(n.placeOfSupply, n.placeOfSupplyName),
         n.reason ?? '',
