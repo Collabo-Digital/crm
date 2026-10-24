@@ -53,7 +53,10 @@ export class AuthController {
     return this.authService.refresh(dto.refreshToken, req.headers['user-agent'], req.ip);
   }
 
+  // Every role must be able to end its own session, whatever it may reach.
   @Post('logout')
+  @AllowVendor()
+  @AllowInfluencer()
   logout(@CurrentUser() user: JwtPayload, @Body() dto: RefreshTokenDto) {
     return this.authService.logout(user.sub, user.sid, dto.refreshToken);
   }

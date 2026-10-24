@@ -36,7 +36,7 @@ export class MembersController {
         @Body() dto: UpdateMemberRoleDto,
     ) {
         await this.orgService.requireRole(orgId, user.sub, [UserRole.OWNER, UserRole.ADMIN]);
-        return this.membersService.updateRole(orgId, memberId, dto.role);
+        return this.membersService.updateRole(orgId, memberId, dto.role, dto.vendorScope);
     }
 
     // PATCH permissions — only OWNER and ADMIN can change grants

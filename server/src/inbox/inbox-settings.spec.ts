@@ -1,4 +1,5 @@
 import { isOpen, parseInboxSettings, validateInboxSettings } from './inbox-settings.schema';
+import { InboxSettingsService } from './inbox-settings.service';
 
 describe('inbox settings', () => {
     it('fills every section with defaults', () => {
@@ -22,5 +23,28 @@ describe('inbox settings', () => {
         expect(isOpen(hours, 'America/New_York', new Date('2026-10-22T04:00:00Z'))).toBe(false);
         expect(isOpen(hours, 'Asia/Kolkata', new Date('2026-10-22T13:00:00Z'))).toBe(false);
         expect(isOpen({ ...hours, enabled: false }, 'Asia/Kolkata', at)).toBe(true);
+    });
+});
+
+describe('InboxSettingsService — business hours time zone', () => {
+    const zoneFor = (timezone: string, hoursZone = '') => {
+        const prisma = {
+            organization: {
+                findUnique: jest.fn().mockResolvedValue({ timezone, settings: { inboxSettings: { businessHours: { timezone: hoursZone } } } }),
+            },
+        };
+        return new InboxSettingsService(prisma as never).get('org').then((r) => r.timeZone);
+    };
+
+    it("reads the untouched 'UTC' default as India, like every report", async () => {
+        await expect(zoneFor('UTC')).resolves.toBe('Asia/Kolkata');
+    });
+
+    it("uses the workspace's own zone when one was chosen", async () => {
+        await expect(zoneFor('Asia/Dubai')).resolves.toBe('Asia/Dubai');
+    });
+
+    it('lets the business-hours card name its own zone, UTC included', async () => {
+        await expect(zoneFor('Asia/Dubai', 'UTC')).resolves.toBe('UTC');
     });
 });

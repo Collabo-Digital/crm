@@ -3,6 +3,10 @@ export const REDIS_PREFIX = 'crm:';
 export const REDIS_KEYS = {
     SESSION: 'session:',
     LOGIN_ATTEMPTS: 'login_attempts:',
+    /// Set for a short gap after an email of one kind goes to one recipient.
+    EMAIL_SEND_GAP: 'email_gap:',
+    /// Emails of one kind sent to one recipient in the last hour.
+    EMAIL_SEND_COUNT: 'email_count:',
     REFRESH_TOKEN: 'refresh:',
     USER_REFRESH_TOKENS: 'user_tokens:',
     REFRESH_ROTATION: 'refresh_rotation:',
@@ -33,6 +37,22 @@ export const REDIS_TTL = {
 };
 
 export const LOGIN_RATE_LIMIT = {
+    /** Per address from one IP address. */
     MAX_ATTEMPTS: 5,
+    /**
+     * Per address from anywhere. High enough that a stranger who knows the
+     * address must work at it to lock the owner out, low enough to stop
+     * guessing spread over many IP addresses.
+     */
+    MAX_ATTEMPTS_ANY_IP: 50,
     WINDOW_SECONDS: 900,
+};
+
+/**
+ * Password reset and verification emails, per recipient. The gap is a little
+ * under the client's 60-second resend timer so a patient click always sends.
+ */
+export const EMAIL_SEND_LIMIT = {
+    MIN_GAP_SECONDS: 50,
+    MAX_PER_HOUR: 5,
 };

@@ -11,6 +11,8 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SendInviteDto } from './dto/send-invite.dto';
 import { EmailService } from '../email/email.service';
+import { UserService } from '../user/user.service';
+import { resolveVendorScope } from './vendor-scope';
 import { extractGrants, sectionGrants, SECTION_SCOPED_ROLES } from '../auth/permissions';
 
 /** How long an invitation stays claimable. */
@@ -43,7 +45,11 @@ export function deriveInviteState(
 export class InvitesService {
     private readonly logger = new Logger(InvitesService.name);
 
-    constructor(private readonly prisma: PrismaService, private readonly emailService: EmailService) { }
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly emailService: EmailService,
+        private readonly users: UserService,
+    ) { }
 
     // ─── SEND INVITE ───
     async send(orgId: string, userId: string, dto: SendInviteDto) {
@@ -69,25 +75,8 @@ export class InvitesService {
         }
 
         // 2b. VENDOR invites must be scoped to a real vendor; non-vendors carry no scope.
-        let vendorScope: string | null = null;
-        if (dto.role === UserRole.VENDOR) {
-            const scope = dto.vendorScope?.trim();
-            if (!scope) {
-                throw new BadRequestException('A vendor must be selected for VENDOR invites.');
-            }
-            const hasProducts = await this.prisma.product.findFirst({
-                where: {
-                    organizationId: orgId,
-                    deletedAt: null,
-                    OR: [{ vendorKey: scope }, { vendor: scope }],
-                },
-                select: { id: true },
-            });
-            if (!hasProducts) {
-                throw new BadRequestException(`No products found for vendor "${scope}".`);
-            }
-            vendorScope = scope;
-        }
+        const vendorScope =
+            dto.role === UserRole.VENDOR ? await resolveVendorScope(this.prisma, orgId, dto.vendorScope) : null;
 
         // 2c. Section access applies to AGENT / VIEWER only — every other role
         // resolves its access from the role itself. A list that names no
@@ -101,10 +90,10 @@ export class InvitesService {
         }
 
         // 3. Check if already a member
-        const existingUser = await this.prisma.user.findUnique({ where: { email } });
-        if (existingUser) {
+        const existingUserId = await this.users.findIdByEmail(email);
+        if (existingUserId) {
             const existingMember = await this.prisma.organizationMember.findUnique({
-                where: { organizationId_userId: { organizationId: orgId, userId: existingUser.id } },
+                where: { organizationId_userId: { organizationId: orgId, userId: existingUserId } },
             });
             if (existingMember?.isActive) {
                 throw new ConflictException('This person is already a member of the organization.');

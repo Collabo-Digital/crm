@@ -1,5 +1,12 @@
 import * as Joi from 'joi';
 
+/**
+ * Set in production, optional elsewhere. For settings production silently
+ * misbehaves without: a deploy missing one fails at boot instead.
+ */
+const requiredInProduction = (schema: Joi.Schema) =>
+    schema.when('NODE_ENV', { is: 'production', then: Joi.required(), otherwise: Joi.optional() });
+
 export const validationSchema = Joi.object({
     NODE_ENV: Joi.string().valid('development', 'production', 'test').required(),
     PORT: Joi.number().default(5000),
@@ -9,10 +16,15 @@ export const validationSchema = Joi.object({
     REDIS_URL: Joi.string().required(),
     // Required: an unset CORS origin makes the `cors` library allow every origin.
     FRONTEND_URL: Joi.string().uri().required(),
-    // Number of reverse-proxy hops in front of the API (1 behind Caddy).
-    // Without it req.ip is the proxy's address and every client shares one
-    // throttle bucket.
-    TRUST_PROXY: Joi.number().integer().min(0).max(5).optional(),
+    // Number of reverse-proxy hops in front of the API (1 behind Caddy or
+    // Render, 0 when Node is reached directly). Without it req.ip is the
+    // proxy's address and every client shares one throttle bucket.
+    TRUST_PROXY: requiredInProduction(Joi.number().integer().min(0).max(5)),
+    // Every email (verification codes, password resets, invites) goes through
+    // SMTP; without these EmailService skips each send and only logs.
+    SMTP_HOST: requiredInProduction(Joi.string()),
+    SMTP_USER: requiredInProduction(Joi.string()),
+    SMTP_PASS: requiredInProduction(Joi.string()),
     JWT_ACCESS_SECRET: Joi.string().min(32).required(),
     JWT_REFRESH_SECRET: Joi.string().min(32).required(),
     RESEND_API_KEY: Joi.string().optional(),

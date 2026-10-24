@@ -4,13 +4,21 @@ import {
   ForbiddenException,
   ConflictException,
 } from '@nestjs/common';
-import { Organization, OrganizationType, UserRole } from '@prisma/client';
+import {
+  AutomationStatus,
+  BroadcastRecipientStatus,
+  BroadcastStatus,
+  Organization,
+  OrganizationType,
+  UserRole,
+} from '@prisma/client';
 import slugify from 'slugify';
 import { randomBytes } from 'crypto';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { BillingService } from '../billing/billing.service';
+import { ChannelService } from '../channel/channel.service';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { CreatePersonalDto } from './dto/create-personal.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
@@ -22,6 +30,7 @@ export class OrganizationService {
     private readonly prisma: PrismaService,
     private readonly billing: BillingService,
     private readonly redis: RedisService,
+    private readonly channels: ChannelService,
   ) { }
 
   // ─── CREATE ORGANIZATION ───
@@ -211,13 +220,50 @@ export class OrganizationService {
   // ─── SOFT DELETE ORG ───
   // Only OWNER can delete. Sets deletedAt instead of actually removing.
   // WHY soft delete? Preserves billing history, enables reactivation.
+  // Nothing on the background paths (webhooks, automations, broadcasts, the
+  // public API) looks at deletedAt, so everything that acts for the workspace
+  // is switched off here: otherwise customers kept getting automated messages
+  // nobody could stop, and the WhatsApp number and Shopify store stayed
+  // claimed, so no other workspace could connect them.
   async delete(orgId: string, userId: string) {
     await this.requireRole(orgId, userId, [UserRole.OWNER]);
 
-    await this.prisma.organization.update({
-      where: { id: orgId },
-      data: { deletedAt: new Date() },
-    });
+    // Each step below stops the deletion if it fails, so the owner can retry
+    // rather than end up with a deleted workspace that still charges or sends.
+    await this.billing.cancelOrganizationSubscription(orgId);
+    await this.channels.disconnectAllForOrg(orgId);
+
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.organization.update({
+        where: { id: orgId },
+        data: { deletedAt: now },
+      }),
+      this.prisma.apiKey.updateMany({
+        where: { organizationId: orgId, revokedAt: null },
+        data: { revokedAt: now },
+      }),
+      this.prisma.webhookEndpoint.updateMany({
+        where: { organizationId: orgId, enabled: true },
+        data: { enabled: false, disabledReason: 'The workspace was deleted.' },
+      }),
+      this.prisma.broadcast.updateMany({
+        where: { organizationId: orgId, status: { in: [BroadcastStatus.SCHEDULED, BroadcastStatus.SENDING] } },
+        data: { status: BroadcastStatus.CANCELLED, cancelledAt: now },
+      }),
+      this.prisma.broadcastRecipient.updateMany({
+        where: { organizationId: orgId, status: BroadcastRecipientStatus.PENDING },
+        data: { status: BroadcastRecipientStatus.SKIPPED, skipReason: 'cancelled' },
+      }),
+      this.prisma.automation.updateMany({
+        where: { organizationId: orgId, status: AutomationStatus.ACTIVE },
+        data: { status: AutomationStatus.PAUSED },
+      }),
+      this.prisma.automationTrigger.updateMany({
+        where: { organizationId: orgId, isActive: true },
+        data: { isActive: false },
+      }),
+    ]);
 
     // Drop every member's cached session. The cache is what requests are
     // served from for up to 15 minutes; without this, members keep working

@@ -246,6 +246,24 @@ describe('AuthService — session lifecycle', () => {
 
     await service.revokeAllUserTokens('u1');
 
-    expect(redis.deleteAllAuthSessions).toHaveBeenCalledWith('u1');
+    expect(redis.deleteAllAuthSessions).toHaveBeenCalledWith('u1', undefined);
+    expect(redis.deleteAllUserTokens).toHaveBeenCalledWith('u1', undefined);
+  });
+
+  it('keeps the named session on revoke-all, as after a password change', async () => {
+    const { service, redis } = build(null);
+
+    await service.revokeAllUserTokens('u1', 's-mine');
+
+    expect(redis.deleteAllAuthSessions).toHaveBeenCalledWith('u1', 's-mine');
+    expect(redis.deleteAllUserTokens).toHaveBeenCalledWith('u1', 's-mine');
+  });
+
+  it('takes a logged-out refresh token off the user\'s token list', async () => {
+    const { service, redis } = build({ userId: 'u1' });
+
+    await service.logout('u1', 's1', 'refresh');
+
+    expect(redis.deleteRefreshToken).toHaveBeenCalledWith('refresh', 'u1');
   });
 });

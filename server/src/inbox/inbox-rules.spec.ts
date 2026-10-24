@@ -33,3 +33,38 @@ describe('InboxRulesService.autoClose', () => {
         expect(published).toEqual(['c1', 'c2']);
     });
 });
+
+describe('InboxRulesService.onEvent — reopened chats of departed members', () => {
+    function build(assigneeStillHere: boolean) {
+        const prisma = {
+            conversation: {
+                findUnique: jest.fn().mockResolvedValue({
+                    id: 'c1', platform: 'WHATSAPP', channelId: 'ch1', contactId: 'ct1', customerId: null,
+                    assignedUserId: 'gone', contact: { tags: [] }, customer: null,
+                }),
+                updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            },
+            organizationMember: { findFirst: jest.fn().mockResolvedValue(assigneeStillHere ? { userId: 'gone' } : null) },
+        };
+        const settings = { get: jest.fn().mockResolvedValue({ settings: parseInboxSettings({}), timeZone: 'Asia/Kolkata' }) };
+        const service = new InboxRulesService(prisma as never, settings as never, {} as never, {} as never, { publish: jest.fn() } as never);
+        const event = { id: 'e1', organizationId: 'org', channelId: 'ch1', contactId: 'ct1', eventType: 'whatsapp.message', text: 'hi', newConversation: true };
+        return { service, prisma, event };
+    }
+
+    it('puts the chat back in the queue when its assignee has left the workspace', async () => {
+        const { service, prisma, event } = build(false);
+
+        await service.onEvent(event, { automated: true });
+
+        expect(prisma.conversation.updateMany).toHaveBeenCalledWith({ where: { id: 'c1', assignedUserId: 'gone' }, data: { assignedUserId: null } });
+    });
+
+    it('leaves it with an assignee who is still a member', async () => {
+        const { service, prisma, event } = build(true);
+
+        await service.onEvent(event, { automated: true });
+
+        expect(prisma.conversation.updateMany).not.toHaveBeenCalled();
+    });
+});

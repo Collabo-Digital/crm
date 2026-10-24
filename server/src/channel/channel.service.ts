@@ -4,7 +4,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { ChannelPlatform, ChannelStatus, SyncStatus, UserRole, Prisma } from '@prisma/client';
+import { Channel, ChannelPlatform, ChannelStatus, SyncStatus, UserRole, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { describeRateLimit } from '../rate-limit/rate-limit-state.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
@@ -422,6 +422,31 @@ export class ChannelService {
       return { message: 'Channel already disconnected' };
     }
 
+    await this.release(channel);
+    return { message: 'Channel disconnected' };
+  }
+
+  /**
+   * Disconnect every connected channel of a workspace that is being deleted,
+   * so its WhatsApp number and Shopify store stop receiving and sending, and
+   * can be connected again in another workspace. The caller has already
+   * checked that the deleting user owns the workspace.
+   */
+  async disconnectAllForOrg(orgId: string): Promise<void> {
+    const channels = await this.prisma.channel.findMany({
+      where: {
+        organizationId: orgId,
+        platform: { not: ChannelPlatform.MANUAL },
+        status: { not: ChannelStatus.DISCONNECTED },
+      },
+    });
+    for (const channel of channels) await this.release(channel);
+  }
+
+  /** Revoke what we can remotely, then clear the grant and the account claim. */
+  private async release(channel: Channel): Promise<void> {
+    const { id: channelId, organizationId: orgId } = channel;
+
     // Remote cleanup is best-effort throughout — the grant may already be dead
     // on the provider's side, and that must not block us from clearing it here.
     if (channel.credentials) {
@@ -488,8 +513,6 @@ export class ChannelService {
         } as Prisma.InputJsonValue,
       },
     });
-
-    return { message: 'Channel disconnected' };
   }
 
   async getSyncLogs(channelId: string, orgId: string) {

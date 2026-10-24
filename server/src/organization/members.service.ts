@@ -1,14 +1,18 @@
 import { BadRequestException, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { extractGrants, sectionGrants, SECTION_SCOPED_ROLES } from '../auth/permissions';
+import { InboxEventsService } from '../messaging/inbox-events.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { releaseMemberWork } from './member-release';
+import { resolveVendorScope } from './vendor-scope';
 
 @Injectable()
 export class MembersService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly redis: RedisService,
+        private readonly inboxEvents: InboxEventsService,
     ) { }
 
     // ─── LIST MEMBERS ───
@@ -44,7 +48,10 @@ export class MembersService {
     // ─── UPDATE ROLE ───
     // WHY protect OWNER? The org creator (OWNER) can never be demoted.
     // WHY prevent assigning OWNER? There can only be one OWNER per org.
-    async updateRole(orgId: string, memberId: string, role: UserRole) {
+    // A VENDOR needs the vendor it supplies, or every request it makes is
+    // refused. INFLUENCER is an outside party that joins through its own
+    // invite, never a role a team member is moved into.
+    async updateRole(orgId: string, memberId: string, role: UserRole, vendorScope?: string) {
         const member = await this.prisma.organizationMember.findFirst({
             where: { id: memberId, organizationId: orgId, isActive: true },
         });
@@ -56,10 +63,14 @@ export class MembersService {
         if (role === UserRole.OWNER) {
             throw new ForbiddenException('Cannot assign OWNER role');
         }
+        if (role === UserRole.INFLUENCER) {
+            throw new BadRequestException('Influencers can only join through an influencer invitation.');
+        }
+        const scope = role === UserRole.VENDOR ? await resolveVendorScope(this.prisma, orgId, vendorScope) : null;
 
         const updated = await this.prisma.organizationMember.update({
             where: { id: memberId },
-            data: { role },
+            data: { role, vendorScope: scope },
         });
 
         // Invalidate session cache — forces fresh role on next request
@@ -106,9 +117,10 @@ export class MembersService {
 
     // ─── REMOVE MEMBER ───
     // WHY isActive=false instead of DELETE? Soft removal preserves:
-    // - Their notes/messages/assigned conversations still reference them
+    // - Their notes/messages and closed conversations still reference them
     // - They can be re-invited later (the row exists but inactive)
     // - Audit trail of who was in the org
+    // Their open conversations and inbox team places are released.
     async remove(orgId: string, memberId: string) {
         const member = await this.prisma.organizationMember.findFirst({
             where: { id: memberId, organizationId: orgId, isActive: true },
@@ -119,13 +131,19 @@ export class MembersService {
             throw new ForbiddenException('Cannot remove the organization owner');
         }
 
-        const removed = await this.prisma.organizationMember.update({
-            where: { id: memberId },
-            data: { isActive: false },
-        });
+        const { removed, released } = await this.prisma.$transaction(async (tx) => ({
+            removed: await tx.organizationMember.update({
+                where: { id: memberId },
+                data: { isActive: false },
+            }),
+            released: await releaseMemberWork(tx, [orgId], member.userId),
+        }));
 
         // Invalidate session cache — forces membership refresh on next request
         await this.redis.deleteSession(member.userId);
+        for (const c of released) {
+            this.inboxEvents.publish(orgId, { type: 'conversation.updated', conversationId: c.id });
+        }
 
         return removed;
     }

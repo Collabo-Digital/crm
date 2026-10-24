@@ -99,7 +99,7 @@ describe('AuthService.resetPassword — a reset link works exactly once', () => 
 
     expect(passwords).toHaveLength(1);
     expect(usedAt('t1')).toBeInstanceOf(Date);
-    expect(redis.deleteAllAuthSessions).toHaveBeenCalledWith('u1');
+    expect(redis.deleteAllAuthSessions).toHaveBeenCalledWith('u1', undefined);
   });
 
   it('lets only one of two concurrent requests with the same link change the password', async () => {
