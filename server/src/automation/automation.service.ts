@@ -152,7 +152,11 @@ export class AutomationService {
             ? !!(await this.prisma.paymentAccount.findFirst({ where: { organizationId: row.organizationId, disconnectedAt: null, credentials: { not: null } }, select: { id: true } }))
             : undefined;
         const whatsAppPayReady = paySteps.some(({ step }) => step.config.method === 'whatsapp_pay') ? await this.whatsAppPay.available(row.channelId) : undefined;
-        return { platform: row.platform, knownMediaIds, templates, paymentsConnected, whatsAppPayReady };
+        const usesSheets = new Flow(steps).all().some(({ step }) => step.type === 'sheet_add_row' || (step.type === 'trigger' && step.config.event === 'sheet_row'));
+        const sheets = usesSheets
+            ? new Set((await this.prisma.googleSheet.findMany({ where: { organizationId: row.organizationId }, select: { id: true } })).map((s) => s.id))
+            : undefined;
+        return { platform: row.platform, knownMediaIds, templates, paymentsConnected, whatsAppPayReady, sheets };
     }
 
 

@@ -54,6 +54,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { GrowthModule } from './growth/growth.module';
 import { AdsModule } from './ads/ads.module';
 import { ReviewsModule } from './reviews/reviews.module';
+import { GoogleModule } from './integrations/google/google.module';
 import { DeveloperModule } from './developer/developer.module';
 
 @Module({
@@ -126,6 +127,7 @@ import { DeveloperModule } from './developer/developer.module';
     GrowthModule,
     AdsModule,
     ReviewsModule,
+    GoogleModule,
     DeveloperModule,
   ],
   controllers: [AppController],

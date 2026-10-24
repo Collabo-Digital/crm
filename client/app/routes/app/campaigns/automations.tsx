@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { CircleAlert, MessagesSquare, Plus, Search, Workflow } from "lucide-react";
+import { CircleAlert, FileSpreadsheet, MessagesSquare, Plus, Search, Workflow } from "lucide-react";
 
 import { CreateAutomationDialog } from "~/components/app/automations/create-automation-dialog";
 import { ChannelBadge } from "~/components/app/channel-badge";
@@ -56,6 +56,14 @@ export default function AutomationsPage() {
               <Link to="/campaigns/automations/starters">
                 <MessagesSquare />
                 Conversation starters
+              </Link>
+            </Button>
+          )}
+          {!isInfluencer && (
+            <Button asChild variant="outline" size="sm">
+              <Link to="/campaigns/automations/sheets">
+                <FileSpreadsheet />
+                Google Sheets
               </Link>
             </Button>
           )}

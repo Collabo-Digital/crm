@@ -37,6 +37,8 @@ export interface IssueContext {
     paymentsConnected?: boolean;
     /** Whether the automation's WhatsApp number has WhatsApp Pay turned on. Absent when not loaded. */
     whatsAppPayReady?: boolean;
+    /** The organization's Google sheets in Collabo. Absent when not loaded. */
+    sheets?: Set<string>;
 }
 
 const StepId = z.string().min(1).max(64);
@@ -55,12 +57,13 @@ const TriggerConfig = z.object({
      * WhatsApp cart sent from the catalog · invoice_issued — a GST invoice was
      * issued for an order · payment_received — a payment link was paid ·
      * website_signup — someone left their number in the website pop-up ·
-     * ad_message — a chat started from a click-to-message ad (any, or the ad ids in `keyword`).
+     * ad_message — a chat started from a click-to-message ad (any, or the ad ids in `keyword`) ·
+     * sheet_row — a row was added to a Google sheet, naming the person in its phone column.
      */
     event: z.enum([
         'comment', 'message', 'mention', 'postback', 'tag_added', 'webhook',
         'order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled', 'checkout_abandoned', 'cart',
-        'invoice_issued', 'payment_received', 'website_signup', 'ad_message',
+        'invoice_issued', 'payment_received', 'website_signup', 'ad_message', 'sheet_row',
     ]),
     /** Comment: the post or reel id; empty for every post. */
     post: z.string().max(64).default(''),
@@ -73,8 +76,10 @@ const TriggerConfig = z.object({
     tag: z.string().max(60).default(''),
     /** Webhook: the secret part of the URL, issued on publish. */
     token: z.string().max(64).default(''),
-    /** Webhook: the JSON field holding the person's phone number. */
+    /** Webhook: the JSON field holding the person's phone number. Sheet row: the phone column's header. */
     phoneField: z.string().max(60).default('phone'),
+    /** Sheet row: the Google sheet (Campaigns → Automations → Google Sheets) to watch. */
+    sheetId: z.string().max(64).default(''),
 });
 
 const MediaRef = z.object({
@@ -133,6 +138,12 @@ const PostReviewConfig = z.object({
     products: z.enum(['first', 'each']).default('first'),
     /** How Judge.me shows their name; the store's own setting wins when stricter. */
     nameFormat: z.enum(['', 'last_initial', 'all_initials', 'anonymous']).default('last_initial'),
+});
+
+/** A row added to a Google sheet: one value per column, from the left. */
+const SheetAddRowConfig = z.object({
+    sheetId: z.string().max(64).default(''),
+    values: z.array(z.string().max(1000)).max(26).default([]),
 });
 
 /** The order's GST invoice as a PDF, in the document header of an approved WhatsApp template. */
@@ -231,6 +242,7 @@ const BLOCK_SCHEMAS = {
     http_request: HttpRequestConfig,
     store_action: StoreActionConfig,
     post_review: PostReviewConfig,
+    sheet_add_row: SheetAddRowConfig,
 } as const;
 
 /** Each branching block and the branches it has. */
@@ -333,8 +345,8 @@ export function parseDefinition(input: unknown): StepDef[] {
 const ORDER_EVENTS = ['order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled'];
 /** Events about one order: its actions and its invoice are available. A paid link is about its order, when it had one. */
 const ORDER_CONTEXT = [...ORDER_EVENTS, 'invoice_issued', 'payment_received'];
-/** Store events and website sign-ups reach people who may not have written in 24 hours: WhatsApp templates only. */
-const STORE_EVENTS = [...ORDER_CONTEXT, 'checkout_abandoned', 'website_signup'];
+/** Store events, website sign-ups and sheet rows reach people who may not have written in 24 hours: WhatsApp templates only. */
+const STORE_EVENTS = [...ORDER_CONTEXT, 'checkout_abandoned', 'website_signup', 'sheet_row'];
 const EVENTS_BY_CHANNEL: Record<z.infer<typeof Channel>, string[]> = {
     instagram: ['comment', 'message', 'mention', 'postback', 'tag_added', 'webhook', 'ad_message'],
     facebook: ['comment', 'message', 'postback', 'tag_added', 'webhook', 'ad_message'],
@@ -366,6 +378,11 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
         push(trigger.id, 'payload_missing', 'Button missing', 'Choose which ice breaker, menu item or button starts this, or choose any.');
     }
     if (t.event === 'tag_added' && !t.tag.trim()) push(trigger.id, 'tag_missing', 'Tag missing', 'Choose the tag that starts this automation.');
+    if (t.event === 'sheet_row') {
+        if (!t.sheetId) push(trigger.id, 'sheet_missing', 'Choose a sheet', 'Pick the Google sheet whose new rows start this automation.');
+        else if (ctx.sheets && !ctx.sheets.has(t.sheetId)) push(trigger.id, 'sheet_not_found', 'Sheet not found', 'The sheet was removed from Collabo. Pick another one.');
+        if (!t.phoneField.trim()) push(trigger.id, 'phone_column_missing', 'Choose the phone column', 'Pick the column with each person’s WhatsApp number.');
+    }
     if (t.event === 'ad_message' && keywordsFor(trigger).some((id) => !/^\d{5,25}$/.test(id))) {
         push(trigger.id, 'ad_id_invalid', 'Check the ad ids', 'Ad ids are the long numbers shown in Ads Manager, separated by commas. Leave it empty for every ad.');
     }
@@ -384,6 +401,8 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
     if (t.event === 'payment_received') saved.add('payment');
     if (t.event === 'website_signup') saved.add('signup');
     if (t.event === 'ad_message') saved.add('ad');
+    // A sheet row's cells arrive as {{sheet.<column>}}, and its number as {{sheet.row}}.
+    if (t.event === 'sheet_row') saved.add('sheet');
     let privateReplies = 0;
     for (const { step, path } of actions) {
         const c = step.config;
@@ -580,6 +599,16 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 checkText(r.text);
                 break;
             }
+            case 'sheet_add_row': {
+                const r = c as z.infer<typeof SheetAddRowConfig>;
+                if (!r.sheetId) push(step.id, 'sheet_missing', 'Choose a sheet', 'Pick the Google sheet to add the row to.');
+                else if (ctx.sheets && !ctx.sheets.has(r.sheetId)) push(step.id, 'sheet_not_found', 'Sheet not found', 'The sheet was removed from Collabo. Pick another one.');
+                // Its own row would start it again, and again.
+                else if (t.event === 'sheet_row' && t.sheetId === r.sheetId) push(step.id, 'sheet_loop', 'Same sheet as the trigger', 'A row added here would start this automation again. Add it to another sheet.');
+                if (!r.values.some((v) => v.trim())) push(step.id, 'row_empty', 'The row is empty', 'Fill in at least one column.');
+                r.values.forEach(checkText);
+                break;
+            }
             case 'http_request': {
                 const h = c as z.infer<typeof HttpRequestConfig>;
                 if (!/^https?:\/\//i.test(h.url)) push(step.id, 'url_missing', 'Add the URL', 'Requests go to a full https:// address.');
@@ -617,14 +646,16 @@ export function triggerTypeFor(trigger: StepDef): string {
     if (c.event === 'website_signup') return 'crm.website.signup';
     if (c.event === 'ad_message') return 'crm.ad.referral';
     if (c.event === 'cart') return 'whatsapp.cart';
+    if (c.event === 'sheet_row') return 'crm.sheet.row';
     if (c.event === 'mention') return 'instagram.mention';
     return `${c.channel}.${c.event}`;
 }
 
-/** The trigger row's subject: the post for comments, the token for webhooks. */
+/** The trigger row's subject: the post for comments, the token for webhooks, the sheet for sheet rows. */
 export function triggerPostFor(trigger: StepDef): string | null {
     const c = trigger.config as TriggerConfigT;
     if (c.event === 'webhook') return c.token || null;
+    if (c.event === 'sheet_row') return c.sheetId || null;
     if (c.event === 'comment') return c.post || null;
     return null;
 }

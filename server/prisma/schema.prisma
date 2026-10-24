@@ -369,6 +369,8 @@ model Organization {
   whatsappCalls          WhatsAppCall[]
   reviewAccounts         ReviewAccount[]
   productReviews         ProductReview[]
+  googleAccount          GoogleAccount?
+  googleSheets           GoogleSheet[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -3760,4 +3762,53 @@ model ProductReview {
   @@index([organizationId, createdAt])
   @@index([orderId])
   @@map("product_reviews")
+}
+
+/// The organization's Google account, for sheets used by automations. Scope
+/// drive.file only: Google gives access to the sheets Collabo creates or the
+/// merchant picks, never the rest of their Drive.
+model GoogleAccount {
+  id             String    @id @default(cuid())
+  organizationId String    @unique @map("organization_id")
+  email          String?
+  /// EncryptionService ciphertext of the refresh token; null once disconnected.
+  credentials    String?
+  scopes         String[]  @default([])
+  connectedById  String?   @map("connected_by_id")
+  disconnectedAt DateTime? @map("disconnected_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("google_accounts")
+}
+
+/// A spreadsheet automations use: they add rows to it, or a new row in it
+/// starts one ("A row is added to a sheet").
+model GoogleSheet {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  spreadsheetId  String    @map("spreadsheet_id")
+  title          String
+  url            String
+  /// The tab rows are read from and added to: the first one.
+  tab            String
+  /// created (by Collabo) or picked (an existing sheet chosen in Google's picker).
+  origin         String
+  /// Rows (the header included) already seen; null until an automation watches the sheet.
+  seenRows       Int?      @map("seen_rows")
+  checkedAt      DateTime? @map("checked_at")
+  /// Why the sheet could not be read last time; cleared when it can.
+  lastError      String?   @map("last_error")
+  /// The last new row that started nothing, and why (no phone number).
+  skippedRow     String?   @map("skipped_row")
+  createdById    String?   @map("created_by_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, spreadsheetId])
+  @@map("google_sheets")
 }

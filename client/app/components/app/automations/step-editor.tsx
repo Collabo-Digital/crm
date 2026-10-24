@@ -8,11 +8,12 @@ import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Textarea } from "~/components/ui/textarea";
 import { useInstagramPosts } from "~/hooks/use-automation-queries";
+import { useSheetColumns } from "~/hooks/use-google";
 import { useCampaignUploadMutation } from "~/hooks/use-campaign-mutations";
 import { useTemplates } from "~/hooks/use-campaign-queries";
 import { BLOCKS, CHANNEL_LABEL, EVENTS, ORDER_EVENTS, STORE_EVENTS, allSteps } from "~/lib/automation-blocks";
 import { cn } from "~/lib/utils";
-import type { AutomationChannelKey, AutomationIssue, AutomationStep } from "~/types/api";
+import type { AutomationChannelKey, AutomationIssue, AutomationStep, SheetColumn } from "~/types/api";
 
 type Config = AutomationStep["config"];
 
@@ -29,6 +30,10 @@ export interface EditorContext {
   readOnly: boolean;
   /** May edit automations; only they are sent a webhook trigger's URL. */
   canEdit: boolean;
+  /** The organization's Google sheets in Collabo. */
+  sheets: Array<{ id: string; title: string }>;
+  /** The trigger sheet's columns, for {{sheet.*}}. */
+  sheetColumns: SheetColumn[];
 }
 
 const selectClass = "h-8 w-full rounded-lg border bg-background px-2 text-body disabled:opacity-60";
@@ -74,6 +79,7 @@ function variablesFor(ctx: EditorContext): string[] {
     "last_reply",
     ...saved,
     ...(trigger.event === "webhook" ? ["webhook.<field>"] : []),
+    ...(trigger.event === "sheet_row" ? ["sheet.row", ...ctx.sheetColumns.map((c) => `sheet.${c.key}`)] : []),
   ];
 }
 
@@ -294,6 +300,91 @@ function WebhookUrl({ token, phoneField, canEdit }: { token: string; phoneField:
   );
 }
 
+function SheetSelect({ id, value, onChange, ctx }: { id: string; value: string; onChange: (sheetId: string) => void; ctx: EditorContext }) {
+  return (
+    <>
+      <select id={id} className={selectClass} value={value} disabled={ctx.readOnly} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Choose a sheet</option>
+        {ctx.sheets.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.title}
+          </option>
+        ))}
+      </select>
+      {ctx.sheets.length === 0 && (
+        <p className="text-micro text-muted-foreground">
+          Add one in <Link to="/campaigns/automations/sheets" className="underline">Google Sheets</Link> first.
+        </p>
+      )}
+    </>
+  );
+}
+
+/** "A row is added to a sheet": which sheet, and which column has the person's number. */
+function SheetTriggerFields({ config, set, ctx }: { config: Config; set: (p: Config) => void; ctx: EditorContext }) {
+  const { data: columns = [], isLoading, isError } = useSheetColumns(config.sheetId || undefined);
+  return (
+    <>
+      <Field label="Sheet" htmlFor="t-sheet">
+        <SheetSelect id="t-sheet" value={config.sheetId ?? ""} onChange={(sheetId) => set({ sheetId, phoneField: "" })} ctx={ctx} />
+      </Field>
+      {config.sheetId && (
+        <Field label="Phone column" hint="Each row’s WhatsApp number, with its country code." htmlFor="t-phone-column">
+          {isError ? (
+            <p className="text-micro text-danger">The sheet’s columns could not be read from Google.</p>
+          ) : (
+            <select id="t-phone-column" className={selectClass} value={config.phoneField ?? ""} disabled={ctx.readOnly || isLoading} onChange={(e) => set({ phoneField: e.target.value })}>
+              <option value="">{isLoading ? "Reading the columns…" : "Choose a column"}</option>
+              {columns.map((c) => (
+                <option key={c.key} value={c.header}>
+                  {c.header}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+      )}
+      <p className="rounded-lg bg-info-subtle p-2 text-micro text-info">
+        Collabo reads the sheet every couple of minutes. Each new row starts this once, for the number in its phone column; a new number becomes a contact. Messages must be approved templates, since they may not have written to you.
+      </p>
+    </>
+  );
+}
+
+/** "Add a row to a sheet": a value for each of the sheet's columns. */
+function SheetRowFields({ config, set, ctx }: { config: Config; set: (p: Config) => void; ctx: EditorContext }) {
+  const { data: columns = [], isLoading, isError } = useSheetColumns(config.sheetId || undefined);
+  const values = (config.values as string[] | undefined) ?? [];
+  const setValue = (i: number, v: string) => {
+    const next = [...values];
+    while (next.length < columns.length) next.push("");
+    next[i] = v;
+    set({ values: next.slice(0, Math.max(columns.length, i + 1)) });
+  };
+  return (
+    <div className="space-y-4">
+      <Field label="Sheet" htmlFor="sr-sheet">
+        <SheetSelect id="sr-sheet" value={config.sheetId ?? ""} onChange={(sheetId) => set({ sheetId, values: [] })} ctx={ctx} />
+      </Field>
+      {config.sheetId &&
+        (isLoading ? (
+          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        ) : isError ? (
+          <p className="text-micro text-danger">The sheet’s columns could not be read from Google.</p>
+        ) : columns.length === 0 ? (
+          <p className="text-micro text-muted-foreground">The sheet has no column names. Type them in its first row, then choose it again.</p>
+        ) : (
+          columns.map((c, i) => (
+            <Field key={c.key} label={c.header} htmlFor={`sr-${i}`}>
+              <TextWithVariables id={`sr-${i}`} rows={1} value={values[i] ?? ""} onChange={(v) => setValue(i, v)} ctx={ctx} maxLength={1000} />
+            </Field>
+          ))
+        ))}
+      <p className="text-micro text-muted-foreground">Added below the last row, as plain text: nothing a customer wrote becomes a formula.</p>
+    </div>
+  );
+}
+
 function TriggerForm({ config, set, ctx }: { config: Config; set: (p: Config) => void; ctx: EditorContext }) {
   const events = EVENTS[ctx.channel];
   const ro = ctx.readOnly;
@@ -371,6 +462,7 @@ function TriggerForm({ config, set, ctx }: { config: Config; set: (p: Config) =>
           <Input id="t-ads" value={config.keyword ?? ""} disabled={ro} maxLength={500} onChange={(e) => set({ keyword: e.target.value.replace(/[^\d,\s]/g, "") })} placeholder="120210000000001, 120210000000002" />
         </Field>
       )}
+      {config.event === "sheet_row" && <SheetTriggerFields config={config} set={set} ctx={ctx} />}
       {config.event === "website_signup" ? (
         <p className="rounded-lg bg-info-subtle p-2 text-micro text-info">
           The person who signed up becomes a contact, opted in with the text they agreed to. Messages must be approved templates, since they have not written yet.
@@ -951,6 +1043,9 @@ export function StepEditor({ step, onChange, ctx }: { step: AutomationStep; onCh
           )}
         </div>
       );
+      break;
+    case "sheet_add_row":
+      body = <SheetRowFields config={c} set={set} ctx={ctx} />;
       break;
     case "post_review":
       body = (

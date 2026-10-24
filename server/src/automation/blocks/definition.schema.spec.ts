@@ -309,3 +309,31 @@ describe('publishing a review', () => {
         expect(check(steps('message', {}, 'instagram'), 'INSTAGRAM')).toContain('store_needs_whatsapp');
     });
 });
+
+describe('Google sheets', () => {
+    const rowTrigger = (config: Record<string, unknown> = {}) => ({ id: 't', type: 'trigger', config: { channel: 'whatsapp', event: 'sheet_row', sheetId: 'sh1', phoneField: 'Phone', ...config } });
+    const addRow = (config: Record<string, unknown>) => ({ id: 'a', type: 'sheet_add_row', config });
+    const check = (steps: unknown[], sheets?: Set<string>) =>
+        collectIssues(parseDefinition({ steps }), { platform: 'WHATSAPP', knownMediaIds: null, sheets }).map((i) => i.code);
+
+    it('starts on a new row of a sheet, for the person in its phone column', () => {
+        const [t] = parseDefinition({ steps: [rowTrigger()] });
+        expect([triggerTypeFor(t), triggerPostFor(t)]).toEqual(['crm.sheet.row', 'sh1']);
+        expect(check([rowTrigger(), { id: 'n', type: 'add_note', config: { text: 'New lead {{sheet.full_name}} in row {{sheet.row}}' } }])).toEqual([]);
+    });
+
+    it('needs its sheet and phone column, and templates for people who have not written', () => {
+        expect(check([rowTrigger({ sheetId: '' }), { id: 'n', type: 'add_note', config: { text: 'x' } }])).toContain('sheet_missing');
+        expect(check([rowTrigger({ phoneField: ' ' }), { id: 'n', type: 'add_note', config: { text: 'x' } }])).toContain('phone_column_missing');
+        expect(check([rowTrigger(), { id: 'n', type: 'add_note', config: { text: 'x' } }], new Set(['other']))).toContain('sheet_not_found');
+        expect(check([rowTrigger(), { id: 'm', type: 'send_message', config: { message: 'Hi {{sheet.name}}' } }])).toContain('template_needed');
+    });
+
+    it('adds a row to a sheet from any automation, but never to the sheet that started it', () => {
+        const message = { id: 't', type: 'trigger', config: { channel: 'instagram', event: 'message', match: 'any' } };
+        expect(collectIssues(parseDefinition({ steps: [message, addRow({ sheetId: 'sh2', values: ['{{name}}', '{{last_reply}}'] })] }), { platform: 'INSTAGRAM', knownMediaIds: null }).map((i) => i.code)).toEqual([]);
+        expect(check([rowTrigger(), addRow({ sheetId: 'sh1', values: ['x'] })])).toContain('sheet_loop');
+        expect(check([rowTrigger(), addRow({ sheetId: 'sh2', values: ['', ' '] })])).toContain('row_empty');
+        expect(check([rowTrigger(), addRow({ sheetId: '', values: ['x'] })])).toContain('sheet_missing');
+    });
+});

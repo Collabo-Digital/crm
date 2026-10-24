@@ -24,6 +24,7 @@ import {
 import { automationKeys, useAutomation, useAutomationStats } from "~/hooks/use-automation-queries";
 import { useTemplates } from "~/hooks/use-campaign-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
+import { useGoogleIntegration, useSheetColumns } from "~/hooks/use-google";
 import { canEditAutomations } from "~/lib/permissions";
 import { useContactTags, useInboxMembers, useInboxTeams } from "~/hooks/use-inbox-queries";
 import { useSectionAccess } from "~/hooks/use-section-access";
@@ -57,7 +58,7 @@ const ONCE: Array<[NonNullable<AutomationSettings["oncePerContact"]>, string, st
 ];
 
 /** What a store trigger is about; each one starts the automation once (the server counts it so). */
-const SUBJECT: Record<string, string> = { cart: "cart", checkout_abandoned: "checkout", invoice_issued: "invoice", payment_received: "payment" };
+const SUBJECT: Record<string, string> = { cart: "cart", checkout_abandoned: "checkout", invoice_issued: "invoice", payment_received: "payment", sheet_row: "row" };
 const subjectOf = (event: unknown) => (typeof event !== "string" ? null : event.startsWith("order_") ? "order" : (SUBJECT[event] ?? null));
 
 /** The builder: the flow, the selected step's form, and how it has been running. */
@@ -82,6 +83,10 @@ export default function AutomationPage() {
 
   const [tab, setTab] = useState<"flow" | "activity">("flow");
   const [steps, setSteps] = useState<AutomationStep[]>([]);
+  // Sheets, for "Add a row to a sheet" and "A row is added to a sheet".
+  const { data: google } = useGoogleIntegration(!isInfluencer);
+  const triggerSheet = steps[0]?.config.event === "sheet_row" ? String(steps[0]?.config.sheetId ?? "") : "";
+  const { data: sheetColumns = [] } = useSheetColumns(triggerSheet || undefined);
   const [settings, setSettings] = useState<AutomationSettings>({ oncePerContact: "ever" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
@@ -162,6 +167,8 @@ export default function AutomationPage() {
     storeTools,
     readOnly,
     canEdit: editor,
+    sheets: (google?.sheets ?? []).map((s) => ({ id: s.id, title: s.title })),
+    sheetColumns,
   };
 
   const publish = async () => {

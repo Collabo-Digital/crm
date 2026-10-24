@@ -15,6 +15,19 @@ function pick(body: unknown, path: string): unknown {
 }
 
 /**
+ * A phone number with its country code as digits, or null. 00 is the
+ * international prefix; a trunk 0 after the country code ("+91 098…") is
+ * dropped when the number is valid without it (WhatsApp's own 521…/549…
+ * forms are not, and stay as sent); a number that still starts with 0 has no
+ * country code.
+ */
+export function fullPhone(value: unknown): string | null {
+    const sent = String(value ?? '').replace(/\D/g, '').replace(/^00/, '');
+    const digits = normalizePhone(`+${sent}`)?.slice(1) ?? sent;
+    return digits.length < 11 || digits.length > 15 || digits.startsWith('0') ? null : digits;
+}
+
+/**
  * Another system starting an automation for one person: an order tool, a
  * form, a spreadsheet script. The secret URL is the credential; the body
  * names the person by phone number and its fields become {{webhook.*}}.
@@ -36,14 +49,8 @@ export class AutomationHooksService {
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Send a JSON object.');
 
         const phoneField = ((trigger.config ?? {}) as { phoneField?: string }).phoneField || 'phone';
-        // 00 is the international prefix; a trunk 0 after the country code ("+91 098…") is dropped when the
-        // number is valid without it (WhatsApp's own 521…/549… forms are not, and stay as sent); a number
-        // that still starts with 0 has no country code.
-        const sent = String(pick(body, phoneField) ?? '').replace(/\D/g, '').replace(/^00/, '');
-        const digits = normalizePhone(`+${sent}`)?.slice(1) ?? sent;
-        if (digits.length < 11 || digits.length > 15 || digits.startsWith('0')) {
-            throw new BadRequestException(`Send "${phoneField}" as a full phone number with its country code, like +919876543210.`);
-        }
+        const digits = fullPhone(pick(body, phoneField));
+        if (!digits) throw new BadRequestException(`Send "${phoneField}" as a full phone number with its country code, like +919876543210.`);
 
         const contact = await this.contactFor(trigger.automation.organizationId, trigger.channel, digits);
         const fields = Object.fromEntries(
@@ -80,7 +87,7 @@ export class AutomationHooksService {
      * cannot: the person must be the one contact linked to a store customer
      * with this number (storedPhoneIs).
      */
-    private async contactFor(orgId: string, channel: { id: string; platform: ChannelPlatform }, digits: string) {
+    async contactFor(orgId: string, channel: { id: string; platform: ChannelPlatform }, digits: string) {
         const existing = await this.prisma.channelContact.findFirst({
             where: { channelId: channel.id, OR: [{ waId: digits }, { externalId: digits }, { phone: `+${digits}` }] },
             select: { id: true, externalId: true },

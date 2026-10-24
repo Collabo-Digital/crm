@@ -2,6 +2,7 @@ import {
   CircleCheck,
   Clock,
   CreditCard,
+  FileSpreadsheet,
   FileText,
   GitBranch,
   Hourglass,
@@ -60,6 +61,7 @@ export const BLOCKS: Record<AutomationBlockType, BlockSpec> = {
   http_request: { label: "Call a URL", icon: Webhook, hint: "Send data to another system and use its answer.", group: "Connect" },
   store_action: { label: "Store action", icon: ShoppingBag, hint: "Tag, note or cancel the order, or turn a cart into a draft order.", group: "Store", channels: ["whatsapp"] },
   post_review: { label: "Publish a review", icon: Star, hint: "The customer’s rating and words, to your Judge.me and Campaigns → Reviews.", group: "Store", channels: ["whatsapp"] },
+  sheet_add_row: { label: "Add a row to a sheet", icon: FileSpreadsheet, hint: "A row in one of your Google sheets: a lead list, an order log.", group: "Connect" },
 };
 
 export const BLOCK_GROUPS: Array<BlockSpec["group"]> = ["Messages", "Flow", "Contact", "Conversation", "Store", "Connect"];
@@ -113,6 +115,7 @@ export const EVENTS: Record<AutomationChannelKey, Array<{ value: string; label: 
     { value: "order_cancelled", label: "An order is cancelled", hint: "" },
     { value: "checkout_abandoned", label: "A checkout is left unfinished", hint: "An hour after a Shopify checkout with a phone number goes quiet." },
     { value: "website_signup", label: "Someone signs up on your website", hint: "From the pop-up in Campaigns → Growth, with their consent. {{signup.name}} and {{signup.page}} are filled in." },
+    { value: "sheet_row", label: "A row is added to a Google sheet", hint: "A form response, or a lead your team types in. Each cell is in {{sheet.<column>}}; rows already there when you publish are left alone." },
     { value: "tag_added", label: "A contact gets a tag", hint: "A chat link’s tag too, when a chat starts from it." },
     { value: "webhook", label: "Another app calls a URL", hint: "For example your order tool, with the customer’s phone number." },
   ],
@@ -159,6 +162,8 @@ export function newStep(type: AutomationBlockType, channel: AutomationChannelKey
       return { id, type, config: { action: "tag_order", value: "" } };
     case "post_review":
       return { id, type, config: { rating: "{{attr.review_rating}}", text: "{{last_reply}}", products: "first", nameFormat: "last_initial" } };
+    case "sheet_add_row":
+      return { id, type, config: { sheetId: "", values: [] } };
     default:
       return { id, type: "trigger", config: { channel, event: channel === "whatsapp" ? "message" : "comment", match: "contains", keyword: "", post: "" } };
   }
@@ -278,6 +283,8 @@ export function triggerSummary(config: AutomationStep["config"]): string {
       return "A payment link is paid";
     case "website_signup":
       return "Someone signs up on your website";
+    case "sheet_row":
+      return "A new row in a Google sheet";
     case "ad_message":
       return config.keyword ? `A chat from ad ${String(config.keyword).split(",").length > 1 ? "ids " : ""}${config.keyword}` : "A chat from any ad";
     case "order_fulfilled":
@@ -342,6 +349,10 @@ export function stepSummary(step: AutomationStep, templateName?: (id: string) =>
       )[c.action] ?? "Store action";
     case "post_review":
       return `Publish the rating in ${clip(c.rating || "…", 40)}${c.products === "each" ? " for each product" : ""} to Judge.me`;
+    case "sheet_add_row": {
+      const filled = ((c.values as string[] | undefined) ?? []).filter((v) => v.trim());
+      return !c.sheetId ? "Choose the sheet" : filled.length ? `A row: ${clip(filled.join(" · "), 60)}` : "Fill in the row";
+    }
     default:
       return BLOCKS[(step as AutomationStep).type]?.hint ?? "";
   }

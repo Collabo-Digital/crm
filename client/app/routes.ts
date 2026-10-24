@@ -85,6 +85,7 @@ export default [
     route("campaigns/reviews", "routes/app/campaigns/reviews.tsx"),
     route("campaigns/automations", "routes/app/campaigns/automations.tsx"),
     route("campaigns/automations/starters", "routes/app/campaigns/automations/starters.tsx"),
+    route("campaigns/automations/sheets", "routes/app/campaigns/automations/sheets.tsx"),
     route("campaigns/automations/:id", "routes/app/campaigns/automations/$id.tsx"),
     // Logistics is not on this branch. Its old URLs fall through
     // legacy-redirect to the landing page rather than the bare 404.

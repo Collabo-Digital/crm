@@ -14,6 +14,7 @@ import { ASSIGNABLE_ROLES } from '../../inbox/inbox-team.service';
 import { StoreActionsService } from '../../commerce/store-actions.service';
 import { PaymentLinksService } from '../../payments/payment-links.service';
 import { ReviewsService } from '../../reviews/reviews.service';
+import { GoogleService } from '../../integrations/google/google.service';
 import type { ReviewerNameFormat } from '../../reviews/judgeme.client';
 import { paymentVars } from '../../payments/payment-link.util';
 import { WhatsAppPayService } from '../../payments/whatsapp-pay.service';
@@ -76,6 +77,7 @@ export class AutomationRunner {
         private readonly paymentLinks: PaymentLinksService,
         private readonly whatsAppPay: WhatsAppPayService,
         private readonly reviews: ReviewsService,
+        private readonly google: GoogleService,
         config: ConfigService,
     ) {
         this.allowPrivate = config.get<string>('AUTOMATION_HTTP_ALLOW_PRIVATE') === 'true';
@@ -252,6 +254,11 @@ export class AutomationRunner {
                 return this.storeAction(s, c as { action: string; value: string });
             case 'post_review':
                 return this.postReview(s, c as { rating: string; text: string; products: 'first' | 'each'; nameFormat: ReviewerNameFormat });
+            case 'sheet_add_row': {
+                const values = ((c.values as string[]) ?? []).map((v) => interpolate(v, s.vars));
+                await this.google.appendRow(run.organizationId, String(c.sheetId), values);
+                return { kind: 'next', output: { values } };
+            }
             default:
                 return fail(`Unknown block "${step.type}".`);
         }

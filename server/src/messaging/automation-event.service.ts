@@ -22,7 +22,9 @@ export type InboundEventType =
     /** A cart sent from the WhatsApp catalog. */
     | 'whatsapp.cart'
     /** A chat that started from a click-to-message ad. */
-    | 'crm.ad.referral';
+    | 'crm.ad.referral'
+    /** A row added to a Google sheet an automation watches. */
+    | 'crm.sheet.row';
 
 /** Tags added by automations can start automations that add tags; stop after this many hops. */
 export const MAX_TAG_DEPTH = 3;

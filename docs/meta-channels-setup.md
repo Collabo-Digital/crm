@@ -135,12 +135,21 @@ ANTHROPIC_BASE_URL=                 # leave unset in production; local tests poi
                                     # at the Anthropic stand-in
 JUDGEME_API_BASE=                   # leave unset in production (https://api.judge.me/api/v1);
                                     # local tests point it at the Judge.me stand-in
+GOOGLE_CLIENT_ID=                   # Collabo's Google OAuth client (web application),
+GOOGLE_CLIENT_SECRET=               # for Google Sheets; unset, the page says so
+GOOGLE_SHEETS_POLL_SECONDS=         # how often watched sheets are read (default 120)
+GOOGLE_OAUTH_AUTH_URL=              # these four: leave unset in production; local tests
+GOOGLE_OAUTH_TOKEN_URL=             # point them at the Google stand-in
+GOOGLE_OAUTH_REVOKE_URL=
+GOOGLE_SHEETS_API_BASE=
 ```
 
 Client (`client/.env`):
 
 ```
 VITE_META_APP_ID=                   # same app as META_APP_ID
+VITE_GOOGLE_PICKER_API_KEY=         # browser API key for Google's picker (existing sheets)
+VITE_GOOGLE_APP_ID=                 # the Google Cloud project number, for the picker
 ```
 
 `VITE_*` variables are baked in at **build** time. Setting `VITE_META_APP_ID`
@@ -784,6 +793,47 @@ teammate's network must allow outbound UDP.
 - **Webhook field:** subscribe the app to `calls` (table above). Call hours,
   SIP, video and the permission-request template (for outside the reply
   window) are not set from Collabo yet.
+
+### Google Sheets in automations (Campaigns → Automations → Google Sheets)
+
+- **Connecting:** owners and admins connect one Google account for the
+  organization (OAuth for web server apps, `access_type=offline`,
+  `prompt=consent`). Google sends the browser back to the Google Sheets page,
+  which posts the code to the API signed in; the single-use state must belong
+  to the same person, so a consent link sent to someone else cannot link
+  their Google account to this organization. Scopes: `openid`, `email` and
+  `https://www.googleapis.com/auth/drive.file`, which Google rates
+  non-sensitive: Collabo reaches only the sheets it creates and the ones the
+  merchant picks, never the rest of their Drive. The refresh token is kept
+  encrypted; access tokens are minted from it and cached until shortly before
+  they expire. Disconnecting revokes it at Google. Access removed from the
+  Google account side (`invalid_grant`) disconnects it here, with a message to
+  connect again.
+- **Sheets:** "Create in Google Drive" makes a spreadsheet with a header row.
+  "Choose an existing sheet" opens Google's picker (needs
+  `VITE_GOOGLE_PICKER_API_KEY` and `VITE_GOOGLE_APP_ID`); picking a sheet is
+  what gives Collabo access to it under `drive.file`. Rows are read from and
+  added to the first tab. A sheet an automation uses cannot be removed from
+  Collabo; removing one never deletes it from Drive.
+- **"Add a row to a sheet"** (any channel) appends one value per column with
+  `valueInputOption=RAW`, so text a customer wrote is never run as a formula.
+- **"A row is added to a sheet"** (WhatsApp) reads watched sheets every
+  `GOOGLE_SHEETS_POLL_SECONDS` (two minutes by default). Rows already there
+  when it is first read are left alone; each new row starts the automation
+  once, for the number in the chosen phone column (a new number becomes a
+  contact), with each cell as `{{sheet.<column>}}` (the header in lower case,
+  `Full Name` → `{{sheet.full_name}}`) and `{{sheet.row}}`. Messages must be
+  templates. A row without a usable number is skipped and named on the page.
+  An automation cannot add rows to the sheet that starts it. Deleting rows
+  from a watched sheet can make Collabo miss the next ones.
+- **Setting it up in Google Cloud** (Collabo's own project): enable the
+  Google Sheets API and the Google Picker API; configure the OAuth consent
+  screen with the scopes above (drive.file is non-sensitive, so only basic app
+  verification); create an OAuth client of type Web application with the
+  redirect URI `{FRONTEND_URL}/campaigns/automations/sheets` and the app's
+  address as a JavaScript origin; create an API key for the picker, restricted
+  to the app's domain and `https://docs.google.com/*`; the project number is
+  `VITE_GOOGLE_APP_ID`.
 
 ### Messaging analytics (Analytics → Messaging)
 

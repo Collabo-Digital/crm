@@ -128,6 +128,9 @@ export function simulate(
                 push('done', said[String(c.action)] ?? 'Runs a store action.');
                 break;
             }
+            case 'sheet_add_row':
+                push('done', `Adds a row to the sheet: ${((c.values as string[]) ?? []).map((v) => interpolate(v, vars)).join(' | ')} (not added in a test).`);
+                break;
             case 'post_review': {
                 const given = interpolate(String(c.rating ?? ''), vars);
                 const rating = parseRating(given);

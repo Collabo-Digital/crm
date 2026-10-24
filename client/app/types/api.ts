@@ -4380,7 +4380,8 @@ export type AutomationBlockType =
   | "add_note"
   | "http_request"
   | "store_action"
-  | "post_review";
+  | "post_review"
+  | "sheet_add_row";
 
 /** One block of a flow. Condition (yes / no) and wait-for-reply (replied / timeout) carry branches. */
 export interface AutomationStep {
@@ -4886,4 +4887,39 @@ export interface ReviewsList {
   pageSize: number;
   /** Over every review, whatever the filters. */
   stats: { count: number; average: number | null; byRating: Record<number, number>; published: number };
+}
+
+// ─── Google Sheets (Campaigns → Automations → Google Sheets) ───────────────
+
+export interface GoogleSheetView {
+  id: string;
+  title: string;
+  url: string;
+  /** The tab rows are read from and added to. */
+  tab: string;
+  /** created by Collabo, or picked in Google's picker. */
+  origin: "created" | "picked";
+  /** An active "A row is added to a sheet" automation reads it. */
+  watched: boolean;
+  checkedAt: string | null;
+  /** Why it could not be read last time; cleared when it can. */
+  lastError: string | null;
+  /** The last new row that started nothing, and why. */
+  skippedRow: string | null;
+  createdAt: string;
+}
+
+export interface GoogleIntegration {
+  /** Collabo has its Google OAuth client set up. */
+  configured: boolean;
+  connected: boolean;
+  email: string | null;
+  connectedAt: string | null;
+  sheets: GoogleSheetView[];
+}
+
+/** A sheet's column: its header, and the {{sheet.<key>}} a new row's cell arrives as. */
+export interface SheetColumn {
+  header: string;
+  key: string;
 }

@@ -29,10 +29,12 @@ import { AutomationHooksService } from './automation-hooks.service';
 import { AutomationHooksController } from './automation-hooks.controller';
 import { ConversationStartersService } from './conversation-starters.service';
 import { ReviewsModule } from '../reviews/reviews.module';
+import { GoogleModule } from '../integrations/google/google.module';
+import { SheetRowsWatcher } from './sheet-rows.watcher';
 
 @Module({
   imports: [
-    ChannelModule, MessagingModule, CampaignsModule, InboxModule, CommerceModule, PaymentsModule, GrowthModule, AdsModule, DeveloperModule, ReviewsModule,
+    ChannelModule, MessagingModule, CampaignsModule, InboxModule, CommerceModule, PaymentsModule, GrowthModule, AdsModule, DeveloperModule, ReviewsModule, GoogleModule,
     BullModule.registerQueue({ name: META_INBOUND_QUEUE }),
     BullModule.registerQueue({ name: AUTOMATION_QUEUE }),
   ],
@@ -42,7 +44,7 @@ import { ReviewsModule } from '../reviews/reviews.module';
     MetaWebhookIntakeService, MetaInboundRouter, MetaInboundProcessor, MetaWebhookMaintenance,
     WhatsAppWebhookHandler, MessengerWebhookHandler,
     AutomationDispatcher, AutomationRunner, AutomationProcessor, AutomationSweeper,
-    AutomationInsightsService, AutomationHooksService, ConversationStartersService,
+    AutomationInsightsService, AutomationHooksService, ConversationStartersService, SheetRowsWatcher,
   ],
   exports: [AutomationService, InstagramMediaService],
 })

@@ -42,6 +42,18 @@ export default () => ({
     reviews: {
         judgemeApiBase: process.env.JUDGEME_API_BASE || 'https://api.judge.me/api/v1',
     },
+    // Collabo's own Google OAuth client, for Google Sheets in automations. Without
+    // it the Google Sheets page says it is not set up. The URLs are for local tests.
+    google: {
+        clientId: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        authUrl: process.env.GOOGLE_OAUTH_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth',
+        tokenUrl: process.env.GOOGLE_OAUTH_TOKEN_URL || 'https://oauth2.googleapis.com/token',
+        revokeUrl: process.env.GOOGLE_OAUTH_REVOKE_URL || 'https://oauth2.googleapis.com/revoke',
+        sheetsApiBase: process.env.GOOGLE_SHEETS_API_BASE || 'https://sheets.googleapis.com/v4',
+        // How often sheets watched by "A row is added to a sheet" are read.
+        pollSeconds: Number.parseInt(process.env.GOOGLE_SHEETS_POLL_SECONDS || '120', 10),
+    },
     shopify: {
         clientId: process.env.SHOPIFY_CLIENT_ID,
         clientSecret: process.env.SHOPIFY_CLIENT_SECRET,

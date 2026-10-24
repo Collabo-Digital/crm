@@ -18,6 +18,10 @@ export const REDIS_KEYS = {
     OAUTH_META_PAGES: 'oauth:meta-pages:',
     /// Facebook Login with ads_read, for the Ads page's results.
     OAUTH_META_ADS: 'oauth:meta-ads:',
+    /// Google OAuth for Google Sheets in automations.
+    OAUTH_GOOGLE: 'oauth:google:',
+    /// A Google access token minted from the organization's refresh token, kept until just before it expires.
+    GOOGLE_ACCESS_TOKEN: 'google:access:',
 };
 
 export const REDIS_TTL = {

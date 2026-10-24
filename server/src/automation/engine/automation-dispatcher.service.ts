@@ -14,12 +14,13 @@ const REPLY_EVENTS = new Set(['whatsapp.message', 'instagram.message', 'facebook
 const ONE_WINNER = new Set(['whatsapp.message', 'whatsapp.cart', 'instagram.message', 'facebook.message', 'instagram.comment', 'facebook.comment', 'instagram.postback', 'facebook.postback', 'instagram.mention']);
 const DAY = 24 * 3600_000;
 /**
- * Store events, each about one order, invoice, payment, cart or checkout and
- * raised once for it. "Once" on these means once for that thing, which the
- * event's own uniqueness ensures: a returning buyer's next order still runs.
+ * Store events, each about one order, invoice, payment, cart or checkout (or
+ * one sheet row) and raised once for it. "Once" on these means once for that
+ * thing, which the event's own uniqueness ensures: a returning buyer's next
+ * order still runs.
  */
 const ONE_PER_SUBJECT = (eventType: string) =>
-    eventType.startsWith('crm.order.') || ['crm.invoice.issued', 'crm.payment.received', 'crm.checkout.abandoned', 'whatsapp.cart'].includes(eventType);
+    eventType.startsWith('crm.order.') || ['crm.invoice.issued', 'crm.payment.received', 'crm.checkout.abandoned', 'whatsapp.cart', 'crm.sheet.row'].includes(eventType);
 
 interface EventPayload {
     mediaExternalId?: string | null;
@@ -220,6 +221,7 @@ export class AutomationDispatcher {
                 return t.keywords.some((k) => k.toLowerCase() === tag);
             }
             case 'crm.webhook':
+            case 'crm.sheet.row':
                 return t.automationId === payload.raw?.automationId;
             case 'crm.ad.referral':
                 // Any ad, or the ads the trigger names.
