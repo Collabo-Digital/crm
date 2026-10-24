@@ -60,6 +60,7 @@ import { readAddress } from "~/lib/address";
 import { useWarehouses } from "~/hooks/use-inventory-queries";
 import { GstReturnSettings } from "~/components/app/settings/gst-return-settings";
 import { InvoiceSeriesSetting } from "~/components/app/settings/invoice-series-setting";
+import { platformOffered } from "~/lib/channel-providers";
 
 export function meta() {
   return [{ title: "Settings | Collabo CRM" }];
@@ -1508,8 +1509,8 @@ export default function SettingsPage() {
   // Org data
   const { data: org, isLoading: orgLoading } = useCurrentOrg();
   const { data: members, isLoading: membersLoading } = useOrgMembers(currentOrgId);
-  const { data: invites } = useOrgInvites(currentOrgId);
   const { role: memberRole, isInfluencer } = useCurrentRole();
+  const { data: invites } = useOrgInvites(currentOrgId, memberRole === "OWNER" || memberRole === "ADMIN");
   const { canAccess } = useSectionAccess();
   // Inbox settings are for members who can open the Inbox, and billing for
   // owners and admins; the API refuses the rest.
@@ -2086,7 +2087,7 @@ export default function SettingsPage() {
 
               {/* Influencers: external collaborators, invited and tracked here,
                   who connect their own Instagram from Settings -> Channels. */}
-              {currentOrgId && (
+              {currentOrgId && platformOffered("INSTAGRAM") && (
                 <InfluencersSection
                   orgId={currentOrgId}
                   canManage={canManageTeam}
@@ -2097,7 +2098,10 @@ export default function SettingsPage() {
           )}
 
           {/* ─── BILLING ─── */}
-          {activeTab === "billing" && org && <BillingTab orgId={org.id} />}
+          {activeTab === "billing" && org && (memberRole === "OWNER" || memberRole === "ADMIN") && <BillingTab orgId={org.id} />}
+          {activeTab === "billing" && memberRole && memberRole !== "OWNER" && memberRole !== "ADMIN" && (
+            <p className="rounded-2xl bg-card p-6 text-sm text-muted-foreground shadow-sm ring-1 ring-border">Only the workspace owner and admins can see billing and plans.</p>
+          )}
 
           {/* ─── PRODUCT SETTINGS ─── */}
           {activeTab === "store-profile" && <StoreProfileTab />}

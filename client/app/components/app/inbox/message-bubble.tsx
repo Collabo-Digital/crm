@@ -10,6 +10,8 @@ import {
   MapPin,
   MessageCircle,
   MoreHorizontal,
+  Phone,
+  RotateCw,
   ShoppingCart,
   SmilePlus,
   UserRound,
@@ -18,6 +20,8 @@ import {
 import { Button } from "~/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
 import { MESSAGE_STATUS_LABEL, SOURCE_LABEL, formatBubbleTime, formatBytes, formatDateTime } from "~/lib/inbox-format";
+import { apiUrl } from "~/lib/api-client";
+import { useResendMessageMutation } from "~/hooks/use-inbox-mutations";
 import { cn } from "~/lib/utils";
 import { CartActions } from "./cart-actions";
 import type { InboxMessage } from "~/types/api";
@@ -40,13 +44,14 @@ function MessageMedia({ message, isOutbound }: { message: InboxMessage; isOutbou
       </p>
     );
   }
+  const url = apiUrl(media.url);
   switch (message.kind) {
     case "IMAGE":
     case "STICKER":
       return (
-        <a href={media.url} target="_blank" rel="noreferrer" className="block">
+        <a href={url} target="_blank" rel="noreferrer" className="block">
           <img
-            src={media.url}
+            src={url}
             alt={message.text ?? "Image"}
             loading="lazy"
             className={cn("max-h-72 rounded-lg object-contain", message.kind === "STICKER" ? "size-32" : "max-w-full")}
@@ -54,18 +59,18 @@ function MessageMedia({ message, isOutbound }: { message: InboxMessage; isOutbou
         </a>
       );
     case "VIDEO":
-      return <video src={media.url} controls preload="metadata" className="max-h-72 max-w-full rounded-lg" />;
+      return <video src={url} controls preload="metadata" className="max-h-72 max-w-full rounded-lg" />;
     case "AUDIO":
       return (
         <div className="space-y-1">
           {media.voice && <p className="text-micro opacity-80">Voice message</p>}
-          <audio src={media.url} controls preload="none" className="h-9 w-full max-w-64" />
+          <audio src={url} controls preload="none" className="h-9 w-full max-w-64" />
         </div>
       );
     default:
       return (
         <a
-          href={media.url}
+          href={url}
           target="_blank"
           rel="noreferrer"
           className={cn(
@@ -102,6 +107,17 @@ function SentOptions({ payload }: { payload: Record<string, unknown> }) {
       </div>
     );
   }
+  if (payload.type === "call_permission_request") {
+    // WhatsApp shows the customer its own "Allow calls" buttons under this text.
+    return (
+      <div className="mt-2 flex flex-wrap gap-1">
+        <span className="inline-flex items-center gap-1 rounded-full border border-brand-foreground/30 px-2.5 py-0.5 text-micro font-medium">
+          <Phone className="size-3" />
+          Allow calls
+        </span>
+      </div>
+    );
+  }
   const titles =
     (payload.buttons as Array<{ title: string }> | undefined)?.map((b) => b.title) ??
     (payload.replies as Array<{ title: string }> | undefined)?.map((r) => r.title) ??
@@ -114,8 +130,8 @@ function SentOptions({ payload }: { payload: Record<string, unknown> }) {
           {String(payload.buttonText)} · {titles.length} options
         </span>
       ) : (
-        titles.map((title) => (
-          <span key={title} className="rounded-full border border-brand-foreground/30 px-2.5 py-0.5 text-micro font-medium">
+        titles.map((title, index) => (
+          <span key={index} className="rounded-full border border-brand-foreground/30 px-2.5 py-0.5 text-micro font-medium">
             {title}
           </span>
         ))
@@ -199,7 +215,7 @@ function MessageBody({ message, isOutbound }: { message: InboxMessage; isOutboun
       )}
 
       {/* Media captions and location names are already shown above. */}
-      {message.text && !location && <p className="whitespace-pre-wrap break-words">{message.text}</p>}
+      {message.text && !location && <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{message.text}</p>}
       {!message.text && !media && !location && message.kind === "UNSUPPORTED" && (
         <p className="text-caption italic opacity-80">This message type cannot be shown here. Open it on the phone.</p>
       )}
@@ -240,7 +256,7 @@ function CommentCard({
           {message.revokedAt ? (
             <p className="mt-1 text-caption italic text-muted-foreground">This comment was deleted.</p>
           ) : (
-            <p className="mt-1 whitespace-pre-wrap break-words text-body text-foreground">{message.text}</p>
+            <p className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere] text-body text-foreground">{message.text}</p>
           )}
           {comment?.post?.caption && <p className="mt-1 truncate text-micro text-muted-foreground">“{comment.post.caption}”</p>}
         </div>
@@ -275,6 +291,17 @@ function CommentCard({
  * corner (`rounded-tr-sm` / `rounded-tl-sm`) is what makes direction readable
  * at a glance without reading the alignment.
  */
+/** Sends a failed message again; the new one appears below it. */
+function ResendButton({ conversationId, messageId }: { conversationId: string; messageId: string }) {
+  const resend = useResendMessageMutation(conversationId);
+  return (
+    <Button variant="ghost" size="xs" disabled={resend.isPending} onClick={() => resend.mutate(messageId)} className="self-end text-muted-foreground">
+      {resend.isPending ? <Loader2 className="animate-spin" /> : <RotateCw />}
+      Send again
+    </Button>
+  );
+}
+
 export const MessageBubble = memo(function MessageBubble({
   message,
   conversationId,
@@ -318,7 +345,7 @@ export const MessageBubble = memo(function MessageBubble({
 
   return (
     <div className={cn("group flex items-center gap-1", isOutbound ? "flex-row-reverse" : "flex-row")}>
-      <div className={cn("flex max-w-[min(34rem,78%)] flex-col gap-1", isOutbound ? "items-end" : "items-start")}>
+      <div className={cn("flex min-w-0 max-w-[min(34rem,78%)] flex-col gap-1", isOutbound ? "items-end" : "items-start")}>
         {message.groupSender && !isOutbound && (
           <span className="px-1 text-micro font-semibold text-brand-strong">{message.groupSender.name ?? `+${message.groupSender.waId}`}</span>
         )}
@@ -378,7 +405,10 @@ export const MessageBubble = memo(function MessageBubble({
             </span>
           )}
         </div>
-        {isFailed && message.errorMessage && <p className="max-w-full px-1 text-micro text-danger">{message.errorMessage}</p>}
+        {isFailed && message.errorMessage && <p className="max-w-full px-1 text-micro text-danger [overflow-wrap:anywhere]">{message.errorMessage}</p>}
+        {isFailed && isOutbound && canReply && !message.imported && message.source !== "BUSINESS_APP" && message.source !== "OTHER_APP" && (
+          <ResendButton conversationId={conversationId} messageId={message.id} />
+        )}
       </div>
 
       {canAct && (

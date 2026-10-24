@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { motion, LayoutGroup } from "framer-motion";
 import {
@@ -51,6 +52,7 @@ import { useSectionAccess } from "~/hooks/use-section-access";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { useInboxCounts } from "~/hooks/use-inbox-queries";
 import { toast } from "sonner";
+import { roleLabel } from "~/lib/labels";
 
 type NavChild = { label: string; href: string; icon: typeof LayoutDashboard };
 type NavItem = {
@@ -169,6 +171,16 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
   const activeTop = matchNav(navLinks, location.pathname);
   const sectionChildren = activeTop?.children;
   const activeChild = sectionChildren ? matchNav(sectionChildren, location.pathname) : undefined;
+  // On a phone the section tabs scroll sideways; keep the current one in view.
+  const sectionNavRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = sectionNavRef.current;
+    const tab = box?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!box || !tab || box.scrollWidth <= box.clientWidth) return;
+    const b = box.getBoundingClientRect();
+    const t = tab.getBoundingClientRect();
+    box.scrollLeft += t.left - b.left - (b.width - t.width) / 2;
+  }, [activeChild?.href]);
 
   async function handleSwitchOrg(orgId: string) {
     if (orgId === currentOrgId) return;
@@ -317,9 +329,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                       ? "Impersonating"
                       : user?.isSuperAdmin
                         ? "Super Admin"
-                        : currentOrg?.role === "OWNER"
-                          ? "Owner"
-                          : currentOrg?.role?.toLowerCase() ?? "Member"}
+                        : roleLabel(currentOrg?.role)}
                   </span>
                 </div>
                 <ChevronDown className="size-3.5 text-gray-400" />
@@ -389,7 +399,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
       {/* ── Section sub-nav — only for a section that has children ─── */}
       {sectionChildren && (
         <LayoutGroup id="section-nav">
-          <div className="mobile-section-nav mx-auto max-w-screen-xl overflow-x-auto px-4 pb-2 md:px-6 md:pb-3 md:mt-3">
+          <div ref={sectionNavRef} className="mobile-section-nav mx-auto max-w-screen-xl overflow-x-auto px-4 pb-2 md:px-6 md:pb-3 md:mt-3">
             <nav
               aria-label={`${activeTop?.label} section`}
               className="inline-flex min-w-max items-center gap-0.5 rounded-full bg-white dark:bg-gray-900 px-1.5 py-1 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700"

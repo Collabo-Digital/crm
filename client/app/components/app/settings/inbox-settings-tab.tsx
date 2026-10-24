@@ -21,6 +21,7 @@ import { useInboxMe, useInboxMembers, useInboxTeams, useQuickReplies } from "~/h
 import { PRESENCE_DOT, PRESENCE_LABEL } from "~/lib/inbox-format";
 import { cn } from "~/lib/utils";
 import type { InboxShareScope, InboxTeam, QuickReply, QuickReplyAttachment } from "~/types/api";
+import { messagingChannelWords } from "~/lib/channel-providers";
 
 const SCOPE_LABEL: Record<InboxShareScope, string> = {
   ORGANIZATION: "Everyone",
@@ -267,7 +268,7 @@ export function InboxSettingsTab() {
     <div className="space-y-6">
       <div>
         <h2 className="text-base font-bold text-gray-900 dark:text-gray-100">Inbox</h2>
-        <p className="mt-1 text-xs text-muted-foreground">Business hours, auto-replies, routing, teams and saved answers for WhatsApp, Messenger and Instagram chats.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Business hours, auto-replies, routing, teams and saved answers for {messagingChannelWords("and")} chats.</p>
       </div>
 
       <InboxRulesSection canManage={canManage} members={members.map((m) => ({ id: m.id, name: m.name }))} teams={teamRefs} />

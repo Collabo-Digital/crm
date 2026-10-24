@@ -445,6 +445,14 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 }
                 if (m.kind === 'buttons' && m.options.length > 3) push(step.id, 'too_many_buttons', 'Too many buttons', 'Use at most three buttons; use a list for more choices.');
                 if (m.kind === 'buttons' && m.options.some((o) => o.length > 20)) push(step.id, 'button_too_long', 'Button too long', 'Button labels are at most 20 characters.');
+                if (m.kind === 'buttons' || m.kind === 'list' || m.kind === 'quick_replies') {
+                    const labels = m.options.map((o) => o.trim().toLowerCase()).filter(Boolean);
+                    if (new Set(labels).size !== labels.length) push(step.id, 'options_repeated', 'Two options are the same', 'Give each button or option a different label; WhatsApp refuses repeats.');
+                }
+                if (m.kind === 'buttons' && channel === 'whatsapp' && m.message.length > 1024) {
+                    push(step.id, 'message_too_long', 'Message too long', 'A WhatsApp message with buttons can be at most 1,024 characters.');
+                }
+                if (m.kind === 'list' && m.options.filter((o) => o.trim()).length > 10) push(step.id, 'too_many_options', 'Too many options', 'A WhatsApp list takes at most 10 options.');
                 if (m.kind === 'list' && channel !== 'whatsapp') push(step.id, 'list_needs_whatsapp', 'Lists are WhatsApp only', 'Use quick replies on Instagram and Messenger.');
                 if (m.kind === 'quick_replies' && channel === 'whatsapp') push(step.id, 'quick_replies_not_whatsapp', 'Use buttons on WhatsApp', 'WhatsApp has reply buttons (up to 3) or lists instead of quick replies.');
                 if (channel === 'instagram' && Buffer.byteLength(m.message, 'utf8') > IG_MESSAGE_MAX_BYTES) {

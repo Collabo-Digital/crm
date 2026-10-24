@@ -98,6 +98,9 @@ export function toMetaComponents(draft: TemplateDraft, headerHandle?: string | n
         if (header.format === 'TEXT') {
             if (!header.text.trim()) throw new TemplateDraftError('Header: write the header text or remove it.');
             if (header.text.length > 60) throw new TemplateDraftError('Header text can be at most 60 characters.');
+            // Meta: no line breaks, formatting characters or emoji in a text header.
+            if (/[\n*_~`]/.test(header.text)) throw new TemplateDraftError('Header text cannot have line breaks or formatting (* _ ~ `).');
+            if (/\p{Extended_Pictographic}/u.test(header.text)) throw new TemplateDraftError('Header text cannot have emoji.');
             const vars = variablesIn(header.text);
             if (vars.length > 1) throw new TemplateDraftError('The header can have at most one variable.');
             if (vars.length && draft.parameterFormat === 'NAMED') {
@@ -126,6 +129,11 @@ export function toMetaComponents(draft: TemplateDraft, headerHandle?: string | n
     if (!body.trim()) throw new TemplateDraftError('Write the message body.');
     if (body.length > 1024) throw new TemplateDraftError('The body can be at most 1,024 characters.');
     const bodyVars = checkVariables(body, draft.parameterFormat, 'Body');
+    // Meta rejects a body that starts or ends with a variable.
+    // Meta rejects a body that starts or ends with a variable (2388299); punctuation after it does not count as text.
+    if (/^\s*\{\{[^}]+\}\}/.test(body) || /\{\{[^}]+\}\}[\s\p{P}]*$/u.test(body)) {
+        throw new TemplateDraftError('The body cannot start or end with a variable. Add words before the first one and after the last one.');
+    }
     for (const v of bodyVars) {
         if (!draft.body.examples[v]?.trim()) throw new TemplateDraftError(`Body: give an example value for {{${v}}}.`);
     }
@@ -152,6 +160,11 @@ export function toMetaComponents(draft: TemplateDraft, headerHandle?: string | n
         if (count('URL') > 2) throw new TemplateDraftError('Use at most 2 link buttons.');
         if (count('PHONE_NUMBER') > 1) throw new TemplateDraftError('Use at most 1 call button.');
         if (count('COPY_CODE') > 1) throw new TemplateDraftError('Use at most 1 copy-code button.');
+        // Meta: quick replies sit together, before or after the other buttons, never between them.
+        const kinds = buttons.map((b) => (b.type === 'QUICK_REPLY' ? 'Q' : 'C')).join('').replace(/(.)\1+/g, '$1');
+        if (kinds.length > 2) throw new TemplateDraftError('Keep quick-reply buttons together, before or after the link, call and code buttons.');
+        const labels = buttons.filter((b) => b.type !== 'COPY_CODE').map((b) => b.text.trim().toLowerCase());
+        if (new Set(labels).size !== labels.length) throw new TemplateDraftError('Give each button a different label.');
         components.push({
             type: 'BUTTONS',
             buttons: buttons.map((b) => {

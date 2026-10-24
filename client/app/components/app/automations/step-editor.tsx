@@ -1,3 +1,4 @@
+import { serverMessage } from "~/lib/handle-mutation-error";
 import { useRef, useState } from "react";
 import { Link } from "react-router";
 import { Check, Copy, Loader2, Paperclip, Plus, RefreshCw, Trash2, X } from "lucide-react";
@@ -322,7 +323,7 @@ function SheetSelect({ id, value, onChange, ctx }: { id: string; value: string; 
 
 /** "A row is added to a sheet": which sheet, and which column has the person's number. */
 function SheetTriggerFields({ config, set, ctx }: { config: Config; set: (p: Config) => void; ctx: EditorContext }) {
-  const { data: columns = [], isLoading, isError } = useSheetColumns(config.sheetId || undefined);
+  const { data: columns = [], isLoading, isError, error } = useSheetColumns(config.sheetId || undefined);
   return (
     <>
       <Field label="Sheet" htmlFor="t-sheet">
@@ -331,7 +332,7 @@ function SheetTriggerFields({ config, set, ctx }: { config: Config; set: (p: Con
       {config.sheetId && (
         <Field label="Phone column" hint="Each row’s WhatsApp number, with its country code." htmlFor="t-phone-column">
           {isError ? (
-            <p className="text-micro text-danger">The sheet’s columns could not be read from Google.</p>
+            <p className="text-micro text-danger">{serverMessage(error, "The sheet’s columns could not be read from Google.")}</p>
           ) : (
             <select id="t-phone-column" className={selectClass} value={config.phoneField ?? ""} disabled={ctx.readOnly || isLoading} onChange={(e) => set({ phoneField: e.target.value })}>
               <option value="">{isLoading ? "Reading the columns…" : "Choose a column"}</option>
@@ -353,7 +354,7 @@ function SheetTriggerFields({ config, set, ctx }: { config: Config; set: (p: Con
 
 /** "Add a row to a sheet": a value for each of the sheet's columns. */
 function SheetRowFields({ config, set, ctx }: { config: Config; set: (p: Config) => void; ctx: EditorContext }) {
-  const { data: columns = [], isLoading, isError } = useSheetColumns(config.sheetId || undefined);
+  const { data: columns = [], isLoading, isError, error } = useSheetColumns(config.sheetId || undefined);
   const values = (config.values as string[] | undefined) ?? [];
   const setValue = (i: number, v: string) => {
     const next = [...values];
@@ -370,7 +371,7 @@ function SheetRowFields({ config, set, ctx }: { config: Config; set: (p: Config)
         (isLoading ? (
           <Loader2 className="size-4 animate-spin text-muted-foreground" />
         ) : isError ? (
-          <p className="text-micro text-danger">The sheet’s columns could not be read from Google.</p>
+          <p className="text-micro text-danger">{serverMessage(error, "The sheet’s columns could not be read from Google.")}</p>
         ) : columns.length === 0 ? (
           <p className="text-micro text-muted-foreground">The sheet has no column names. Type them in its first row, then choose it again.</p>
         ) : (

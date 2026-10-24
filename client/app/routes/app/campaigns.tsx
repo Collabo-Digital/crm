@@ -1,3 +1,4 @@
+import { SendingHealthAlert } from "~/components/app/channels/sending-health-alert";
 import { useState } from "react";
 import { Link } from "react-router";
 import { ArrowUpRight, FileText, Megaphone, Plus, Receipt, Users, Workflow } from "lucide-react";
@@ -43,7 +44,7 @@ export default function CampaignsOverviewPage() {
 
   const tiles = stats
     ? [
-        { label: "Messages sent", value: stats.sent.toLocaleString("en-IN"), sub: `${stats.broadcasts} broadcasts` },
+        { label: "Messages sent", value: stats.sent.toLocaleString("en-IN"), sub: `${stats.broadcasts} broadcast${stats.broadcasts === 1 ? "" : "s"}` },
         { label: "Delivered", value: stats.delivered.toLocaleString("en-IN"), sub: pct(stats.delivered, stats.sent) },
         { label: "Read", value: stats.read.toLocaleString("en-IN"), sub: pct(stats.read, stats.sent) },
         { label: "Replied", value: stats.replied.toLocaleString("en-IN"), sub: pct(stats.replied, stats.sent) },
@@ -142,6 +143,7 @@ export default function CampaignsOverviewPage() {
             <div className="space-y-6">
               <SectionCard title="WhatsApp number">
                 <div className="space-y-3 px-5 py-4 text-caption">
+                  <SendingHealthAlert sending={data?.number?.sending} />
                   {!data?.number ? (
                     <p className="text-muted-foreground">
                       No WhatsApp number connected.{" "}
@@ -161,7 +163,7 @@ export default function CampaignsOverviewPage() {
                       </div>
                       <div className="flex justify-between gap-2">
                         <span className="text-muted-foreground">Messaging limit</span>
-                        <span>{data.number.messagingLimit ? (TIER_LABEL[data.number.messagingLimit] ?? data.number.messagingLimit) : "Not read yet"}</span>
+                        <span>{data.number.messagingLimit ? (TIER_LABEL[data.number.messagingLimit] ?? data.number.messagingLimit) : "Not known yet (checked daily)"}</span>
                       </div>
                       <div className="flex justify-between gap-2">
                         <span className="text-muted-foreground">Marketing Messages API</span>

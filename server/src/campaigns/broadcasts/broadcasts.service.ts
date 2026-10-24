@@ -1,3 +1,4 @@
+import { describeSending } from '../../channel/channel-connection.util';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -110,12 +111,19 @@ export class BroadcastsService {
                 : {}),
         };
         const [rows, total] = await Promise.all([
-            this.prisma.broadcast.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * limit, take: limit }),
+            this.prisma.broadcast.findMany({
+                where,
+                orderBy: { createdAt: 'desc' },
+                skip: (page - 1) * limit,
+                take: limit,
+                include: { template: { select: { name: true } } },
+            }),
             this.prisma.broadcast.count({ where }),
         ]);
         const stats = await this.stats(rows.map((r) => r.id));
         return {
-            data: rows.map((b) => ({ ...this.view(b), stats: stats.get(b.id) ?? emptyStats() })),
+            // A draft names its template only once sending starts; until then, the chosen one.
+            data: rows.map((b) => ({ ...this.view(b), templateName: b.templateName ?? b.template?.name ?? null, stats: stats.get(b.id) ?? emptyStats() })),
             meta: { total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) },
         };
     }
@@ -259,6 +267,12 @@ export class BroadcastsService {
 
         const channel = await this.prisma.channel.findUnique({ where: { id: b.channelId }, select: { metadata: true } });
         const health = ((channel?.metadata as Record<string, any> | null)?.health?.number ?? {}) as Record<string, any>;
+        const sending = describeSending(health);
+        if (sending && sending.state !== 'AVAILABLE') {
+            const why = sending.problems.map((p) => p.description).join(' ');
+            const text = `Meta is ${sending.state === 'BLOCKED' ? 'blocking' : 'limiting'} messages you start on this number${why ? `: ${why}` : '.'} Fix it in WhatsApp Manager, then refresh the number in Settings → Channels.`;
+            (sending.state === 'BLOCKED' ? blockers : warnings).push(text);
+        }
         if (health.quality_rating === 'RED' || health.quality_rating === 'YELLOW') {
             warnings.push(`The number’s quality rating is ${String(health.quality_rating).toLowerCase()}. Sending to people who do not expect it can lower it further.`);
         }

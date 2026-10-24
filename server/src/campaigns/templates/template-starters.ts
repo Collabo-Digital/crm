@@ -177,7 +177,7 @@ export const TEMPLATE_STARTERS: TemplateStarter[] = [
             parameterFormat: 'NAMED',
             header: { format: 'IMAGE' },
             body: {
-                text: '{{product_name}} is back in stock, {{first_name}}. Sizes go fast — grab yours today.',
+                text: 'Good news, {{first_name}}: {{product_name}} is back in stock. Sizes go fast — grab yours today.',
                 examples: { product_name: 'Linen Kurta', first_name: 'Ananya' },
             },
             footer: 'Tap Stop promotions to opt out',

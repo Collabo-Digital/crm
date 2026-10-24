@@ -16,6 +16,8 @@ import { useArchiveGrowthLinkMutation, useCreateGrowthLinkMutation, useGrowthLin
 import { downloadBlob } from "~/lib/download-blob";
 import { growthService } from "~/services/growth.service";
 import type { GrowthLink, WidgetSettings } from "~/types/api";
+import { messagingChannelWords } from "~/lib/channel-providers";
+import { platformLabel } from "~/lib/labels";
 
 export function meta() {
   return [{ title: "Growth tools | Collabo CRM" }];
@@ -136,7 +138,7 @@ function ChatLinks({ canManage }: { canManage: boolean }) {
         )}
 
         {canManage && (chatChannels.length === 0 ? (
-          <p className="text-caption text-muted-foreground">Connect WhatsApp, Instagram or Messenger in Settings → Channels to make chat links.</p>
+          <p className="text-caption text-muted-foreground">Connect {messagingChannelWords()} in Settings → Channels to make chat links.</p>
         ) : (
           <form
             className="grid gap-3 rounded-lg border border-dashed p-3 sm:grid-cols-2"
@@ -154,7 +156,7 @@ function ChatLinks({ canManage }: { canManage: boolean }) {
             <div className="space-y-1.5">
               <Label htmlFor="gl-channel">Opens a chat on</Label>
               <select id="gl-channel" className={selectClass} value={channelId} onChange={(e) => setChannelId(e.target.value)}>
-                {chatChannels.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.platform.toLowerCase()}</option>)}
+                {chatChannels.map((c) => <option key={c.id} value={c.id}>{c.name} · {platformLabel(c.platform)}</option>)}
               </select>
             </div>
             <div className="space-y-1.5">

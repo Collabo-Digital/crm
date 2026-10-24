@@ -13,6 +13,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsageMeter } from '../billing/usage-meter';
+import { describeSendFailure } from './send/platform-sender.service';
 import { ContactIdentityService, ContactRef, ContactTouch } from './contact-identity.service';
 import { ConsentService, isOptInText, isOptOutText } from './consent.service';
 import { AutomationEventService, InboundEventType } from './automation-event.service';
@@ -428,7 +429,12 @@ export class MessageIngestService {
                 ...(advance && update.status === MessageStatus.DELIVERED ? { deliveredAt: update.at } : {}),
                 ...(advance && update.status === MessageStatus.READ ? { readAt: update.at } : {}),
                 ...(advance && update.status === MessageStatus.FAILED
-                    ? { failedAt: update.at, errorCode: update.error?.code ?? null, errorMessage: update.error?.message ?? null }
+                    ? {
+                        failedAt: update.at,
+                        errorCode: update.error?.code ?? null,
+                        // Meta's words for a status-webhook failure, translated the same way as a refused send.
+                        errorMessage: update.error ? describeSendFailure(update.error.code ? Number(update.error.code) : undefined, update.error.message ?? 'WhatsApp could not deliver this message.') : null,
+                    }
                     : {}),
                 ...(update.pricing ? { pricing: update.pricing as Prisma.InputJsonValue } : {}),
             },

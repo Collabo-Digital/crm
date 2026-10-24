@@ -13,6 +13,8 @@ import { handleMutationError } from "~/lib/handle-mutation-error";
 import { cn } from "~/lib/utils";
 import { messagingAnalyticsService } from "~/services/messaging-analytics.service";
 import type { MessagingAnalytics } from "~/types/api";
+import { messagingChannelWords } from "~/lib/channel-providers";
+import { roleLabel } from "~/lib/labels";
 
 const MessagingVolumeChart = lazy(() => import("~/components/app/analytics/messaging-volume-chart").then((m) => ({ default: m.MessagingVolumeChart })));
 
@@ -142,7 +144,7 @@ export default function MessagingAnalyticsPage() {
     <div className={cn("space-y-6", VIZ_COLORS)}>
       <div>
         <h1 className="text-xl font-bold text-foreground">Messaging</h1>
-        <p className="text-sm text-muted-foreground">WhatsApp, Instagram and Messenger: how much comes in, how fast it is answered, and what it brings in.</p>
+        <p className="text-sm text-muted-foreground">{messagingChannelWords("and")}: how much comes in, how fast it is answered, and what it brings in.</p>
       </div>
 
       {/* One filter row; everything below follows it. */}
@@ -292,7 +294,7 @@ export default function MessagingAnalyticsPage() {
                   <li key={a.userId} className="space-y-3 p-4">
                     <div className="flex items-baseline justify-between gap-3">
                       <p className="min-w-0 break-words text-body font-semibold">{a.name}</p>
-                      <span className="shrink-0 text-caption capitalize text-muted-foreground">{a.role.toLowerCase()}</span>
+                      <span className="shrink-0 text-caption text-muted-foreground">{roleLabel(a.role)}</span>
                     </div>
                     <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-caption">
                       <div><dt className="text-muted-foreground">Replies</dt><dd className="mt-1 text-body tabular-nums">{num(a.replies)}</dd></div>
@@ -320,7 +322,7 @@ export default function MessagingAnalyticsPage() {
                       <tr key={a.userId}>
                         <td className="px-5 py-2">
                           <span className="font-medium">{a.name}</span>
-                          <span className="ml-2 text-micro text-muted-foreground">{a.role.toLowerCase()}</span>
+                          <span className="ml-2 text-micro text-muted-foreground">{roleLabel(a.role)}</span>
                         </td>
                         <td className="px-3 py-2 text-right">{num(a.replies)}</td>
                         <td className="px-3 py-2 text-right">{num(a.conversations)}</td>

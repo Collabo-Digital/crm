@@ -503,8 +503,29 @@ describe('describeMessagingStatus', () => {
             historySync: { status: 'importing', progress: 55, messagesReceived: 1200, error: null },
             setup: { webhooks: 'ok', registration: 'not_needed' },
             webhooksOk: null,
+            sending: null,
         });
         expect(JSON.stringify(summary)).not.toContain('enc-secret');
+    });
+
+    it('reports what Meta says blocks sending, leaving out calling-only problems', () => {
+        const summary = describeMessagingStatus(ChannelPlatform.WHATSAPP, {}, {
+            health: {
+                number: {
+                    health_status: {
+                        can_send_message: 'BLOCKED',
+                        entities: [
+                            { entity_type: 'PHONE_NUMBER', can_send_message: 'AVAILABLE', errors: [{ error_code: 138024, error_description: 'SIP not enabled' }] },
+                            { entity_type: 'WABA', can_send_message: 'BLOCKED', errors: [{ error_code: 141006, error_description: 'There is an error with the payment method.', possible_solution: 'Add a new payment method.' }] },
+                        ],
+                    },
+                },
+            },
+        });
+        expect(summary?.sending).toEqual({
+            state: 'BLOCKED',
+            problems: [{ description: 'There is an error with the payment method.', solution: 'Add a new payment method.' }],
+        });
     });
 
     it('reports a Page whose webhook subscription failed', () => {

@@ -28,7 +28,36 @@ export interface ChannelProvider {
   features: string[];
 }
 
-export const CHANNEL_PROVIDERS: ChannelProvider[] = [
+/**
+ * The messaging channels this deployment offers, from VITE_MESSAGING_CHANNELS
+ * (a comma list; WhatsApp only when unset). Instagram and Messenger stay hidden
+ * until listed here, and the server refuses to connect them unless its
+ * MESSAGING_CHANNELS lists them too.
+ */
+export const MESSAGING_CHANNELS: ChannelPlatform[] = String(import.meta.env.VITE_MESSAGING_CHANNELS || "WHATSAPP")
+  .split(",")
+  .map((p) => p.trim().toUpperCase())
+  .filter(Boolean) as ChannelPlatform[];
+
+const MESSAGING_PLATFORMS: ChannelPlatform[] = ["WHATSAPP", "INSTAGRAM", "FACEBOOK"];
+
+/** Whether the app offers this platform: stores always, messaging channels when switched on. */
+export function platformOffered(platform: ChannelPlatform): boolean {
+  return !MESSAGING_PLATFORMS.includes(platform) || MESSAGING_CHANNELS.includes(platform);
+}
+
+/** The offered messaging channels in words: "WhatsApp", or "WhatsApp, Messenger or Instagram". */
+export function messagingChannelWords(joiner: "or" | "and" = "or"): string {
+  const names = (["WHATSAPP", "FACEBOOK", "INSTAGRAM"] as ChannelPlatform[])
+    .filter((p) => MESSAGING_CHANNELS.includes(p))
+    .map((p) => ({ WHATSAPP: "WhatsApp", FACEBOOK: "Messenger", INSTAGRAM: "Instagram" })[p as "WHATSAPP"]);
+  return names.length <= 1 ? (names[0] ?? "WhatsApp") : `${names.slice(0, -1).join(", ")} ${joiner} ${names[names.length - 1]}`;
+}
+
+/** Instagram or Messenger is on: comments, ice breakers and the persistent menu apply. */
+export const SOCIAL_CHANNELS_OFFERED = platformOffered("INSTAGRAM") || platformOffered("FACEBOOK");
+
+const ALL_PROVIDERS: ChannelProvider[] = [
   {
     platform: "WHATSAPP",
     label: "WhatsApp Business",
@@ -67,8 +96,10 @@ export const CHANNEL_PROVIDERS: ChannelProvider[] = [
   },
 ];
 
+export const CHANNEL_PROVIDERS: ChannelProvider[] = ALL_PROVIDERS.filter((p) => platformOffered(p.platform));
+
 export function findProvider(platform: ChannelPlatform): ChannelProvider | undefined {
-  return CHANNEL_PROVIDERS.find((p) => p.platform === platform);
+  return ALL_PROVIDERS.find((p) => p.platform === platform);
 }
 
 /**

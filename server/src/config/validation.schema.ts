@@ -51,6 +51,7 @@ export const validationSchema = Joi.object({
     RAZORPAY_WEBHOOK_SECRET: Joi.string().optional(),
     RAZORPAY_MERCHANT_API_BASE: Joi.string().uri().optional(),
     RAZORPAY_API_BASE: Joi.string().uri().optional(),
+    MESSAGING_CHANNELS: Joi.string().pattern(/^(WHATSAPP|INSTAGRAM|FACEBOOK)(,(WHATSAPP|INSTAGRAM|FACEBOOK))*$/i).optional(),
     RAZORPAY_PLAN_BASIC_INR: Joi.string().pattern(/^plan_[A-Za-z0-9]+$/).optional(),
     RAZORPAY_PLAN_BASIC_USD: Joi.string().pattern(/^plan_[A-Za-z0-9]+$/).optional(),
     RAZORPAY_PLAN_GROWTH_INR: Joi.string().pattern(/^plan_[A-Za-z0-9]+$/).optional(),

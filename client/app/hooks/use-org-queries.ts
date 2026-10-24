@@ -45,11 +45,12 @@ export function useOrgMembers(orgId?: string | null) {
 }
 
 /** Fetch pending invites of an organization */
-export function useOrgInvites(orgId?: string | null) {
+/** Pending invites. Only owners and admins may list them, so pass `enabled: false` for anyone else. */
+export function useOrgInvites(orgId?: string | null, enabled = true) {
   return useQuery({
     queryKey: orgKeys.invites(orgId!),
     queryFn: () => orgService.listInvites(orgId!),
-    enabled: !!orgId,
+    enabled: !!orgId && enabled,
   });
 }
 

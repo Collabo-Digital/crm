@@ -13,6 +13,7 @@ import {
 } from "~/lib/messaging-status";
 import { cn } from "~/lib/utils";
 import type { Channel } from "~/types/api";
+import { SendingHealthAlert } from "./sending-health-alert";
 
 const WHATSAPP_MANAGER_URL = "https://business.facebook.com/wa/manage/home/";
 
@@ -55,6 +56,7 @@ export function MessagingStatusPanel({ channel, canManage }: { channel: Channel;
 
   return (
     <div className="space-y-3">
+      <SendingHealthAlert sending={status.sending} />
       <div className="divide-y divide-border rounded-lg border border-border px-3">
         <Row label="Number type">
           {status.isOnBizApp ? "WhatsApp Business app + Collabo" : "Collabo only (Cloud API)"}

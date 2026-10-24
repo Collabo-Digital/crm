@@ -25,7 +25,7 @@ import type { UploadedFile as InboxUpload } from './inbox.service';
 import { InboxTeamService } from './inbox-team.service';
 import { QueryConversationsDto } from './dto/query-conversations.dto';
 import { QueryMessagesDto } from './dto/query-messages.dto';
-import { SendMessageDto } from './dto/send-message.dto';
+import { ResendMessageDto, SendMessageDto } from './dto/send-message.dto';
 import { UpdateConversationDto } from './dto/update-conversation.dto';
 import { CreateNoteDto } from './dto/create-note.dto';
 import { CreatePaymentLinkDto } from '../payments/dto/payments.dto';
@@ -79,6 +79,12 @@ export class InboxController {
     @Post('conversations/:id/messages')
     async send(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Body() dto: SendMessageDto) {
         return this.inbox.send(user.orgId!, await this.teams.viewer(user), id, dto);
+    }
+
+    /** A failed message, sent again as it was. */
+    @Post('conversations/:id/messages/:messageId/resend')
+    async resend(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Param('messageId') messageId: string, @Body() dto: ResendMessageDto) {
+        return this.inbox.resend(user.orgId!, await this.teams.viewer(user), id, messageId, dto.clientId);
     }
 
     /** The product tray: the store's products, and whether this chat can get catalog messages. */

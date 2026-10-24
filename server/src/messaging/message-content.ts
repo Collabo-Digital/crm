@@ -76,7 +76,8 @@ export function whatsAppContent(m: WaMessage): MessageContent {
         case 'template':
             return { kind: MessageKind.TEMPLATE, text: m.text, media: null };
         case 'system':
-            return { kind: MessageKind.SYSTEM, text: m.text, media: null };
+            // Meta writes numbers bare ("changed from 16505551234 to …"); show them as numbers.
+            return { kind: MessageKind.SYSTEM, text: m.text?.replace(/(?<![+\d])(\d{10,15})(?!\d)/g, '+$1') ?? null, media: null };
         case 'reaction':
             return { kind: MessageKind.REACTION, text: m.text, media: null };
         case 'media_placeholder':

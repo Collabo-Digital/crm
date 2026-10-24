@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ServiceUnavailableException, Controller, Post, Get, Patch, Delete, Body, Param, Query, Res, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { requireMessagingChannel } from './messaging-channels';
 import type { Response, Request } from 'express';
 import { ChannelPlatform, ChannelStatus, SyncStatus, UserRole } from '@prisma/client';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -203,6 +204,7 @@ export class ChannelController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: ConnectInstagramDto,
   ) {
+    requireMessagingChannel(ChannelPlatform.INSTAGRAM);
     const authUrl = await this.instagramOAuth.getInstallUrl(
       user.orgId!,
       user.sub,
@@ -303,6 +305,7 @@ export class ChannelController {
   @Post('messenger/install')
   @Roles(UserRole.OWNER, UserRole.ADMIN)
   async installMessenger(@CurrentUser() user: JwtPayload) {
+    requireMessagingChannel(ChannelPlatform.FACEBOOK);
     return this.metaPages.getConnectConfig(user.orgId!, user.sub);
   }
 
@@ -311,6 +314,7 @@ export class ChannelController {
   @Post('messenger/callback')
   @Roles(UserRole.OWNER, UserRole.ADMIN)
   async messengerCallback(@CurrentUser() user: JwtPayload, @Body() dto: MetaPagesCallbackDto) {
+    requireMessagingChannel(ChannelPlatform.FACEBOOK);
     return this.metaPages.handleCallback(dto.code, dto.state, user.orgId!, user.sub);
   }
 

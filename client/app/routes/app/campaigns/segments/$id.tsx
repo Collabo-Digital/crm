@@ -18,6 +18,7 @@ import { useDebounced } from "~/hooks/use-debounced";
 import { useContactTags } from "~/hooks/use-inbox-queries";
 import { useShopifySegments } from "~/hooks/use-shopify-segments";
 import type { SegmentDefinition } from "~/types/api";
+import { platformLabel } from "~/lib/labels";
 
 export function meta() {
   return [{ title: "Segment | Collabo CRM" }];
@@ -87,7 +88,7 @@ export default function SegmentPage() {
                 definition={definition}
                 onChange={setDefinition}
                 tags={tagRows.map((t) => t.tag)}
-                channels={channels.filter((c) => ["WHATSAPP", "FACEBOOK", "INSTAGRAM"].includes(c.platform)).map((c) => ({ id: c.id, name: `${c.name} (${c.platform.toLowerCase()})` }))}
+                channels={channels.filter((c) => ["WHATSAPP", "FACEBOOK", "INSTAGRAM"].includes(c.platform)).map((c) => ({ id: c.id, name: `${c.name} (${platformLabel(c.platform)})` }))}
                 broadcasts={(past?.data ?? []).map((b) => ({ id: b.id, name: b.name }))}
                 rfmCounts={rfm}
                 shopifySegments={(shopifySegments?.linked ?? []).map((x) => ({ id: x.id, name: x.name }))}

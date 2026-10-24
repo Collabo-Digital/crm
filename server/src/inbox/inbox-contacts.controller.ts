@@ -13,6 +13,7 @@ import { QueryContactsDto } from './dto/query-contacts.dto';
 import { UpdateContactDto } from './dto/update-contact.dto';
 import { RecordConsentDto } from './dto/record-consent.dto';
 import { BulkTagContactsDto } from './dto/bulk-tag-contacts.dto';
+import { StartChatDto } from './dto/start-chat.dto';
 
 type ImportFile = { buffer: Buffer; size: number; originalname: string } | undefined;
 
@@ -74,6 +75,12 @@ export class InboxContactsController {
     @Get('imports')
     importHistory(@CurrentUser() user: SessionPayload) {
         return this.imports.history(user.orgId!);
+    }
+
+    /** A WhatsApp chat with a number: the contact found or added, and its conversation. */
+    @Post()
+    async startChat(@CurrentUser() user: SessionPayload, @Body() dto: StartChatDto) {
+        return this.contacts.startChat(user.orgId!, await this.teams.viewer(user), dto);
     }
 
     @Get()

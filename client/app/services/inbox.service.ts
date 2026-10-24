@@ -68,6 +68,10 @@ export const inboxService = {
   send: (id: string, data: { payload: InboxSendPayload; replyToMessageId?: string; clientId?: string }) =>
     apiClient.post<InboxSendOutcome>(`/inbox/conversations/${id}/messages`, data).then((response) => response.data),
 
+  /** A failed message sent again, as it was. */
+  resend: (id: string, messageId: string, clientId: string) =>
+    apiClient.post<InboxSendOutcome>(`/inbox/conversations/${id}/messages/${messageId}/resend`, { clientId }).then((response) => response.data),
+
   products: (id: string, search?: string, collectionId?: string) =>
     apiClient
       .get<StoreProductsResponse>(`/inbox/conversations/${id}/products`, { params: { ...(search ? { search } : {}), ...(collectionId ? { collectionId } : {}) } })

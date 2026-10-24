@@ -61,6 +61,7 @@ import type {
   InboxMessage,
   InboxSavedView,
 } from "~/types/api";
+import { platformOffered } from "~/lib/channel-providers";
 
 export function meta() {
   return [{ title: "Inbox | Collabo CRM" }];
@@ -68,7 +69,7 @@ export function meta() {
 
 const VIEWS: InboxListView[] = ["all", "mine", "unassigned"];
 const STATUSES: InboxListStatus[] = ["open", "snoozed", "closed"];
-const MESSAGING_PLATFORMS: ChannelPlatform[] = ["WHATSAPP", "FACEBOOK", "INSTAGRAM"];
+const MESSAGING_PLATFORMS: ChannelPlatform[] = (["WHATSAPP", "FACEBOOK", "INSTAGRAM"] as ChannelPlatform[]).filter(platformOffered);
 
 /** URL parameter for each filter. Short, because they end up in shared links. */
 const PARAM = {

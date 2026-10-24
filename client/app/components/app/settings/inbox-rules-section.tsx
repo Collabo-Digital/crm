@@ -13,13 +13,14 @@ import { useInboxRules } from "~/hooks/use-automation-queries";
 import { useChannels } from "~/hooks/use-channel-queries";
 import { cn } from "~/lib/utils";
 import type { AutomationPlatform, InboxAutoReply, InboxRoutingRule, InboxRulesSettings } from "~/types/api";
+import { platformOffered } from "~/lib/channel-providers";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const PLATFORMS: Array<[AutomationPlatform, string]> = [
+const PLATFORMS: Array<[AutomationPlatform, string]> = ([
   ["WHATSAPP", "WhatsApp"],
   ["INSTAGRAM", "Instagram"],
   ["FACEBOOK", "Messenger"],
-];
+] as Array<[AutomationPlatform, string]>).filter(([p]) => platformOffered(p));
 const selectClass = "h-8 rounded-lg border bg-background px-2 text-body disabled:opacity-60";
 
 const CONDITION_FIELDS: Array<{ field: InboxRoutingRule["conditions"][number]["field"]; label: string; op: InboxRoutingRule["conditions"][number]["op"] }> = [
@@ -128,11 +129,12 @@ export function InboxRulesSection({ canManage, members, teams }: { canManage: bo
                       {label}
                     </label>
                     {entry ? (
-                      <>
-                        <Input type="time" className="h-7 w-32" value={entry.open} disabled={readOnly} onChange={(e) => setDay({ open: e.target.value, close: entry.close })} aria-label={`${label} opens`} />
+                      // Kept on one line: "to" never ends a row on its own.
+                      <span className="flex items-center gap-2">
+                        <Input type="time" className="h-7 w-28" value={entry.open} disabled={readOnly} onChange={(e) => setDay({ open: e.target.value, close: entry.close })} aria-label={`${label} opens`} />
                         to
-                        <Input type="time" className="h-7 w-32" value={entry.close} disabled={readOnly} onChange={(e) => setDay({ open: entry.open, close: e.target.value })} aria-label={`${label} closes`} />
-                      </>
+                        <Input type="time" className="h-7 w-28" value={entry.close} disabled={readOnly} onChange={(e) => setDay({ open: entry.open, close: e.target.value })} aria-label={`${label} closes`} />
+                      </span>
                     ) : (
                       <span className="text-muted-foreground">Closed</span>
                     )}

@@ -29,12 +29,13 @@ import { getInitials } from "~/lib/inbox-format";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { reportingTimeZone, todayIn } from "~/lib/reporting-date";
 import type { ChannelPlatform, InboxContactQuery, InboxContactRow } from "~/types/api";
+import { SOCIAL_CHANNELS_OFFERED, messagingChannelWords, platformOffered } from "~/lib/channel-providers";
 
 export function meta() {
   return [{ title: "Contacts | Collabo CRM" }];
 }
 
-const MESSAGING_PLATFORMS: ChannelPlatform[] = ["WHATSAPP", "FACEBOOK", "INSTAGRAM"];
+const MESSAGING_PLATFORMS: ChannelPlatform[] = (["WHATSAPP", "FACEBOOK", "INSTAGRAM"] as ChannelPlatform[]).filter(platformOffered);
 
 const FIRST_SEEN_PRESETS: ReadonlyArray<DateRangePreset<OrderRangePreset>> = [
   { value: "all", label: "All time" },
@@ -44,7 +45,8 @@ const FIRST_SEEN_PRESETS: ReadonlyArray<DateRangePreset<OrderRangePreset>> = [
 ];
 
 const CONSENT_OPTIONS = [
-  { value: "subscribed", label: "Subscribed" },
+  { value: "subscribed", label: "Opted in" },
+  { value: "no_consent", label: "No opt-in recorded" },
   { value: "opted_out", label: "Opted out" },
   { value: "blocked", label: "Blocked" },
 ];
@@ -134,8 +136,10 @@ export default function InboxContactsPage() {
             <StatusPill className="bg-danger-subtle text-danger">Blocked</StatusPill>
           ) : row.optedOut ? (
             <StatusPill className="bg-warning-subtle text-warning">Opted out</StatusPill>
+          ) : row.optedIn ? (
+            <StatusPill className="bg-success-subtle text-success">Opted in</StatusPill>
           ) : (
-            <StatusPill className="bg-success-subtle text-success">Subscribed</StatusPill>
+            <StatusPill className="bg-muted text-muted-foreground">No opt-in</StatusPill>
           ),
       },
       {
@@ -227,7 +231,7 @@ export default function InboxContactsPage() {
       <PageHeader>
         <PageHeaderContent>
           <PageHeaderTitle>Contacts</PageHeaderTitle>
-          <PageHeaderDescription>Everyone who has messaged you on WhatsApp, Messenger or Instagram.</PageHeaderDescription>
+          <PageHeaderDescription>Everyone who has messaged you on {messagingChannelWords()}.</PageHeaderDescription>
         </PageHeaderContent>
         {me?.access.canManage && (
           <PageHeaderActions>
@@ -271,7 +275,7 @@ export default function InboxContactsPage() {
         }}
         emptyState={{
           title: "No contacts yet",
-          description: "People appear here when they message a connected WhatsApp number, Facebook Page or Instagram account.",
+          description: SOCIAL_CHANNELS_OFFERED ? "People appear here when they message a connected WhatsApp number, Facebook Page or Instagram account." : "People appear here when they message your connected WhatsApp number, or when you add or import them.",
         }}
       />
 

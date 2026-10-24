@@ -25,11 +25,17 @@ export const links: Route.LinksFunction = () => [
   { rel: "apple-touch-icon", href: "/brand/apple-touch-icon.png", sizes: "180x180" },
 ];
 
+/** Applies the saved theme (stores/theme.store.ts, key "crm-theme") before the first paint. */
+const THEME_SCRIPT = `try{var t=(JSON.parse(localStorage.getItem("crm-theme")||"{}").state||{}).theme||"light";if(t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches))document.documentElement.classList.add("dark")}catch(e){}`;
+
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // The theme class is set before React hydrates (no light flash), so the
+    // attributes of <html> differ from the prerendered page on purpose.
+    <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
         <Meta />
         <Links />

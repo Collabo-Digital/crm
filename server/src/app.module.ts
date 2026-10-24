@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { ScheduleModule } from '@nestjs/schedule';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
@@ -21,6 +21,7 @@ import { RateLimitModule } from './rate-limit/rate-limit.module';
 import { FxModule } from './common/fx/fx.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { OrgRequiredGuard } from './auth/guards/org-required.guard';
 import { VendorAccessGuard } from './auth/guards/vendor-access.guard';
@@ -133,8 +134,9 @@ import { DeveloperModule } from './developer/developer.module';
   controllers: [AppController],
   providers: [
     AppService,
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // After sign-in, so members are counted one by one; see UserThrottlerGuard.
+    { provide: APP_GUARD, useClass: UserThrottlerGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: OrgRequiredGuard },
     { provide: APP_GUARD, useClass: VendorAccessGuard },

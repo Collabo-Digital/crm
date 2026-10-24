@@ -135,6 +135,16 @@ function LinkCustomer({
  * their orders, the same person on other channels, tags, owner, consent,
  * custom fields and the team's notes.
  */
+/** Where a consent change came from, in words. */
+const CONSENT_SOURCE: Record<string, string> = {
+  agent: "set by a teammate",
+  keyword: "replied with a keyword",
+  import: "contact import",
+  widget: "website pop-up",
+  api: "API",
+  meta_preference: "WhatsApp marketing setting",
+};
+
 export function ContactPanel({
   contact,
   conversationId,
@@ -335,7 +345,10 @@ export function ContactPanel({
               <p className="text-micro text-muted-foreground">{[customer.email, customer.phone].filter(Boolean).join(" · ")}</p>
             </div>
             {customer.recentOrders.length === 0 ? (
-              <p className="text-caption text-muted-foreground">No orders yet.</p>
+              <p className="text-caption text-muted-foreground">
+                {/* The counts come from the store; the orders themselves may not be synced yet. */}
+                {customer.ordersCount > 0 ? "Their orders have not synced to Collabo yet." : "No orders yet."}
+              </p>
             ) : (
               customer.recentOrders.map((order) => (
                 <div key={order.id} className="flex items-center gap-2">
@@ -405,7 +418,7 @@ export function ContactPanel({
             {contact.optedOutAt ? (
               <span className="text-warning-strong">Opted out {formatDateTime(contact.optedOutAt)}</span>
             ) : contact.optInAt ? (
-              <span className="text-success">Subscribed {formatDateTime(contact.optInAt)}</span>
+              <span className="text-success">Opted in {formatDateTime(contact.optInAt)}</span>
             ) : (
               <span className="text-muted-foreground">No consent recorded</span>
             )}
@@ -424,7 +437,7 @@ export function ContactPanel({
             <ul className="space-y-0.5 text-micro text-muted-foreground">
               {contact.consent.map((event, index) => (
                 <li key={index}>
-                  {event.type === "OPT_IN" ? "Subscribed" : "Opted out"} · {event.source} · {formatDateTime(event.occurredAt)}
+                  {event.type === "OPT_IN" ? "Opted in" : "Opted out"} · {CONSENT_SOURCE[event.source] ?? event.source} · {formatDateTime(event.occurredAt)}
                 </li>
               ))}
             </ul>

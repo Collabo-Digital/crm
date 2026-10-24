@@ -6,6 +6,7 @@ import { useBillingPlans, useBillingUsage } from "~/hooks/use-billing";
 import { formatDate } from "~/lib/format-date";
 import { cn } from "~/lib/utils";
 import type { BillingCurrency, BillingUsage, PlanAllowance, PricingPlan, SubscriptionStatus, UsageBill, UsageBillStatus, UsageChargeLine } from "~/types/api";
+import { platformOffered } from "~/lib/channel-providers";
 
 /** The tab's icon, so Settings needs no icon import of its own. */
 export const BillingIcon = CreditCard;
@@ -92,7 +93,9 @@ function UsageMeters({ usage, plan, currency }: { usage: BillingUsage; plan: Pri
       <Meter label="Conversations" used={usage.conversations} allowance={plan?.conversations ?? null} currency={currency} unit="conversations" />
       <Meter label="WhatsApp calling minutes" used={usage.callingMinutes} allowance={plan?.callingMinutes ?? null} currency={currency} unit="minutes" />
       <Meter label="Team members" used={usage.members} allowance={plan?.members ?? null} currency={currency} unit="members" />
-      <Meter label="Instagram accounts" used={usage.instagramAccounts} allowance={null} currency={currency} unit="accounts" />
+      {(platformOffered("INSTAGRAM") || usage.instagramAccounts > 0) && (
+        <Meter label="Instagram accounts" used={usage.instagramAccounts} allowance={null} currency={currency} unit="accounts" />
+      )}
     </div>
   );
 }

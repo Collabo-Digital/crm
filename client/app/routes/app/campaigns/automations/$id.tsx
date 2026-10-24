@@ -83,6 +83,15 @@ export default function AutomationPage() {
 
   const [tab, setTab] = useState<"flow" | "activity">("flow");
   const [steps, setSteps] = useState<AutomationStep[]>([]);
+  // A wide branching flow opens scrolled to its middle, where the trigger is.
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const centred = useRef(false);
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (centred.current || !el || steps.length === 0) return;
+    centred.current = true;
+    el.scrollLeft = Math.max(0, (el.scrollWidth - el.clientWidth) / 2);
+  }, [steps]);
   // Sheets, for "Add a row to a sheet" and "A row is added to a sheet".
   const { data: google } = useGoogleIntegration(!isInfluencer);
   const triggerSheet = steps[0]?.config.event === "sheet_row" ? String(steps[0]?.config.sheetId ?? "") : "";
@@ -331,7 +340,7 @@ export default function AutomationPage() {
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="space-y-4">
             {issues.length > 0 && (
-              <SectionCard title={`${issues.length} thing${issues.length === 1 ? "" : "s"} to fix before publishing`} icon={<CircleAlert className="size-4 text-danger" />}>
+              <SectionCard title={`${issues.length} thing${issues.length === 1 ? "" : "s"} to fix ${detail.status === "ACTIVE" ? "before publishing changes (the live version keeps running)" : "before publishing"}`} icon={<CircleAlert className="size-4 text-danger" />}>
                 <ul className="divide-y">
                   {issues.map((i, n) => (
                     <li key={`${i.stepId}-${i.code}-${n}`}>
@@ -343,7 +352,7 @@ export default function AutomationPage() {
                 </ul>
               </SectionCard>
             )}
-            <div className="overflow-x-auto rounded-xl border bg-muted/20">
+            <div ref={canvasRef} className="overflow-x-auto rounded-xl border bg-muted/20">
               <FlowCanvas
                 steps={steps}
                 selectedId={selectedId}

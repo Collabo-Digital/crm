@@ -2,6 +2,7 @@ import { Check, Mail, Sparkles } from "lucide-react";
 
 import { cn, formatCurrency } from "~/lib/utils";
 import type { BillingCurrency, BillingPlan, BillingPlansResponse, Money, PricingPlan } from "~/types/api";
+import { platformOffered } from "~/lib/channel-providers";
 
 /** Rupees as read in India (₹1,00,000), dollars as in the US ($59, not US$59). */
 const LOCALE: Record<BillingCurrency, string> = { INR: "en-IN", USD: "en-US" };
@@ -40,8 +41,8 @@ export function planFeatures(plan: PricingPlan, currency: BillingCurrency): stri
     callingMinutes.fee && callingMinutes.included !== null
       ? `${n(callingMinutes.included)} WhatsApp calling minutes, then ${fee(callingMinutes.fee)} a minute`
       : `${n(callingMinutes.included ?? 0)}+ WhatsApp calling minutes`,
-    plan.instagram ? `Instagram: ${fee(plan.instagram)} a month per account` : "Instagram included",
-    "Messenger included",
+    ...(platformOffered("INSTAGRAM") ? [plan.instagram ? `Instagram: ${fee(plan.instagram)} a month per account` : "Instagram included"] : []),
+    ...(platformOffered("FACEBOOK") ? ["Messenger included"] : []),
   ];
 }
 

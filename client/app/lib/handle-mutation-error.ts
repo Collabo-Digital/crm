@@ -30,3 +30,10 @@ export function handleMutationError(
     toast.error("Something went wrong. Please try again.");
   }
 }
+
+/** The server's own message for a failed request, when it sent one. */
+export function serverMessage(error: unknown, fallback: string): string {
+  if (!isAxiosError(error)) return fallback;
+  const message = (error.response?.data as { message?: unknown } | undefined)?.message;
+  return typeof message === "string" && message.trim() ? message : fallback;
+}

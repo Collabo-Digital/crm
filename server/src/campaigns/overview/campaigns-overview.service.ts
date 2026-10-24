@@ -1,3 +1,4 @@
+import { describeSending } from '../../channel/channel-connection.util';
 import { Injectable } from '@nestjs/common';
 import { BroadcastRecipientStatus as R, ChannelPlatform, ChannelStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -47,6 +48,7 @@ export class CampaignsOverviewService {
                     status: channel.status,
                     quality: health.quality_rating ?? null,
                     messagingLimit: health.whatsapp_business_manager_messaging_limit ?? null,
+                    sending: describeSending(health),
                     marketingMessagesApi: ((channel.metadata as Record<string, any> | null)?.marketingMessages?.status as string | undefined) ?? null,
                 }
                 : null,

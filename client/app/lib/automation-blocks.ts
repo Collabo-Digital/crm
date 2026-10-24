@@ -332,7 +332,7 @@ export function stepSummary(step: AutomationStep, templateName?: (id: string) =>
     case "http_request":
       return c.url ? `${c.method} ${clip(c.url, 60)}` : "Add the URL";
     case "send_invoice":
-      return c.templateId ? `The invoice PDF with “${templateName?.(c.templateId) ?? "a template"}”` : "Choose the template";
+      return c.templateId ? (templateName?.(c.templateId) ? `The invoice PDF with “${templateName(c.templateId)}”` : "Choose the template again: it is no longer approved") : "Choose the template";
     case "send_payment_link":
       if (c.method === "whatsapp_pay") return "A WhatsApp Pay bill in the chat";
       if (c.kind === "text") return c.message ? clip(c.message) : "Write the message";

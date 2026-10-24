@@ -435,7 +435,7 @@ export class WhatsAppGroupsService {
     private readonly listInclude = {
         channel: { select: { name: true } },
         contact: { select: { conversations: { select: { id: true }, take: 1 } } },
-        _count: { select: { joinRequests: { where: { status: 'PENDING' } } } },
+        _count: { select: { joinRequests: { where: { status: 'PENDING' } }, participants: { where: { leftAt: null } } } },
     } satisfies Prisma.WhatsAppGroupInclude;
 
     private view(g: Prisma.WhatsAppGroupGetPayload<{ include: WhatsAppGroupsService['listInclude'] }>) {
@@ -449,7 +449,8 @@ export class WhatsAppGroupsService {
             inviteLink: g.inviteLink,
             status: g.status,
             statusReason: g.statusReason,
-            participantCount: g.participantCount,
+            // Counted from the people in the group, as the group's own page lists them.
+            participantCount: g._count.participants,
             pendingJoinRequests: g._count.joinRequests,
             conversationId: g.contact?.conversations[0]?.id ?? null,
             createdAt: g.createdAt,

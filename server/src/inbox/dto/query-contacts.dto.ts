@@ -10,7 +10,7 @@ export class QueryContactsDto {
     /** A member id, or "none" for contacts nobody owns. */
     @IsOptional() @IsString() ownerUserId?: string;
     @IsOptional() @IsString() ownerTeamId?: string;
-    @IsOptional() @IsIn(['subscribed', 'opted_out', 'blocked']) consent?: 'subscribed' | 'opted_out' | 'blocked';
+    @IsOptional() @IsIn(['subscribed', 'no_consent', 'opted_out', 'blocked']) consent?: 'subscribed' | 'no_consent' | 'opted_out' | 'blocked';
     /** First seen on or after / before these dates. */
     @IsOptional() @IsDateString() from?: string;
     @IsOptional() @IsDateString() to?: string;

@@ -127,9 +127,24 @@ export function MessageComposer({
   const trimmed = draft.trim();
   const optionLimit = platform === "WHATSAPP" ? OPTION_LIMIT.WHATSAPP : OPTION_LIMIT.OTHER;
   const cleanOptions = options.map((o) => o.trim()).filter(Boolean);
+  /** What WhatsApp, Messenger or Instagram would refuse, said before sending. */
+  const composeProblem = (() => {
+    if (isNoteMode) return null;
+    const withOptions = cleanOptions.length > 0 && !commentMode && !staged;
+    if (withOptions && new Set(cleanOptions.map((o) => o.toLowerCase())).size !== cleanOptions.length) {
+      return "Give each option a different label. WhatsApp refuses two the same.";
+    }
+    if (withOptions && platform === "WHATSAPP" && trimmed.length > 1024) {
+      return `A message with buttons can be at most 1,024 characters (this one is ${trimmed.length.toLocaleString("en-IN")}).`;
+    }
+    const max = platform === "WHATSAPP" ? 4096 : 2000;
+    if (trimmed.length > max) return `Messages can be at most ${max.toLocaleString("en-IN")} characters (this one is ${trimmed.length.toLocaleString("en-IN")}).`;
+    return null;
+  })();
   const canSubmit =
     !isSending &&
     !uploading &&
+    !composeProblem &&
     (isNoteMode ? trimmed.length > 0 : !replyLocked && (trimmed.length > 0 || (!!staged && !commentMode) || (products.length > 0 && !commentMode)));
 
   /** Why products or a file cannot join this message right now, if they cannot. */
@@ -350,6 +365,12 @@ export function MessageComposer({
           onRemove={(id) => (products.length === 1 ? clearProducts() : setProducts((list) => list.filter((p) => p.variantId !== id)))}
           onClear={clearProducts}
         />
+      )}
+
+      {composeProblem && (
+        <p role="alert" className="mb-2 text-caption text-destructive">
+          {composeProblem}
+        </p>
       )}
 
       {options.length > 0 && !isNoteMode && !commentMode && !staged && (

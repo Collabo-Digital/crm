@@ -4,6 +4,7 @@ import type { OutboundPayload } from '../messaging/outbound';
 
 const text = z.string().trim().min(1).max(4096);
 const option = z.object({ id: z.string().min(1).max(256), title: z.string().min(1).max(24) });
+const button = z.object({ id: z.string().min(1).max(256), title: z.string().trim().min(1).max(20) });
 
 /**
  * What the inbox composer may send. Platform limits beyond shape (window,
@@ -35,7 +36,7 @@ const SendPayloadSchema = z.discriminatedUnion('type', [
             .optional(),
         previewText: z.string().max(1100).optional(),
     }),
-    z.object({ type: z.literal('buttons'), text, buttons: z.array(option).min(1).max(3), footer: z.string().max(60).optional() }),
+    z.object({ type: z.literal('buttons'), text, buttons: z.array(button).min(1).max(3), footer: z.string().max(60).optional() }),
     z.object({
         type: z.literal('list'),
         text,

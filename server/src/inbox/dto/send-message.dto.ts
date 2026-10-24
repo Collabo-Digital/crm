@@ -7,3 +7,8 @@ export class SendMessageDto {
     /** Retrying the same send with the same key sends once. */
     @IsOptional() @IsString() @MaxLength(100) clientId?: string;
 }
+
+export class ResendMessageDto {
+    /** Retrying the same resend with the same key sends once. */
+    @IsOptional() @IsString() @MaxLength(100) clientId?: string;
+}

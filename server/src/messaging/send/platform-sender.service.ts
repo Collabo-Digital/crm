@@ -46,14 +46,15 @@ const PERMANENT_META_CODES = new Set<number>([
     2534037, // Instagram: thread owned by Meta Business AI
 ]);
 
-/** Why a send failed, as the merchant should read it in the thread. */
-export function describeSendFailure(code: number | undefined, fallback: string): string {
+/** Why a send failed, as the merchant should read it in the thread. `details` is Meta's error_data.details. */
+export function describeSendFailure(code: number | undefined, fallback: string, details?: string | null): string {
+    const why = (details ?? '').trim();
     switch (code) {
         case 131047:
         case 2018278:
-            return 'The reply window had closed by the time this was sent.';
+            return 'The reply window had closed by the time this was sent. Send a template instead.';
         case 131026:
-            return 'This number cannot receive WhatsApp messages.';
+            return 'This number cannot receive WhatsApp messages, or is on an old version of WhatsApp.';
         case 131049:
             return 'WhatsApp held this marketing message back to protect engagement. Try again in a day or two.';
         case 131050:
@@ -63,6 +64,43 @@ export function describeSendFailure(code: number | undefined, fallback: string):
             return 'This template is paused or disabled because of low quality.';
         case 131063:
             return 'Marketing messages must go through the Marketing Messages API for this account.';
+        case 131009:
+        case 131008:
+        case 100:
+            return `WhatsApp refused part of this message${why ? `: ${why}` : ''}. Check its buttons, links and length.`;
+        case 131042:
+            return 'Meta blocked this message because of a problem with the WhatsApp account’s payment method. Fix it in WhatsApp Manager → Payment settings.';
+        case 131031:
+            return 'Meta has locked this WhatsApp account. Check its status in WhatsApp Manager.';
+        case 131037:
+            return 'This number’s display name is not approved yet, so WhatsApp will not send messages from it.';
+        case 131048:
+            return 'WhatsApp is limiting messages from this number because many were blocked or reported as spam. Send fewer for a while.';
+        case 131056:
+            return 'Too many messages went to this customer in a short time. Wait a moment, then send again.';
+        case 131051:
+            return 'WhatsApp does not support this kind of message.';
+        case 131053:
+            return 'The file could not be sent. Check its type and size.';
+        case 130472:
+            return 'WhatsApp did not deliver this marketing message: the customer is in one of Meta’s experiments.';
+        case 130497:
+            return 'This WhatsApp account may not message customers in this country.';
+        case 133010:
+            return 'This WhatsApp number is not registered with the Cloud API. Reconnect it.';
+        case 368:
+            return 'Meta has temporarily blocked this account for policy violations. Check WhatsApp Manager.';
+        case 132000:
+        case 132012:
+            return `The template’s values do not match what Meta approved${why ? `: ${why}` : ''}.`;
+        case 132001:
+            return 'This template does not exist or is not approved in this language. Sync templates and try again.';
+        case 132005:
+            return 'With its values filled in, this template is too long.';
+        case 132007:
+            return 'A value in this template breaks WhatsApp’s formatting rules (for example a line break or too many spaces).';
+        case 131000:
+            return 'WhatsApp could not send this for an unknown reason. Send it again.';
         case 10900:
             return 'This comment already has a private reply.';
         case 10903:
@@ -70,8 +108,14 @@ export function describeSendFailure(code: number | undefined, fallback: string):
         case 2534037:
             return 'Meta Business AI owns this conversation. Take it over in Meta Business Suite first.';
         default:
-            return fallback;
+            return why && !fallback.includes(why) ? `${fallback} (${why})` : fallback;
     }
+}
+
+/** Meta's error_data.details from a Graph error body, when it has one. */
+export function metaErrorDetails(raw: unknown): string | null {
+    const details = (raw as { error_data?: { details?: unknown } } | undefined)?.error_data?.details;
+    return typeof details === 'string' && details.trim() ? details.trim() : null;
 }
 
 const isUniqueViolation = (err: unknown) =>
@@ -133,7 +177,7 @@ export class PlatformSenderService {
                     return this.fail(message, err.metaCode, 'The account’s access was revoked or expired. Reconnect it.');
                 }
                 if (err.code === 'API_ERROR' && (err.metaCode === undefined || PERMANENT_META_CODES.has(err.metaCode) || (err.httpStatus ?? 0) < 500)) {
-                    return this.fail(message, err.metaCode, describeSendFailure(err.metaCode, err.message));
+                    return this.fail(message, err.metaCode, describeSendFailure(err.metaCode, err.message, metaErrorDetails(err.details)));
                 }
             }
             if (err instanceof UnsupportedSend) return this.fail(message, undefined, err.message);

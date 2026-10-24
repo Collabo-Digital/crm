@@ -1,5 +1,9 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { ChannelContact, ConsentType, Prisma } from '@prisma/client';
+import { ChannelContact, ChannelPlatform, ChannelStatus, ConsentType, Prisma } from '@prisma/client';
+import { normalizePhone } from '../common/phone.util';
+import { ContactIdentityService } from '../messaging/contact-identity.service';
+import { MessagingSendService } from '../messaging/send/messaging-send.service';
+import { StartChatDto } from './dto/start-chat.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { resolveReportingTimeZone, zonedDayEndExclusive, zonedDayStart } from '../common/utils/zoned-date.util';
 import { ConsentService } from '../messaging/consent.service';
@@ -41,7 +45,70 @@ export class InboxContactsService {
         private readonly teams: InboxTeamService,
         private readonly automationEvents: AutomationEventService,
         private readonly automationJobs: AutomationJobs,
+        private readonly identity: ContactIdentityService,
+        private readonly sender: MessagingSendService,
     ) { }
+
+    /**
+     * Starts a WhatsApp chat with a number, or adds it as a contact: finds or
+     * creates the person on the organization's WhatsApp number, links the
+     * store customer, and returns the conversation to open. Until they write,
+     * the first message has to be a template.
+     */
+    async startChat(orgId: string, viewer: InboxViewer, dto: StartChatDto) {
+        if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot start chats.');
+        const channel = await this.prisma.channel.findFirst({
+            where: { organizationId: orgId, platform: ChannelPlatform.WHATSAPP, status: { not: ChannelStatus.DISCONNECTED } },
+            select: { id: true },
+        });
+        if (!channel) throw new BadRequestException('Connect a WhatsApp number in Settings → Channels first.');
+        const digits = normalizePhone(dto.phone, dto.countryCode);
+        if (!digits) throw new BadRequestException('Enter a WhatsApp number with its country code, like +91 98765 43210.');
+        const customer = dto.customerId
+            ? await this.prisma.customer.findFirst({ where: { id: dto.customerId, organizationId: orgId, deletedAt: null }, select: { id: true } })
+            : null;
+        if (dto.customerId && !customer) throw new NotFoundException('Customer not found');
+        const name = dto.name?.trim() || null;
+
+        const { contactId, created } = await this.prisma.$transaction(async (tx) => {
+            let contact = await tx.channelContact.findFirst({
+                where: { channelId: channel.id, OR: [{ waId: digits }, { externalId: digits }, { previousExternalIds: { has: digits } }] },
+            });
+            const created = !contact;
+            if (!contact) {
+                contact = await tx.channelContact.create({
+                    data: {
+                        organizationId: orgId,
+                        channelId: channel.id,
+                        platform: ChannelPlatform.WHATSAPP,
+                        externalId: digits,
+                        waId: digits,
+                        phone: `+${digits}`,
+                        displayName: name,
+                        customerId: customer?.id ?? null,
+                    },
+                });
+            } else if ((name && !contact.displayName) || (customer && !contact.customerId)) {
+                contact = await tx.channelContact.update({
+                    where: { id: contact.id },
+                    data: { ...(name && !contact.displayName ? { displayName: name } : {}), ...(customer && !contact.customerId ? { customerId: customer.id } : {}) },
+                });
+            }
+            if (!contact.customerId) await this.identity.linkCustomerByPhone(tx, contact);
+            if (dto.optIn && !contact.optedOutAt && !contact.optInAt) {
+                await this.consent.record(tx, contact, ConsentType.OPT_IN, 'agent', { note: 'Agreed when the chat was started' }, viewer.userId);
+            }
+            return { contactId: contact.id, created };
+        });
+
+        const conversationId = await this.sender.conversationFor(contactId);
+        // An agent who only sees their own chats must be able to open the one they started.
+        if (!seesAll(viewer)) {
+            await this.prisma.conversation.updateMany({ where: { id: conversationId, assignedUserId: null }, data: { assignedUserId: viewer.userId } });
+        }
+        this.events.publish(orgId, { type: 'conversation.updated', conversationId });
+        return { contactId, conversationId, created };
+    }
 
     async list(orgId: string, viewer: InboxViewer, q: QueryContactsDto) {
         const limit = q.limit ?? 25;
@@ -54,7 +121,8 @@ export class InboxContactsService {
         if (q.tag) and.push({ tags: { has: q.tag } });
         if (q.ownerUserId) and.push({ ownerUserId: q.ownerUserId === 'none' ? null : q.ownerUserId });
         if (q.ownerTeamId) and.push({ ownerTeamId: q.ownerTeamId === 'none' ? null : q.ownerTeamId });
-        if (q.consent === 'subscribed') and.push({ optedOutAt: null, blockedAt: null });
+        if (q.consent === 'subscribed') and.push({ optInAt: { not: null }, optedOutAt: null, blockedAt: null });
+        if (q.consent === 'no_consent') and.push({ optInAt: null, optedOutAt: null, blockedAt: null });
         if (q.consent === 'opted_out') and.push({ optedOutAt: { not: null } });
         if (q.consent === 'blocked') and.push({ blockedAt: { not: null } });
         if (q.from || q.to) {
@@ -103,6 +171,7 @@ export class InboxContactsService {
                 username: c.username,
                 avatarUrl: c.profilePicUrl,
                 tags: c.tags,
+                optedIn: !!c.optInAt && !c.optedOutAt,
                 optedOut: !!c.optedOutAt,
                 blocked: !!c.blockedAt,
                 customer: c.customer ? { id: c.customer.id, name: customerName(c.customer) } : null,

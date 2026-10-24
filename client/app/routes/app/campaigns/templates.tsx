@@ -25,6 +25,20 @@ export function meta() {
 const FILTERS = ["", "APPROVED", "PENDING", "REJECTED", "PAUSED"];
 
 /** WhatsApp message templates on the connected number, as Meta last reported them. */
+/** Meta's rejection reasons, with what to change. */
+const REJECTION_HELP: Record<string, string> = {
+  INVALID_FORMAT: "Formatting problem: check variables, length and buttons",
+  TAG_CONTENT_MISMATCH: "Category does not match the content",
+  INCORRECT_CATEGORY: "Category does not match the content",
+  PROMOTIONAL: "Promotional content needs the Marketing category",
+  ABUSIVE_CONTENT: "Meta judged the content against its policies",
+  SCAM: "Meta judged the content against its policies",
+};
+
+function rejectionHelp(reason: string): string {
+  return REJECTION_HELP[reason] ?? reason.toLowerCase().replace(/_/g, " ");
+}
+
 export default function TemplatesPage() {
   const navigate = useNavigate();
   const [status, setStatus] = useState("");
@@ -106,22 +120,25 @@ export default function TemplatesPage() {
                 onKeyDown={(e) => e.key === "Enter" && navigate(`/campaigns/templates/${t.id}`)}
                 className="flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3 hover:bg-muted/50"
               >
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 basis-full md:basis-0 md:flex-1">
                   <p className="truncate font-mono text-body font-medium">{t.name}</p>
                   <p className="truncate text-caption text-muted-foreground">{t.preview.body}</p>
                 </div>
                 <TemplateCategoryLabel template={t} />
                 <span className="w-14 text-caption text-muted-foreground">{t.language}</span>
-                <QualityDot score={t.qualityScore} />
-                <div className="flex w-36 flex-col items-start gap-0.5">
+                <span className="hidden w-24 md:inline-flex">
+                  <QualityDot score={t.qualityScore} />
+                </span>
+                <div className="flex min-w-0 flex-col items-start gap-0.5 md:w-36">
                   <TemplateStatusBadge status={t.status} />
-                  {t.statusReason && <span className="truncate text-micro text-danger" title={t.statusReason}>{t.statusReason.toLowerCase().replace(/_/g, " ")}</span>}
+                  {t.statusReason && <span className="max-w-full truncate text-micro text-danger" title={rejectionHelp(t.statusReason)}>{rejectionHelp(t.statusReason)}</span>}
                 </div>
                 <span className="hidden w-32 text-caption text-muted-foreground lg:inline">{formatDateTime(t.updatedAt)}</span>
                 {canEdit && (
                   <Button
                     variant="ghost"
                     size="icon-sm"
+                    className="ml-auto md:ml-0"
                     onClick={(e) => {
                       e.stopPropagation();
                       if (window.confirm(`Delete ${t.name} (${t.language}) at Meta? Its name cannot be reused for 30 days.`)) remove.mutate(t.id);

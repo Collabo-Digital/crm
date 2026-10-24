@@ -34,13 +34,22 @@ export interface PhoneNumberDetails {
     name_status?: string;
     is_on_biz_app?: boolean;
     whatsapp_business_manager_messaging_limit?: string;
+    /** Whether Meta lets this number send, and what blocks it (payment method, policy…). */
+    health_status?: {
+        can_send_message?: string;
+        entities?: Array<{
+            entity_type?: string;
+            can_send_message?: string;
+            errors?: Array<{ error_code?: number; error_description?: string; possible_solution?: string }>;
+        }>;
+    };
 }
 
 /// Present on every version we run; requested together.
 const NUMBER_FIELDS =
     'id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,throughput,name_status';
 /// Newer fields, asked for separately: an unknown field fails the whole read.
-const NUMBER_FIELDS_OPTIONAL = 'is_on_biz_app,whatsapp_business_manager_messaging_limit';
+const NUMBER_FIELDS_OPTIONAL = 'is_on_biz_app,whatsapp_business_manager_messaging_limit,health_status';
 
 /** Coexistence contacts + history must be requested within 24 hours of onboarding. */
 export const COEXISTENCE_SYNC_WINDOW_MS = 24 * 3600_000;

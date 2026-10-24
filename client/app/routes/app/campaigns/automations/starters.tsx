@@ -163,7 +163,7 @@ export default function ConversationStartersPage() {
                           }
                         />
                         <select
-                          className="h-8 min-w-0 rounded-lg border bg-background px-2 text-body"
+                          className="h-8 w-24 shrink-0 rounded-lg border bg-background px-2 text-body"
                           value={m.type}
                           disabled={readOnly}
                           aria-label="Item type"

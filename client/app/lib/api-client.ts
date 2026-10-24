@@ -8,8 +8,19 @@ import { useAuthStore } from "~/stores/auth.store";
  * - Unwraps the backend `{ success, data }` envelope automatically.
  * - Performs a silent token refresh on 401 responses (once per request).
  */
+const API_BASE: string = import.meta.env.VITE_API_BASE_URL || "/api/v1";
+
+/**
+ * A path the API hands out for the browser to load directly (signed media
+ * links such as `/inbox/media/…`), resolved against the API base. Absolute
+ * URLs (files kept at Meta or a CDN) pass through.
+ */
+export function apiUrl(path: string): string {
+  return path.startsWith("/") ? `${API_BASE}${path}` : path;
+}
+
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || "/api/v1",
+  baseURL: API_BASE,
   headers: { "Content-Type": "application/json" },
   withCredentials: true,
   timeout: 30_000,

@@ -66,7 +66,7 @@ describe('resolveValues', () => {
             category: 'MARKETING',
             parameterFormat: 'NAMED',
             header: { format: 'IMAGE' },
-            body: { text: 'Hi {{first_name}}, code {{code}}, tier {{tier}}', examples: { first_name: 'a', code: 'b', tier: 'c' } },
+            body: { text: 'Hi {{first_name}}, code {{code}}, tier {{tier}} today.', examples: { first_name: 'a', code: 'b', tier: 'c' } },
         },
         'h',
     );

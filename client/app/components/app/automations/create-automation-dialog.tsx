@@ -12,8 +12,9 @@ import { useChannels } from "~/hooks/use-channel-queries";
 import { PLAYBOOKS, channelKeyOf, newStep, type Playbook } from "~/lib/automation-blocks";
 import { cn } from "~/lib/utils";
 import type { AutomationPlatform } from "~/types/api";
+import { SOCIAL_CHANNELS_OFFERED, platformOffered } from "~/lib/channel-providers";
 
-const PLATFORMS: AutomationPlatform[] = ["WHATSAPP", "INSTAGRAM", "FACEBOOK"];
+const PLATFORMS: AutomationPlatform[] = (["WHATSAPP", "INSTAGRAM", "FACEBOOK"] as AutomationPlatform[]).filter(platformOffered);
 
 /** Name it, pick the account it runs on, and start blank or from a playbook. */
 export function CreateAutomationDialog({ playbook, onClose }: { playbook: Playbook | null; onClose: () => void }) {
@@ -66,7 +67,7 @@ export function CreateAutomationDialog({ playbook, onClose }: { playbook: Playbo
             <Label>Account</Label>
             {usable.length === 0 ? (
               <p className="rounded-lg border border-dashed p-3 text-caption text-muted-foreground">
-                Connect a {playbook ? playbook.channels.map((c) => (c === "facebook" ? "Facebook Page" : c === "whatsapp" ? "WhatsApp number" : "Instagram account")).join(" or ") : "WhatsApp number, Instagram account or Facebook Page"} in Settings → Channels first.
+                Connect a {playbook ? playbook.channels.map((c) => (c === "facebook" ? "Facebook Page" : c === "whatsapp" ? "WhatsApp number" : "Instagram account")).join(" or ") : SOCIAL_CHANNELS_OFFERED ? "WhatsApp number, Instagram account or Facebook Page" : "WhatsApp number"} in Settings → Channels first.
               </p>
             ) : (
               <div className="space-y-1">

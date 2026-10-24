@@ -382,6 +382,21 @@ export interface MessagingStatusSummary {
     setup: { webhooks: string; registration: string } | null;
     /** Pages and Instagram accounts: did the webhook subscription succeed. */
     webhooksOk: boolean | null;
+    /** WhatsApp: whether Meta lets the number send (AVAILABLE, LIMITED, BLOCKED), and why not. */
+    sending: { state: string; problems: Array<{ description: string; solution: string | null }> } | null;
+}
+
+/** Meta's health_status, reduced to what stops or limits sending. Calling-only (SIP) errors are left out. */
+export function describeSending(number: Record<string, unknown> | null): MessagingStatusSummary['sending'] {
+    const health = asRecord(number?.health_status);
+    const state = str(health, 'can_send_message');
+    if (!state) return null;
+    const entities = Array.isArray(health?.entities) ? (health.entities as Array<Record<string, unknown>>) : [];
+    const problems = entities
+        .filter((e) => e.can_send_message && e.can_send_message !== 'AVAILABLE')
+        .flatMap((e) => (Array.isArray(e.errors) ? (e.errors as Array<Record<string, unknown>>) : []))
+        .map((e) => ({ description: String(e.error_description ?? 'Meta reported a problem.'), solution: typeof e.possible_solution === 'string' ? e.possible_solution : null }));
+    return { state, problems };
 }
 
 function num(source: Record<string, unknown> | null, key: string): number | null {
@@ -438,6 +453,7 @@ export function describeMessagingStatus(
             ? { webhooks: str(setup, 'webhooks') ?? 'ok', registration: str(setup, 'registration') ?? 'ok' }
             : null,
         webhooksOk: subscription ? subscription.ok === true : null,
+        sending: platform === ChannelPlatform.WHATSAPP ? describeSending(number) : null,
     };
 }
 

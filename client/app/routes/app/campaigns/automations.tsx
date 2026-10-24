@@ -19,7 +19,10 @@ import { AUTOMATION_STATUS_CLASS, AUTOMATION_STATUS_LABEL, CHANNEL_LABEL, PLAYBO
 import { formatRelativeTime } from "~/lib/format-date";
 import { cn } from "~/lib/utils";
 import type { AutomationStatus } from "~/types/api";
+import { SOCIAL_CHANNELS_OFFERED, platformOffered } from "~/lib/channel-providers";
 
+
+const PLATFORM_OF = { whatsapp: "WHATSAPP", instagram: "INSTAGRAM", facebook: "FACEBOOK" } as const;
 export function meta() {
   return [{ title: "Automations | Collabo CRM" }];
 }
@@ -48,10 +51,10 @@ export default function AutomationsPage() {
       <PageHeader>
         <PageHeaderContent>
           <PageHeaderTitle>Automations</PageHeaderTitle>
-          <PageHeaderDescription>Answer comments, DMs and WhatsApp messages by themselves, follow up, tag and route — on every channel from one builder.</PageHeaderDescription>
+          <PageHeaderDescription>{SOCIAL_CHANNELS_OFFERED ? "Answer comments, DMs and WhatsApp messages by themselves, follow up, tag and route — on every channel from one builder." : "Answer WhatsApp messages by themselves, follow up on orders and carts, tag and route — all from one builder."}</PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions>
-          {!isInfluencer && (
+          {!isInfluencer && SOCIAL_CHANNELS_OFFERED && (
             <Button asChild variant="outline" size="sm">
               <Link to="/campaigns/automations/starters">
                 <MessagesSquare />
@@ -143,7 +146,7 @@ export default function AutomationsPage() {
       {canManage && (
         <SectionCard title="Start from a playbook" description="Each opens as a draft with our suggested wording, to adjust before you publish.">
           <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3">
-            {PLAYBOOKS.filter((p) => !isInfluencer || p.channels.includes("instagram")).map((p) => (
+            {PLAYBOOKS.filter((p) => (!isInfluencer || p.channels.includes("instagram")) && p.channels.some((c) => platformOffered(PLATFORM_OF[c]))).map((p) => (
               <button
                 key={p.key}
                 type="button"

@@ -202,17 +202,41 @@ function checkShape(platform: ChannelPlatform, payload: OutboundPayload): GateRe
             }
             return null;
         case 'template':
-        case 'list':
         case 'location':
             return wa ? null : refuse('unsupported_on_platform', 'This message type is only available on WhatsApp.');
-        case 'buttons':
+        case 'list': {
+            if (!wa) return refuse('unsupported_on_platform', 'This message type is only available on WhatsApp.');
+            // Meta: at most 10 rows across all sections, ids unique, a title on every section when there are several.
+            const rows = payload.sections.flatMap((sec) => sec.rows);
+            if (!payload.text.trim() || payload.text.length > 4096) return refuse('invalid_payload', 'Write a message of up to 4,096 characters.');
+            if (!payload.buttonText.trim() || payload.buttonText.length > 20) return refuse('invalid_payload', 'The list button label can be at most 20 characters.');
+            if (rows.length < 1 || rows.length > 10) return refuse('invalid_payload', 'A list takes 1 to 10 options in all.');
+            if (rows.some((r) => !r.title.trim() || r.title.length > 24)) return refuse('invalid_payload', 'List options need a title of up to 24 characters.');
+            if (new Set(rows.map((r) => r.id)).size !== rows.length) return refuse('invalid_payload', 'Each list option needs its own id.');
+            if (payload.sections.length > 1 && payload.sections.some((sec) => !sec.title?.trim())) {
+                return refuse('invalid_payload', 'Give every section a title when the list has more than one.');
+            }
+            return null;
+        }
+        case 'buttons': {
             if (payload.buttons.length < 1 || payload.buttons.length > 3) {
                 return refuse('invalid_payload', 'Use one to three buttons.');
             }
-            if (payload.buttons.some((b) => b.title.length > 20)) {
-                return refuse('invalid_payload', 'Button labels can be at most 20 characters.');
+            if (payload.buttons.some((b) => !b.title.trim() || b.title.length > 20)) {
+                return refuse('invalid_payload', 'Button labels need 1 to 20 characters.');
+            }
+            // WhatsApp refuses two buttons with the same label (error 131009).
+            const labels = payload.buttons.map((b) => b.title.trim().toLowerCase());
+            if (new Set(labels).size !== labels.length) return refuse('invalid_payload', 'Give each button a different label.');
+            if (new Set(payload.buttons.map((b) => b.id)).size !== payload.buttons.length) {
+                return refuse('invalid_payload', 'Each button needs its own id.');
+            }
+            if (!payload.text.trim()) return refuse('invalid_payload', 'Write a message first.');
+            if (payload.text.length > (wa ? 1024 : 640)) {
+                return refuse('invalid_payload', `A message with buttons can be at most ${wa ? '1,024' : '640'} characters.`);
             }
             return null;
+        }
         case 'quick_replies':
             if (wa) return refuse('unsupported_on_platform', 'Use buttons or a list on WhatsApp.');
             if (payload.replies.length < 1 || payload.replies.length > 13) {

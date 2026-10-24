@@ -35,6 +35,20 @@ export function useSendMessageMutation(conversationId: string) {
   });
 }
 
+/** Send a failed message again. A refusal comes back as `{ ok: false, message }`, like a send. */
+export function useResendMessageMutation(conversationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (messageId: string) => inboxService.resend(conversationId, messageId, nextClientId()),
+    onSuccess: (outcome) => {
+      if (!outcome.ok) toast.error(outcome.message);
+      void queryClient.invalidateQueries({ queryKey: inboxKeys.messages(conversationId) });
+      void queryClient.invalidateQueries({ queryKey: inboxKeys.lists() });
+    },
+    onError: (error) => handleMutationError(error, "The message was not sent again."),
+  });
+}
+
 export function useMarkReadMutation() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -143,7 +157,7 @@ export function useRecordConsentMutation(contactId: string) {
     mutationFn: (data: { type: "OPT_IN" | "OPT_OUT"; note?: string }) =>
       inboxService.recordConsent(contactId, data),
     onSuccess: (_data, { type }) => {
-      toast.success(type === "OPT_IN" ? "Marked as subscribed." : "Marked as opted out.");
+      toast.success(type === "OPT_IN" ? "Marked as opted in." : "Marked as opted out.");
       invalidate();
     },
     onError: (error) => handleMutationError(error, "Consent was not recorded."),

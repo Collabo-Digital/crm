@@ -42,7 +42,7 @@ describe('toMetaComponents', () => {
             ...sale,
             parameterFormat: 'NAMED',
             header: undefined,
-            body: { text: 'Hi {{first_name}}', examples: { first_name: 'Pablo' } },
+            body: { text: 'Hi {{first_name}}, welcome back.', examples: { first_name: 'Pablo' } },
         });
         expect(c[0].example).toEqual({ body_text_named_params: [{ param_name: 'first_name', example: 'Pablo' }] });
     });
@@ -59,8 +59,10 @@ describe('toMetaComponents', () => {
     it('enforces Meta’s limits in the editor’s words', () => {
         const bad = (patch: Partial<TemplateDraft>) => () => toMetaComponents({ ...sale, ...patch });
         expect(bad({ name: 'Sale Now' })).toThrow('lower-case');
-        expect(bad({ body: { text: 'Hi {{2}}', examples: { 2: 'x' } } })).toThrow('in order');
-        expect(bad({ body: { text: 'Hi {{1}}', examples: {} } })).toThrow('example');
+        expect(bad({ body: { text: 'Hi {{2}}, welcome.', examples: { 2: 'x' } } })).toThrow('in order');
+        expect(bad({ body: { text: 'Hi {{1}}, welcome.', examples: {} } })).toThrow('example');
+        expect(bad({ body: { text: '{{1}}, welcome.', examples: { 1: 'x' } } })).toThrow('start or end');
+        expect(bad({ body: { text: 'Welcome {{1}}.', examples: { 1: 'x' } } })).toThrow('start or end');
         expect(bad({ footer: 'x'.repeat(61) })).toThrow('60');
         expect(bad({ buttons: [{ type: 'URL', text: 'Go', url: 'https://x.com/{{1}}/y', example: 'a' }] })).toThrow('very end');
         expect(bad({ buttons: [{ type: 'COPY_CODE', example: 'A' }, { type: 'COPY_CODE', example: 'B' }] })).toThrow('copy-code');
@@ -99,7 +101,7 @@ describe('sending', () => {
 
     it('names parameters for named templates and sends media headers by id', () => {
         const named = toMetaComponents(
-            { ...sale, parameterFormat: 'NAMED', header: { format: 'IMAGE' }, body: { text: 'Hi {{first_name}}', examples: { first_name: 'P' } }, buttons: [] },
+            { ...sale, parameterFormat: 'NAMED', header: { format: 'IMAGE' }, body: { text: 'Hi {{first_name}}, welcome back.', examples: { first_name: 'P' } }, buttons: [] },
             'h',
         );
         expect(sendComponents(named, 'NAMED', { header: { mediaId: '1339522734477770' }, 'body.first_name': 'Jessica' })).toEqual([

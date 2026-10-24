@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import type { Channel, InboxFilters, InboxMember } from "~/types/api";
+import { SOCIAL_CHANNELS_OFFERED } from "~/lib/channel-providers";
 
 const ANY = "any";
 
@@ -60,12 +61,14 @@ export function InboxFilterMenu({
         >
           Unread only
         </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={!!filters.comments}
-          onCheckedChange={(checked) => onChange({ comments: checked === true || undefined })}
-        >
-          With post comments
-        </DropdownMenuCheckboxItem>
+        {SOCIAL_CHANNELS_OFFERED && (
+          <DropdownMenuCheckboxItem
+            checked={!!filters.comments}
+            onCheckedChange={(checked) => onChange({ comments: checked === true || undefined })}
+          >
+            With post comments
+          </DropdownMenuCheckboxItem>
+        )}
         <DropdownMenuSeparator />
 
         <DropdownMenuSub>

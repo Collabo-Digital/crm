@@ -5,7 +5,7 @@ const STAGES: Array<{ key: keyof BroadcastStats; label: string; fill: string; hi
   { key: "sent", label: "Sent", fill: "bg-info", hint: "Accepted by WhatsApp" },
   { key: "delivered", label: "Delivered", fill: "bg-brand", hint: "Reached the phone" },
   { key: "read", label: "Read", fill: "bg-success", hint: "Opened, where read receipts are on" },
-  { key: "replied", label: "Replied", fill: "bg-brand-strong", hint: "Wrote back within three days" },
+  { key: "replied", label: "Replied", fill: "bg-foreground/60", hint: "Wrote back within three days" },
   { key: "clicked", label: "Tapped a button", fill: "bg-warning", hint: "Quick-reply taps on the template" },
 ];
 

@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ConversationStatus, MessageDirection, MessageKind, Prisma } from '@prisma/client';
+import { ConversationStatus, MessageDirection, MessageKind, MessageStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CatalogService } from '../commerce/catalog.service';
 import { StoreActionsService } from '../commerce/store-actions.service';
@@ -8,6 +8,7 @@ import { PaymentLinksService } from '../payments/payment-links.service';
 import { WhatsAppPayService } from '../payments/whatsapp-pay.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
 import { MessagingSendService, SendOutcome } from '../messaging/send/messaging-send.service';
+import type { OutboundPayload } from '../messaging/outbound';
 import { MessagingMediaStorage } from '../messaging/media/messaging-media.storage';
 import { signMediaPath, verifyMediaSignature } from '../messaging/media/media-url';
 import { replyWindow } from '../messaging/outbound';
@@ -306,6 +307,33 @@ export class InboxService {
             return this.sender.send({ ...base, payload: await this.catalog.productPayload(orgId, conversation.channelId, input) });
         }
         return this.sender.send({ ...base, payload: asOutbound(input) });
+    }
+
+    /**
+     * Sends a failed message again, as it was: a new message through the same
+     * checks (reply window, consent, WhatsApp's rules). The failed one stays in
+     * the thread.
+     */
+    async resend(orgId: string, viewer: InboxViewer, id: string, messageId: string, clientId?: string): Promise<SendOutcome> {
+        if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot send messages.');
+        const conversation = await this.loadConversation(orgId, viewer, id);
+        const failed = await this.prisma.message.findFirst({
+            where: { id: messageId, conversationId: conversation.id, direction: MessageDirection.OUTBOUND, status: MessageStatus.FAILED },
+            select: { body: true },
+        });
+        const payload = (failed?.body as { payload?: OutboundPayload } | null)?.payload;
+        if (!payload || ['reaction', 'private_reply', 'comment_reply'].includes(payload.type)) {
+            throw new BadRequestException('This message cannot be sent again.');
+        }
+        return this.sender.send({
+            organizationId: orgId,
+            conversationId: conversation.id,
+            origin: 'agent',
+            actorUserId: viewer.userId,
+            replyToMessageId: null,
+            idempotencyKey: clientId ? `inbox:${viewer.userId}:${clientId}` : null,
+            payload,
+        });
     }
 
     /** The store's products for the composer's product tray, with what this conversation's channel can send. */

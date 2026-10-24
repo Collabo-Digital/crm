@@ -1,5 +1,6 @@
+import { requireMessagingChannel } from '../channel/messaging-channels';
 import { Controller, Post, Get, Delete, Body, Param, BadRequestException } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { ChannelPlatform, UserRole } from '@prisma/client';
 
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -48,6 +49,8 @@ export class InvitesController {
         @Body() dto: InviteInfluencerDto,
     ) {
         await this.orgService.requireRole(orgId, user.sub, INVITE_MANAGERS);
+        // Influencers are invited to connect their own Instagram.
+        requireMessagingChannel(ChannelPlatform.INSTAGRAM);
         if (dto.role && dto.role !== UserRole.INFLUENCER) {
             throw new BadRequestException('This endpoint only invites influencers.');
         }

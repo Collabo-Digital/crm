@@ -809,6 +809,14 @@ export interface ChannelMessagingStatus {
   } | null;
   setup: { webhooks: string; registration: string } | null;
   webhooksOk: boolean | null;
+  /** WhatsApp: whether Meta lets the number send, and what blocks it. */
+  sending: WhatsAppSendingHealth | null;
+}
+
+/** Meta's health_status for a WhatsApp number: AVAILABLE, LIMITED or BLOCKED, with the reasons. */
+export interface WhatsAppSendingHealth {
+  state: "AVAILABLE" | "LIMITED" | "BLOCKED" | (string & {});
+  problems: Array<{ description: string; solution: string | null }>;
 }
 
 /** Live outbound rate-limit summary for a channel (from GET /channels/:id). */
@@ -4117,6 +4125,8 @@ export interface InboxContactRow {
   username: string | null;
   avatarUrl: string | null;
   tags: string[];
+  /** A recorded opt-in, not withdrawn. */
+  optedIn: boolean;
   optedOut: boolean;
   blocked: boolean;
   customer: { id: string; name: string | null } | null;
@@ -4426,6 +4436,7 @@ export interface CampaignsOverview {
     quality: string | null;
     messagingLimit: string | null;
     marketingMessagesApi: string | null;
+    sending: WhatsAppSendingHealth | null;
   } | null;
   recent: Array<{ id: string; name: string; status: BroadcastStatus; templateName: string | null; startedAt: string | null; scheduledAt: string | null; createdAt: string }>;
 }

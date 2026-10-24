@@ -60,6 +60,27 @@ const fail = (error: string): Outcome => ({ kind: 'fail', error });
  * with. Every executed block leaves an AutomationRunStep row; waits park the
  * run and queue its wake-up.
  */
+/** Step names as the editor shows them, for the automation's "last stop" line. */
+const STEP_NAME: Record<string, string> = {
+    send_message: 'Send a message',
+    reply_comment: 'Reply to the comment',
+    send_invoice: 'Send the invoice',
+    send_payment_link: 'Send a payment link',
+    wait: 'Wait',
+    wait_for_reply: 'Wait for a reply',
+    condition: 'Check a condition',
+    add_tag: 'Add tags',
+    remove_tag: 'Remove tags',
+    set_attribute: 'Save a field',
+    assign: 'Assign',
+    set_status: 'Open, close or snooze',
+    add_note: 'Add a note',
+    http_request: 'Call a URL',
+    store_action: 'Store action',
+    post_review: 'Publish a review',
+    sheet_add_row: 'Add a row to a sheet',
+};
+
 @Injectable()
 export class AutomationRunner {
     private readonly logger = new Logger(AutomationRunner.name);
@@ -677,7 +698,7 @@ export class AutomationRunner {
             }),
             this.prisma.automation.update({
                 where: { id: run.automationId },
-                data: { lastError: `${step.type.replace(/_/g, ' ')}: ${error}`.slice(0, 500), lastErrorAt: now },
+                data: { lastError: `${STEP_NAME[step.type] ?? 'A step'}: ${error}`.slice(0, 500), lastErrorAt: now },
             }),
         ]);
     }
