@@ -120,7 +120,8 @@ export class AutomationRunner {
         const run = await this.load(runId);
         if (!run.startedAt) await this.prisma.automationRun.update({ where: { id: run.id }, data: { startedAt: new Date() } });
         if (!(await this.stillLive(run))) return;
-        const flow = new Flow(parseDefinition(run.version.definition));
+        const flow = await this.flowOf(run);
+        if (!flow) return;
         const start = run.currentStepKey ? flow.step(run.currentStepKey) : flow.first();
         await this.execute(run, flow, start, parseRunContext(run.context));
     }
@@ -141,7 +142,8 @@ export class AutomationRunner {
         if (!count) return;
         const run = await this.load(runId);
         if (!(await this.stillLive(run))) return;
-        const flow = new Flow(parseDefinition(run.version.definition));
+        const flow = await this.flowOf(run);
+        if (!flow) return;
         const ctx = parseRunContext(run.context);
         const waiting = run.currentStepKey ? flow.step(run.currentStepKey) : null;
         if (!waiting) return this.finish(run.id, ctx);
@@ -547,10 +549,13 @@ export class AutomationRunner {
                 if (!orderId) return fail('This run is not about an order.');
                 await this.store.noteOrder(orgId, orderId, value, actor);
                 return { kind: 'next', output: { note: value } };
-            case 'cancel_order':
+            case 'cancel_order': {
                 if (!orderId) return fail('This run is not about an order.');
-                await this.store.cancelOrder(orgId, orderId, actor, value || 'Cancelled by an automation after the customer’s reply.');
+                const refused = await this.store.cancelOrder(orgId, orderId, actor, value || 'Cancelled by an automation after the customer’s reply.');
+                // The steps after it (a "cancelled" message) must not run for an order that was not cancelled.
+                if (refused) return fail(refused);
                 return { kind: 'next', output: { cancelled: true } };
+            }
             case 'tag_customer':
                 if (!s.contact.customerId) return fail('This contact is not linked to a store customer.');
                 return { kind: 'next', output: await this.store.tagCustomer(orgId, s.contact.customerId, value) };
@@ -612,6 +617,28 @@ export class AutomationRunner {
 
     private load(runId: string) {
         return this.prisma.automationRun.findUniqueOrThrow({ where: { id: runId }, include: runInclude });
+    }
+
+    /**
+     * The run's version as a flow. A stored version that no longer parses
+     * fails the run; left RUNNING, the sweeper would retry it for ever.
+     */
+    private async flowOf(run: LoadedRun): Promise<Flow | null> {
+        try {
+            return new Flow(parseDefinition(run.version.definition));
+        } catch (err) {
+            this.logger.warn(`Run ${run.id}: version ${run.automationVersionId} no longer parses: ${err instanceof Error ? err.message : err}`);
+            const error = 'This published version can no longer run. Open the automation, check it and publish it again.';
+            const now = new Date();
+            await this.prisma.$transaction([
+                this.prisma.automationRun.update({
+                    where: { id: run.id },
+                    data: { status: AutomationRunStatus.FAILED, error, completedAt: now, waitingForReply: false, resumeAt: null },
+                }),
+                this.prisma.automation.update({ where: { id: run.automationId }, data: { lastError: error, lastErrorAt: now } }),
+            ]);
+            return null;
+        }
     }
 
     /** Runs of a paused or archived automation stop where they are. */

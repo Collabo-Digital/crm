@@ -39,7 +39,8 @@ export class AutomationProcessor extends WorkerHost {
 
 /**
  * The backstop for lost jobs: events nobody processed, waits whose wake-up
- * never fired, runs that never started or whose worker died.
+ * never fired, replies whose resume was never queued, runs that never
+ * started or whose worker died.
  */
 @Injectable()
 export class AutomationSweeper {
@@ -53,7 +54,7 @@ export class AutomationSweeper {
     @Cron(CronExpression.EVERY_MINUTE)
     async sweep(now = new Date()) {
         const minuteAgo = new Date(now.getTime() - 60_000);
-        const [events, overdue, pending, stale] = await Promise.all([
+        const [events, overdue, answered, pending, stale] = await Promise.all([
             this.prisma.automationEvent.findMany({
                 where: { processedAt: null, error: null, createdAt: { lt: minuteAgo, gt: new Date(now.getTime() - 24 * 3600_000) } },
                 select: { id: true },
@@ -61,6 +62,12 @@ export class AutomationSweeper {
             }),
             this.prisma.automationRun.findMany({
                 where: { status: AutomationRunStatus.WAITING, resumeAt: { lt: minuteAgo } },
+                select: { id: true },
+                take: 200,
+            }),
+            // The dispatcher gave these their reply (no timer, not waiting) but their resume never ran.
+            this.prisma.automationRun.findMany({
+                where: { status: AutomationRunStatus.WAITING, resumeAt: null, waitingForReply: false, updatedAt: { lt: minuteAgo } },
                 select: { id: true },
                 take: 200,
             }),
@@ -77,9 +84,10 @@ export class AutomationSweeper {
         ]);
         for (const e of events) await this.jobs.event(e.id);
         for (const r of overdue) await this.jobs.resume(r.id, 'timer');
+        for (const r of answered) await this.jobs.resume(r.id, 'reply');
         for (const r of [...pending, ...stale]) await this.jobs.run(r.id);
-        const total = events.length + overdue.length + pending.length + stale.length;
-        if (total) this.logger.log(`Swept ${events.length} events, ${overdue.length} waits, ${pending.length + stale.length} runs`);
+        const total = events.length + overdue.length + answered.length + pending.length + stale.length;
+        if (total) this.logger.log(`Swept ${events.length} events, ${overdue.length} waits, ${answered.length} replies, ${pending.length + stale.length} runs`);
         return total;
     }
 }

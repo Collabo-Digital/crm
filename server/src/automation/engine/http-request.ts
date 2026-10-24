@@ -143,6 +143,7 @@ export function guardedRequest(opts: {
                     chunks.push(chunk);
                 });
                 res.on('end', () => {
+                    clearTimeout(deadline);
                     const raw = Buffer.concat(chunks).toString('utf8');
                     let body: unknown = raw;
                     try {
@@ -155,6 +156,9 @@ export function guardedRequest(opts: {
                 res.on('error', reject);
             },
         );
+        // `timeout` only notices a silent socket; this bounds the whole request, however slowly the body trickles in.
+        const deadline = setTimeout(() => req.destroy(new HttpRequestError(`No complete response within ${timeoutMs / 1000} seconds.`)), timeoutMs);
+        req.on('close', () => clearTimeout(deadline));
         req.on('timeout', () => req.destroy(new HttpRequestError(`No response within ${timeoutMs / 1000} seconds.`)));
         req.on('error', (err) => reject(err instanceof HttpRequestError ? err : new HttpRequestError(err.message)));
         if (opts.body !== undefined) req.write(opts.body);

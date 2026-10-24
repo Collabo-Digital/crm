@@ -66,9 +66,11 @@ export function variablesFor(facts: RunFacts): FlowVariables {
     const { contact, customer } = facts;
     const displayName = contact.name?.replace(/^@/, '') ?? null;
     const firstWord = displayName?.split(/\s+/)[0] ?? null;
+    // A guest checkout's buyer has no store customer, and a contact made from their number has no name.
+    const checkoutName = text(facts.context.vars['checkout.first_name']);
     const vars: FlowVariables = {
-        first_name: text(customer?.firstName) ?? (firstWord && /\p{L}/u.test(firstWord) ? firstWord : null),
-        name: text([customer?.firstName, customer?.lastName].filter(Boolean).join(' ')) ?? displayName,
+        first_name: text(customer?.firstName) ?? (firstWord && /\p{L}/u.test(firstWord) ? firstWord : null) ?? checkoutName,
+        name: text([customer?.firstName, customer?.lastName].filter(Boolean).join(' ')) ?? displayName ?? checkoutName,
         phone: contact.phone,
         username: contact.username,
     };

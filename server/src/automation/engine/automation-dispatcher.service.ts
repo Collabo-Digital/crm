@@ -1,18 +1,29 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { AutomationEvent, AutomationRunStatus, AutomationStatus, Prisma } from '@prisma/client';
+import { AutomationEvent, AutomationRunStatus, AutomationStatus, ChannelPlatform, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RedisService } from '../../redis/redis.service';
 import { AutomationJobs } from '../../messaging/automation-jobs';
 import { InboxRulesService } from '../../inbox/inbox-rules.service';
+import { adReferral } from '../../ads/ads.util';
 import { Flow, keywordMatches } from './flow';
 import { RunContext, parseRunContext } from './run-context';
 import { parseDefinition } from '../blocks/definition.schema';
 import { WebhooksService } from '../../developer/webhooks.service';
+import { withRedisLock } from './redis-lock';
 
 /** Inbound messages: what a waiting flow takes as a reply. Comments are public and never count. */
 const REPLY_EVENTS = new Set(['whatsapp.message', 'instagram.message', 'facebook.message', 'instagram.postback', 'facebook.postback']);
 /** Events where only the best-matching automation starts, so one message never gets several answers. */
 const ONE_WINNER = new Set(['whatsapp.message', 'whatsapp.cart', 'instagram.message', 'facebook.message', 'instagram.comment', 'facebook.comment', 'instagram.postback', 'facebook.postback', 'instagram.mention']);
+/** Messages that can carry a click-to-chat ad's referral, and the platform that reads it. */
+const AD_MESSAGES: Record<string, ChannelPlatform> = {
+    'whatsapp.message': ChannelPlatform.WHATSAPP,
+    'instagram.message': ChannelPlatform.INSTAGRAM,
+    'facebook.message': ChannelPlatform.FACEBOOK,
+};
 const DAY = 24 * 3600_000;
+/** Earlier unhandled events of one person handled before theirs, at most. */
+const CATCH_UP = 20;
 /**
  * Store events, each about one order, invoice, payment, cart or checkout (or
  * one sheet row) and raised once for it. "Once" on these means once for that
@@ -37,11 +48,16 @@ interface EventPayload {
         vars?: Record<string, string>;
         /** A WhatsApp cart message. */
         order?: { product_items?: Array<{ product_retailer_id?: string; quantity?: number; item_price?: number; currency?: string }> };
+        /** A message from a click-to-chat ad. */
+        referral?: unknown;
     };
 }
 
+type SkipReason = 'once_per_contact' | 'once_per_day';
+
+// Limits come from the published version: a setting changed in the draft is not live until it is published.
 const triggerInclude = {
-    automation: { select: { id: true, status: true, publishedVersionId: true, publishedAt: true, settings: true } },
+    automation: { select: { id: true, status: true, publishedVersionId: true, publishedAt: true, publishedVersion: { select: { settings: true } } } },
 } satisfies Prisma.AutomationTriggerInclude;
 type CandidateTrigger = Prisma.AutomationTriggerGetPayload<{ include: typeof triggerInclude }>;
 
@@ -59,18 +75,54 @@ export class AutomationDispatcher {
         private readonly jobs: AutomationJobs,
         private readonly rules: InboxRulesService,
         private readonly webhooks: WebhooksService,
+        private readonly redis: RedisService,
     ) { }
 
+    /**
+     * One person's events are handled one at a time, oldest first, on every
+     * server: two quick messages must not both pass a "once" check or the
+     * away message's cooldown, and a reply must not overtake the one sent
+     * before it. Their earlier events still waiting are handled here first.
+     */
     async handle(eventId: string): Promise<void> {
         const event = await this.prisma.automationEvent.findUnique({ where: { id: eventId } });
         if (!event || event.processedAt) return;
+        const contactId = event.contactId;
+        if (!contactId) return this.process(event);
+
+        await withRedisLock(this.redis, `automation:contact:${contactId}`, async () => {
+            const earlier = await this.prisma.automationEvent.findMany({
+                where: {
+                    contactId,
+                    id: { not: event.id },
+                    processedAt: null,
+                    error: null,
+                    createdAt: { gt: new Date(Date.now() - DAY) },
+                    OR: [{ occurredAt: { lt: event.occurredAt } }, { occurredAt: event.occurredAt, createdAt: { lt: event.createdAt } }],
+                },
+                orderBy: [{ occurredAt: 'asc' }, { createdAt: 'asc' }],
+                take: CATCH_UP,
+            });
+            for (const e of earlier) {
+                // Its own job retries it.
+                await this.process(e).catch((err) => this.logger.warn(`Event ${e.id} failed before ${event.id}: ${err instanceof Error ? err.message : err}`));
+            }
+            // Another server may have handled it while this one waited for the lock.
+            const current = await this.prisma.automationEvent.findUnique({ where: { id: event.id } });
+            if (current && !current.processedAt) await this.process(current);
+        });
+    }
+
+    private async process(event: AutomationEvent): Promise<void> {
         const payload = (event.payload ?? {}) as EventPayload;
         // Outgoing webhooks see every message, tag, sign-up and ad chat; each is sent once per endpoint.
         await this.webhooks.fromAutomationEvent(event);
 
         try {
             const replied = REPLY_EVENTS.has(event.eventType) ? await this.handOffReply(event, payload) : 0;
-            const runIds = replied ? [] : await this.start(event, payload);
+            // A chat from an ad gets the ad's automation, not a message automation or the welcome as well.
+            const adAnswers = !replied && (await this.adAutomationAnswers(event, payload));
+            const runIds = replied || adAnswers ? [] : await this.start(event, payload);
 
             const ruleEvent = {
                 id: event.id,
@@ -82,7 +134,7 @@ export class AutomationDispatcher {
                 newConversation: payload.raw?.newConversation === true,
             };
             if (event.eventType === 'crm.contact.tag_added') await this.rules.onTagAdded({ ...ruleEvent, tag: payload.raw?.tag ?? event.text ?? '' });
-            else await this.rules.onEvent(ruleEvent, { automated: replied > 0 || runIds.length > 0 });
+            else await this.rules.onEvent(ruleEvent, { automated: replied > 0 || adAnswers || runIds.length > 0 });
 
             await this.prisma.automationEvent.update({
                 where: { id: event.id },
@@ -138,8 +190,13 @@ export class AutomationDispatcher {
         ctx.vars.last_reply = reply;
         ctx.replied = true;
         ctx.replyEventIds = [...(ctx.replyEventIds ?? []), event.id];
-        const step = run.currentStepKey ? new Flow(parseDefinition(run.version.definition)).step(run.currentStepKey) : null;
-        const saveAs = typeof step?.config.saveAs === 'string' ? step.config.saveAs : '';
+        let saveAs = '';
+        try {
+            const step = run.currentStepKey ? new Flow(parseDefinition(run.version.definition)).step(run.currentStepKey) : null;
+            if (typeof step?.config.saveAs === 'string') saveAs = step.config.saveAs;
+        } catch {
+            // A version that no longer parses: the run still takes the reply, and resuming it fails the run with the reason.
+        }
 
         // Only one of the reply and the timeout may wake the run: the flag decides.
         const { count } = await this.prisma.automationRun.updateMany({
@@ -176,8 +233,22 @@ export class AutomationDispatcher {
     /** Start the automations this event triggers. Returns the runs to execute. */
     private async start(event: AutomationEvent, payload: EventPayload): Promise<string[]> {
         if (!event.contactId) return [];
+        let matched = (await this.candidates(event)).filter((t) => this.matches(t, event, payload));
+        const skips = new Map<string, SkipReason | null>();
+        for (const t of matched) skips.set(t.id, await this.onceSkip(t, event));
+        if (ONE_WINNER.has(event.eventType) && matched.length > 1) matched = [pickWinner(matched, (t) => !skips.get(t.id))];
+
+        const runIds: string[] = [];
+        for (const trigger of matched) {
+            const id = await this.createRun(trigger, event, payload, skips.get(trigger.id) ?? null);
+            if (id) runIds.push(id);
+        }
+        return runIds;
+    }
+
+    private candidates(event: AutomationEvent): Promise<CandidateTrigger[]> {
         const crm = event.eventType.startsWith('crm.');
-        const candidates = await this.prisma.automationTrigger.findMany({
+        return this.prisma.automationTrigger.findMany({
             where: {
                 organizationId: event.organizationId,
                 triggerType: event.eventType,
@@ -187,17 +258,22 @@ export class AutomationDispatcher {
             },
             include: triggerInclude,
         });
-        let matched = candidates.filter((t) => this.matches(t, event, payload));
-        if (ONE_WINNER.has(event.eventType) && matched.length > 1) {
-            matched = [matched.sort((a, b) => score(b) - score(a) || (b.automation.publishedAt?.getTime() ?? 0) - (a.automation.publishedAt?.getTime() ?? 0))[0]];
-        }
+    }
 
-        const runIds: string[] = [];
-        for (const trigger of matched) {
-            const id = await this.createRun(trigger, event, payload);
-            if (id) runIds.push(id);
+    /**
+     * True when this message came from an ad and an automation for that ad
+     * will start for this person. The ad's own event (raised right after the
+     * message, and handled after it) starts that automation.
+     */
+    private async adAutomationAnswers(event: AutomationEvent, payload: EventPayload): Promise<boolean> {
+        const platform = AD_MESSAGES[event.eventType];
+        const ad = platform && event.contactId ? adReferral(platform, payload.raw?.referral) : null;
+        if (!ad) return false;
+        const adEvent: AutomationEvent = { ...event, eventType: 'crm.ad.referral', text: ad.adId };
+        for (const t of await this.candidates(adEvent)) {
+            if (this.matches(t, adEvent, payload) && !(await this.onceSkip(t, adEvent))) return true;
         }
-        return runIds;
+        return false;
     }
 
     private matches(t: CandidateTrigger, event: AutomationEvent, payload: EventPayload): boolean {
@@ -237,25 +313,28 @@ export class AutomationDispatcher {
         }
     }
 
-    /** A run for this trigger, or a skipped one when the automation's limits say no. */
-    private async createRun(trigger: CandidateTrigger, event: AutomationEvent, payload: EventPayload): Promise<string | null> {
-        const a = trigger.automation;
-        const settings = (a.settings ?? {}) as { oncePerContact?: 'ever' | 'perDay' | 'never' };
+    /** Why the automation's "once" setting keeps it from starting for this person again, or null. */
+    private async onceSkip(trigger: CandidateTrigger, event: AutomationEvent): Promise<SkipReason | null> {
+        const settings = (trigger.automation.publishedVersion?.settings ?? {}) as { oncePerContact?: 'ever' | 'perDay' | 'never' };
         const chosen = settings.oncePerContact ?? 'ever';
         const once = chosen === 'ever' && ONE_PER_SUBJECT(event.eventType) ? 'never' : chosen;
-        const skip =
-            once !== 'never' &&
-            (await this.prisma.automationRun.findFirst({
-                where: {
-                    automationId: a.id,
-                    contactId: event.contactId,
-                    isTest: false,
-                    status: { notIn: [AutomationRunStatus.SKIPPED, AutomationRunStatus.CANCELLED] },
-                    ...(once === 'perDay' ? { createdAt: { gte: new Date(Date.now() - DAY) } } : {}),
-                },
-                select: { id: true },
-            }));
+        if (once === 'never') return null;
+        const earlier = await this.prisma.automationRun.findFirst({
+            where: {
+                automationId: trigger.automation.id,
+                contactId: event.contactId,
+                isTest: false,
+                status: { notIn: [AutomationRunStatus.SKIPPED, AutomationRunStatus.CANCELLED] },
+                ...(once === 'perDay' ? { createdAt: { gte: new Date(Date.now() - DAY) } } : {}),
+            },
+            select: { id: true },
+        });
+        return earlier ? (once === 'perDay' ? 'once_per_day' : 'once_per_contact') : null;
+    }
 
+    /** A run for this trigger, or a skipped one when the automation's limits say no. */
+    private async createRun(trigger: CandidateTrigger, event: AutomationEvent, payload: EventPayload, skip: SkipReason | null): Promise<string | null> {
+        const a = trigger.automation;
         const isComment = event.eventType.endsWith('.comment');
         const ctx: RunContext = {
             vars: {
@@ -290,7 +369,7 @@ export class AutomationDispatcher {
                     customerId: event.customerId ?? contact?.customerId ?? null,
                     orderId: event.orderId,
                     status: skip ? AutomationRunStatus.SKIPPED : AutomationRunStatus.PENDING,
-                    skipReason: skip ? (once === 'perDay' ? 'once_per_day' : 'once_per_contact') : null,
+                    skipReason: skip,
                     completedAt: skip ? new Date() : null,
                     context: ctx as unknown as Prisma.InputJsonValue,
                 },
@@ -314,8 +393,21 @@ export class AutomationDispatcher {
     }
 }
 
+type ScoredTrigger = Pick<CandidateTrigger, 'config' | 'subjectId' | 'keywords'> & { automation: { publishedAt: Date | null } };
+
 /** Specific beats general: a chosen post, then exact words, then any keyword, then "any message". */
-function score(t: CandidateTrigger): number {
+function score(t: ScoredTrigger): number {
     const match = ((t.config ?? {}) as { match?: string }).match ?? 'contains';
     return (t.subjectId ? 4 : 0) + (match === 'exact' ? 2 : match === 'contains' && t.keywords.length ? 1 : 0);
+}
+
+/**
+ * The one automation that answers: the most specific, then the latest
+ * published, among those that would run. A "once" automation this person
+ * already went through gives way to the next best; when none would run,
+ * the best one is recorded as skipped.
+ */
+function pickWinner<T extends ScoredTrigger>(matched: T[], willRun: (t: T) => boolean): T {
+    const pool = matched.some(willRun) ? matched.filter(willRun) : matched;
+    return [...pool].sort((a, b) => score(b) - score(a) || (b.automation.publishedAt?.getTime() ?? 0) - (a.automation.publishedAt?.getTime() ?? 0))[0];
 }

@@ -57,4 +57,22 @@ describe('guardedRequest', () => {
         const res = await guardedRequest({ method: 'POST', url: `http://localhost:${port}/hook`, body: '{"a":1}', allowPrivate: true });
         expect(res).toEqual({ status: 200, body: { method: 'POST', got: { a: 1 } } });
     });
+
+    it('gives up on a response that trickles in for longer than the timeout', async () => {
+        const slow = http.createServer((_req, res) => {
+            res.write(' ');
+            const drip = setInterval(() => res.write(' '), 50);
+            res.on('close', () => clearInterval(drip));
+        });
+        await new Promise<void>((r) => slow.listen(0, '127.0.0.1', r));
+        const slowPort = (slow.address() as AddressInfo).port;
+        const started = Date.now();
+        try {
+            await expect(guardedRequest({ method: 'GET', url: `http://127.0.0.1:${slowPort}/`, allowPrivate: true, timeoutMs: 300 })).rejects.toThrow('No complete response within 0.3 seconds');
+            expect(Date.now() - started).toBeLessThan(2_000);
+        } finally {
+            slow.closeAllConnections();
+            await new Promise((r) => slow.close(r));
+        }
+    });
 });

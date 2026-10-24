@@ -187,31 +187,49 @@ export class GoogleService {
     }
 
     /**
-     * Rows added since the last read. The first read of a sheet only notes
-     * how many rows it has: rows already there never start anything.
+     * Rows added since the last read, and the row they reach (`end`). The
+     * caller records them, then moves the read position with markRead. The
+     * first read of a sheet only notes how many rows it has: rows already
+     * there never start anything.
      */
-    async newRows(sheetId: string): Promise<{ columns: SheetColumn[]; rows: Array<{ number: number; cells: string[] }> }> {
+    async newRows(sheetId: string): Promise<{ columns: SheetColumn[]; rows: Array<{ number: number; cells: string[] }>; end: number }> {
         const sheet = await this.prisma.googleSheet.findUnique({ where: { id: sheetId } });
-        if (!sheet) return { columns: [], rows: [] };
+        if (!sheet) return { columns: [], rows: [], end: 0 };
+        const read = (range: string) => this.call(sheet.organizationId, (token) => this.google.values(token, sheet.spreadsheetId, a1(sheet.tab, range)));
+        const restart = async () => {
+            const all = await read(`A1:${LAST_COLUMN}`);
+            await this.prisma.googleSheet.update({ where: { id: sheet.id }, data: { seenRows: all.length, checkedAt: new Date(), lastError: null } });
+            return { columns: [], rows: [], end: all.length };
+        };
         try {
-            if (sheet.seenRows === null) {
-                const all = await this.call(sheet.organizationId, (token) => this.google.values(token, sheet.spreadsheetId, a1(sheet.tab, `A1:${LAST_COLUMN}`)));
-                await this.prisma.googleSheet.update({ where: { id: sheet.id }, data: { seenRows: all.length, checkedAt: new Date(), lastError: null } });
-                return { columns: [], rows: [] };
-            }
-            const from = sheet.seenRows + 1;
-            const fresh = await this.call(sheet.organizationId, (token) => this.google.values(token, sheet.spreadsheetId, a1(sheet.tab, `A${from}:${LAST_COLUMN}`)));
-            const [header = []] = fresh.length ? await this.call(sheet.organizationId, (token) => this.google.values(token, sheet.spreadsheetId, a1(sheet.tab, `A1:${LAST_COLUMN}1`))) : [[]];
-            await this.prisma.googleSheet.update({ where: { id: sheet.id }, data: { seenRows: sheet.seenRows + fresh.length, checkedAt: new Date(), lastError: null } });
+            if (sheet.seenRows === null) return await restart();
+            // From the last row already seen: when nothing is there any more, rows were deleted, and the position
+            // moves back to the sheet's end so the next new row is not taken for one already seen.
+            const seen = sheet.seenRows;
+            const tail = await read(`A${Math.max(1, seen)}:${LAST_COLUMN}`);
+            if (seen > 0 && !tail.length) return await restart();
+            const fresh = seen > 0 ? tail.slice(1) : tail;
+            const from = seen + 1;
+            const [header = []] = fresh.length ? await read(`A1:${LAST_COLUMN}1`) : [[]];
+            await this.prisma.googleSheet.update({ where: { id: sheet.id }, data: { checkedAt: new Date(), lastError: null } });
             return {
                 columns: sheetColumns(header),
                 rows: fresh.map((cells, i) => ({ number: from + i, cells })).filter((r) => r.cells.some((c) => c.trim())),
+                end: seen + fresh.length,
             };
         } catch (err) {
             const message = (err instanceof Error ? err.message : String(err)).slice(0, 300);
             await this.prisma.googleSheet.update({ where: { id: sheet.id }, data: { lastError: message, checkedAt: new Date() } }).catch(() => undefined);
             throw err;
         }
+    }
+
+    /**
+     * Every row up to `seenRows` has been recorded. Never moves back, and
+     * leaves a position cleared meanwhile (a publish restarting the watch).
+     */
+    async markRead(sheetId: string, seenRows: number): Promise<void> {
+        await this.prisma.googleSheet.updateMany({ where: { id: sheetId, seenRows: { lt: seenRows } }, data: { seenRows } });
     }
 
     /** A new row that started nothing, for the Google Sheets page. */

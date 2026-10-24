@@ -9,11 +9,23 @@ import { useTestAutomationMutation } from "~/hooks/use-automation-mutations";
 import { BLOCKS } from "~/lib/automation-blocks";
 import { cn } from "~/lib/utils";
 
-/** Walk the draft for a sample person: what would be sent, which branches taken. Nothing is sent. */
-export function TestRunDialog({ automationId, hasReplyStep, onClose }: { automationId: string; hasReplyStep: boolean; onClose: () => void }) {
+/** Walk the draft for a sample person (and a sample order): what would be sent, which branches taken. Nothing is sent. */
+export function TestRunDialog({
+  automationId,
+  hasReplyStep,
+  orderTrigger,
+  onClose,
+}: {
+  automationId: string;
+  hasReplyStep: boolean;
+  /** The trigger is about an order: the test uses a sample order, paid the way chosen here. */
+  orderTrigger: boolean;
+  onClose: () => void;
+}) {
   const test = useTestAutomationMutation();
   const [text, setText] = useState("");
   const [reply, setReply] = useState("");
+  const [payment, setPayment] = useState<"cod" | "prepaid">("cod");
   const result = test.data;
 
   return (
@@ -28,13 +40,28 @@ export function TestRunDialog({ automationId, hasReplyStep, onClose }: { automat
           className="grid gap-3 sm:grid-cols-2"
           onSubmit={(e) => {
             e.preventDefault();
-            test.mutate({ id: automationId, text, ...(hasReplyStep && reply.trim() ? { reply } : {}) });
+            test.mutate({ id: automationId, text, ...(hasReplyStep && reply.trim() ? { reply } : {}), ...(orderTrigger ? { order: payment } : {}) });
           }}
         >
-          <div className="space-y-1.5">
-            <Label htmlFor="test-text">Their message or comment</Label>
-            <Input id="test-text" value={text} maxLength={1000} onChange={(e) => setText(e.target.value)} placeholder="What’s the price?" />
-          </div>
+          {orderTrigger ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="test-order">Sample order</Label>
+              <select
+                id="test-order"
+                className="h-8 w-full rounded-lg border bg-background px-2 text-body"
+                value={payment}
+                onChange={(e) => setPayment(e.target.value === "prepaid" ? "prepaid" : "cod")}
+              >
+                <option value="cod">Cash on delivery</option>
+                <option value="prepaid">Paid online</option>
+              </select>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <Label htmlFor="test-text">Their message or comment</Label>
+              <Input id="test-text" value={text} maxLength={1000} onChange={(e) => setText(e.target.value)} placeholder="What’s the price?" />
+            </div>
+          )}
           {hasReplyStep && (
             <div className="space-y-1.5">
               <Label htmlFor="test-reply">Their reply</Label>
@@ -44,6 +71,11 @@ export function TestRunDialog({ automationId, hasReplyStep, onClose }: { automat
         </form>
         {result && (
           <div className="max-h-80 space-y-2 overflow-y-auto rounded-lg border p-3">
+            {result.order && (
+              <p className="text-caption text-muted-foreground">
+                With sample order {result.order.name}: {result.order.total}, {result.order.payment.toLowerCase()}.
+              </p>
+            )}
             {result.issues.length > 0 && (
               <p className="rounded-md bg-warning-subtle p-2 text-caption text-warning">
                 {result.issues.length} thing{result.issues.length === 1 ? "" : "s"} must be fixed before publishing.

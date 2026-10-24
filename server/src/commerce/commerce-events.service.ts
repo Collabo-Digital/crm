@@ -169,6 +169,7 @@ export class CommerceEventsService {
         total: Prisma.Decimal | null;
         currency: string | null;
         items: Prisma.JsonValue;
+        firstName: string | null;
         customerExternalId: string | null;
         channelId: string;
     }): Promise<number> {
@@ -184,7 +185,7 @@ export class CommerceEventsService {
                 e164: normalizePhone(checkout.phone),
                 customerId: customer?.id ?? null,
                 orderId: null,
-                vars: checkoutVars({ recoveryUrl: checkout.recoveryUrl, total: checkout.total?.toString() ?? null, currency: checkout.currency, items }),
+                vars: checkoutVars({ recoveryUrl: checkout.recoveryUrl, total: checkout.total?.toString() ?? null, currency: checkout.currency, items, firstName: checkout.firstName }),
             });
         } catch (err) {
             this.logger.warn(`Abandoned checkout ${checkout.id} not raised: ${err instanceof Error ? err.message : err}`);

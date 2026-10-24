@@ -32,6 +32,7 @@ import {
   AUTOMATION_STATUS_CLASS,
   AUTOMATION_STATUS_LABEL,
   MAX_STEPS,
+  ORDER_EVENTS,
   allSteps,
   channelKeyOf,
   countSteps,
@@ -211,6 +212,7 @@ export default function AutomationPage() {
   };
 
   const hasReplyStep = allSteps(steps).some((s) => s.type === "wait_for_reply");
+  const orderTrigger = ORDER_EVENTS.includes(String(steps[0]?.config.event ?? ""));
 
   return (
     <div className="space-y-6">
@@ -419,7 +421,7 @@ export default function AutomationPage() {
         </div>
       )}
 
-      {testing && <TestRunDialog automationId={detail.id} hasReplyStep={hasReplyStep} onClose={() => setTesting(false)} />}
+      {testing && <TestRunDialog automationId={detail.id} hasReplyStep={hasReplyStep} orderTrigger={orderTrigger} onClose={() => setTesting(false)} />}
     </div>
   );
 }

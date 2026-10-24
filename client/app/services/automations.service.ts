@@ -39,7 +39,7 @@ export const automationsService = {
   stats: (id: string) => apiClient.get<AutomationStats>(`/automations/${id}/stats`).then((r) => r.data),
   runs: (id: string, params: { page?: number; status?: AutomationRunStatus }) =>
     apiClient.get<PaginatedResponse<AutomationRunRow>>(`/automations/${id}/runs`, { params }).then((r) => r.data),
-  test: (id: string, data: { text?: string; reply?: string; contactId?: string }) =>
+  test: (id: string, data: { text?: string; reply?: string; contactId?: string; order?: "cod" | "prepaid" }) =>
     apiClient.post<AutomationTestResult>(`/automations/${id}/test`, data).then((r) => r.data),
   posts: (channelId: string, refresh = false) =>
     apiClient

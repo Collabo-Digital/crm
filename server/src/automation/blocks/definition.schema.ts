@@ -344,9 +344,11 @@ export function parseDefinition(input: unknown): StepDef[] {
 /** What a trigger can listen to on each channel. */
 const ORDER_EVENTS = ['order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled'];
 /** Events about one order: its actions and its invoice are available. A paid link is about its order, when it had one. */
-const ORDER_CONTEXT = [...ORDER_EVENTS, 'invoice_issued', 'payment_received'];
+export const ORDER_CONTEXT = [...ORDER_EVENTS, 'invoice_issued', 'payment_received'];
 /** Store events, website sign-ups and sheet rows reach people who may not have written in 24 hours: WhatsApp templates only. */
 const STORE_EVENTS = [...ORDER_CONTEXT, 'checkout_abandoned', 'website_signup', 'sheet_row'];
+/** Triggers whose person may not have written in 24 hours. A webhook can name any number, often a new contact. */
+const TEMPLATE_ONLY_EVENTS = [...STORE_EVENTS, 'webhook'];
 const EVENTS_BY_CHANNEL: Record<z.infer<typeof Channel>, string[]> = {
     instagram: ['comment', 'message', 'mention', 'postback', 'tag_added', 'webhook', 'ad_message'],
     facebook: ['comment', 'message', 'postback', 'tag_added', 'webhook', 'ad_message'],
@@ -459,9 +461,9 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                     push(step.id, 'message_too_long', 'Message too long', `Instagram messages must be under ${IG_MESSAGE_MAX_BYTES} bytes.`);
                 }
                 if (m.product && !m.link) push(step.id, 'link_missing', 'Product link missing', 'Add the link customers should tap to buy this product.');
-                if (STORE_EVENTS.includes(t.event) && channel === 'whatsapp' && !insideReply) {
+                if (TEMPLATE_ONLY_EVENTS.includes(t.event) && channel === 'whatsapp' && !insideReply) {
                     push(step.id, 'template_needed', 'Use an approved template',
-                        'A store message may reach someone who has not written in 24 hours, and WhatsApp then accepts templates only. Send a template, or put this after “Wait for a reply”.');
+                        'This message may reach someone who has not written in 24 hours, and WhatsApp then accepts templates only. Send a template, or put this after “Wait for a reply”.');
                 }
                 if (t.event === 'comment' && channel !== 'whatsapp' && !insideReply) {
                     push(step.id, 'needs_reply_first', 'Send a private reply first',
@@ -536,9 +538,9 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 } else {
                     if (!v.message.trim()) push(step.id, 'message_missing', 'Message is incomplete', 'Write the message before publishing.');
                     else if (!usesLink(v.message)) push(step.id, 'payment_link_unused', 'The link is not in the message', 'Put {{payment.link}} where the link should go.');
-                    if (STORE_EVENTS.includes(t.event) && !insideReply) {
+                    if (TEMPLATE_ONLY_EVENTS.includes(t.event) && !insideReply) {
                         push(step.id, 'template_needed', 'Use an approved template',
-                            'A store message may reach someone who has not written in 24 hours, and WhatsApp then accepts templates only. Send a template, or put this after “Wait for a reply”.');
+                            'This message may reach someone who has not written in 24 hours, and WhatsApp then accepts templates only. Send a template, or put this after “Wait for a reply”.');
                     }
                     checkText(v.message);
                 }
