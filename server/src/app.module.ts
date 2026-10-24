@@ -6,6 +6,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { BullModule } from '@nestjs/bullmq';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
+import type { Response } from 'express';
 import { join } from 'path';
 
 import { AppController } from './app.controller';
@@ -88,6 +89,11 @@ import { DeveloperModule } from './developer/developer.module';
     ServeStaticModule.forRoot({
       rootPath: join(process.cwd(), 'uploads'),
       serveRoot: '/uploads',
+      // The app shows these from another origin; Helmet's same-origin
+      // Cross-Origin-Resource-Policy would make the browser refuse them.
+      serveStaticOptions: {
+        setHeaders: (res: Response) => res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'),
+      },
     }),
     PrismaModule,
     RedisModule,

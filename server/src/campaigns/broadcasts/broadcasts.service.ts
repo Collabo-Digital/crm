@@ -1,5 +1,5 @@
 import { describeSending } from '../../channel/channel-connection.util';
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import {
@@ -30,7 +30,7 @@ import {
     skipReason,
 } from './broadcast-audience';
 import { BroadcastVariables, RecipientContext, parseVariables, resolveValues } from './broadcast-variables';
-import { BROADCAST_QUEUE, BroadcastJobData, startJobId } from './broadcast.queue';
+import { BROADCAST_QUEUE, BroadcastJobData, START_JOB_OPTS, startJobId } from './broadcast.queue';
 
 /// Messaging limit tiers: unique people reachable outside a reply window in a moving 24 hours.
 const TIER_LIMITS: Record<string, number> = { TIER_250: 250, TIER_2K: 2000, TIER_10K: 10_000, TIER_100K: 100_000 };
@@ -361,11 +361,17 @@ export class BroadcastsService {
             where: { id: b.id },
             data: { status: BroadcastStatus.SCHEDULED, scheduledAt: at ?? new Date() },
         });
-        await this.queue.add(
-            'start',
-            { kind: 'start', broadcastId: b.id },
-            { jobId: startJobId(b.id), delay: at ? at.getTime() - Date.now() : 0, attempts: 3, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: true, removeOnFail: { count: 100 } },
-        );
+        try {
+            await this.queue.add(
+                'start',
+                { kind: 'start', broadcastId: b.id },
+                { jobId: startJobId(b.id), delay: at ? at.getTime() - Date.now() : 0, ...START_JOB_OPTS },
+            );
+        } catch (err) {
+            this.logger.error(`Broadcast ${b.id}: could not queue its start: ${err instanceof Error ? err.message : err}`);
+            await this.prisma.broadcast.update({ where: { id: b.id }, data: { status: BroadcastStatus.DRAFT, scheduledAt: null } });
+            throw new ServiceUnavailableException('The broadcast was not scheduled and is still a draft. Try again in a minute.');
+        }
         return this.get(orgId, b.id);
     }
 
@@ -694,7 +700,8 @@ export class BroadcastsService {
         }));
     }
 
-    private async enqueueBatches(b: Pick<Broadcast, 'id' | 'channelId'>, ids: string[]) {
+    /** Also used by BroadcastMaintenance for recipients whose send jobs were lost. */
+    async enqueueBatches(b: Pick<Broadcast, 'id' | 'channelId'>, ids: string[]) {
         const channel = await this.prisma.channel.findUnique({ where: { id: b.channelId }, select: { credentials: true } });
         const coexistence = (channel?.credentials as { isOnBizApp?: boolean } | null)?.isOnBizApp === true;
         const rate = coexistence ? RATE_COEXISTENCE : RATE_DEFAULT;

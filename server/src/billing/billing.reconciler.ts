@@ -12,6 +12,8 @@ import { RazorpayService } from './razorpay.service';
  *      authoritative subscription state from Razorpay's API.
  *   2. Cleanup (daily at 3 AM): cancel + clear Razorpay subscriptions that
  *      were created during onboarding but the user abandoned.
+ *
+ * Both age rows by User.updatedAt, so they write only when something changed.
  */
 @Injectable()
 export class BillingReconciler {
@@ -36,6 +38,8 @@ export class BillingReconciler {
                 },
                 updatedAt: { lt: twoMinAgo },
             },
+            // Newest first: a missed webhook matters most to someone checking out now.
+            orderBy: { updatedAt: 'desc' },
             take: 50,
         });
 
@@ -44,16 +48,9 @@ export class BillingReconciler {
                 const sub = await this.razorpay.fetchSubscription(
                     user.pendingExternalSubscriptionId!,
                 );
-                await this.prisma.user.update({
-                    where: { id: user.id },
-                    data: {
-                        pendingSubscriptionStatus: this.mapStatus(sub.status),
-                        pendingCurrentPeriodEnd: sub.current_end
-                            ? new Date(sub.current_end * 1000)
-                            : null,
-                    },
-                });
-                this.logger.log(`Reconciled user ${user.id} → ${sub.status}`);
+                if (await this.record(user, sub)) {
+                    this.logger.log(`Reconciled user ${user.id} → ${sub.status}`);
+                }
             } catch (err) {
                 this.logger.error(
                     `Reconcile failed for user ${user.id}: ${(err as Error).message}`,
@@ -76,23 +73,30 @@ export class BillingReconciler {
                 },
                 updatedAt: { lt: oneDayAgo },
             },
-            select: { id: true, pendingExternalSubscriptionId: true },
+            select: { id: true, pendingExternalSubscriptionId: true, pendingSubscriptionStatus: true, pendingCurrentPeriodEnd: true },
         });
 
         for (const user of abandoned) {
+            const subId = user.pendingExternalSubscriptionId!;
             try {
-                await this.razorpay.cancelSubscription(
-                    user.pendingExternalSubscriptionId!,
-                );
+                const sub = await this.razorpay.fetchSubscription(subId);
+                // Once the customer has authorised it, money may already be
+                // moving: that one waits for its webhook or for a person.
+                if (sub.status !== 'created') {
+                    await this.record(user, sub);
+                    continue;
+                }
+                await this.razorpay.cancelSubscription(subId);
             } catch (err) {
-                // It might already be cancelled / expired on Razorpay side.
+                // Kept: a subscription that may still be paid must stay findable by its webhook.
                 this.logger.warn(
-                    `Cancel on Razorpay failed for ${user.pendingExternalSubscriptionId}: ${(err as Error).message}`,
+                    `Abandoned subscription ${subId} was not cancelled: ${(err as Error).message}`,
                 );
+                continue;
             }
 
-            await this.prisma.user.update({
-                where: { id: user.id },
+            await this.prisma.user.updateMany({
+                where: { id: user.id, pendingExternalSubscriptionId: subId },
                 data: {
                     pendingBillingPlan: null,
                     pendingBillingInterval: null,
@@ -105,6 +109,24 @@ export class BillingReconciler {
             });
             this.logger.log(`Cleaned up abandoned pending for user ${user.id}`);
         }
+    }
+
+    /** Stores Razorpay's state of a pending subscription, if it changed; true when it wrote. */
+    private async record(
+        user: { id: string; pendingExternalSubscriptionId: string | null; pendingSubscriptionStatus: SubscriptionStatus | null; pendingCurrentPeriodEnd: Date | null },
+        sub: { status: string; current_end: number | null },
+    ): Promise<boolean> {
+        const status = this.mapStatus(sub.status);
+        const periodEnd = sub.current_end ? new Date(sub.current_end * 1000) : null;
+        if (status === user.pendingSubscriptionStatus && periodEnd?.getTime() === user.pendingCurrentPeriodEnd?.getTime()) {
+            return false;
+        }
+        // Conditional, so a webhook that landed meanwhile is not overwritten.
+        const { count } = await this.prisma.user.updateMany({
+            where: { id: user.id, pendingExternalSubscriptionId: user.pendingExternalSubscriptionId, pendingSubscriptionStatus: user.pendingSubscriptionStatus },
+            data: { pendingSubscriptionStatus: status, pendingCurrentPeriodEnd: periodEnd },
+        });
+        return count > 0;
     }
 
     private mapStatus(raw: string): SubscriptionStatus {

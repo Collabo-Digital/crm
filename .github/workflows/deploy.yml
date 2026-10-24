@@ -18,8 +18,34 @@ env:
     IMAGE: ghcr.io/collabo-digital/crm-api
 
 jobs:
-    build:
+    # The image is built only from a commit whose unit tests pass.
+    test:
         if: github.repository == 'Collabo-Digital/crm'
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: server
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                ref: ${{ inputs.ref || github.sha }}
+
+            - uses: actions/setup-node@v4
+              with:
+                node-version: 20
+                cache: npm
+                cache-dependency-path: server/package-lock.json
+
+            - run: npm ci --legacy-peer-deps --no-audit --no-fund
+
+            - run: npx prisma generate
+              env:
+                DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
+
+            - run: npx jest
+
+    build:
+        needs: test
         runs-on: ubuntu-latest
         permissions:
             contents: read

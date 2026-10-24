@@ -389,7 +389,8 @@ Per-account subscription happens at connect time and is undone at disconnect:
   that number (matched the same way as linking, below). A number starting with
   00 is read as international, a trunk 0 after the country code
   ("+91 098…") is dropped, and a number that still starts with 0 is refused.
-  The global rate limit applies.
+  Each hook URL takes 600 calls a minute; past that it answers `429` with a
+  `Retry-After` header (seconds).
 - **“Call a URL” steps** refuse private, loopback, link-local and metadata
   addresses, written as IPv4 or as any IPv6 form that carries one (mapped,
   NAT64, 6to4), both for literal addresses and after DNS resolution, follow no

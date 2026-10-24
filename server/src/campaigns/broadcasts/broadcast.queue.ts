@@ -6,3 +6,5 @@ export type BroadcastJobData =
     | { kind: 'finish'; broadcastId: string; attempt: number };
 
 export const startJobId = (broadcastId: string) => `broadcast-start-${broadcastId}`;
+
+export const START_JOB_OPTS = { attempts: 3, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: true, removeOnFail: { count: 100 } };

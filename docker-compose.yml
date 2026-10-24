@@ -79,9 +79,12 @@ services:
       # Redis
       REDIS_URL: redis://redis:6379
 
-      # App URLs (override these for production)
+      # App URLs (override FRONTEND_URL for production; APP_URL must be set, https)
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
-      APP_URL: ${APP_URL:-http://localhost}
+      APP_URL: ${APP_URL}
+      # Proxy hops in front of this container: 1 behind Cloudflare or another
+      # proxy, 0 when reached directly (must be set)
+      TRUST_PROXY: ${TRUST_PROXY}
 
       # JWT secrets (must be set in .env)
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
@@ -90,7 +93,7 @@ services:
       # Encryption (32 chars exactly)
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
 
-      # Optional integrations
+      # Email (SMTP host, user and password must be set: NODE_ENV is production)
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_SECURE: ${SMTP_SECURE:-false}
@@ -99,6 +102,8 @@ services:
       FROM_EMAIL: ${FROM_EMAIL:-noreply@yourcrm.com}
       FROM_NAME: ${FROM_NAME:-Collabo CRM}
       REPLY_TO_EMAIL: ${REPLY_TO_EMAIL:-}
+
+      # Optional integrations
       SHOPIFY_CLIENT_ID: ${SHOPIFY_CLIENT_ID:-}
       SHOPIFY_CLIENT_SECRET: ${SHOPIFY_CLIENT_SECRET:-}
       META_APP_ID: ${META_APP_ID:-}
@@ -111,12 +116,19 @@ services:
       MESSENGER_WEBHOOK_VERIFY_TOKEN: ${MESSENGER_WEBHOOK_VERIFY_TOKEN:-}
     ports:
       - "${APP_PORT:-80}:80"
+    volumes:
+      # Chat media copied from Meta, and product images uploaded in the CRM;
+      # both must outlive the container.
+      - messaging_media:/app/server/storage/messaging
+      - uploads:/app/server/uploads
     networks:
       - collabo-network
 
 volumes:
   postgres_data:
   redis_data:
+  messaging_media:
+  uploads:
 
 networks:
   collabo-network:
