@@ -366,6 +366,7 @@ model Organization {
   webhookEndpoints       WebhookEndpoint[]
   shopifySegments        ShopifySegment[]
   whatsappGroups         WhatsAppGroup[]
+  whatsappCalls          WhatsAppCall[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -626,6 +627,7 @@ model Channel {
   shopifySegments ShopifySegment[]
 
   whatsappGroups WhatsAppGroup[]
+  whatsappCalls  WhatsAppCall[]
 
   @@index([organizationId, platform])
   @@index([organizationId])
@@ -2113,6 +2115,10 @@ model ChannelContact {
   mutedUntil           DateTime?       @map("muted_until")
   /// A WhatsApp group's chat, not a person: kept out of audiences and the contact list.
   isGroup              Boolean         @default(false) @map("is_group")
+  /// WhatsApp call permission from the person's call_permission_reply:
+  /// temporary, permanent or declined. A temporary one ends at callPermissionUntil.
+  callPermission       String?         @map("call_permission")
+  callPermissionUntil  DateTime?       @map("call_permission_until")
   /// The member or team responsible for this contact.
   ownerUserId          String?         @map("owner_user_id")
   ownerTeamId          String?         @map("owner_team_id")
@@ -2133,6 +2139,7 @@ model ChannelContact {
   consentEvents       ConsentEvent[]
   broadcastRecipients BroadcastRecipient[]
   whatsappGroup       WhatsAppGroup?
+  whatsappCalls       WhatsAppCall[]
 
   @@unique([channelId, externalId])
   @@index([channelId, waId])
@@ -2500,6 +2507,7 @@ model Conversation {
   team         InboxTeam?         @relation(fields: [teamId], references: [id], onDelete: SetNull)
   messages     Message[]
   notes        ConversationNote[]
+  calls        WhatsAppCall[]
 
   @@unique([channelId, contactId])
   @@index([organizationId, status, lastMessageAt])
@@ -3620,4 +3628,61 @@ model WhatsAppGroupJoinRequest {
   @@unique([groupId, externalId])
   @@index([groupId, status])
   @@map("whatsapp_group_join_requests")
+}
+
+// ─── WhatsApp calling (Business Calling API) ────────────────────────────────
+
+enum WhatsAppCallDirection {
+  USER_INITIATED
+  BUSINESS_INITIATED
+}
+
+enum WhatsAppCallStatus {
+  /// A person's call waiting for a teammate, or a business call ringing them.
+  RINGING
+  /// Answered or placed in a browser; the media path is being set up.
+  CONNECTING
+  ACTIVE
+  COMPLETED
+  /// A person's call nobody answered, or a business call they did not pick up.
+  MISSED
+  REJECTED
+  FAILED
+}
+
+/// A WhatsApp voice call answered or placed from a teammate's browser over
+/// WebRTC. The SDPs are kept while the call is set up; the outcome is posted
+/// in the conversation.
+model WhatsAppCall {
+  id              String                @id @default(cuid())
+  organizationId  String                @map("organization_id")
+  channelId       String                @map("channel_id")
+  conversationId  String?               @map("conversation_id")
+  contactId       String?               @map("contact_id")
+  /// Meta's call id (wacid…).
+  externalId      String?               @map("external_id")
+  direction       WhatsAppCallDirection
+  status          WhatsAppCallStatus    @default(RINGING)
+  /// Meta's offer for a person's call; the browser's for a business call.
+  offerSdp        String?               @map("offer_sdp")
+  answerSdp       String?               @map("answer_sdp")
+  /// The teammate who answered or placed it.
+  agentUserId     String?               @map("agent_user_id")
+  startedAt       DateTime              @default(now()) @map("started_at")
+  answeredAt      DateTime?             @map("answered_at")
+  endedAt         DateTime?             @map("ended_at")
+  durationSeconds Int?                  @map("duration_seconds")
+  failure         String?
+  createdAt       DateTime              @default(now()) @map("created_at")
+  updatedAt       DateTime              @updatedAt @map("updated_at")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel         @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  conversation Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  contact      ChannelContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@unique([channelId, externalId])
+  @@index([organizationId, status])
+  @@index([conversationId])
+  @@map("whatsapp_calls")
 }

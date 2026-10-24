@@ -250,7 +250,7 @@ with `INSTAGRAM_APP_SECRET`, which is also accepted on the Instagram endpoint).
 
 | Product (dashboard) | Callback URL | Verify token | Fields |
 |---|---|---|---|
-| WhatsApp → Configuration | `{APP_URL}/api/v1/webhooks/whatsapp` | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | messages, smb_message_echoes, history, smb_app_state_sync, account_update, message_template_status_update, message_template_quality_update, template_category_update, message_template_components_update, phone_number_quality_update, phone_number_name_update, business_capability_update, user_preferences, group_lifecycle_update, group_participants_update, group_settings_update, group_status_update |
+| WhatsApp → Configuration | `{APP_URL}/api/v1/webhooks/whatsapp` | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | messages, smb_message_echoes, history, smb_app_state_sync, account_update, message_template_status_update, message_template_quality_update, template_category_update, message_template_components_update, phone_number_quality_update, phone_number_name_update, business_capability_update, user_preferences, group_lifecycle_update, group_participants_update, group_settings_update, group_status_update, calls |
 | Messenger → Settings | `{APP_URL}/api/v1/webhooks/messenger` | `MESSENGER_WEBHOOK_VERIFY_TOKEN` | messages, message_echoes, message_deliveries, message_reads, message_reactions, message_edits, messaging_postbacks, messaging_referrals, messaging_handovers, standby, feed |
 | Instagram | `{APP_URL}/api/v1/webhooks/instagram` | `INSTAGRAM_WEBHOOK_VERIFY_TOKEN` | messages, messaging_postbacks, messaging_seen, message_reactions, message_edit, messaging_referral, messaging_handover, standby, comments, mentions |
 
@@ -698,6 +698,52 @@ number, for VIP drops, workshops or order help.
   `group_participants_update`, `group_settings_update` and
   `group_status_update` (table above). Meta's "group invite link" utility
   template (template library) is not sent from Collabo yet.
+
+### WhatsApp calls (call dock and the chat's call button)
+
+Meta's Business Calling API, answered and placed in a teammate's browser.
+Collabo relays the signalling; the audio goes over WebRTC between the browser
+and Meta (Opus, one audio track). Meta gives no STUN or TURN servers, so the
+teammate's network must allow outbound UDP.
+
+- **Who can:** Cloud API numbers with a daily messaging limit of at least
+  2,000. Never a number shared with the WhatsApp Business app: Meta keeps
+  voice calls in the app there, and Collabo says so. Owners and admins switch
+  calling on in Settings → Inbox → WhatsApp calls (`POST
+  /{phone_number_id}/settings`: `calling.status`, `call_icon_visibility`
+  `DEFAULT` or `DISABLE_ALL`, `callback_permission_status`); Meta warns that
+  phones can take up to 7 days to show a change. Owners, admins, managers and
+  agents take and place calls; viewers cannot. One-to-one WhatsApp chats only.
+- **A person calls:** the `calls` webhook (`connect`, Meta's SDP offer) rings
+  in the call dock on every page, for everyone in the inbox, for the 30 to 60
+  seconds Meta allows. The first teammate to answer takes it: the browser
+  makes its SDP answer with every ICE candidate in it (no trickle), Collabo
+  sends `pre_accept` and then `accept` with the same answer, and the
+  microphone stays silent until the accept is confirmed. Decline sends
+  `reject`. The call opens the 24-hour reply window. Meta's `terminate`
+  webhook ends it; an unanswered call is recorded as missed. The chat gets a
+  note ("Incoming WhatsApp call · 1 min 35 s", "Missed WhatsApp call", …).
+- **The business calls:** only someone who allowed it. The call button checks
+  `GET /{phone_number_id}/call_permissions`; without permission it offers to
+  ask with an interactive `call_permission_request` in the chat (inside the
+  reply window; Meta allows 1 request in 24 hours and 2 in 7 days, reset by a
+  connected call, and charges it as a message). The answer
+  (`call_permission_reply`) is kept on the contact: temporary (7 days) or
+  permanent. With callback permission on, a person who calls the business
+  grants a temporary permission. WhatsApp's own grants and withdrawals
+  (`response_source: automatic`) are noted in the chat, not taken as messages
+  from the person. The call goes out with the browser's SDP offer (`action:
+  connect`); Meta's answer, then `RINGING`, `ACCEPTED` and `REJECTED`
+  statuses, come back on the `calls` webhook. Picking up opens the reply
+  window. Meta revokes a permission after 4 unanswered calls in a
+  row, and does not offer business calls from numbers in the United States,
+  Canada, Egypt, Vietnam or Nigeria.
+- **Cost:** calls people place are free. Business calls are billed by Meta in
+  six-second pulses, by the called number's country and the month's volume
+  tier.
+- **Webhook field:** subscribe the app to `calls` (table above). Call hours,
+  SIP, video and the permission-request template (for outside the reply
+  window) are not set from Collabo yet.
 
 ### Messaging analytics (Analytics → Messaging)
 

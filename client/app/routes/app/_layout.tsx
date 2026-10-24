@@ -1,4 +1,5 @@
 import { Outlet, Navigate, useLocation, useMatches } from "react-router";
+import { CallDock } from "~/components/app/calls/call-dock";
 import { Navbar } from "~/components/app/navbar";
 import { ImpersonationBanner } from "~/components/app/impersonation-banner";
 import { AuthGuard } from "~/components/guards/auth-guard";
@@ -96,6 +97,8 @@ export default function AppLayout() {
         >
           {redirectTo ? <Navigate to={redirectTo} replace /> : <Outlet />}
         </main>
+        {/* WhatsApp calls ring on every page for members who work the inbox. */}
+        {canAccess("/inbox") && <CallDock />}
       </div>
     </AuthGuard>
   );

@@ -3,6 +3,7 @@ import { Loader2, Paperclip, Pencil, Plus, Trash2, Users, X, Zap } from "lucide-
 
 import { SectionCard } from "~/components/app/section-card";
 import { InboxRulesSection } from "~/components/app/settings/inbox-rules-section";
+import { CallingCard } from "~/components/app/settings/calling-card";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
@@ -270,6 +271,8 @@ export function InboxSettingsTab() {
       </div>
 
       <InboxRulesSection canManage={canManage} members={members.map((m) => ({ id: m.id, name: m.name }))} teams={teamRefs} />
+
+      {canManage && <CallingCard />}
 
       <SectionCard
         title="Teams"

@@ -296,10 +296,10 @@ export class MessageIngestService {
     }
 
     /**
-     * A notice in a group's chat (someone joined, left, was removed). It does
-     * not open the reply window or count as unread.
+     * A notice in a contact's chat: someone joined or left a group, a call
+     * ended. It does not open the reply window or count as unread.
      */
-    async recordGroupNotice(channel: IngestChannel, contactId: string, text: string, at: Date): Promise<void> {
+    async recordNotice(channel: IngestChannel, contactId: string, text: string, at: Date): Promise<void> {
         const conversation = await this.prisma.conversation.findUnique({ where: { channelId_contactId: { channelId: channel.id, contactId } }, select: { id: true } });
         if (!conversation) return;
         const message = await this.prisma.message.create({

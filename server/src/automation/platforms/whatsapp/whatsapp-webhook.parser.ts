@@ -96,6 +96,31 @@ export interface WaGroupChange {
 
 export type WaGroupField = 'group_lifecycle_update' | 'group_participants_update' | 'group_settings_update' | 'group_status_update';
 
+/** One entry of a `calls` webhook (Business Calling API). */
+export interface WaCall {
+    /** wacid… */
+    id: string;
+    /** connect or terminate. */
+    event: string;
+    /** USER_INITIATED or BUSINESS_INITIATED. */
+    direction: string | null;
+    timestamp: Date | null;
+    /** The person on the other end, whichever side placed the call. */
+    user: WaContactRef | null;
+    /** offer (a person's call) or answer (to the business's offer). */
+    sdpType: string | null;
+    sdp: string | null;
+    /** terminate: COMPLETED or FAILED. */
+    status: string | null;
+    /** terminate, when the call was answered. */
+    startTime: Date | null;
+    endTime: Date | null;
+    duration: number | null;
+    bizOpaqueCallbackData: string | null;
+    errors: WaError[];
+    raw: Record<string, unknown>;
+}
+
 /** WhatsApp Pay: a payment on an `order_details` bill, from the gateway Meta is linked to. */
 export interface WaPayment {
     referenceId: string;
@@ -162,6 +187,9 @@ export type WaEvent =
     | (Base & { kind: 'number_update'; field: string; event: string | null; value: Record<string, unknown> })
     | (Base & { kind: 'value_errors'; errors: WaError[] })
     | (Base & { kind: 'group'; field: WaGroupField; change: WaGroupChange })
+    | (Base & { kind: 'call'; call: WaCall })
+    /** A business call's progress: RINGING, ACCEPTED or REJECTED. */
+    | (Base & { kind: 'call_status'; callId: string; status: string; at: Date | null; recipient: WaContactRef })
     | (Base & { kind: 'other'; field: string; value: Record<string, unknown> });
 
 type Obj = Record<string, unknown>;
@@ -243,6 +271,7 @@ export function waMessageText(m: Obj): string | null {
             const kind = str(body?.type);
             const reply = kind ? obj(body?.[kind]) : null;
             if (kind === 'nfm_reply') return str(reply?.body);
+            if (kind === 'call_permission_reply') return reply?.response === 'accept' ? 'Allowed calls from the business' : 'Declined calls from the business';
             return str(reply?.title);
         }
         case 'button':
@@ -338,6 +367,34 @@ const participantIds = (v: unknown) => arr(v).map((p) => str(p.wa_id) ?? str(p.i
 function changedSetting(v: unknown): string | null {
     const setting = obj(v);
     return setting && setting.update_successful !== false ? str(setting.text) : null;
+}
+
+function toCall(c: Obj, index: Map<string, Obj>): WaCall | null {
+    const id = str(c.id);
+    const event = str(c.event);
+    if (!id || !event) return null;
+    const direction = str(c.direction);
+    const session = obj(c.session);
+    // Meta's older samples carry the SDP in connection.webrtc.sdp.
+    const legacy = obj(obj(c.connection)?.webrtc);
+    return {
+        id,
+        event,
+        direction,
+        timestamp: seconds(c.timestamp),
+        user: direction === 'BUSINESS_INITIATED'
+            ? contactRef(str(c.to), str(c.to_user_id), index)
+            : contactRef(str(c.from), str(c.from_user_id), index),
+        sdpType: str(session?.sdp_type),
+        sdp: str(session?.sdp) ?? str(legacy?.sdp),
+        status: str(c.status),
+        startTime: seconds(c.start_time),
+        endTime: seconds(c.end_time),
+        duration: num(c.duration),
+        bizOpaqueCallbackData: str(c.biz_opaque_callback_data),
+        errors: errorsOf(c.errors),
+        raw: c,
+    };
 }
 
 function toGroupChange(g: Obj): WaGroupChange | null {
@@ -551,6 +608,21 @@ function parseChange(field: string, value: Obj, base: Base): WaEvent[] {
                 event: str(value.event) ?? str(value.new_quality_score) ?? str(value.new_category),
                 value,
             });
+            return out;
+
+        case 'calls':
+            for (const c of arr(value.calls)) {
+                const call = toCall(c, index);
+                if (call) out.push({ ...base, kind: 'call', call });
+            }
+            // A business call's progress comes on this field too, as statuses of type call.
+            for (const s of arr(value.statuses)) {
+                const callId = str(s.id);
+                const status = str(s.status);
+                if (callId && status) {
+                    out.push({ ...base, kind: 'call_status', callId, status, at: seconds(s.timestamp), recipient: contactRef(str(s.recipient_id), str(s.recipient_user_id), index) });
+                }
+            }
             return out;
 
         case 'group_lifecycle_update':

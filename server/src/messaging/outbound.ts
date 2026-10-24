@@ -81,6 +81,8 @@ export type OutboundPayload =
     }
     /** WhatsApp: 2 to 10 product cards to swipe through, all from one catalog. */
     | { type: 'product_carousel'; catalogId: string; text: string; productRetailerIds: string[] }
+    /** WhatsApp: asks the person to allow calls from the business; only the text can be set. */
+    | { type: 'call_permission_request'; text: string }
     /** WhatsApp: a button that opens the whole catalog. */
     | { type: 'catalog'; text: string; footer?: string; thumbnailRetailerId?: string }
     /**
@@ -151,6 +153,9 @@ export function checkSend(input: GateInput): GateResult {
     if (shape) return shape;
     if (channel.onBusinessApp && (payload.type === 'product' || payload.type === 'product_list' || payload.type === 'product_carousel' || payload.type === 'catalog')) {
         return refuse('unsupported_on_platform', 'Products cannot be sent from a number shared with the WhatsApp Business app. Share a link instead.');
+    }
+    if (channel.onBusinessApp && payload.type === 'call_permission_request') {
+        return refuse('unsupported_on_platform', 'Calls are not available on a number shared with the WhatsApp Business app.');
     }
 
     if (payload.type === 'template') {
@@ -226,6 +231,10 @@ function checkShape(platform: ChannelPlatform, payload: OutboundPayload): GateRe
             if (!payload.header.trim() || !payload.text.trim()) return refuse('invalid_payload', 'A product list needs a header and a message.');
             return null;
         }
+        case 'call_permission_request':
+            if (!wa) return refuse('unsupported_on_platform', 'Calls are on WhatsApp only.');
+            if (!payload.text.trim() || payload.text.length > 1024) return refuse('invalid_payload', 'Write a message of up to 1,024 characters.');
+            return null;
         case 'product_carousel':
             if (!wa) return refuse('unsupported_on_platform', 'Products from the catalog can be sent on WhatsApp only.');
             if (payload.productRetailerIds.length < 2 || payload.productRetailerIds.length > 10) return refuse('invalid_payload', 'Product cards take 2 to 10 products.');
@@ -351,6 +360,12 @@ export function buildWhatsAppBody(
                         })),
                     },
                 },
+            };
+        case 'call_permission_request':
+            return {
+                ...base,
+                type: 'interactive',
+                interactive: { type: 'call_permission_request', action: { name: 'call_permission_request' }, body: { text: payload.text } },
             };
         case 'product_carousel':
             return {
@@ -498,6 +513,7 @@ export function outboundText(payload: OutboundPayload): string | null {
         case 'product_list':
             return `${payload.header}\n${payload.text}`;
         case 'product_carousel':
+        case 'call_permission_request':
             return payload.text;
         case 'catalog':
             return payload.text;

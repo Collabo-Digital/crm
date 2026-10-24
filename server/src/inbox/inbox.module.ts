@@ -17,16 +17,18 @@ import { QuickReplyService } from './quick-reply.service';
 import { InboxMaintenance } from './inbox.maintenance';
 import { InboxSettingsService } from './inbox-settings.service';
 import { InboxRulesService } from './inbox-rules.service';
+import { WhatsAppCallsController } from './calls/whatsapp-calls.controller';
+import { WhatsAppCallsService } from './calls/whatsapp-calls.service';
 import { WhatsAppGroupsController } from './groups/whatsapp-groups.controller';
 import { WhatsAppGroupsService } from './groups/whatsapp-groups.service';
 
 @Module({
     imports: [ChannelModule, MessagingModule, CampaignsModule, CommerceModule, PaymentsModule],
-    controllers: [InboxController, InboxContactsController, InboxWorkspaceController, InboxMediaController, WhatsAppGroupsController],
+    controllers: [InboxController, InboxContactsController, InboxWorkspaceController, InboxMediaController, WhatsAppGroupsController, WhatsAppCallsController],
     providers: [
         InboxService, InboxContactsService, ContactImportService, InboxTeamService, InboxViewService, QuickReplyService, InboxMaintenance,
-        InboxSettingsService, InboxRulesService, WhatsAppGroupsService,
+        InboxSettingsService, InboxRulesService, WhatsAppGroupsService, WhatsAppCallsService,
     ],
-    exports: [InboxTeamService, InboxSettingsService, InboxRulesService, WhatsAppGroupsService],
+    exports: [InboxTeamService, InboxSettingsService, InboxRulesService, WhatsAppGroupsService, WhatsAppCallsService],
 })
 export class InboxModule { }

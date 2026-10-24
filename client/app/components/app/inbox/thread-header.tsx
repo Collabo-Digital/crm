@@ -1,5 +1,6 @@
 import { ArrowLeft, Check, ChevronDown, Clock, PanelRight, RotateCcw, UserPlus, Users } from "lucide-react";
 
+import { CallButton } from "~/components/app/calls/call-button";
 import { ChannelBadge } from "~/components/app/channel-badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -161,6 +162,10 @@ export function ThreadHeader({
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
+        )}
+
+        {canReply && conversation.platform === "WHATSAPP" && !contact.isGroup && !contact.blockedAt && (
+          <CallButton conversationId={conversation.id} name={contact.name} />
         )}
 
         {!isClosed && canReply && (

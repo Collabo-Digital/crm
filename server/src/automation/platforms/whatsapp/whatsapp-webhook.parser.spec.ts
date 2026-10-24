@@ -270,3 +270,35 @@ describe('WhatsApp groups', () => {
         ]);
     });
 });
+
+describe('WhatsApp calls', () => {
+    it('reads a person’s call with Meta’s SDP offer, and how it ended', () => {
+        const calls = ofKind(parseWhatsAppDelivery(fixture('wa-calls.json')), 'call').map((e) => e.call);
+        expect(calls[0]).toMatchObject({ id: 'wacid.USER1', event: 'connect', direction: 'USER_INITIATED', sdpType: 'offer', user: { waId: '919811100160', profileName: 'Riya Menon' } });
+        expect(calls[0].sdp).toContain('a=ice-lite');
+        expect(calls[1]).toMatchObject({ event: 'terminate', status: 'COMPLETED', duration: 180 });
+        expect(calls[1].startTime?.toISOString()).toBe(new Date(1761300010 * 1000).toISOString());
+    });
+
+    it('reads Meta’s answer to a business call, with the person as the other end', () => {
+        const calls = ofKind(parseWhatsAppDelivery(fixture('wa-calls.json')), 'call').map((e) => e.call);
+        expect(calls[2]).toMatchObject({ id: 'wacid.BIZ1', direction: 'BUSINESS_INITIATED', sdpType: 'answer', user: { waId: '919811100160' } });
+        expect(calls[3]).toMatchObject({ status: 'FAILED', errors: [{ code: 138001, details: 'The person is not reachable.' }] });
+    });
+
+    it('reads a business call’s ringing, answer and rejection from the calls field, apart from message statuses', () => {
+        const events = parseWhatsAppDelivery(fixture('wa-call-statuses.json'));
+        expect(ofKind(events, 'call_status').map((e) => [e.callId, e.status])).toEqual([
+            ['wacid.BIZ1', 'RINGING'],
+            ['wacid.BIZ1', 'ACCEPTED'],
+            ['wacid.BIZ3', 'REJECTED'],
+        ]);
+        expect(ofKind(events, 'status')).toEqual([]);
+    });
+
+    it('reads the answer to a call permission request as a message', () => {
+        const [e] = ofKind(parseWhatsAppDelivery(fixture('wa-call-statuses.json')), 'message');
+        expect(e.message).toMatchObject({ type: 'interactive', text: 'Allowed calls from the business' });
+    });
+});
+

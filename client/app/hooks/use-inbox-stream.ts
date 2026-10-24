@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "~/lib/api-client";
+import { callKeys } from "~/hooks/use-calls";
 import { inboxKeys } from "~/hooks/use-inbox-queries";
 import { useAuthStore } from "~/stores/auth.store";
 import type { InboxStreamEvent } from "~/types/api";
@@ -50,6 +51,8 @@ export function useInboxStream(enabled = true): boolean {
     };
 
     const handle = (event: InboxStreamEvent) => {
+      // A call rang, was answered or ended: the call dock checks at once.
+      if (event.type === "call.updated") void queryClient.invalidateQueries({ queryKey: callKeys.live });
       changedConversations.add(event.conversationId);
       if (event.type !== "conversation.updated") changedThreads.add(event.conversationId);
       flushTimer ??= setTimeout(flush, FLUSH_MS);

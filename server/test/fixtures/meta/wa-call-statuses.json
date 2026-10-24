@@ -1,0 +1,79 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "field": "calls",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "statuses": [
+              {
+                "id": "wacid.BIZ1",
+                "timestamp": "1761301001",
+                "type": "call",
+                "recipient_id": "919811100160",
+                "status": "RINGING"
+              },
+              {
+                "id": "wacid.BIZ1",
+                "timestamp": "1761301005",
+                "type": "call",
+                "recipient_id": "919811100160",
+                "status": "ACCEPTED",
+                "biz_opaque_callback_data": "agent-42"
+              },
+              {
+                "id": "wacid.BIZ3",
+                "timestamp": "1761301100",
+                "type": "call",
+                "recipient_id": "919811100160",
+                "status": "REJECTED"
+              }
+            ]
+          }
+        },
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Riya Menon"
+                },
+                "wa_id": "919811100160"
+              }
+            ],
+            "messages": [
+              {
+                "from": "919811100160",
+                "id": "wamid.PERM1",
+                "timestamp": "1761300500",
+                "type": "interactive",
+                "interactive": {
+                  "type": "call_permission_reply",
+                  "call_permission_reply": {
+                    "response": "accept",
+                    "is_permanent": false,
+                    "expiration_timestamp": 1761905300,
+                    "response_source": "user_action"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

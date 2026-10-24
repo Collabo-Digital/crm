@@ -12,6 +12,7 @@ import { WhatsAppPayService } from '../../../payments/whatsapp-pay.service';
 import { GrowthService } from '../../../growth/growth.service';
 import { AdsService } from '../../../ads/ads.service';
 import { WhatsAppGroupsService } from '../../../inbox/groups/whatsapp-groups.service';
+import { WhatsAppCallsService } from '../../../inbox/calls/whatsapp-calls.service';
 
 export interface WhatsAppChannelRef {
     id: string;
@@ -64,6 +65,7 @@ export class WhatsAppWebhookHandler {
         private readonly growth: GrowthService,
         private readonly ads: AdsService,
         private readonly groups: WhatsAppGroupsService,
+        private readonly calls: WhatsAppCallsService,
     ) { }
 
     async handle(events: WaEvent[]): Promise<void> {
@@ -148,6 +150,12 @@ export class WhatsAppWebhookHandler {
             case 'group':
                 await this.groups.onChange(channel, e.field, e.change);
                 return;
+            case 'call':
+                await this.calls.onCall(channel, e.call);
+                return;
+            case 'call_status':
+                await this.calls.onStatus(channel, e.callId, e.status, e.at);
+                return;
             default:
                 return;
         }
@@ -196,6 +204,12 @@ export class WhatsAppWebhookHandler {
             }
         }
         if (!from || (!from.userId && !from.waId)) return;
+        const permissionReply = raw.interactive as { type?: string; call_permission_reply?: { response_source?: string } } | undefined;
+        // WhatsApp's own grant (the person called in) or withdrawal (unanswered calls) is not a message from the person.
+        if (permissionReply?.type === 'call_permission_reply' && permissionReply.call_permission_reply?.response_source === 'automatic') {
+            if (!imported) await this.calls.onPermissionReply(channel, from, raw, m.timestamp);
+            return;
+        }
         const button = raw.button as { payload?: string } | undefined;
         const recorded = await this.ingest.recordInbound({
             channel,
@@ -213,6 +227,10 @@ export class WhatsAppWebhookHandler {
         });
         // A chat opened from a chat link carries its reference.
         if (recorded && !imported && m.type === 'text') await this.growth.attribute(channel.id, recorded.conversationId, m.text);
+        // The person's answer to "may we call you?".
+        if (recorded && !imported && permissionReply?.type === 'call_permission_reply') {
+            await this.calls.onPermissionReply(channel, from, raw, m.timestamp);
+        }
         if (recorded && !imported && m.referral) {
             await this.ads.captureReferral(channel, { conversationId: recorded.conversationId, messageId: recorded.messageId, referral: m.referral, at: m.timestamp });
         }

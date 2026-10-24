@@ -244,3 +244,22 @@ describe('WhatsApp groups', () => {
         });
     });
 });
+
+describe('call permission requests', () => {
+    const ask = { type: 'call_permission_request' as const, text: 'May we call you about your order?' };
+
+    it('go as Meta’s interactive call_permission_request, WhatsApp only', () => {
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: ask }).ok).toBe(true);
+        expect(gate({ platform: ChannelPlatform.INSTAGRAM, payload: ask })).toMatchObject({ ok: false, code: 'unsupported_on_platform' });
+        expect(
+            gate({ platform: ChannelPlatform.WHATSAPP, payload: ask, channel: { status: ChannelStatus.CONNECTED, isEnabled: true, sendsPaused: false, onBusinessApp: true } }),
+        ).toMatchObject({ ok: false, code: 'unsupported_on_platform' });
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: ask, group: { closed: null } })).toMatchObject({ ok: false, code: 'unsupported_on_platform' });
+        expect(buildWhatsAppBody(ask, { waId: '919800000001', userId: null }).interactive).toEqual({
+            type: 'call_permission_request',
+            action: { name: 'call_permission_request' },
+            body: { text: 'May we call you about your order?' },
+        });
+    });
+});
+

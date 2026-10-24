@@ -3616,6 +3616,46 @@ export interface InboxConversation {
   window: ReplyWindowState;
 }
 
+// ─── WhatsApp calls ─────────────────────────────────────────────────────────
+
+export type WhatsAppCallStatus = "RINGING" | "CONNECTING" | "ACTIVE" | "COMPLETED" | "MISSED" | "REJECTED" | "FAILED";
+
+export interface WhatsAppCallView {
+  id: string;
+  conversationId: string | null;
+  direction: "USER_INITIATED" | "BUSINESS_INITIATED";
+  status: WhatsAppCallStatus;
+  contactName: string;
+  phone: string | null;
+  agentUserId: string | null;
+  startedAt: string;
+  answeredAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number | null;
+  failure: string | null;
+  /** Meta's answer to a business call has arrived. */
+  hasAnswer: boolean;
+}
+
+export interface WhatsAppCallDetail extends WhatsAppCallView {
+  offerSdp: string | null;
+  answerSdp: string | null;
+}
+
+export interface CallPermission {
+  status: string;
+  canCall: boolean;
+  canAsk: boolean;
+}
+
+export interface CallSettings {
+  available: boolean;
+  reason: string | null;
+  enabled: boolean;
+  showCallButton: boolean;
+  callbackPermission: boolean;
+}
+
 // ─── WhatsApp groups ────────────────────────────────────────────────────────
 
 export type WhatsAppGroupStatus = "CREATING" | "ACTIVE" | "SUSPENDED" | "DELETING" | "DELETED" | "FAILED";
@@ -4010,7 +4050,8 @@ export type InboxStreamEvent =
   | { type: "conversation.updated"; conversationId: string }
   | { type: "message.created"; conversationId: string; messageId: string }
   | { type: "message.updated"; conversationId: string; messageId: string }
-  | { type: "note.created"; conversationId: string; noteId: string };
+  | { type: "note.created"; conversationId: string; noteId: string }
+  | { type: "call.updated"; conversationId: string; callId: string };
 
 // ─── Campaign Types ─────────────────────────────────────────────────────────
 // Mirrors server/src/campaigns.

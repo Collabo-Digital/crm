@@ -344,7 +344,7 @@ export class WhatsAppGroupsService {
                 }
                 await this.prisma.whatsAppGroup.update({ where: { id: group.id }, data: { status: WhatsAppGroupStatus.DELETED, statusReason: null } });
                 if (group.contactId) {
-                    await this.ingest.recordGroupNotice(channel, group.contactId, 'The group was deleted. Everyone, your business included, was removed.', at);
+                    await this.ingest.recordNotice(channel, group.contactId, 'The group was deleted. Everyone, your business included, was removed.', at);
                     await this.prisma.conversation.updateMany({
                         where: { contactId: group.contactId },
                         data: { status: ConversationStatus.CLOSED, closedAt: at, awaitingReplySince: null },
@@ -366,7 +366,7 @@ export class WhatsAppGroupsService {
                         data: { status: 'APPROVED', decidedAt: at },
                     });
                     const p = await this.prisma.whatsAppGroupParticipant.findUnique({ where: { groupId_waId: { groupId: group.id, waId } }, select: { name: true } });
-                    if (group.contactId) await this.ingest.recordGroupNotice(channel, group.contactId, `${participantLabel(waId, p?.name)} joined with the invite link.`, at);
+                    if (group.contactId) await this.ingest.recordNotice(channel, group.contactId, `${participantLabel(waId, p?.name)} joined with the invite link.`, at);
                 }
                 await this.recount(group.id);
                 return;
@@ -379,7 +379,7 @@ export class WhatsAppGroupsService {
                     if (p) await this.prisma.whatsAppGroupParticipant.update({ where: { id: p.id }, data: { leftAt: at, leftBy: change.initiatedBy } });
                     if (group.contactId) {
                         const who = participantLabel(waId, p?.name);
-                        await this.ingest.recordGroupNotice(channel, group.contactId, change.initiatedBy === 'business' ? `${who} was removed from the group.` : `${who} left the group.`, at);
+                        await this.ingest.recordNotice(channel, group.contactId, change.initiatedBy === 'business' ? `${who} was removed from the group.` : `${who} left the group.`, at);
                     }
                 }
                 if (change.failed.length && failure) {
@@ -421,7 +421,7 @@ export class WhatsAppGroupsService {
                 const suspended = change.type === 'group_suspend';
                 await this.prisma.whatsAppGroup.update({ where: { id: group.id }, data: { status: suspended ? WhatsAppGroupStatus.SUSPENDED : WhatsAppGroupStatus.ACTIVE } });
                 if (group.contactId) {
-                    await this.ingest.recordGroupNotice(channel, group.contactId, suspended ? 'WhatsApp suspended the group. It cannot be messaged until the suspension is lifted.' : 'WhatsApp lifted the group’s suspension.', at);
+                    await this.ingest.recordNotice(channel, group.contactId, suspended ? 'WhatsApp suspended the group. It cannot be messaged until the suspension is lifted.' : 'WhatsApp lifted the group’s suspension.', at);
                 }
                 return;
             }
@@ -525,7 +525,7 @@ export class WhatsAppGroupsService {
             update: {},
         });
         const updated = await this.prisma.whatsAppGroup.update({ where: { id: group.id }, data: { contactId: contact.id } });
-        await this.ingest.recordGroupNotice(channel, contact.id, 'Group created. Share the invite link to bring people in; a template starts the chat until someone writes.', at);
+        await this.ingest.recordNotice(channel, contact.id, 'Group created. Share the invite link to bring people in; a template starts the chat until someone writes.', at);
         this.events.publish(channel.organizationId, { type: 'conversation.updated', conversationId: conversation.id });
         return updated;
     }

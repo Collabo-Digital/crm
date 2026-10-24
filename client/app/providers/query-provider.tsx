@@ -12,7 +12,8 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       {children}
-      {import.meta.env.DEV && desktop && <ReactQueryDevtools initialIsOpen={false} />}
+      {/* Bottom left: the call dock sits in the bottom-right corner. */}
+      {import.meta.env.DEV && desktop && <ReactQueryDevtools initialIsOpen={false} buttonPosition="bottom-left" />}
     </QueryClientProvider>
   );
 }

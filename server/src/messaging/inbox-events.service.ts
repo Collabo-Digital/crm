@@ -8,7 +8,8 @@ export type InboxEvent =
     | { type: 'conversation.updated'; conversationId: string }
     | { type: 'message.created'; conversationId: string; messageId: string }
     | { type: 'message.updated'; conversationId: string; messageId: string }
-    | { type: 'note.created'; conversationId: string; noteId: string };
+    | { type: 'note.created'; conversationId: string; noteId: string }
+    | { type: 'call.updated'; conversationId: string; callId: string };
 
 const channelFor = (orgId: string) => `crm:inbox:${orgId}`;
 
