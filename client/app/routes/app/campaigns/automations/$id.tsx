@@ -56,6 +56,10 @@ const ONCE: Array<[NonNullable<AutomationSettings["oncePerContact"]>, string, st
   ["never", "Every time", "Every matching message or comment starts it."],
 ];
 
+/** What a store trigger is about; each one starts the automation once (the server counts it so). */
+const SUBJECT: Record<string, string> = { cart: "cart", checkout_abandoned: "checkout", invoice_issued: "invoice", payment_received: "payment" };
+const subjectOf = (event: unknown) => (typeof event !== "string" ? null : event.startsWith("order_") ? "order" : (SUBJECT[event] ?? null));
+
 /** The builder: the flow, the selected step's form, and how it has been running. */
 export default function AutomationPage() {
   const { id } = useParams();
@@ -138,6 +142,15 @@ export default function AutomationPage() {
   if (isError) return <p className="text-body text-muted-foreground">This automation could not be loaded.</p>;
   if (isLoading || !detail) return <Skeleton className="h-[32rem] w-full rounded-xl" />;
 
+  const subject = subjectOf(steps[0]?.config.event);
+  const onceOptions: typeof ONCE = subject
+    ? [
+        ["ever", `Once per ${subject}`, `Each ${subject} starts it one time, so a returning customer’s next ${subject} does too.`],
+        ["perDay", "Once a day", "At most one run per person in 24 hours."],
+      ]
+    : ONCE;
+  // On a store trigger "every time" is the same as once per order, cart or checkout.
+  const once = subject && settings.oncePerContact === "never" ? "ever" : settings.oncePerContact;
   const ctx: EditorContext = {
     channel,
     channelId: detail.channel?.id ?? null,
@@ -368,13 +381,13 @@ export default function AutomationPage() {
             </SectionCard>
             <SectionCard title="The same person can go through it">
               <div className="space-y-1 p-3">
-                {ONCE.map(([value, label, hint]) => (
-                  <label key={value} className={cn("flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5", settings.oncePerContact === value ? "bg-brand/10" : "hover:bg-muted")}>
+                {onceOptions.map(([value, label, hint]) => (
+                  <label key={value} className={cn("flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5", once === value ? "bg-brand/10" : "hover:bg-muted")}>
                     <input
                       type="radio"
                       name="once"
                       className="mt-1 accent-[var(--color-brand)]"
-                      checked={settings.oncePerContact === value}
+                      checked={once === value}
                       disabled={readOnly}
                       onChange={() => setSettings({ oncePerContact: value })}
                     />

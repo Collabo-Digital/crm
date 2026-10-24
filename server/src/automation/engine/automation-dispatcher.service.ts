@@ -13,6 +13,13 @@ const REPLY_EVENTS = new Set(['whatsapp.message', 'instagram.message', 'facebook
 /** Events where only the best-matching automation starts, so one message never gets several answers. */
 const ONE_WINNER = new Set(['whatsapp.message', 'whatsapp.cart', 'instagram.message', 'facebook.message', 'instagram.comment', 'facebook.comment', 'instagram.postback', 'facebook.postback', 'instagram.mention']);
 const DAY = 24 * 3600_000;
+/**
+ * Store events, each about one order, invoice, payment, cart or checkout and
+ * raised once for it. "Once" on these means once for that thing, which the
+ * event's own uniqueness ensures: a returning buyer's next order still runs.
+ */
+const ONE_PER_SUBJECT = (eventType: string) =>
+    eventType.startsWith('crm.order.') || ['crm.invoice.issued', 'crm.payment.received', 'crm.checkout.abandoned', 'whatsapp.cart'].includes(eventType);
 
 interface EventPayload {
     mediaExternalId?: string | null;
@@ -232,7 +239,8 @@ export class AutomationDispatcher {
     private async createRun(trigger: CandidateTrigger, event: AutomationEvent, payload: EventPayload): Promise<string | null> {
         const a = trigger.automation;
         const settings = (a.settings ?? {}) as { oncePerContact?: 'ever' | 'perDay' | 'never' };
-        const once = settings.oncePerContact ?? 'ever';
+        const chosen = settings.oncePerContact ?? 'ever';
+        const once = chosen === 'ever' && ONE_PER_SUBJECT(event.eventType) ? 'never' : chosen;
         const skip =
             once !== 'never' &&
             (await this.prisma.automationRun.findFirst({

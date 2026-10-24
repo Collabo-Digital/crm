@@ -409,6 +409,9 @@ Per-account subscription happens at connect time and is undone at disconnect:
   links to a customer saved as +91 79111 23456.)
   Messages from these
   triggers must be approved templates: the builder refuses free text there.
+  An automation on these runs once for each order (or invoice, payment, cart
+  or checkout), so a returning buyer's next order runs it too; "once a day"
+  still limits each person to one run in 24 hours.
   Shopify has no delivered order state; a fulfilment whose carrier
   `shipment_status` is `delivered` counts, as does marking it delivered in
   Collabo.
@@ -418,8 +421,8 @@ Per-account subscription happens at connect time and is undone at disconnect:
   cash-on-delivery orders” playbook decides only on whole replies: “Confirm
   order”, “Confirm” or “Yes” tags the order `cod-confirmed`; “Cancel order” or
   “Cancel” cancels it; any other reply (“Please don't cancel”, “When will it
-  arrive?”) goes to the team (tag `cod-check`, assigned, with a note). For
-  buyers who order more than once, set it to run every time.
+  arrive?”) goes to the team (tag `cod-check`, assigned, with a note). Each
+  order is asked once, including a returning buyer's.
 - **Store actions** an automation can take: tag the order or add to its note
   (Shopify `orderUpdate`), cancel it (Shopify `orderCancel` — customer
   notified, restocked, no refund), tag the store customer (Shopify `tagsAdd`
