@@ -11,6 +11,7 @@ import {
   useUpdateInventorySettingsMutation,
 } from "~/hooks/use-settings-mutations";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import { useUpdateOrganizationMutation } from "~/hooks/use-org-mutations";
 import type { InventorySettings, ProductSettings } from "~/types/api";
 
@@ -24,6 +25,9 @@ import type { InventorySettings, ProductSettings } from "~/types/api";
 export function ProductSettingsTab() {
   const { data, isLoading } = useOrganizationSettings();
   const mutation = useUpdateProductSettingsMutation();
+  const { role } = useCurrentRole();
+  // PATCH /organization/settings/products is ORG_MANAGERS on the server.
+  const canManage = role === "OWNER" || role === "ADMIN" || role === "MANAGER";
 
   if (isLoading || !data) {
     return (
@@ -44,6 +48,11 @@ export function ProductSettingsTab() {
         <p className="mt-1 text-xs text-muted-foreground">
           Control how products created in the CRM behave when a Shopify channel is connected.
         </p>
+        {!canManage && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Only an owner, admin or manager can change the switches below.
+          </p>
+        )}
       </div>
 
       <SettingsCard>
@@ -51,25 +60,25 @@ export function ProductSettingsTab() {
           label="Auto-sync new products to Shopify"
           help="When ON, every product created in the CRM is pushed to your connected Shopify store immediately. When OFF (default), products stay local until you sync them manually from the product page or via the channels-page Sync button."
           checked={settings.autoSyncToShopify}
-          disabled={isFieldSaving(mutation, "autoSyncToShopify")}
+          disabled={!canManage || isFieldSaving(mutation, "autoSyncToShopify")}
           onChange={(checked) => mutation.mutate({ autoSyncToShopify: checked })}
         />
         <SettingsToggleRow
           label="Track quantity (all products)"
           help="When ON, every variant tracks inventory regardless of its individual setting — stock decrements on offline orders and Shopify pushes set inventory_management=shopify. Combine with the option below if you want to track but still allow overselling. Turn OFF (default) to honor each variant's per-row setting."
           checked={settings.trackQuantityGlobally}
-          disabled={isFieldSaving(mutation, "trackQuantityGlobally")}
+          disabled={!canManage || isFieldSaving(mutation, "trackQuantityGlobally")}
           onChange={(checked) => mutation.mutate({ trackQuantityGlobally: checked })}
         />
         <SettingsToggleRow
           label="Continue selling when out of stock (all products)"
           help="When ON, every variant in your catalog is treated as continue-selling — offline orders accept lines even when stock is 0, and Shopify pushes use inventory_policy=continue across the board. The per-variant toggle on individual products becomes redundant. Turn OFF to honor each variant's setting individually (default)."
           checked={settings.allowOversellGlobally}
-          disabled={isFieldSaving(mutation, "allowOversellGlobally")}
+          disabled={!canManage || isFieldSaving(mutation, "allowOversellGlobally")}
           onChange={(checked) => mutation.mutate({ allowOversellGlobally: checked })}
         />
         <LowStockThresholdRow />
-        <VendorMetafieldRow settings={settings} mutation={mutation} />
+        <VendorMetafieldRow settings={settings} mutation={mutation} canManage={canManage} />
       </SettingsCard>
       <BarcodePushCard />
     </div>
@@ -85,9 +94,11 @@ export function ProductSettingsTab() {
 function VendorMetafieldRow({
   settings,
   mutation,
+  canManage,
 }: {
   settings: ProductSettings;
   mutation: ReturnType<typeof useUpdateProductSettingsMutation>;
+  canManage: boolean;
 }) {
   const [namespace, setNamespace] = useState(settings.vendorMetafieldNamespace ?? "custom");
   const [key, setKey] = useState(settings.vendorMetafieldKey ?? "vendor_shop_domain");
@@ -110,13 +121,14 @@ function VendorMetafieldRow({
         </div>
         <ToggleSwitch
           checked={settings.vendorMetafieldEnabled}
-          disabled={isFieldSaving(mutation, "vendorMetafieldEnabled")}
+          disabled={!canManage || isFieldSaving(mutation, "vendorMetafieldEnabled")}
           onChange={(checked) => mutation.mutate({ vendorMetafieldEnabled: checked })}
         />
       </div>
       {settings.vendorMetafieldEnabled && (
         <div className="flex items-center gap-2">
           <input
+            disabled={!canManage}
             value={namespace}
             onChange={(e) => setNamespace(e.target.value)}
             onBlur={() =>
@@ -128,6 +140,7 @@ function VendorMetafieldRow({
           />
           <span className="text-xs text-muted-foreground">.</span>
           <input
+            disabled={!canManage}
             value={key}
             onChange={(e) => setKey(e.target.value)}
             onBlur={() =>

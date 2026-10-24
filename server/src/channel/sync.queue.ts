@@ -1,6 +1,6 @@
 export const SYNC_QUEUE = 'shopify-sync';
 
-/// Pull data from Shopify (and, on success, push local items back up).
+/// Pull data from Shopify (and, when `pushAfter`, push local items back up).
 export interface SyncPullJobData {
     /// Optional so jobs enqueued by the previous release - which had no
     /// discriminator - still deserialise after this deploys.
@@ -13,6 +13,9 @@ export interface SyncPullJobData {
     /// is interactive; the post-connect backfill and cron pulls are bulk.
     /// Also passed to BullMQ as the job priority. Absent on old jobs = normal.
     priority?: number;
+    /// Set only by a merchant's Sync press. Absent (connect-time backfill, old
+    /// jobs) = pull only, so no CRM backlog reaches the store unasked.
+    pushAfter?: boolean;
 }
 
 /// Post-connect store setup: register webhooks, activate the web pixel.

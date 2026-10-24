@@ -11,7 +11,7 @@ import { SYNC_RESUME_MAX_AGE_MS } from './shopify-sync.service';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
-import { Roles, ORG_MANAGERS, CHANNEL_MANAGERS } from '../auth/decorators/roles.decorator';
+import { Roles, ORG_MANAGERS, ORG_OPERATORS, CHANNEL_MANAGERS } from '../auth/decorators/roles.decorator';
 import { AllowInfluencer } from '../auth/decorators/allow-influencer.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChannelService } from './channel.service';
@@ -429,7 +429,10 @@ export class ChannelController {
   //     the UI button is disabled for ever. Take the claim over and queue.
   //
   // `isSyncLive` is what separates them.
+  //
+  // Operators only: this sync can push CRM items into the live store.
   @Post(':id/sync')
+  @Roles(...ORG_OPERATORS)
   async triggerSync(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -500,6 +503,9 @@ export class ChannelController {
         organizationId: orgId,
         entityTypes: dto.entityTypes,
         priority: Priority.INTERACTIVE,
+        // The only sync that may push: a person asked for it, and the push
+        // toggles they switched on decide what goes.
+        pushAfter: true,
       } satisfies SyncJobData, {
         attempts: 3,                          // Retry up to 3 times
         backoff: { type: 'exponential', delay: 5000 },  // 5s, 10s, 20s

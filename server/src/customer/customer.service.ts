@@ -5,6 +5,10 @@ import { LoyaltyService } from '../loyalty/loyalty.service';
 import { QueryCustomersDto } from './dto/query-customers.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { pickPrefillAddress } from './prefill-address.util';
+import {
+  resolveReportingTimeZone,
+  zonedMonthStartMonthsAgo,
+} from '../common/utils/zoned-date.util';
 
 @Injectable()
 export class CustomerService {
@@ -162,10 +166,28 @@ export class CustomerService {
       ...(channelId && { channelId }),
     };
 
+    // Months in the org's reporting timezone, not the server's (UTC in
+    // production), so an IST sign-up at 02:00 on the 1st counts in its own month.
+    const org = await this.prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { timezone: true },
+    });
+    const timeZone = resolveReportingTimeZone(org ?? {});
     const now = new Date();
-    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const previousMonthEnd = new Date(currentMonthStart.getTime() - 1);
+    const currentMonthStart = zonedMonthStartMonthsAgo(now, 0, timeZone);
+    const previousMonthStart = zonedMonthStartMonthsAgo(now, 1, timeZone);
+    // A customer first seen in [from, to). `externalCreatedAt` is null for
+    // customers created in the CRM (offline orders, drafts), so those count by
+    // `createdAt` — the same rule as the dashboard's new-customer figure.
+    const firstSeenBetween = (from: Date, to?: Date): Prisma.CustomerWhereInput => {
+      const range = { gte: from, ...(to ? { lt: to } : {}) };
+      return {
+        OR: [
+          { externalCreatedAt: range },
+          { externalCreatedAt: null, createdAt: range },
+        ],
+      };
+    };
 
     const [
       totalCustomers,
@@ -181,12 +203,12 @@ export class CustomerService {
 
       // New customers this month
       this.prisma.customer.count({
-        where: { ...baseWhere, externalCreatedAt: { gte: currentMonthStart } },
+        where: { ...baseWhere, ...firstSeenBetween(currentMonthStart) },
       }),
 
       // New customers last month
       this.prisma.customer.count({
-        where: { ...baseWhere, externalCreatedAt: { gte: previousMonthStart, lte: previousMonthEnd } },
+        where: { ...baseWhere, ...firstSeenBetween(previousMonthStart, currentMonthStart) },
       }),
 
       // Active customers — have placed at least 1 order

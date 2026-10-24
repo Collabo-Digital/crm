@@ -86,7 +86,13 @@ const STOCK_OPTIONS: ReadonlyArray<{ value: StockStatus; label: string }> = [
 
 export default function ProductsPage() {
   const navigate = useNavigate();
-  const { isVendor } = useCurrentRole();
+  const { role, isVendor } = useCurrentRole();
+  // Mirror the server's role groups on the product write routes
+  // (server/src/auth/decorators/roles.decorator.ts): editing is ORG_OPERATORS,
+  // permanent delete and CSV import are ORG_MANAGERS. A Viewer sees the
+  // catalogue without buttons the API would refuse.
+  const canManage = role === "OWNER" || role === "ADMIN" || role === "MANAGER";
+  const canEdit = canManage || role === "AGENT";
   // The whole view — page, search, filters, sort, page size — lives in the
   // URL so Back from a product (and the product page's breadcrumb) return to
   // the exact list the row was opened from, while the navbar's bare link
@@ -350,7 +356,7 @@ export default function ProductsPage() {
     }
   }
 
-  const showDock = !isVendor && selectedProducts.length > 0;
+  const showDock = canEdit && selectedProducts.length > 0;
 
   return (
     // Bottom padding while the bulk-action dock is up, so it never covers the
@@ -375,15 +381,17 @@ export default function ProductsPage() {
               {exporting ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
               Export
             </Button>
-            <Button
-              variant="outline"
-              size="action"
-              onClick={() => setImportOpen(true)}
-              title="Import products from a Shopify-format CSV"
-            >
-              <Upload className="size-3.5" />
-              Import
-            </Button>
+            {canManage && (
+              <Button
+                variant="outline"
+                size="action"
+                onClick={() => setImportOpen(true)}
+                title="Import products from a Shopify-format CSV"
+              >
+                <Upload className="size-3.5" />
+                Import
+              </Button>
+            )}
             {/* Codes belong to the catalogue, not to a location, so this is
                 their home. The Inventory page carries the same dialog, but it
                 is gated on warehousing — without this trigger an org that has
@@ -405,19 +413,23 @@ export default function ProductsPage() {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
                 <DropdownMenuItem onSelect={handleExport} disabled={exporting}><Download /> Export products</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setImportOpen(true)}><Upload /> Import products</DropdownMenuItem>
+                {canManage && (
+                  <DropdownMenuItem onSelect={() => setImportOpen(true)}><Upload /> Import products</DropdownMenuItem>
+                )}
                 <DropdownMenuItem onSelect={() => setCodesOpen(true)}><Barcode /> {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button
-              variant="brand"
-              size="action"
-              onClick={() => setCreatingProduct(true)}
-              className="h-11 rounded-xl px-5 md:h-8 md:rounded-lg md:px-3"
-            >
-              <Plus className="size-3.5" />
-              Add Product
-            </Button>
+            {canEdit && (
+              <Button
+                variant="brand"
+                size="action"
+                onClick={() => setCreatingProduct(true)}
+                className="h-11 rounded-xl px-5 md:h-8 md:rounded-lg md:px-3"
+              >
+                <Plus className="size-3.5" />
+                Add Product
+              </Button>
+            )}
           </PageHeaderActions>
         )}
       </PageHeader>
@@ -427,6 +439,7 @@ export default function ProductsPage() {
       {/* Floating bulk-action dock — only up while a product is selected */}
       {showDock && (
         <BulkActionBar
+          canDelete={canManage}
           selectedProducts={selectedProducts}
           offPageCount={selectedProducts.length - selectedOnPageCount}
           onClear={() => setSelected(new Map())}

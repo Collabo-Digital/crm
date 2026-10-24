@@ -39,7 +39,11 @@ export class OrganizationSettingsController {
   }
 
   // PATCH /api/v1/organization/settings/products
+  // Role-gated like orders: autoSyncToShopify pushes CRM products into the live
+  // store, allowOversellGlobally changes what can be sold, and the vendor
+  // metafield decides which products and orders each Vendor member sees.
   @Patch('products')
+  @Roles(...ORG_MANAGERS)
   updateProducts(
     @CurrentUser() user: JwtPayload,
     @Body(new ZodValidationPipe(UpdateProductSettingsSchema))

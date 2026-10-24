@@ -44,6 +44,7 @@ import {
   ShopifyPushService,
   isStalePendingSync,
   QUEUE_UNAVAILABLE_ERROR,
+  unpushableOrderReason,
 } from '../channel/shopify-push.service';
 import { ShopifyGraphqlClient, ShopifyGraphqlError } from '../channel/shopify-graphql.client';
 import { ShopifyOAuthService } from '../channel/shopify-oauth.service';
@@ -53,7 +54,7 @@ import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { FxRateService } from '../common/fx/fx-rate.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { PUSH_JOB_OPTS, SHOPIFY_PUSH_QUEUE, pushJobId } from '../channel/shopify-push.queue';
+import { SHOPIFY_PUSH_QUEUE, addAvailabilityPush } from '../channel/shopify-push.queue';
 import { Priority } from '../rate-limit/rate-limit.types';
 import { displayVariantTitle } from '../product/variant-title.util';
 import {
@@ -1507,7 +1508,12 @@ export class OrderService {
             subtotalPrice: subtotal,
             totalPrice: grandTotal,
             totalTax,
-            totalDiscounts: 0,
+            // Informational, like Shopify's total_discounts: the line
+            // discounts are already out of `subtotal`. It was 0, so a
+            // discounted sale's header disagreed with its own lines.
+            totalDiscounts: round(
+              lineItemsToCreate.reduce((sum, li) => sum + li.totalDiscount, 0),
+            ),
             totalShippingPrice: 0,
             // Prefer explicit order addresses (e.g. draft completion); else
             // customer.address so GST place-of-supply / packing slips aren't blank.
@@ -1825,15 +1831,23 @@ export class OrderService {
     // `cancel`: a queue outage must not roll back a completed sale.
     if (result.soldVariantIds.length > 0 && !orderPushedToShopify) {
       try {
-        await this.shopifyPushQueue.add(
-          'push-availability',
-          {
-            type: 'push-availability',
-            organizationId: orgId,
-            variantIds: [...new Set(result.soldVariantIds)],
-          },
-          { attempts: 5, backoff: { type: 'exponential', delay: 10_000 } },
+        const outcome = await addAvailabilityPush(
+          this.shopifyPushQueue,
+          orgId,
+          result.soldVariantIds,
+          Priority.NORMAL,
         );
+        // That push sets Shopify to the stock left AFTER this sale, so if the
+        // order itself is pushed later it must not decrement Shopify again
+        // (pushOrder reads this flag). Only claimed when a store is connected
+        // to receive the push and some job will still read the stock after
+        // this sale ('active' means none is certain to).
+        const shopify = await this.shopifyPushService.findShopifyChannel(orgId);
+        if (shopify?.status === ChannelStatus.CONNECTED && outcome !== 'active') {
+          await mergeJsonMetadata(this.prisma, 'orders', result.order.id, orgId, {
+            shopifyStockPushed: true,
+          });
+        }
       } catch (err) {
         this.logger.warn(
           `Failed to enqueue availability push after offline sale ${result.order.id}: ${err}`,
@@ -1934,6 +1948,8 @@ export class OrderService {
         'Only offline (MANUAL channel) orders can be synced to Shopify. This order originated in Shopify.',
       );
     }
+    const unpushable = unpushableOrderReason(order);
+    if (unpushable) throw new BadRequestException(unpushable);
 
     const shopifyChannel = await this.shopifyPushService.findShopifyChannel(orgId);
     if (!shopifyChannel || shopifyChannel.status !== ChannelStatus.CONNECTED) {
@@ -2433,20 +2449,11 @@ export class OrderService {
     // per-warehouse, so it lands at the location the goods returned to.
     if (restockedVariantIds.length > 0) {
       try {
-        const variantIds = [...new Set(restockedVariantIds)];
-        await this.shopifyPushQueue.add(
-          'push-availability',
-          {
-            type: 'push-availability',
-            organizationId: orgId,
-            variantIds,
-            priority: Priority.INTERACTIVE,
-          },
-          {
-            ...PUSH_JOB_OPTS,
-            jobId: pushJobId.availability(orgId, variantIds),
-            priority: Priority.INTERACTIVE,
-          },
+        await addAvailabilityPush(
+          this.shopifyPushQueue,
+          orgId,
+          restockedVariantIds,
+          Priority.INTERACTIVE,
         );
       } catch (err) {
         this.logger.warn(

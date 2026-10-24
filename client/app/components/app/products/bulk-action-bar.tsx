@@ -44,10 +44,13 @@ import { DockButton, FloatingDock } from "~/components/app/floating-dock";
  * every selected product; the only "skipped" reason left is "Not found".
  */
 export function BulkActionBar({
+  canDelete,
   selectedProducts,
   offPageCount = 0,
   onClear,
 }: {
+  /** Permanent delete is owner/admin/manager only on the server. */
+  canDelete: boolean;
   selectedProducts: Product[];
   /** How many of the selected products are on OTHER pages of the list. */
   offPageCount?: number;
@@ -176,7 +179,7 @@ export function BulkActionBar({
         <DockButton onClick={handleArchive} disabled={isPending || editableCount === 0}>
           <Archive /> Archive
         </DockButton>
-        {archivedCount > 0 && (
+        {canDelete && archivedCount > 0 && (
           <Tip
             text={`Delete forever — ${archivedCount} of ${ids.length} are archived and can be permanently deleted`}
           >

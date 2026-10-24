@@ -2185,13 +2185,41 @@ export class ProductService {
         skipped.push({ id, reason: 'Must be archived first' });
       }
     }
-    const toDelete = ok.filter((id) => allowed.has(id));
-    if (toDelete.length === 0) return { ok: [], skipped, deleted: 0 };
+    const archived = ok.filter((id) => allowed.has(id));
+    if (archived.length === 0) return { ok: [], skipped, deleted: 0 };
 
-    const result = await this.prisma.product.deleteMany({
-      where: { id: { in: toDelete }, organizationId: orgId },
+    // Warehousing orgs give every tracked variant a stock row, and stock rows
+    // block a variant's delete (ON DELETE RESTRICT), so this used to fail
+    // whole with "Related resource not found". Same rule as deleteVariant:
+    // a product still holding stock is skipped, all-zero rows go with it.
+    // Legacy orgs have no stock rows, so nothing changes for them.
+    const { toDelete, deleted } = await this.prisma.$transaction(async (tx) => {
+      const holding = await tx.stockLevel.findMany({
+        where: {
+          variant: { productId: { in: archived } },
+          OR: [
+            { available: { not: 0 } },
+            { reserved: { not: 0 } },
+            { qc: { not: 0 } },
+            { damaged: { not: 0 } },
+          ],
+        },
+        select: { variant: { select: { productId: true } } },
+      });
+      const withStock = new Set(holding.map((l) => l.variant.productId));
+      for (const id of withStock) {
+        skipped.push({ id, reason: 'Still has stock. Adjust it to zero before deleting.' });
+      }
+      const ids = archived.filter((id) => !withStock.has(id));
+      if (ids.length === 0) return { toDelete: ids, deleted: 0 };
+
+      await tx.stockLevel.deleteMany({ where: { variant: { productId: { in: ids } } } });
+      const result = await tx.product.deleteMany({
+        where: { id: { in: ids }, organizationId: orgId },
+      });
+      return { toDelete: ids, deleted: result.count };
     });
-    return { ok: toDelete, skipped, deleted: result.count };
+    return { ok: toDelete, skipped, deleted };
   }
 
   async bulkAddTags(orgId: string, productIds: string[], tags: string[]) {
