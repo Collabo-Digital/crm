@@ -13,6 +13,8 @@ import { InboxSettingsService } from '../../inbox/inbox-settings.service';
 import { ASSIGNABLE_ROLES } from '../../inbox/inbox-team.service';
 import { StoreActionsService } from '../../commerce/store-actions.service';
 import { PaymentLinksService } from '../../payments/payment-links.service';
+import { ReviewsService } from '../../reviews/reviews.service';
+import type { ReviewerNameFormat } from '../../reviews/judgeme.client';
 import { paymentVars } from '../../payments/payment-link.util';
 import { WhatsAppPayService } from '../../payments/whatsapp-pay.service';
 import { isCashOnDelivery } from '../../commerce/order-vars';
@@ -73,6 +75,7 @@ export class AutomationRunner {
         private readonly store: StoreActionsService,
         private readonly paymentLinks: PaymentLinksService,
         private readonly whatsAppPay: WhatsAppPayService,
+        private readonly reviews: ReviewsService,
         config: ConfigService,
     ) {
         this.allowPrivate = config.get<string>('AUTOMATION_HTTP_ALLOW_PRIVATE') === 'true';
@@ -247,6 +250,8 @@ export class AutomationRunner {
                 return this.httpRequest(s, c as { method: 'GET' | 'POST'; url: string; body: string; saveAs: string });
             case 'store_action':
                 return this.storeAction(s, c as { action: string; value: string });
+            case 'post_review':
+                return this.postReview(s, c as { rating: string; text: string; products: 'first' | 'each'; nameFormat: ReviewerNameFormat });
             default:
                 return fail(`Unknown block "${step.type}".`);
         }
@@ -546,6 +551,33 @@ export class AutomationRunner {
             default:
                 return fail(`Unknown store action "${c.action}".`);
         }
+    }
+
+    private async postReview(s: StepState, c: { rating: string; text: string; products: 'first' | 'each'; nameFormat: ReviewerNameFormat }): Promise<Outcome> {
+        // Publish refuses these elsewhere; this also stops versions published before that check.
+        if (s.contact.platform !== ChannelPlatform.WHATSAPP) return fail('Reviews are collected in WhatsApp automations only.');
+        if (!s.run.orderId) return fail('This run is not about an order.');
+        const conversationId = await this.conversationId(s);
+        const text = interpolate(c.text ?? '', s.vars);
+        const { rating, reviews } = await this.reviews.publish({
+            orgId: s.run.organizationId,
+            orderId: s.run.orderId,
+            contactId: s.contact.id,
+            conversationId,
+            runId: s.run.id,
+            rating: interpolate(c.rating ?? '', s.vars),
+            text,
+            products: c.products,
+            nameFormat: c.nameFormat,
+            contactName: contactName(s.contact),
+        });
+        const note = await this.prisma.conversationNote.create({
+            data: { organizationId: s.run.organizationId, conversationId, source: 'automation', body: this.reviews.noteFor(rating, text, reviews) },
+        });
+        this.inboxEvents.publish(s.run.organizationId, { type: 'note.created', conversationId, noteId: note.id });
+        const output = { rating, reviews: reviews.map((r) => ({ id: r.id, product: r.productTitle, status: r.status, reason: r.reason })) };
+        const failed = reviews.find((r) => r.status === 'FAILED');
+        return failed ? { kind: 'fail', error: `Judge.me did not take the review: ${failed.reason}`, output } : { kind: 'next', output };
     }
 
     // ─── State ────────────────────────────────────────────────────────

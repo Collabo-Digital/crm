@@ -50,6 +50,7 @@ export const validationSchema = Joi.object({
     RAZORPAY_KEY_SECRET: Joi.string().optional(),
     RAZORPAY_WEBHOOK_SECRET: Joi.string().optional(),
     RAZORPAY_MERCHANT_API_BASE: Joi.string().uri().optional(),
+    JUDGEME_API_BASE: Joi.string().uri().optional(),
     META_ADS_CONFIG_ID: Joi.string().optional(),
     ANTHROPIC_API_KEY: Joi.string().optional(),
     ANTHROPIC_BASE_URL: Joi.string().uri().optional(),

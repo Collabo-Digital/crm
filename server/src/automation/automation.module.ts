@@ -28,10 +28,11 @@ import { AutomationInsightsService } from './automation-insights.service';
 import { AutomationHooksService } from './automation-hooks.service';
 import { AutomationHooksController } from './automation-hooks.controller';
 import { ConversationStartersService } from './conversation-starters.service';
+import { ReviewsModule } from '../reviews/reviews.module';
 
 @Module({
   imports: [
-    ChannelModule, MessagingModule, CampaignsModule, InboxModule, CommerceModule, PaymentsModule, GrowthModule, AdsModule, DeveloperModule,
+    ChannelModule, MessagingModule, CampaignsModule, InboxModule, CommerceModule, PaymentsModule, GrowthModule, AdsModule, DeveloperModule, ReviewsModule,
     BullModule.registerQueue({ name: META_INBOUND_QUEUE }),
     BullModule.registerQueue({ name: AUTOMATION_QUEUE }),
   ],

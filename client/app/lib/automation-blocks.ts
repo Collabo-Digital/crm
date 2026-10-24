@@ -9,6 +9,7 @@ import {
   MessageSquare,
   PenLine,
   ShoppingBag,
+  Star,
   StickyNote,
   Tag,
   Tags,
@@ -58,6 +59,7 @@ export const BLOCKS: Record<AutomationBlockType, BlockSpec> = {
   add_note: { label: "Add a note", icon: StickyNote, hint: "A private note for the team.", group: "Conversation" },
   http_request: { label: "Call a URL", icon: Webhook, hint: "Send data to another system and use its answer.", group: "Connect" },
   store_action: { label: "Store action", icon: ShoppingBag, hint: "Tag, note or cancel the order, or turn a cart into a draft order.", group: "Store", channels: ["whatsapp"] },
+  post_review: { label: "Publish a review", icon: Star, hint: "The customer’s rating and words, to your Judge.me and Campaigns → Reviews.", group: "Store", channels: ["whatsapp"] },
 };
 
 export const BLOCK_GROUPS: Array<BlockSpec["group"]> = ["Messages", "Flow", "Contact", "Conversation", "Store", "Connect"];
@@ -155,6 +157,8 @@ export function newStep(type: AutomationBlockType, channel: AutomationChannelKey
       return { id, type, config: { method: "link", kind: "template", message: "", templateValues: {}, expiresInHours: 48, tagOnPaid: "" } };
     case "store_action":
       return { id, type, config: { action: "tag_order", value: "" } };
+    case "post_review":
+      return { id, type, config: { rating: "{{attr.review_rating}}", text: "{{last_reply}}", products: "first", nameFormat: "last_initial" } };
     default:
       return { id, type: "trigger", config: { channel, event: channel === "whatsapp" ? "message" : "comment", match: "contains", keyword: "", post: "" } };
   }
@@ -336,6 +340,8 @@ export function stepSummary(step: AutomationStep, templateName?: (id: string) =>
           create_draft_order: "Make a draft order with a checkout link",
         } as Record<string, string>
       )[c.action] ?? "Store action";
+    case "post_review":
+      return `Publish the rating in ${clip(c.rating || "…", 40)}${c.products === "each" ? " for each product" : ""} to Judge.me`;
     default:
       return BLOCKS[(step as AutomationStep).type]?.hint ?? "";
   }
@@ -626,18 +632,25 @@ export const PLAYBOOKS: Playbook[] = [
   },
   {
     key: "review_request",
-    name: "Ask for a review after delivery",
-    description: "Two days after delivery, ask how it went and tag happy customers.",
+    name: "Collect reviews after delivery",
+    description: "Two days after delivery, ask for a 1 to 5 rating and a few words, publish them to Judge.me, and pass ratings of 3 or less to a person.",
     channels: ["whatsapp"],
     steps: (channel) => [
       t(channel, { event: "order_delivered" }),
       s("wait", { amount: 2, unit: "days" }),
+      // The “Ask for a rating” starter: its buttons start with the rating.
       s("send_message", { kind: "template", templateValues: prefill({ first_name: "{{first_name}}", order_number: "{{order.name}}" }), options: [] }),
-      s("wait_for_reply", { amount: 3, unit: "days", saveAs: "review" }, {
+      s("wait_for_reply", { amount: 3, unit: "days", saveAs: "review_rating" }, {
         replied: [
-          s("condition", { match: "any", rules: [{ field: "last_reply", op: "contains", key: "", value: "love, great, good, 5" }] }, {
-            yes: [s("add_tag", { tags: ["happy-customer"] })],
-            no: [s("assign", { mode: "round_robin", userId: "", teamId: "" }), s("add_note", { text: "Unhappy after delivery: {{last_reply}}" })],
+          s("condition", { match: "all", rules: [{ field: "attribute", op: "equals", key: "review_rating", value: "3 - Okay, 2 - Poor, 1 - Very poor" }] }, {
+            yes: [s("assign", { mode: "round_robin", userId: "", teamId: "" }), s("add_note", { text: "{{first_name}} rated {{order.name}} “{{attr.review_rating}}”. Please follow up." })],
+            no: [s("add_tag", { tags: ["happy-customer"] })],
+          }),
+          s("send_message", { kind: "text", message: "Thank you, {{first_name}}! Would you tell us in a few words how it went? We share reviews on our store. Reply skip to leave it.", options: [], templateValues: {} }),
+          s("wait_for_reply", { amount: 1, unit: "days", saveAs: "review_text" }, {
+            // Every rating is published, high or low; Judge.me's own moderation decides what shows.
+            replied: [s("post_review", { rating: "{{attr.review_rating}}", text: "{{last_reply}}", products: "first", nameFormat: "last_initial" })],
+            timeout: [],
           }),
         ],
         timeout: [],

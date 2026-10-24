@@ -289,3 +289,23 @@ describe('a chat from an ad', () => {
         expect(check(steps('summer-sale'))).toEqual(['ad_id_invalid']);
     });
 });
+
+describe('publishing a review', () => {
+    const steps = (event: string, config: Record<string, unknown> = {}, channel = 'whatsapp') => [
+        { id: 't', type: 'trigger', config: { channel, event } },
+        { id: 'r', type: 'post_review', config },
+    ];
+    const check = (s: unknown[], platform = 'WHATSAPP') => collectIssues(parseDefinition({ steps: s }), { platform, knownMediaIds: null }).map((i) => i.code);
+
+    it('reads the saved rating and the reply just received by default', () => {
+        const [, r] = parseDefinition({ steps: steps('order_delivered') });
+        expect(r.config).toEqual({ rating: '{{attr.review_rating}}', text: '{{last_reply}}', products: 'first', nameFormat: 'last_initial' });
+        expect(check(steps('order_delivered'))).toEqual([]);
+    });
+
+    it('is for the order the trigger is about, on WhatsApp, with a rating to read', () => {
+        expect(check(steps('message'))).toContain('review_needs_order');
+        expect(check(steps('order_delivered', { rating: '  ' }))).toContain('rating_missing');
+        expect(check(steps('message', {}, 'instagram'), 'INSTAGRAM')).toContain('store_needs_whatsapp');
+    });
+});

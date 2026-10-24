@@ -222,20 +222,24 @@ export const TEMPLATE_STARTERS: TemplateStarter[] = [
     {
         key: 'review_request',
         useCase: 'engagement',
-        title: 'Ask for a review',
-        description: 'Asks a customer how their order went a few days after delivery.',
+        title: 'Ask for a rating',
+        description: 'Asks a customer to rate their delivered order from 1 to 5. The “Collect reviews” automation publishes it to Judge.me.',
         draft: {
             name: 'review_request',
-            category: 'MARKETING',
+            // Meta: feedback on a specific order, with nothing promotional, can be utility.
+            category: 'UTILITY',
             parameterFormat: 'NAMED',
             body: {
-                text: 'Hi {{first_name}}, how are you liking your order {{order_number}}? A quick rating helps us and other shoppers.',
+                text: 'Hi {{first_name}}, your order {{order_number}} was delivered. How would you rate it?',
                 examples: { first_name: 'Ananya', order_number: '#1042' },
             },
+            // Each starts with its rating, which the automation reads.
             buttons: [
-                { type: 'QUICK_REPLY', text: 'Loved it' },
-                { type: 'QUICK_REPLY', text: 'It was okay' },
-                { type: 'QUICK_REPLY', text: 'Not happy' },
+                { type: 'QUICK_REPLY', text: '5 - Excellent' },
+                { type: 'QUICK_REPLY', text: '4 - Good' },
+                { type: 'QUICK_REPLY', text: '3 - Okay' },
+                { type: 'QUICK_REPLY', text: '2 - Poor' },
+                { type: 'QUICK_REPLY', text: '1 - Very poor' },
             ],
         },
     },

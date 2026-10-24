@@ -38,6 +38,10 @@ export default () => ({
     payments: {
         razorpayApiBase: process.env.RAZORPAY_MERCHANT_API_BASE || 'https://api.razorpay.com',
     },
+    // Merchants' own review apps, where reviews collected on WhatsApp are published.
+    reviews: {
+        judgemeApiBase: process.env.JUDGEME_API_BASE || 'https://api.judge.me/api/v1',
+    },
     shopify: {
         clientId: process.env.SHOPIFY_CLIENT_ID,
         clientSecret: process.env.SHOPIFY_CLIENT_SECRET,

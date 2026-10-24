@@ -367,6 +367,8 @@ model Organization {
   shopifySegments        ShopifySegment[]
   whatsappGroups         WhatsAppGroup[]
   whatsappCalls          WhatsAppCall[]
+  reviewAccounts         ReviewAccount[]
+  productReviews         ProductReview[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -1020,7 +1022,8 @@ model Order {
   /// draft <name>" in the UI.
   draftOrderOrigin  DraftOrder?          @relation("DraftOrderCompletedOrder")
 
-  paymentLinks PaymentLink[]
+  paymentLinks   PaymentLink[]
+  productReviews ProductReview[]
 
   @@unique([channelId, externalId])
   // NOTE (not expressible in Prisma): a PARTIAL unique index
@@ -2140,6 +2143,7 @@ model ChannelContact {
   broadcastRecipients BroadcastRecipient[]
   whatsappGroup       WhatsAppGroup?
   whatsappCalls       WhatsAppCall[]
+  productReviews      ProductReview[]
 
   @@unique([channelId, externalId])
   @@index([channelId, waId])
@@ -2508,6 +2512,7 @@ model Conversation {
   messages     Message[]
   notes        ConversationNote[]
   calls        WhatsAppCall[]
+  reviews      ProductReview[]
 
   @@unique([channelId, contactId])
   @@index([organizationId, status, lastMessageAt])
@@ -3685,4 +3690,74 @@ model WhatsAppCall {
   @@index([organizationId, status])
   @@index([conversationId])
   @@map("whatsapp_calls")
+}
+
+enum ReviewProvider {
+  JUDGEME
+}
+
+/// A merchant's own review app, where reviews collected on WhatsApp are
+/// published. Judge.me: the shop's myshopify domain, proven with the shop's
+/// private API key when connected. The key is not kept: publishing needs none.
+model ReviewAccount {
+  id             String         @id @default(cuid())
+  organizationId String         @map("organization_id")
+  provider       ReviewProvider
+  /// The shop on the review app (Judge.me: example.myshopify.com).
+  shopDomain     String         @map("shop_domain")
+  /// The shop's name on the review app, read when it was connected.
+  shopName       String?        @map("shop_name")
+  /// Whether the review app publishes new reviews without approval, read when it was connected.
+  autopublish    Boolean?
+  connectedById  String?        @map("connected_by_id")
+  disconnectedAt DateTime?      @map("disconnected_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, provider])
+  @@map("review_accounts")
+}
+
+enum ProductReviewStatus {
+  /// Sent to the review app.
+  POSTED
+  /// Kept in Collabo only: no review text, no email, or no review app connected.
+  SAVED
+  /// The review app refused it or could not be reached.
+  FAILED
+}
+
+/// A rating and review a customer gave on WhatsApp for a product of an order
+/// (or for the shop), and what happened when it was published.
+model ProductReview {
+  id                String              @id @default(cuid())
+  organizationId    String              @map("organization_id")
+  orderId           String?             @map("order_id")
+  conversationId    String?             @map("conversation_id")
+  contactId         String?             @map("contact_id")
+  automationRunId   String?             @map("automation_run_id")
+  /// Shopify product id; null for a review of the shop.
+  productExternalId String?             @map("product_external_id")
+  productTitle      String?             @map("product_title")
+  rating            Int
+  body              String              @default("")
+  reviewerName      String              @map("reviewer_name")
+  reviewerEmail     String?             @map("reviewer_email")
+  provider          ReviewProvider?
+  status            ProductReviewStatus
+  /// Why it was only saved, or why the review app refused it.
+  reason            String?
+  postedAt          DateTime?           @map("posted_at")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order        Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  conversation Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  contact      ChannelContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([orderId])
+  @@map("product_reviews")
 }

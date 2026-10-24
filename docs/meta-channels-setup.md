@@ -133,6 +133,8 @@ ANTHROPIC_API_KEY=                  # Collabo's own key, for the AI template wri
                                     # unset, the writer is hidden
 ANTHROPIC_BASE_URL=                 # leave unset in production; local tests point it
                                     # at the Anthropic stand-in
+JUDGEME_API_BASE=                   # leave unset in production (https://api.judge.me/api/v1);
+                                    # local tests point it at the Judge.me stand-in
 ```
 
 Client (`client/.env`):
@@ -582,6 +584,41 @@ or admin. That is a different account from Collabo's own subscription billing
   `order_details` are allowlist-only at Meta; plain links work for everyone.
   Razorpay's partner OAuth ("Connect with Razorpay" without copying keys)
   needs Collabo registered as a Razorpay technology partner.
+
+### Reviews on WhatsApp (Campaigns → Reviews, Judge.me)
+
+Ratings and reviews asked for on WhatsApp after delivery, published to the
+merchant's own Judge.me (https://judge.me/api/docs).
+
+- **Asking:** the "Collect reviews after delivery" playbook. Two days after
+  Shopify reports an order delivered, the "Ask for a rating" template asks for
+  a rating with quick replies "5 - Excellent" to "1 - Very poor". It is feedback
+  on that order with nothing promotional, which Meta allows as utility; Meta
+  still decides the category. After a rating, a text asks for a few words
+  ("skip" leaves them out). The "Publish a review" step reads the rating (the
+  first digit 1 to 5, or the stars) and the words.
+- **Publishing:** `POST /reviews` with the shop's myshopify domain, platform
+  `shopify`, the Shopify product id (the order's first product, or each), the
+  buyer's name and email from the order, the rating and the words, and how the
+  name shows (first name and last initial by default; Judge.me applies the
+  stricter of this and the store's own setting). Judge.me needs no key for it:
+  it takes the review like one from its web form, in the background, shows it
+  as a web review (not a verified buyer), and creates nothing when the store
+  has web reviews turned off.
+- **Connecting:** owners and admins give the shop's myshopify address and its
+  private API token (Judge.me → Settings → Integrations → View API tokens).
+  Collabo checks them with `GET /shops/info` (`X-Api-Token` header), so reviews
+  only go to a shop the merchant controls, reads `autopublish` from
+  `GET /settings`, and does not keep the token.
+- **Every rating is published,** high or low; Judge.me's own moderation decides
+  what shows on the store. Ratings of 3 or less are also passed to a person
+  with a note.
+- **Kept in Collabo** with the reason (Campaigns → Reviews): a rating without
+  words, an order without an email, Judge.me not connected, or an order and
+  product already published. A Judge.me error is kept as not published and
+  shows on the automation.
+- **Not yet:** photos with a review (Judge.me takes public .jpg and .png links
+  only), and review apps other than Judge.me.
 
 ### Shopify customer segments (Campaigns → Segments)
 

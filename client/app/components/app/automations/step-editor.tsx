@@ -952,6 +952,35 @@ export function StepEditor({ step, onChange, ctx }: { step: AutomationStep; onCh
         </div>
       );
       break;
+    case "post_review":
+      body = (
+        <div className="space-y-4">
+          <Field label="Rating" hint="Usually the saved answer to the rating question. Its first digit from 1 to 5, or its stars, is the rating." htmlFor="pr-rating">
+            <TextWithVariables id="pr-rating" rows={1} value={c.rating ?? ""} onChange={(rating) => set({ rating })} ctx={ctx} maxLength={200} placeholder="{{attr.review_rating}}" />
+          </Field>
+          <Field label="Review" hint="Their words: {{last_reply}} is the reply just received. Without words, or with “skip”, the rating is kept in Collabo only." htmlFor="pr-text">
+            <TextWithVariables id="pr-text" rows={1} value={c.text ?? ""} onChange={(text) => set({ text })} ctx={ctx} maxLength={500} placeholder="{{last_reply}}" />
+          </Field>
+          <Field label="Product" htmlFor="pr-products">
+            <select id="pr-products" className={selectClass} value={c.products ?? "first"} disabled={ro} onChange={(e) => set({ products: e.target.value })}>
+              <option value="first">The order’s first product</option>
+              <option value="each">Each product in the order</option>
+            </select>
+          </Field>
+          <Field label="Name shown" hint="Judge.me uses your store’s setting when it is stricter." htmlFor="pr-name">
+            <select id="pr-name" className={selectClass} value={c.nameFormat ?? "last_initial"} disabled={ro} onChange={(e) => set({ nameFormat: e.target.value })}>
+              <option value="">Full name</option>
+              <option value="last_initial">First name and last initial</option>
+              <option value="all_initials">Initials</option>
+              <option value="anonymous">Anonymous</option>
+            </select>
+          </Field>
+          <p className="text-micro text-muted-foreground">
+            Published to the Judge.me connected in Campaigns → Reviews, with the order’s name and email. Every rating is published, high or low; Judge.me’s own settings decide what shows on your store.
+          </p>
+        </div>
+      );
+      break;
   }
 
   return (

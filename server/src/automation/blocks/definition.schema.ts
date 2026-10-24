@@ -119,6 +119,22 @@ const StoreActionConfig = z.object({
     value: z.string().max(500).default(''),
 });
 
+/**
+ * The customer's rating and words, published to the store's Judge.me for the
+ * order the trigger is about. Without words, an email or Judge.me, the review
+ * is kept in Collabo (Campaigns → Reviews) with the reason.
+ */
+const PostReviewConfig = z.object({
+    /** The rating as they gave it: "4 - Good", "⭐⭐⭐⭐", "4". */
+    rating: z.string().max(200).default('{{attr.review_rating}}'),
+    /** The reply just received by default: a saved field may hold an earlier order's review. */
+    text: z.string().max(500).default('{{last_reply}}'),
+    /** The order's first product, or each of its products. */
+    products: z.enum(['first', 'each']).default('first'),
+    /** How Judge.me shows their name; the store's own setting wins when stricter. */
+    nameFormat: z.enum(['', 'last_initial', 'all_initials', 'anonymous']).default('last_initial'),
+});
+
 /** The order's GST invoice as a PDF, in the document header of an approved WhatsApp template. */
 const SendInvoiceConfig = z.object({
     templateId: z.string().max(64).optional(),
@@ -214,6 +230,7 @@ const BLOCK_SCHEMAS = {
     add_note: AddNoteConfig,
     http_request: HttpRequestConfig,
     store_action: StoreActionConfig,
+    post_review: PostReviewConfig,
 } as const;
 
 /** Each branching block and the branches it has. */
@@ -552,6 +569,15 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 }
                 checkText(a.value);
                 if (a.action === 'create_draft_order') saved.add('draft');
+                break;
+            }
+            case 'post_review': {
+                const r = c as z.infer<typeof PostReviewConfig>;
+                if (t.channel !== 'whatsapp') push(step.id, 'store_needs_whatsapp', 'Reviews are WhatsApp only', 'Use a WhatsApp automation to collect reviews.');
+                if (!ORDER_CONTEXT.includes(t.event)) push(step.id, 'review_needs_order', 'Needs an order', 'A review is for the order the trigger is about: start from an order event, like “Order delivered”.');
+                if (!r.rating.trim()) push(step.id, 'rating_missing', 'Rating missing', 'Say where the rating comes from, like {{attr.review_rating}}.');
+                checkText(r.rating);
+                checkText(r.text);
                 break;
             }
             case 'http_request': {

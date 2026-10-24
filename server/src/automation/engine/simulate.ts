@@ -1,6 +1,7 @@
 import type { SendMessageConfigT, StepDef } from '../blocks/definition.schema';
 import { Flow, interpolate } from './flow';
 import { RunFacts, conditionMatches, variablesFor } from './run-context';
+import { parseRating } from '../../reviews/review-rating';
 
 export interface TraceStep {
     stepId: string;
@@ -125,6 +126,16 @@ export function simulate(
                 };
                 if (c.action === 'create_draft_order') f.context.vars['draft.checkout_url'] = 'https://your-store.example/checkout/…';
                 push('done', said[String(c.action)] ?? 'Runs a store action.');
+                break;
+            }
+            case 'post_review': {
+                const given = interpolate(String(c.rating ?? ''), vars);
+                const rating = parseRating(given);
+                if (rating === null) {
+                    push('error', `No rating from 1 to 5 in “${given}”.`);
+                    return trace;
+                }
+                push('done', `Publishes a ${rating}★ review of the order to Judge.me (not published in a test).`);
                 break;
             }
             default:

@@ -53,6 +53,7 @@ import { CommerceModule } from './commerce/commerce.module';
 import { PaymentsModule } from './payments/payments.module';
 import { GrowthModule } from './growth/growth.module';
 import { AdsModule } from './ads/ads.module';
+import { ReviewsModule } from './reviews/reviews.module';
 import { DeveloperModule } from './developer/developer.module';
 
 @Module({
@@ -124,6 +125,7 @@ import { DeveloperModule } from './developer/developer.module';
     PaymentsModule,
     GrowthModule,
     AdsModule,
+    ReviewsModule,
     DeveloperModule,
   ],
   controllers: [AppController],

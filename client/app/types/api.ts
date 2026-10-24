@@ -4379,7 +4379,8 @@ export type AutomationBlockType =
   | "set_status"
   | "add_note"
   | "http_request"
-  | "store_action";
+  | "store_action"
+  | "post_review";
 
 /** One block of a flow. Condition (yes / no) and wait-for-reply (replied / timeout) carry branches. */
 export interface AutomationStep {
@@ -4844,4 +4845,45 @@ export interface MessagingAnalytics {
     free: number;
     unpriced: number;
   };
+}
+
+// ─── Reviews (Campaigns → Reviews) ─────────────────────────────────────────
+
+/** The store's Judge.me, where reviews collected on WhatsApp are published. */
+export interface ReviewAccountView {
+  connected: boolean;
+  provider: "JUDGEME";
+  shopDomain: string | null;
+  shopName: string | null;
+  /** Whether Judge.me publishes new reviews without approval; null when unknown. */
+  autopublish: boolean | null;
+  connectedAt: string | null;
+}
+
+/** POSTED: sent to Judge.me · SAVED: kept in Collabo only, with the reason · FAILED: Judge.me refused it. */
+export type ProductReviewStatus = "POSTED" | "SAVED" | "FAILED";
+
+export interface ProductReviewView {
+  id: string;
+  rating: number;
+  body: string;
+  /** Null for a review of the shop. */
+  productTitle: string | null;
+  reviewerName: string;
+  contactName: string;
+  order: { id: string; name: string } | null;
+  conversationId: string | null;
+  status: ProductReviewStatus;
+  reason: string | null;
+  createdAt: string;
+  postedAt: string | null;
+}
+
+export interface ReviewsList {
+  reviews: ProductReviewView[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Over every review, whatever the filters. */
+  stats: { count: number; average: number | null; byRating: Record<number, number>; published: number };
 }
