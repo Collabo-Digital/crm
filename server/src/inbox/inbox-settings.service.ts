@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { resolveReportingTimeZone } from '../common/utils/zoned-date.util';
 import { InboxSettings, parseInboxSettings, validateInboxSettings } from './inbox-settings.schema';
 
 /** Business hours, auto-replies, routing and auto-close, stored per organization. */
@@ -8,14 +9,18 @@ import { InboxSettings, parseInboxSettings, validateInboxSettings } from './inbo
 export class InboxSettingsService {
     constructor(private readonly prisma: PrismaService) { }
 
-    /** The settings, and the time zone business hours are read in. */
+    /**
+     * The settings, and the time zone business hours are read in: the card's
+     * own zone if set, else the workspace's, where the untouched 'UTC'
+     * default means India as it does on every other screen.
+     */
     async get(orgId: string): Promise<{ settings: InboxSettings; timeZone: string }> {
         const org = await this.prisma.organization.findUnique({
             where: { id: orgId },
             select: { timezone: true, settings: { select: { inboxSettings: true } } },
         });
         const settings = parseInboxSettings(org?.settings?.inboxSettings);
-        return { settings, timeZone: validZone(settings.businessHours.timezone) ?? validZone(org?.timezone) ?? 'UTC' };
+        return { settings, timeZone: validZone(settings.businessHours.timezone) ?? resolveReportingTimeZone(org ?? {}) };
     }
 
     async view(orgId: string) {

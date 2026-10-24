@@ -3,6 +3,7 @@ import {
     ForbiddenException,
     Injectable,
     Logger,
+    ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -63,6 +64,13 @@ interface RazorpayWebhookPayload {
         };
     };
 }
+
+/** Subscriptions Razorpay will not charge again. */
+const ENDED_SUBSCRIPTION: SubscriptionStatus[] = [
+    SubscriptionStatus.CANCELLED,
+    SubscriptionStatus.COMPLETED,
+    SubscriptionStatus.EXPIRED,
+];
 
 /**
  * Orchestrates the onboarding payment flow.
@@ -297,6 +305,40 @@ export class BillingService {
                 pendingSubscriptionStatus: null,
                 pendingCurrentPeriodEnd: null,
             },
+        });
+    }
+
+    /**
+     * End the Razorpay subscription of a workspace that is being deleted, so it
+     * is not charged again. Throws when Razorpay cannot be asked, so the
+     * deletion stops instead of leaving a deleted workspace on a live
+     * subscription; the owner can try again.
+     */
+    async cancelOrganizationSubscription(orgId: string): Promise<void> {
+        const org = await this.prisma.organization.findUnique({
+            where: { id: orgId },
+            select: { externalSubscriptionId: true, subscriptionStatus: true },
+        });
+        const subscriptionId = org?.externalSubscriptionId;
+        if (!subscriptionId || (org.subscriptionStatus && ENDED_SUBSCRIPTION.includes(org.subscriptionStatus))) return;
+        if (!this.razorpay.isConfigured()) {
+            this.logger.error(`Org ${orgId} is being deleted with subscription ${subscriptionId}, but Razorpay is not configured to cancel it`);
+            return;
+        }
+        try {
+            const sub = await this.razorpay.fetchSubscription(subscriptionId);
+            if (!ENDED_SUBSCRIPTION.includes(this.mapRazorpayStatus(sub.status))) {
+                await this.razorpay.cancelSubscription(subscriptionId);
+            }
+        } catch (err) {
+            this.logger.error(`Cancelling subscription ${subscriptionId} of org ${orgId} failed: ${this.extractRazorpayError(err) ?? JSON.stringify(err)}`);
+            throw new ServiceUnavailableException(
+                'Your Collabo subscription could not be cancelled with Razorpay just now, so the workspace was not deleted. Try again in a few minutes.',
+            );
+        }
+        await this.prisma.organization.update({
+            where: { id: orgId },
+            data: { subscriptionStatus: SubscriptionStatus.CANCELLED },
         });
     }
 

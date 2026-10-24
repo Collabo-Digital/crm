@@ -42,6 +42,7 @@ export class UserController {
   }
 
   @Patch('me')
+  @AllowVendor()
   @AllowInfluencer()
   async updateProfile(@CurrentUser() user: JwtPayload, @Body() dto: UpdateUserDto) {
     const updated = await this.userService.update(user.sub, dto);
@@ -49,10 +50,12 @@ export class UserController {
   }
 
   @Post('me/change-password')
+  @AllowVendor()
   @AllowInfluencer()
   async changePassword(@CurrentUser() user: JwtPayload, @Body() dto: ChangePasswordDto) {
     await this.userService.changePassword(user.sub, dto.currentPassword, dto.newPassword);
-    await this.authService.revokeAllUserTokens(user.sub);
+    // The session that made the change stays signed in; every other one ends.
+    await this.authService.revokeAllUserTokens(user.sub, user.sid);
     return { message: 'Password changed. All other sessions have been revoked.' };
   }
 

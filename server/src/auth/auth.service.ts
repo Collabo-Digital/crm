@@ -134,7 +134,10 @@ export class AuthService {
   }
 
   async resendVerification(userId: string) {
-    const user = await this.userService.regenerateVerifyCode(userId);
+    // Over the limit, the code already sent stays valid; nothing new is sent.
+    const user = (await this.redis.allowEmailSend('verify', userId))
+      ? await this.userService.regenerateVerifyCode(userId)
+      : null;
     if (user) {
       await this.emailService.sendVerificationCode(user.email, user.emailVerifyCode as string);
     }
@@ -145,18 +148,20 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, userAgent?: string, ipAddress?: string) {
-    // Rate limit check — block after 5 failed attempts per email
-    const attempts = await this.redis.getLoginAttempts(dto.email);
-    if (this.redis.isLoginBlocked(attempts)) {
+    const clientIp = ipAddress ?? 'unknown';
+    if (await this.redis.countLoginAttempt(dto.email, clientIp)) {
       throw new UnauthorizedException('Too many failed login attempts. Please try again in 15 minutes.');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-      include: {
-        memberships: { where: ACTIVE_MEMBERSHIP, orderBy: { createdAt: 'asc' }, include: { organization: true } },
-      },
-    });
+    const userId = await this.userService.findIdByEmail(dto.email);
+    const user = userId
+      ? await this.prisma.user.findUnique({
+          where: { id: userId },
+          include: {
+            memberships: { where: ACTIVE_MEMBERSHIP, orderBy: { createdAt: 'asc' }, include: { organization: true } },
+          },
+        })
+      : null;
 
     if (!user || user.deletedAt) {
       throw new UnauthorizedException('Invalid email or password');
@@ -164,14 +169,15 @@ export class AuthService {
 
     const isValid = await bcrypt.compare(dto.password, user.password);
     if (!isValid) {
-      await this.redis.incrementLoginAttempts(dto.email);
       throw new UnauthorizedException('Invalid email or password');
     }
 
     // CHANGED: include userId in error so frontend can redirect to OTP page
     if (!user.emailVerified) {
-      // Resend OTP automatically 
-      const updatedUser = await this.userService.regenerateVerifyCode(user.id);
+      // Resend OTP automatically, within the same per-recipient limit as the resend button
+      const updatedUser = (await this.redis.allowEmailSend('verify', user.id))
+        ? await this.userService.regenerateVerifyCode(user.id)
+        : null;
       if (updatedUser) {
         await this.emailService.sendVerificationCode(user.email, updatedUser.emailVerifyCode!);
       }
@@ -195,7 +201,7 @@ export class AuthService {
     }
 
     // Reset rate limit on successful login
-    await this.redis.resetLoginAttempts(dto.email);
+    await this.redis.resetLoginAttempts(dto.email, clientIp);
 
     // Sync the Collabo-team super-admin flag against the env allowlist before issuing a token.
     await this.syncSuperAdminFlag(user);
@@ -323,7 +329,7 @@ export class AuthService {
     // Only revoke a refresh token that belongs to the caller.
     const tokenData = await this.redis.getRefreshToken<{ userId: string }>(refreshToken);
     if (tokenData?.userId === userId) {
-      await this.revokeRefreshToken(refreshToken);
+      await this.revokeRefreshToken(refreshToken, userId);
     }
     // Kill the access token too, not just the refresh token.
     if (sid) await this.redis.deleteAuthSession(sid, userId);
@@ -332,15 +338,21 @@ export class AuthService {
   }
 
   async forgotPassword(email: string) {
+    const message = 'If an account exists with this email, a reset link has been sent to your email.';
+    // Limited per address before the lookup, so the answer and its timing say
+    // nothing about whether an account exists.
+    if (!(await this.redis.allowEmailSend('password-reset', email))) return { message };
+
     const user = await this.userService.findByEmail(email);
     if (user && !user.deletedAt) {
       const token = randomBytes(32).toString('hex');
       await this.prisma.passwordResetToken.create({
         data: { userId: user.id, token, expiresAt: new Date(Date.now() + 3600000) },
       });
-      await this.emailService.sendPasswordResetLink(email, token);
+      // The account's own address: the lookup ignores case, the mailbox is the account's.
+      await this.emailService.sendPasswordResetLink(user.email, token);
     }
-    return { message: 'If an account exists with this email, a reset link has been sent to your email.' };
+    return { message };
   }
 
   async resetPassword(dto: ResetPasswordDto) {
@@ -455,7 +467,7 @@ export class AuthService {
         where: { id: callerUserId },
         select: { id: true, email: true },
       });
-      if (caller && caller.email !== invite.email) {
+      if (caller && caller.email.toLowerCase() !== invite.email.toLowerCase()) {
         throw new ForbiddenException(
           `This invitation was sent to ${invite.email}. You are signed in as ${caller.email}. Sign out and open the invitation link again.`,
         );
@@ -746,15 +758,16 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  async revokeRefreshToken(token: string): Promise<void> {
-    await this.redis.deleteRefreshToken(token);
+  async revokeRefreshToken(token: string, userId?: string): Promise<void> {
+    await this.redis.deleteRefreshToken(token, userId);
     // Audit trail (fire-and-forget)
     this.prisma.refreshToken.updateMany({ where: { token, revokedAt: null }, data: { revokedAt: new Date() } }).catch(() => { });
   }
 
-  async revokeAllUserTokens(userId: string): Promise<void> {
-    await this.redis.deleteAllUserTokens(userId);
-    await this.redis.deleteAllAuthSessions(userId);
+  /** End every session of a user; `keepSid` keeps that one (the caller's own) signed in. */
+  async revokeAllUserTokens(userId: string, keepSid?: string): Promise<void> {
+    await this.redis.deleteAllUserTokens(userId, keepSid);
+    await this.redis.deleteAllAuthSessions(userId, keepSid);
     await this.redis.deleteSession(userId);
     // Audit trail (fire-and-forget)
     this.prisma.refreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } }).catch(() => { });

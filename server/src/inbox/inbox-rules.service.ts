@@ -65,6 +65,15 @@ export class InboxRulesService {
         if (!conversation) return;
         const { settings, timeZone } = await this.settings.get(event.organizationId);
 
+        // A reopened chat still held by someone who has left (or can no longer
+        // take chats) would be seen by nobody but admins: route it afresh.
+        if (event.newConversation && conversation.assignedUserId && !(await this.activeMember(event.organizationId, conversation.assignedUserId))) {
+            await this.prisma.conversation.updateMany({
+                where: { id: conversation.id, assignedUserId: conversation.assignedUserId },
+                data: { assignedUserId: null },
+            });
+            conversation.assignedUserId = null;
+        }
         if (event.newConversation && !conversation.assignedUserId) await this.route(conversation, event, settings);
         if (!opts.automated && MESSAGE_EVENTS.has(event.eventType)) await this.autoReply(conversation, event, settings, timeZone);
     }
