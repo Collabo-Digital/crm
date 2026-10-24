@@ -59,6 +59,10 @@ export function contactKey(ref: ContactRef): string | null {
 const isUniqueViolation = (err: unknown) =>
     err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 
+/// A customer added since is linked on the first message after this.
+const UNMATCHED_TTL_MS = 10 * 60_000;
+const UNMATCHED_MAX = 20_000;
+
 /**
  * Finds or creates the ChannelContact for a platform identity, keeping
  * WhatsApp contacts stable across the identity changes Meta now makes: a
@@ -69,6 +73,8 @@ const isUniqueViolation = (err: unknown) =>
 @Injectable()
 export class ContactIdentityService {
     private readonly logger = new Logger(ContactIdentityService.name);
+    /** "org:waId" of numbers that matched no single customer, with when; oldest first. */
+    private readonly unmatched = new Map<string, number>();
 
     async resolve(
         tx: Prisma.TransactionClient,
@@ -174,9 +180,17 @@ export class ContactIdentityService {
     /**
      * Link a WhatsApp contact to the store customer with the same phone
      * number (see storedPhoneIs), when exactly one matches.
+     *
+     * The match scans the organization's customers (no index can serve it),
+     * so a number that matched nobody is not looked up again for a while:
+     * otherwise every message from it, and every item of a history import,
+     * would repeat the scan.
      */
-    async linkCustomerByPhone(tx: Prisma.TransactionClient, contact: ChannelContact): Promise<string | null> {
+    async linkCustomerByPhone(tx: Prisma.TransactionClient, contact: ChannelContact, now = Date.now()): Promise<string | null> {
         if (contact.customerId || !contact.waId || contact.waId.length < 10) return contact.customerId;
+        const key = `${contact.organizationId}:${contact.waId}`;
+        const checkedAt = this.unmatched.get(key);
+        if (checkedAt !== undefined && now - checkedAt < UNMATCHED_TTL_MS) return null;
         const matches = await tx.$queryRaw<Array<{ id: string }>>`
             SELECT "id" FROM "customers"
             WHERE "organization_id" = ${contact.organizationId}
@@ -185,7 +199,12 @@ export class ContactIdentityService {
               AND ${storedPhoneIs(Prisma.raw('"phone"'), contact.waId)}
             LIMIT 2
         `;
-        if (matches.length !== 1) return null;
+        if (matches.length !== 1) {
+            this.unmatched.delete(key);
+            if (this.unmatched.size >= UNMATCHED_MAX) this.unmatched.delete(this.unmatched.keys().next().value!);
+            this.unmatched.set(key, now);
+            return null;
+        }
         await tx.channelContact.update({ where: { id: contact.id }, data: { customerId: matches[0].id } });
         await tx.conversation.updateMany({
             where: { contactId: contact.id, customerId: null },

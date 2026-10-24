@@ -1,6 +1,9 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import type { RawBodyRequest } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import { json } from 'express';
+import type { IncomingMessage } from 'node:http';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import compression from 'compression';
@@ -15,6 +18,10 @@ import { EXPORT_EXPOSED_HEADERS } from './common/utils/export-headers.util';
 /// never runs and we cannot even log the miss. Shopify counts those as failed
 /// deliveries and eventually DELETES the subscription, silently stopping sync.
 const REQUEST_BODY_LIMIT = '2mb';
+/// Meta's webhooks go up to 3 MB (WhatsApp Business app history chunks are
+/// the largest), and a 413 is raised before the signature is even checked.
+const META_WEBHOOK_PATHS = ['/api/v1/webhooks/whatsapp', '/api/v1/webhooks/messenger', '/api/v1/webhooks/instagram'];
+const META_WEBHOOK_BODY_LIMIT = '5mb';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -53,6 +60,17 @@ async function bootstrap() {
 
   // Must precede route handling. `rawBody: true` above still captures the
   // untouched buffer the Shopify HMAC check needs — up to this same limit.
+  // The Meta webhooks get their own parser first; the global one then skips
+  // a body that is already read.
+  app.use(
+    META_WEBHOOK_PATHS,
+    json({
+      limit: META_WEBHOOK_BODY_LIMIT,
+      verify: (req: RawBodyRequest<IncomingMessage>, _res, buffer) => {
+        req.rawBody = buffer;
+      },
+    }),
+  );
   app.useBodyParser('json', { limit: REQUEST_BODY_LIMIT });
   app.useBodyParser('urlencoded', { limit: REQUEST_BODY_LIMIT, extended: true });
 

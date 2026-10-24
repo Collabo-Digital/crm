@@ -273,6 +273,12 @@ function checkShape(platform: ChannelPlatform, payload: OutboundPayload): GateRe
             if (!wa) return refuse('unsupported_on_platform', 'The catalog can be sent on WhatsApp only.');
             if (!payload.text.trim() || payload.text.length > 1024) return refuse('invalid_payload', 'Write a message of up to 1,024 characters.');
             return null;
+        case 'media':
+            // WhatsApp takes WebP only as a sticker; as a picture Meta refuses it after it was queued.
+            if (wa && payload.mediaKind === 'image' && !['image/jpeg', 'image/png'].includes(payload.mime.split(';')[0].trim().toLowerCase())) {
+                return refuse('invalid_payload', 'WhatsApp sends pictures as JPEG or PNG only. Save this picture as JPEG or PNG and attach it again.');
+            }
+            return null;
         default:
             return null;
     }

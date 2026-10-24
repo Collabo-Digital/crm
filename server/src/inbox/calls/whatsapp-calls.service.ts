@@ -251,6 +251,14 @@ export class WhatsAppCallsService {
             // Webhooks can repeat; a terminate can also come before its connect.
             if (known || !c.sdp || !c.user) return;
             const { contact, conversation } = await this.chatFor(channel, c.user, at);
+            if (!conversation) {
+                // Blocked: decline at once, without ringing the team or reopening the chat.
+                await this.access
+                    .get(channel.id)
+                    .then((a) => this.call(a, { messaging_product: 'whatsapp', call_id: c.id, action: 'reject' }))
+                    .catch((err) => this.logger.warn(`Call ${c.id} from blocked contact ${contact.id} not declined: ${this.reason(err)}`));
+                return;
+            }
             const call = await this.prisma.whatsAppCall.create({
                 data: {
                     organizationId: channel.organizationId,
@@ -383,10 +391,15 @@ export class WhatsAppCallsService {
         return { status: res.permission?.status ?? 'no_permission', canCall: can('start_call'), canAsk: can('send_call_permission_request') };
     }
 
-    /** The contact and conversation a person's call belongs to; their call opens the 24-hour window. */
+    /**
+     * The contact and conversation a person's call belongs to; their call
+     * opens the 24-hour window. No conversation for a blocked contact: like
+     * their messages, their calls leave the chat closed.
+     */
     private async chatFor(channel: IngestChannel, user: WaContactRef, at: Date) {
         return this.prisma.$transaction(async (tx) => {
             const contact = await this.identity.resolve(tx, channel, this.ref(user), { kind: 'none' });
+            if (contact.blockedAt) return { contact, conversation: null };
             const existing = await tx.conversation.findUnique({ where: { channelId_contactId: { channelId: channel.id, contactId: contact.id } } });
             const conversation = existing
                 ? await tx.conversation.update({
@@ -414,6 +427,7 @@ export class WhatsAppCallsService {
     /** A call we only heard about when it ended (its connect was lost or came late). */
     private async recordMissed(channel: IngestChannel, c: WaCall, at: Date) {
         const { contact, conversation } = await this.chatFor(channel, c.user!, at);
+        if (!conversation) return null;
         try {
             return await this.prisma.whatsAppCall.create({
                 data: {

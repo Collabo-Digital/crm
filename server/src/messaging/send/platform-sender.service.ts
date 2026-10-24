@@ -121,10 +121,51 @@ export function metaErrorDetails(raw: unknown): string | null {
 const isUniqueViolation = (err: unknown) =>
     err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 
+/** A send whose outcome Collabo never learned, as the merchant reads it. */
+export const UNCONFIRMED_SEND =
+    'We could not confirm this message was sent, so it was not sent again automatically. It may still have reached the customer.';
+
+/// Connection errors raised before anything was sent.
+const NOT_CONNECTED = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
+
+/// Tries at writing Meta's message id before the job is left to retry.
+const RECORD_ATTEMPTS = 3;
+
+/**
+ * Whether a send that failed after it was handed to Meta may still have
+ * reached the customer: a timeout, a dropped connection, a 5xx Meta did not
+ * explain. A refusal Meta answered with, a rate limit, or a connection that
+ * never opened sent nothing.
+ */
+export function maySendHaveGoneOut(err: unknown): boolean {
+    if (isRateLimitedError(err) || err instanceof UnsupportedSend) return false;
+    if (err instanceof MetaGraphError) {
+        if (err.code === 'TIMEOUT') return true;
+        if (err.code === 'HTTP_ERROR') return (err.httpStatus ?? 0) >= 500;
+        return false;
+    }
+    const code = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+    return !(typeof code === 'string' && NOT_CONNECTED.has(code));
+}
+
+/** When an earlier attempt handed this row to Meta, if one did. */
+function handedOverAt(responsePayload: Prisma.JsonValue | null): string | null {
+    const at = (responsePayload as { handedOverAt?: unknown } | null)?.handedOverAt;
+    return typeof at === 'string' ? at : null;
+}
+
+/** Another attempt is already sending this row. */
+class AlreadyHandedOver extends Error { }
+
 /**
  * Delivers queued message rows to Meta and records the outcome. Rate limits
  * propagate (the worker parks the job); transient errors propagate (BullMQ
  * retries); permanent errors are written to the row.
+ *
+ * A row is marked handed over (responsePayload.handedOverAt) just before the
+ * request that sends it. A later attempt that finds the mark, or a failure
+ * that may have happened after Meta took the message, fails the row as
+ * unconfirmed instead of sending again: the customer must never get it twice.
  */
 @Injectable()
 export class PlatformSenderService {
@@ -145,29 +186,33 @@ export class PlatformSenderService {
             where: { id: messageId },
             include: { contact: true },
         });
-        if (!message || message.status !== MessageStatus.QUEUED || !message.contact) return 'skipped';
+        if (!message || message.status !== MessageStatus.QUEUED) return 'skipped';
+        if (handedOverAt(message.responsePayload)) return this.fail(message, undefined, UNCONFIRMED_SEND);
+        const contact = message.contact;
+        if (!contact) return this.fail(message, undefined, 'The contact was deleted, so this message was not sent.');
         const payload = (message.body as { payload?: OutboundPayload }).payload;
         if (!payload) return this.fail(message, undefined, 'Nothing to send.');
 
         const channel = await this.access.get(message.channelId);
+        let handedOver = false;
+        const handOver = async () => {
+            handedOver = await this.claim(message.id);
+            if (!handedOver) throw new AlreadyHandedOver();
+        };
+        let sent: { externalId: string; waId?: string };
         try {
-            const externalId =
+            sent =
                 payload.type === 'comment_reply'
-                    ? await this.replyToComment(channel, payload)
+                    ? { externalId: await this.replyToComment(channel, payload, handOver) }
                     : channel.platform === ChannelPlatform.WHATSAPP
-                        ? await this.sendWhatsApp(channel, message.contact, payload, message.replyToExternalId)
-                        : await this.sendMessenger(channel, message.contact.externalId, payload, message.replyToExternalId, humanAgentTag);
-            await this.markSent(message.id, message.channelId, externalId);
-            if (channel.platform === ChannelPlatform.WHATSAPP) {
-                await this.usageMeter.noteMessage(message.organizationId, message.contact.id, new Date());
-            }
-            if (payload.type === 'reaction') {
-                await this.applyBusinessReaction(channel, payload.targetExternalId, payload.emoji);
-            }
-            this.publish(message.organizationId, message.conversationId, message.id);
-            return 'sent';
+                        ? await this.sendWhatsApp(channel, contact, payload, message.replyToExternalId, handOver)
+                        : { externalId: await this.sendMessenger(channel, contact.externalId, payload, message.replyToExternalId, humanAgentTag, handOver) };
         } catch (err) {
-            if (isRateLimitedError(err)) throw err;
+            if (err instanceof AlreadyHandedOver) return 'skipped';
+            if (isRateLimitedError(err)) {
+                if (handedOver) await this.release(message.id);
+                throw err;
+            }
             if (err instanceof MetaGraphError) {
                 if (err.code === 'AUTH_FAILED') {
                     await this.prisma.channel.update({
@@ -181,8 +226,40 @@ export class PlatformSenderService {
                 }
             }
             if (err instanceof UnsupportedSend) return this.fail(message, undefined, err.message);
+            if (handedOver && maySendHaveGoneOut(err)) {
+                this.logger.warn(`Message ${message.id}: outcome unknown, not sent again: ${err instanceof Error ? err.message : err}`);
+                return this.fail(message, undefined, UNCONFIRMED_SEND);
+            }
+            if (handedOver) await this.release(message.id);
             throw err;
         }
+
+        await this.recordSent(message.id, message.channelId, sent.externalId);
+        if (sent.waId && sent.waId !== contact.waId) {
+            await this.prisma.channelContact
+                .update({ where: { id: contact.id }, data: { waId: sent.waId, phone: `+${sent.waId}` } })
+                .catch((err) => this.logger.warn(`Contact ${contact.id}: phone number from WhatsApp not saved: ${err}`));
+        }
+        if (channel.platform === ChannelPlatform.WHATSAPP) {
+            await this.usageMeter.noteMessage(message.organizationId, contact.id, new Date());
+        }
+        if (payload.type === 'reaction') {
+            await this.applyBusinessReaction(channel, payload.targetExternalId, payload.emoji);
+        }
+        this.publish(message.organizationId, message.conversationId, message.id);
+        return 'sent';
+    }
+
+    /**
+     * Fails a message the queue gave up on (retries spent, or rate limited for
+     * too long), if it is still waiting to go out.
+     */
+    async giveUp(messageId: string, reason: string, code?: number): Promise<void> {
+        const message = await this.prisma.message.findUnique({
+            where: { id: messageId },
+            select: { id: true, organizationId: true, conversationId: true, contactId: true, status: true },
+        });
+        if (message?.status === MessageStatus.QUEUED) await this.fail(message, code, reason);
     }
 
     /** Blue ticks on WhatsApp, "seen" on Messenger and Instagram. */
@@ -218,7 +295,8 @@ export class PlatformSenderService {
         contact: { externalId: string; waId: string | null; id: string },
         payload: OutboundPayload,
         replyToExternalId: string | null,
-    ): Promise<string> {
+        handOver: () => Promise<void>,
+    ): Promise<{ externalId: string; waId?: string }> {
         const groupId = groupIdOfContact(contact.externalId);
         const isBsuid = /^[A-Z]{2}\./.test(contact.externalId);
         const recipient = groupId
@@ -243,8 +321,10 @@ export class PlatformSenderService {
                 scopes: channel.scopes,
                 priority: Priority.INTERACTIVE,
                 channelId: channel.id,
+                idempotent: false,
             });
         let res: Awaited<ReturnType<typeof send>>;
+        await handOver();
         try {
             res = await send(marketing && channel.marketingMessagesApi);
         } catch (err) {
@@ -257,11 +337,7 @@ export class PlatformSenderService {
         }
         const id = res.data.messages?.[0]?.id;
         if (!id) throw new MetaGraphError('WhatsApp returned no message id', 'API_ERROR');
-        const waId = groupId ? undefined : res.data.contacts?.[0]?.wa_id;
-        if (waId && waId !== contact.waId) {
-            await this.prisma.channelContact.update({ where: { id: contact.id }, data: { waId, phone: `+${waId}` } });
-        }
-        return id;
+        return { externalId: id, waId: groupId ? undefined : res.data.contacts?.[0]?.wa_id };
     }
 
     private async sendMessenger(
@@ -270,8 +346,10 @@ export class PlatformSenderService {
         payload: OutboundPayload,
         replyToExternalId: string | null,
         humanAgentTag: boolean,
+        handOver: () => Promise<void>,
     ): Promise<string> {
         const attachmentId = payload.type === 'media' ? await this.uploadMessengerAttachment(channel, payload) : null;
+        await handOver();
         const res = await this.metaGraph.request<{ message_id?: string; recipient_id?: string }>({
             method: 'POST',
             ...(channel.baseUrl ? { url: `${channel.baseUrl}${channel.sendPath}` } : { path: channel.sendPath }),
@@ -281,6 +359,7 @@ export class PlatformSenderService {
             pageId: channel.pageId ?? undefined,
             priority: Priority.INTERACTIVE,
             channelId: channel.id,
+            idempotent: false,
         });
         // Reactions answer without a message id; there is no row to key.
         return res.data.message_id ?? `${payload.type}:${Date.now()}`;
@@ -347,8 +426,13 @@ export class PlatformSenderService {
      * Instagram `POST /{ig-comment-id}/replies`. Our own reply comes back on
      * the comments webhook from the account itself, which the handler skips.
      */
-    private async replyToComment(channel: ChannelAccess, payload: Extract<OutboundPayload, { type: 'comment_reply' }>): Promise<string> {
+    private async replyToComment(
+        channel: ChannelAccess,
+        payload: Extract<OutboundPayload, { type: 'comment_reply' }>,
+        handOver: () => Promise<void>,
+    ): Promise<string> {
         const path = channel.platform === ChannelPlatform.INSTAGRAM ? `/${payload.commentId}/replies` : `/${payload.commentId}/comments`;
+        await handOver();
         const res = await this.metaGraph.request<{ id?: string }>({
             method: 'POST',
             ...(channel.baseUrl ? { url: `${channel.baseUrl}${path}` } : { path }),
@@ -358,6 +442,7 @@ export class PlatformSenderService {
             pageId: channel.pageId ?? undefined,
             priority: Priority.INTERACTIVE,
             channelId: channel.id,
+            idempotent: false,
         });
         if (!res.data.id) throw new MetaGraphError('Meta returned no comment id', 'API_ERROR');
         return res.data.id;
@@ -411,14 +496,47 @@ export class PlatformSenderService {
         return res.data.attachment_id;
     }
 
+    /** Marks the row as on its way to Meta. False when another attempt already has. */
+    private async claim(messageId: string): Promise<boolean> {
+        const { count } = await this.prisma.message.updateMany({
+            where: { id: messageId, status: MessageStatus.QUEUED, responsePayload: { equals: Prisma.AnyNull } },
+            data: { responsePayload: { handedOverAt: new Date().toISOString() } },
+        });
+        return count === 1;
+    }
+
+    /** Meta refused or never got the message: the next attempt may send it. */
+    private async release(messageId: string) {
+        await this.prisma.message
+            .updateMany({ where: { id: messageId, status: MessageStatus.QUEUED }, data: { responsePayload: Prisma.DbNull } })
+            .catch((err) => this.logger.warn(`Message ${messageId}: hand-over mark not cleared: ${err}`));
+    }
+
+    /**
+     * Meta has the message: write its id before anything else, and try again
+     * on a database error, because a retried job must never send it twice.
+     */
+    private async recordSent(messageId: string, channelId: string, externalId: string) {
+        const data = { status: MessageStatus.SENT, externalId, sentAt: new Date() };
+        for (let attempt = 1; ; attempt++) {
+            try {
+                await this.writeSent(messageId, channelId, data);
+                break;
+            } catch (err) {
+                if (attempt >= RECORD_ATTEMPTS) throw err;
+                this.logger.warn(`Message ${messageId} (${externalId}) sent but not yet recorded: ${err}`);
+                await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+            }
+        }
+        await this.broadcasts.onStatus(messageId, MessageStatus.SENT, data.sentAt);
+    }
+
     /**
      * Messenger and Instagram echo our own sends back as webhooks, and the echo
      * can land before this response. If it did, it was stored as a separate
      * row under the same platform id: drop that copy and keep ours.
      */
-    private async markSent(messageId: string, channelId: string, externalId: string) {
-        const data = { status: MessageStatus.SENT, externalId, sentAt: new Date() };
-        await this.broadcasts.onStatus(messageId, MessageStatus.SENT, data.sentAt);
+    private async writeSent(messageId: string, channelId: string, data: { status: MessageStatus; externalId: string; sentAt: Date }) {
         try {
             await this.prisma.message.update({ where: { id: messageId }, data });
         } catch (err) {
@@ -426,7 +544,7 @@ export class PlatformSenderService {
             await this.prisma.message.deleteMany({
                 where: {
                     channelId,
-                    externalId,
+                    externalId: data.externalId,
                     id: { not: messageId },
                     direction: MessageDirection.OUTBOUND,
                     source: { in: [MessageSource.OTHER_APP, MessageSource.BUSINESS_APP] },
@@ -451,8 +569,8 @@ export class PlatformSenderService {
         code: number | undefined,
         reason: string,
     ): Promise<'failed'> {
-        await this.prisma.message.update({
-            where: { id: message.id },
+        const { count } = await this.prisma.message.updateMany({
+            where: { id: message.id, status: MessageStatus.QUEUED },
             data: {
                 status: MessageStatus.FAILED,
                 failedAt: new Date(),
@@ -460,6 +578,7 @@ export class PlatformSenderService {
                 errorMessage: reason,
             },
         });
+        if (!count) return 'failed';
         if (message.contactId) {
             await this.prisma.channelContact.update({
                 where: { id: message.contactId },

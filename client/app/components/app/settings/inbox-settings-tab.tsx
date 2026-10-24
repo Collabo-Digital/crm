@@ -206,7 +206,7 @@ function QuickReplyDialog({
               ref={fileRef}
               type="file"
               className="hidden"
-              accept="image/jpeg,image/png,image/webp,video/mp4,application/pdf"
+              accept="image/jpeg,image/png,video/mp4,application/pdf"
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (!file) return;

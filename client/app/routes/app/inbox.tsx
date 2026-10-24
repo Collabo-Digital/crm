@@ -25,6 +25,7 @@ import { Button } from "~/components/ui/button";
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderTitle } from "~/components/ui/page-header";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "~/components/ui/sheet";
 import { useChannels } from "~/hooks/use-channel-queries";
+import { usePageActive } from "~/hooks/use-page-active";
 import {
   useAddNoteMutation,
   useBulkConversationsMutation,
@@ -214,15 +215,20 @@ export default function InboxPage() {
   const deleteView = useDeleteViewMutation();
 
   /**
-   * Clear the unread badge once a thread is open. Keyed on the id and the
-   * count, NOT on the conversation object, which changes on every refetch.
+   * Clear the unread badge once a thread is open and someone is looking at
+   * it: marking read sends the customer blue ticks and clears the badge for
+   * the whole team, so a background tab or a viewer never does. Keyed on the
+   * id and the count, NOT on the conversation object, which changes on every
+   * refetch.
    */
+  const pageActive = usePageActive();
   const unreadCount = conversation?.unreadCount ?? 0;
   const openId = conversation?.id;
+  const canMarkRead = !!conversation?.reply.canReply;
   const markReadMutate = markRead.mutate;
   useEffect(() => {
-    if (openId && unreadCount > 0) markReadMutate(openId);
-  }, [openId, unreadCount, markReadMutate]);
+    if (openId && unreadCount > 0 && pageActive && canMarkRead) markReadMutate(openId);
+  }, [openId, unreadCount, pageActive, canMarkRead, markReadMutate]);
 
   // A quote or comment target belongs to the thread it was picked in.
   useEffect(() => {

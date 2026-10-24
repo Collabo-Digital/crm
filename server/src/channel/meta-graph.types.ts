@@ -56,6 +56,10 @@ export interface MetaRequest {
   scopes: RateLimitScope[];
   priority?: Priority;
   channelId?: string;
+  /// False for a POST that must not be repeated blindly (a message send): a
+  /// 5xx without Meta's error object may have been processed, so it is thrown
+  /// at once as HTTP_ERROR instead of being sent again.
+  idempotent?: boolean;
   timeoutMs?: number;
   graphVersion?: string;
   /// Ids the usage headers do not carry themselves.

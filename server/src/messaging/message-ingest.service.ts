@@ -61,6 +61,21 @@ export interface BusinessInput extends BaseInput {
     status?: MessageStatus;
 }
 
+/// How long after Meta's timestamp a status for an unknown message is retried
+/// rather than dropped: the send that will own it may not have saved its id yet.
+const STATUS_GRACE_MS = 2 * 60_000;
+
+/**
+ * A status arrived for a message whose send is still being recorded. Thrown
+ * so the webhook delivery is processed again shortly.
+ */
+export class StatusBeforeMessage extends Error {
+    constructor(readonly externalId: string) {
+        super(`Status for ${externalId} arrived before the message was saved`);
+        this.name = 'StatusBeforeMessage';
+    }
+}
+
 const STATUS_RANK: Record<MessageStatus, number> = {
     [MessageStatus.QUEUED]: 0,
     [MessageStatus.SENT]: 1,
@@ -417,7 +432,13 @@ export class MessageIngestService {
             where: { channelId: channel.id, externalId, direction: MessageDirection.OUTBOUND },
             select: { id: true, status: true, conversationId: true, contactId: true, organizationId: true, sentAt: true },
         });
-        if (!message) return false;
+        if (!message) {
+            // Meta can report on a message before our send has saved its id.
+            if (Date.now() - update.at.getTime() < STATUS_GRACE_MS && (await this.hasSendInFlight(channel))) {
+                throw new StatusBeforeMessage(externalId);
+            }
+            return false;
+        }
         const advance = statusAdvances(message.status, update.status);
         if (!advance && !update.pricing) return false;
 
@@ -460,10 +481,26 @@ export class MessageIngestService {
             }
         }
         if (advance) await this.broadcastTracker.onStatus(message.id, update.status, update.at, update.error);
-        if (message.conversationId) {
+        // Pricing alone changes nothing an open inbox shows.
+        if (advance && message.conversationId) {
             this.events.publish(message.organizationId, { type: 'message.updated', conversationId: message.conversationId, messageId: message.id });
         }
         return advance;
+    }
+
+    /** A message on this channel is being sent and has no platform id yet. */
+    private async hasSendInFlight(channel: IngestChannel): Promise<boolean> {
+        const row = await this.prisma.message.findFirst({
+            where: {
+                organizationId: channel.organizationId,
+                status: MessageStatus.QUEUED,
+                channelId: channel.id,
+                direction: MessageDirection.OUTBOUND,
+                externalId: null,
+            },
+            select: { id: true },
+        });
+        return !!row;
     }
 
     /**
