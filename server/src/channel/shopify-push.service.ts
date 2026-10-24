@@ -1,5 +1,11 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ChannelPlatform, ChannelStatus, OrderFulfillmentStatus, Prisma } from '@prisma/client';
+import {
+  ChannelPlatform,
+  ChannelStatus,
+  OrderFinancialStatus,
+  OrderFulfillmentStatus,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { mergeJsonMetadata } from '../common/utils/jsonb-merge.util';
 import { countryCodeOf, normalizePhone } from '../common/phone.util';
@@ -124,6 +130,42 @@ export function isStalePendingSync(
   const at = Date.parse(sync.queuedAt);
   return !Number.isFinite(at) || now - at > STALE_PENDING_SYNC_MS;
 }
+
+/**
+ * Why a CRM order must not be pushed, or null when it may be.
+ *
+ * The push creates a PAID Shopify order with a SALE transaction for the full
+ * total and decrements Shopify stock, and a Shopify order cannot be deleted.
+ * A cancelled, refunded or voided sale would arrive as a live paid order that
+ * fulfilment apps may ship, and its echo would revive it in the CRM.
+ */
+export function unpushableOrderReason(order: {
+  cancelledAt: Date | null;
+  financialStatus: OrderFinancialStatus;
+}): string | null {
+  if (order.cancelledAt) {
+    return 'This order was cancelled, so it is not sent to Shopify.';
+  }
+  if (order.financialStatus === OrderFinancialStatus.REFUNDED) {
+    return 'This order was refunded, so it is not sent to Shopify.';
+  }
+  if (order.financialStatus === OrderFinancialStatus.VOIDED) {
+    return 'This order was voided, so it is not sent to Shopify.';
+  }
+  return null;
+}
+
+/// The discount code a pushed CRM order carries in Shopify for its line
+/// discounts. Shown on the Shopify order; not a code a shopper can use.
+export const CRM_DISCOUNT_CODE = 'CRM-DISCOUNT';
+
+/** Prisma filter for the orders `unpushableOrderReason` lets through. */
+export const PUSHABLE_ORDER_WHERE: Prisma.OrderWhereInput = {
+  cancelledAt: null,
+  financialStatus: {
+    notIn: [OrderFinancialStatus.REFUNDED, OrderFinancialStatus.VOIDED],
+  },
+};
 
 /** inventorySetQuantities rejected a write because the item is not stocked
  *  at that location. Message fallback covers responses without `code`. */
@@ -329,6 +371,14 @@ export class ShopifyPushService {
       );
       return;
     }
+    // Re-checked here, not only at enqueue: the order can be cancelled while
+    // its job waits in the queue.
+    const unpushable = unpushableOrderReason(order);
+    if (unpushable) {
+      this.logger.log(`Order ${orderId} not pushed: ${unpushable}`);
+      await this.recordFailure(orderId, orgId, unpushable, /* incrementAttempt */ false);
+      return;
+    }
 
     const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(
       channel.id,
@@ -379,6 +429,18 @@ export class ShopifyPushService {
 
     const grandTotal = order.totalPrice.toString();
 
+    // Line prices go up undiscounted while the GST on `taxLines` and the SALE
+    // transaction are on the discounted value, so without the discount
+    // Shopify's total came out higher than the amount captured: the order
+    // landed PARTIALLY_PAID and its echo inflated the CRM order past its GST
+    // invoice. orderCreate has no per-line discount, so the lines' discounts
+    // go up as one fixed amount off the order (Shopify allocates it across the
+    // lines); the totals then match the CRM to the paisa.
+    const lineDiscountTotal = order.lineItems.reduce(
+      (sum, li) => sum.plus(li.totalDiscount),
+      new Prisma.Decimal(0),
+    );
+
     // A phone Shopify can't parse must not block the sale reaching Shopify —
     // send the order without it. The number itself stays out of the log.
     const phone = shopifyOrderPhone(order);
@@ -407,6 +469,16 @@ export class ShopifyPushService {
       sourceName: 'collabo-crm',
       sourceIdentifier: String(order.id || ''),
       lineItems,
+      ...(lineDiscountTotal.gt(0)
+        ? {
+          discountCode: {
+            itemFixedDiscountCode: {
+              code: CRM_DISCOUNT_CODE,
+              amountSet: money(lineDiscountTotal.toFixed(2)),
+            },
+          },
+        }
+        : {}),
       ...(customerBlock ? { customer: customerBlock } : {}),
       // A successful SALE transaction covering the total marks the order paid.
       transactions: [
@@ -419,12 +491,21 @@ export class ShopifyPushService {
       ],
     };
 
+    // A counter sale that was not pushed at sale time already had its stock
+    // sent to Shopify as an absolute figure (createOfflineOrder records that
+    // as `shopifyStockPushed`). Decrementing again would take the units off
+    // twice, and the inventory webhook would copy the drop back into the CRM.
+    const stockAlreadyPushed =
+      !!order.metadata &&
+      typeof order.metadata === 'object' &&
+      (order.metadata as Record<string, unknown>).shopifyStockPushed === true;
+
     const result = await this.graphql.request<OrderCreatePushResponse>(auth, ORDER_CREATE_MUTATION, {
       order: orderInput,
       options: {
         sendReceipt: false,
         sendFulfillmentReceipt: false,
-        inventoryBehaviour: 'DECREMENT_OBEYING_POLICY',
+        inventoryBehaviour: stockAlreadyPushed ? 'BYPASS' : 'DECREMENT_OBEYING_POLICY',
       },
     });
     ShopifyGraphqlClient.throwIfUserErrors(
@@ -2375,6 +2456,7 @@ export class ShopifyPushService {
         organizationId: orgId,
         channelId: manual.id,
         deletedAt: null,
+        ...PUSHABLE_ORDER_WHERE,
       },
       select: { id: true, metadata: true },
     });

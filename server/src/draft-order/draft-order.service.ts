@@ -10,6 +10,7 @@ import {
   ChannelStatus,
   DraftOrderStatus,
   Prisma,
+  SyncStatus,
 } from '@prisma/client';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
 import { randomUUID } from 'crypto';
@@ -32,6 +33,7 @@ import { countryCodeOf, phoneLookupVariants } from '../common/phone.util';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { displayVariantTitle } from '../product/variant-title.util';
 import { DraftMirrorEnqueuer } from './draft-mirror.enqueuer';
+import { draftLineAppliedDiscount } from './draft-line-discount.util';
 import {
   DRAFT_ORDER_COMPLETE_MUTATION,
   DRAFT_ORDER_CREATE_MUTATION,
@@ -1376,6 +1378,13 @@ export class DraftOrderService {
           ? li.variant.externalId
           : null;
 
+      const unitPrice = this.calculator.toNumber(li.price);
+      const appliedDiscount = draftLineAppliedDiscount(
+        li.totalDiscount != null ? this.calculator.toNumber(li.totalDiscount) : 0,
+        li.quantity,
+        unitPrice,
+      );
+
       if (shopifyVariantId) {
         lineItems.push({
           variantId: ShopifyGraphqlClient.toGid(
@@ -1383,7 +1392,8 @@ export class DraftOrderService {
             shopifyVariantId,
           ),
           quantity: li.quantity,
-          originalUnitPrice: this.calculator.toNumber(li.price).toFixed(2),
+          originalUnitPrice: unitPrice.toFixed(2),
+          ...(appliedDiscount ? { appliedDiscount } : {}),
         });
       } else {
         // Variant is CRM-only — Shopify can't reference it, so we send
@@ -1393,7 +1403,8 @@ export class DraftOrderService {
             ? `${li.title} — ${li.variantTitle}`
             : li.title,
           quantity: li.quantity,
-          originalUnitPrice: this.calculator.toNumber(li.price).toFixed(2),
+          originalUnitPrice: unitPrice.toFixed(2),
+          ...(appliedDiscount ? { appliedDiscount } : {}),
         });
       }
     }
@@ -1668,15 +1679,28 @@ export class DraftOrderService {
 
     // Sync orders so the newly-converted Shopify order appears locally.
     // Fire-and-forget — completion still succeeds even if sync is slow.
-    this.shopifySync
-      .runSync(shopifyChannelId, orgId, ['orders'])
-      .catch((err) => {
-        this.logger.warn(
-          `Post-completion order sync failed for org ${orgId}: ${
-            err instanceof Error ? err.message : err
-          }`,
-        );
-      });
+    //
+    // Pull only (no `pushAfter`): completing one draft must not send the rest
+    // of the CRM backlog to the store. Claimed like a Sync press, so it never
+    // runs beside a queued or running sync of the same channel — that run
+    // pulls the order anyway, and two runs overwrite each other's checkpoints.
+    const claim = await this.prisma.channel
+      .updateMany({
+        where: { id: shopifyChannelId, syncStatus: { not: SyncStatus.IN_PROGRESS } },
+        data: { syncStatus: SyncStatus.IN_PROGRESS },
+      })
+      .catch(() => ({ count: 0 }));
+    if (claim.count === 1) {
+      this.shopifySync
+        .runSync(shopifyChannelId, orgId, ['orders'])
+        .catch((err) => {
+          this.logger.warn(
+            `Post-completion order sync failed for org ${orgId}: ${
+              err instanceof Error ? err.message : err
+            }`,
+          );
+        });
+    }
 
     // The order reaches the CRM through the orders/create webhook (or the
     // sync above) a moment AFTER draftOrderComplete returns — looking it up

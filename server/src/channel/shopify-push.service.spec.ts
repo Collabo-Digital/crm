@@ -1,6 +1,8 @@
 import { ChannelPlatform, ChannelStatus, Prisma } from '@prisma/client';
 import {
+  CRM_DISCOUNT_CODE,
   ShopifyPushService,
+  unpushableOrderReason,
   isStalePendingSync,
   readStoredTaxLines,
   shopifyOrderCustomer,
@@ -62,6 +64,7 @@ function offlineOrder(overrides: Record<string, unknown> = {}) {
         variantTitle: null,
         quantity: 1,
         price: decimal('120'),
+        totalDiscount: decimal('0'),
         channelTaxLines: [
           { title: 'CGST', rate: 0.09, price: '10.80' },
           { title: 'SGST', rate: 0.09, price: '10.80' },
@@ -75,6 +78,7 @@ function offlineOrder(overrides: Record<string, unknown> = {}) {
         variantTitle: 'Large',
         quantity: 2,
         price: decimal('50'),
+        totalDiscount: decimal('0'),
         channelTaxLines: null,
         variant: { externalId: 'manual_variant_x' },
       },
@@ -315,6 +319,80 @@ describe('ShopifyPushService.pushOrder', () => {
 
     expect(fulfil).toHaveBeenCalledTimes(1);
     expect(fulfil).toHaveBeenCalledWith(expect.anything(), 'gid://shopify/Order/6418037801012');
+  });
+
+  // 1 × ₹1,000 with ₹100 off at 18% GST is ₹1,062 in the CRM. Without the
+  // discount Shopify totalled 1,000 + 162 = ₹1,162 against a ₹1,062 SALE.
+  it('sends the line discounts as one fixed amount off, so the totals match the SALE', async () => {
+    const order = offlineOrder({ totalPrice: decimal('1062.00') });
+    order.lineItems[0].totalDiscount = decimal('100');
+    order.lineItems[1].totalDiscount = decimal('0.50');
+    const { service, graphql } = build(order);
+
+    await service.pushOrder(ORDER_ID, ORG);
+
+    const input = (graphql.request.mock.calls.find((c) => c[1] === ORDER_CREATE_MUTATION)![2] as any).order;
+    expect(input.discountCode).toEqual({
+      itemFixedDiscountCode: {
+        code: CRM_DISCOUNT_CODE,
+        amountSet: { shopMoney: { amount: '100.50', currencyCode: 'INR' } },
+      },
+    });
+  });
+
+  it('sends no discount code for an undiscounted order', async () => {
+    const { service, graphql } = build(offlineOrder());
+    await service.pushOrder(ORDER_ID, ORG);
+    const input = (graphql.request.mock.calls.find((c) => c[1] === ORDER_CREATE_MUTATION)![2] as any).order;
+    expect(input).not.toHaveProperty('discountCode');
+  });
+
+  it('does not decrement Shopify stock again when the sale already pushed it', async () => {
+    const { service, graphql } = build(
+      offlineOrder({ metadata: { source: 'offline', paymentMethod: 'CARD', shopifyStockPushed: true } }),
+    );
+    await service.pushOrder(ORDER_ID, ORG);
+    const vars = graphql.request.mock.calls.find((c) => c[1] === ORDER_CREATE_MUTATION)![2] as any;
+    expect(vars.options.inventoryBehaviour).toBe('BYPASS');
+  });
+
+  it.each([
+    ['cancelled', { cancelledAt: new Date('2026-10-01T10:00:00Z') }, /cancelled/],
+    ['refunded', { financialStatus: 'REFUNDED' }, /refunded/],
+    ['voided', { financialStatus: 'VOIDED' }, /voided/],
+  ])('never creates a Shopify order for a %s sale, and says why', async (_label, over, reason) => {
+    const { service, graphql, prisma } = build(offlineOrder(over));
+    await service.pushOrder(ORDER_ID, ORG);
+    expect(graphql.request).not.toHaveBeenCalled();
+    expect(lastSyncPatch(prisma)).toMatchObject({ status: 'FAILED', attempts: 0 });
+    expect(lastSyncPatch(prisma).error).toMatch(reason);
+  });
+});
+
+describe('ShopifyPushService.planBulkOrderPush', () => {
+  it('leaves cancelled, refunded and voided sales out of the backlog', async () => {
+    const prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch_manual' }) },
+      order: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new ShopifyPushService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    jest.spyOn((service as any).logger, 'log').mockImplementation(() => undefined);
+
+    await service.planBulkOrderPush(ORG);
+
+    expect(prisma.order.findMany.mock.calls[0][0].where).toMatchObject({
+      channelId: 'ch_manual',
+      cancelledAt: null,
+      financialStatus: { notIn: ['REFUNDED', 'VOIDED'] },
+    });
+  });
+});
+
+describe('unpushableOrderReason', () => {
+  it('lets a live paid or pending sale through', () => {
+    expect(unpushableOrderReason({ cancelledAt: null, financialStatus: 'PAID' })).toBeNull();
+    expect(unpushableOrderReason({ cancelledAt: null, financialStatus: 'PENDING' })).toBeNull();
+    expect(unpushableOrderReason({ cancelledAt: null, financialStatus: 'PARTIALLY_REFUNDED' })).toBeNull();
   });
 });
 

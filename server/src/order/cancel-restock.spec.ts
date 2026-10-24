@@ -39,7 +39,10 @@ function build({ warehousing, dispatchWarehouseId = null as string | null }) {
     isWarehousingEnabled: jest.fn().mockResolvedValue(warehousing),
     applyMovement: jest.fn().mockResolvedValue({ skipped: false, inventoryQuantity: 8 }),
   };
-  const queue = { add: jest.fn().mockResolvedValue(undefined) };
+  const queue = {
+    add: jest.fn().mockResolvedValue(undefined),
+    getJob: jest.fn().mockResolvedValue(null),
+  };
   const settings = {
     getProductSettings: jest.fn().mockResolvedValue({ trackQuantityGlobally: true }),
   };

@@ -45,6 +45,12 @@ import { InvoiceService } from '../invoice/invoice.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { FxRateService } from '../common/fx/fx-rate.service';
 import { becamePaid } from './order-paid-transition.util';
+import {
+    DELIVERED_EVENT_WINDOW_MS,
+    FIRST_SIGHTING_EVENT_WINDOW_MS,
+    isOlderShopifyPayload,
+    isWithinWindow,
+} from './shopify-payload-age.util';
 import { CRM_SOURCE_NAME, carriesCrmMarker, isLocallyPushedPayload, localOrderIdOf } from './order-rebadge.util';
 import { localDraftIdOf } from './draft-rebadge.util';
 import {
@@ -273,11 +279,18 @@ export class ShopifySyncService {
         }
     }
 
+    /**
+     * `pushAfter` runs the bulk push of unsynced CRM items once the pull is
+     * clean. Only a merchant's Sync press asks for it: the backfill queued on
+     * connect and the orders pull after a draft completion never push, so
+     * connecting a store cannot by itself send a CRM backlog to it.
+     */
     async runSync(
         channelId: string,
         orgId: string,
         entityTypes: string[],
         priority: Priority = Priority.NORMAL,
+        opts: { pushAfter?: boolean } = {},
     ): Promise<void> {
         const channel = await this.prisma.channel.findUnique({ where: { id: channelId } });
         if (!channel) throw new Error(`Channel ${channelId} not found`);
@@ -302,9 +315,11 @@ export class ShopifySyncService {
                     lastSyncedAt: new Date(),
                 },
             });
-            // No pull to fail here, so the push always runs - but it still
-            // honours the per-entity push toggles.
-            const enabledPush = await this.enabledEntities(channelId, 'push');
+            // No pull to fail here, so the push always runs when asked for -
+            // but it still honours the per-entity push toggles.
+            const enabledPush = opts.pushAfter
+                ? await this.enabledEntities(channelId, 'push')
+                : new Set<string>();
             try {
                 if (enabledPush.has('products')) {
                     await this.pushEnqueuer.enqueueBulkProductPush({
@@ -515,7 +530,9 @@ export class ShopifySyncService {
         // start creating real Shopify orders from a backlog nobody has
         // reviewed - `pushOrder` calls `orderCreate`, and a Shopify order
         // cannot be un-created.
-        if (allSucceeded) {
+        if (!opts.pushAfter) {
+            // Connect-time backfill or a post-completion pull: never pushes.
+        } else if (allSucceeded) {
             const enabledPush = await this.enabledEntities(channelId, 'push');
             try {
                 if (enabledPush.has('products')) {
@@ -1414,6 +1431,17 @@ export class ShopifySyncService {
         const normalizedOptions =
             normalizeShopifyOptions(sp.options) ?? Prisma.DbNull;
 
+        // Shopify does not order webhooks, so a retried or late products/update
+        // can carry an older title, price, status or stock than what is stored.
+        // Same rule as upsertOrder's compare-and-set: strictly older is
+        // skipped, equal is re-applied (idempotent).
+        if (await this.isStaleProductPayload(channelId, externalId, sp.updated_at)) {
+            this.logger.debug(
+                `Stale Shopify payload for product ${externalId} (updated_at=${sp.updated_at}) — newer state already stored, skipping.`,
+            );
+            return;
+        }
+
         const product = await this.prisma.product.upsert({
             where: { channelId_externalId: { channelId, externalId } },
             create: {
@@ -2139,6 +2167,10 @@ export class ShopifySyncService {
         // Store events this write produced, raised after the commit (live webhooks only).
         const storeEvents: StoreEventKind[] = [];
         let eventOrderId: string | null = null;
+        /// First sighting of an order Shopify created long ago: imported
+        /// silently, as the backfill would — see FIRST_SIGHTING_EVENT_WINDOW_MS.
+        let quietFirstSighting = false;
+        let newlyDelivered = false;
         await this.prisma.$transaction(async (tx) => {
             let orderId: string;
 
@@ -2189,15 +2221,19 @@ export class ShopifySyncService {
                 });
 
                 if (!alreadySeen) {
-                    // No prior state to diff against, so an order that arrives
-                    // already paid IS the transition.
-                    if (becamePaid(null, this.mapFinancialStatus(so.financial_status))) {
-                        becamePaidOrderId = orderId;
-                        storeEvents.push('paid');
+                    if (!isWithinWindow(so.created_at, FIRST_SIGHTING_EVENT_WINDOW_MS)) {
+                        quietFirstSighting = true;
+                    } else {
+                        // No prior state to diff against, so an order that
+                        // arrives already paid IS the transition.
+                        if (becamePaid(null, this.mapFinancialStatus(so.financial_status))) {
+                            becamePaidOrderId = orderId;
+                            storeEvents.push('paid');
+                        }
+                        storeEvents.unshift('created');
+                        if (so.cancelled_at) storeEvents.push('cancelled');
+                        if (this.mapFulfillmentStatus(so.fulfillment_status) === OrderFulfillmentStatus.FULFILLED) storeEvents.push('fulfilled');
                     }
-                    storeEvents.unshift('created');
-                    if (so.cancelled_at) storeEvents.push('cancelled');
-                    if (this.mapFulfillmentStatus(so.fulfillment_status) === OrderFulfillmentStatus.FULFILLED) storeEvents.push('fulfilled');
 
                     // One 'created' entry, dated to Shopify's own created_at so
                     // a backfill of an existing store does not date every
@@ -2298,10 +2334,10 @@ export class ShopifySyncService {
             }
 
             eventOrderId = orderId;
-            await this.writeOrderChildren(tx, orderId, so, payloadLines, {
+            ({ newlyDelivered } = await this.writeOrderChildren(tx, orderId, so, payloadLines, {
                 variantByExternalId,
                 productByExternalId,
-            });
+            }));
 
             // Stamp where the goods left from, when the payload says so
             // unambiguously. Done HERE rather than inside writeOrderChildren
@@ -2332,10 +2368,11 @@ export class ShopifySyncService {
         }
 
         // Shopify has no delivered order state, but a fulfilment's carrier
-        // tracking can say so. Each kind is raised once per order, however
-        // often Shopify redelivers.
-        if (opts.live && eventOrderId) {
-            if ((so.fulfillments ?? []).some((f: any) => f?.shipment_status === 'delivered')) storeEvents.push('delivered');
+        // tracking can say so. Raised on the change only — `writeOrderChildren`
+        // reports a fulfilment it has just recorded as delivered — never
+        // because a later edit to the order still shows it delivered.
+        if (opts.live && eventOrderId && !quietFirstSighting) {
+            if (newlyDelivered) storeEvents.push('delivered');
             if (storeEvents.includes('fulfilled')) {
                 // As on payment: the invoice snapshots the dispatch point, so resolve it first.
                 await this.ensureDispatchWarehouseFromShopify(orgId, eventOrderId);
@@ -2564,7 +2601,8 @@ export class ShopifySyncService {
             variantByExternalId: Map<string, { id: string; product: { vendor: string | null; vendorKey: string | null } | null }>;
             productByExternalId: Map<string, { vendor: string | null; vendorKey: string | null }>;
         },
-    ): Promise<void> {
+    ): Promise<{ newlyDelivered: boolean }> {
+        let newlyDelivered = false;
         // Current per-line statuses, read once, so `statusForShippedUnits` can
         // be given a real `previous` and never demote a line the CRM already
         // marked delivered back to merely fulfilled.
@@ -2784,6 +2822,19 @@ export class ShopifySyncService {
                     ...(lineItemIds ? { metadata: { lineItemIds } as Prisma.InputJsonValue } : {}),
                 },
             });
+
+            // Record carrier delivery once (`deliveredAt: null` guard, which
+            // also leaves a delivery the CRM marked itself alone), so the
+            // 'delivered' store event follows the change, not every edit.
+            if (ff.shipment_status === 'delivered') {
+                const recorded = await tx.orderFulfillment.updateMany({
+                    where: { orderId, externalId, deliveredAt: null },
+                    data: { deliveredAt: new Date() },
+                });
+                if (recorded.count > 0 && isWithinWindow(ff.created_at, DELIVERED_EVENT_WINDOW_MS)) {
+                    newlyDelivered = true;
+                }
+            }
         }
 
         for (const rf of so.refunds || []) {
@@ -2804,6 +2855,7 @@ export class ShopifySyncService {
                 update: { amount: refund.amount, note: rf.note, lineItems: rf.refund_line_items || null, ...refundTaxPatch },
             });
         }
+        return { newlyDelivered };
     }
 
     /**
@@ -3191,7 +3243,7 @@ export class ShopifySyncService {
         const [byIdentity, byEmail] = await Promise.all([
             this.prisma.customer.findUnique({
                 where: { channelId_externalId: { channelId, externalId } },
-                select: { id: true },
+                select: { id: true, externalUpdatedAt: true },
             }),
             email
                 ? this.prisma.customer.findUnique({
@@ -3202,6 +3254,14 @@ export class ShopifySyncService {
         ]);
 
         if (byIdentity) {
+            // Shopify does not order webhooks: a late customers/update must
+            // not overwrite a newer name, phone, consent or address.
+            if (isOlderShopifyPayload(updateFields.externalUpdatedAt, byIdentity.externalUpdatedAt ?? null)) {
+                this.logger.debug(
+                    `Stale Shopify payload for customer ${externalId} — newer state already stored, skipping.`,
+                );
+                return { id: byIdentity.id };
+            }
             // The Shopify customer changed their email to one another CRM
             // customer already holds. Two rows cannot share an email, and
             // merging customers is not a call a sync should make — keep this
@@ -3443,31 +3503,64 @@ export class ShopifySyncService {
     }
 
     /**
-     * Entity types the merchant has NOT switched off for this direction.
+     * True when the stored product was written from a Shopify payload strictly
+     * newer than `updatedAt`. No stored row, or no usable time, is never stale.
+     */
+    private async isStaleProductPayload(
+        channelId: string,
+        externalId: string,
+        updatedAt: unknown,
+    ): Promise<boolean> {
+        const stored = await this.prisma.product.findUnique({
+            where: { channelId_externalId: { channelId, externalId } },
+            select: { externalUpdatedAt: true },
+        });
+        return isOlderShopifyPayload(updatedAt, stored?.externalUpdatedAt ?? null);
+    }
+
+    /**
+     * Entity types switched on for this direction.
      *
-     * Read as "enabled unless a row says otherwise" so channels that predate
-     * the toggles — and any entity a merchant has never touched — keep syncing
-     * exactly as they do today without needing rows seeded for them.
+     * Pull is "enabled unless a row says otherwise", so channels that predate
+     * the toggles keep pulling without rows seeded for them. Push is the
+     * reverse — enabled only by an explicit row — because a push creates real
+     * products and orders in the merchant's live store and a Shopify order
+     * cannot be un-created. A merchant who connects a store with a CRM backlog
+     * must choose to send it; nothing goes up by default.
      */
     private async enabledEntities(
         channelId: string,
         direction: 'pull' | 'push',
     ): Promise<Set<string>> {
-        const known: readonly string[] =
-            direction === 'pull' ? PULL_ENTITY_TYPES : PUSH_ENTITY_TYPES;
+        if (direction === 'push') {
+            try {
+                const rows = await this.prisma.channelSyncState.findMany({
+                    where: { channelId, direction, enabled: true },
+                    select: { entityType: true },
+                });
+                const enabled = new Set(rows.map((r) => r.entityType));
+                return new Set(PUSH_ENTITY_TYPES.filter((e) => enabled.has(e)));
+            } catch (err) {
+                this.logger.error(
+                    `Could not read push sync toggles for channel ${channelId} — pushing nothing`,
+                    err instanceof Error ? err.stack : err,
+                );
+                return new Set();
+            }
+        }
         try {
             const rows = await this.prisma.channelSyncState.findMany({
                 where: { channelId, direction, enabled: false },
                 select: { entityType: true },
             });
             const disabled = new Set(rows.map((r) => r.entityType));
-            return new Set(known.filter((e) => !disabled.has(e)));
+            return new Set(PULL_ENTITY_TYPES.filter((e) => !disabled.has(e)));
         } catch (err) {
             this.logger.error(
-                `Could not read ${direction} sync toggles for channel ${channelId} — assuming all enabled`,
+                `Could not read pull sync toggles for channel ${channelId} — assuming all enabled`,
                 err instanceof Error ? err.stack : err,
             );
-            return new Set(known);
+            return new Set(PULL_ENTITY_TYPES);
         }
     }
 
@@ -3551,7 +3644,9 @@ export class ShopifySyncService {
     // ─── ENUM MAPPERS ───
     private mapProductStatus(s: string): ProductStatus { return ({ active: 'ACTIVE', draft: 'DRAFT', archived: 'ARCHIVED' } as any)[s] || 'ACTIVE'; }
     private mapFinancialStatus(s: string): OrderFinancialStatus { return ({ pending: 'PENDING', authorized: 'AUTHORIZED', partially_paid: 'PARTIALLY_PAID', paid: 'PAID', partially_refunded: 'PARTIALLY_REFUNDED', refunded: 'REFUNDED', voided: 'VOIDED' } as any)[s] || 'PENDING'; }
-    private mapFulfillmentStatus(s: string | null): OrderFulfillmentStatus { if (!s) return 'UNFULFILLED'; return ({ fulfilled: 'FULFILLED', partial: 'PARTIAL', restocked: 'RESTOCKED' } as any)[s] || 'UNFULFILLED'; }
+    // REST webhooks say `partial`; the GraphQL pull's lowercased
+    // displayFulfillmentStatus says `partially_fulfilled`.
+    private mapFulfillmentStatus(s: string | null): OrderFulfillmentStatus { if (!s) return 'UNFULFILLED'; return ({ fulfilled: 'FULFILLED', partial: 'PARTIAL', partially_fulfilled: 'PARTIAL', restocked: 'RESTOCKED' } as any)[s] || 'UNFULFILLED'; }
     private mapCancelReason(s: string | null): OrderCancelReason | null { if (!s) return null; return ({ customer: 'CUSTOMER', fraud: 'FRAUD', inventory: 'INVENTORY', declined: 'DECLINED', other: 'OTHER' } as any)[s] || 'OTHER'; }
     private mapCustomerState(s: string): CustomerState { return ({ enabled: 'ENABLED', disabled: 'DISABLED', declined: 'DECLINED', invited: 'INVITED' } as any)[s] || 'ENABLED'; }
 

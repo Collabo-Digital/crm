@@ -6,6 +6,8 @@ import {
   PUSH_JOB_OPTS,
   SHOPIFY_PUSH_QUEUE,
   ShopifyPushJobData,
+  addAvailabilityPush,
+  addDedupedPushJob,
   pushJobId,
 } from './shopify-push.queue';
 
@@ -64,14 +66,8 @@ export class ShopifyPushEnqueuer {
     priority: Priority = Priority.NORMAL,
   ): Promise<void> {
     if (variantIds.length === 0) return;
-    const ids = [...new Set(variantIds)];
     try {
-      await this.addDeduped(
-        'push-availability',
-        { type: 'push-availability', organizationId: orgId, variantIds: ids },
-        pushJobId.availability(orgId, ids),
-        priority,
-      );
+      await addAvailabilityPush(this.queue, orgId, variantIds, priority);
     } catch (err) {
       this.logger.error(`Failed to enqueue availability push for org ${orgId}: ${err}`);
     }
@@ -208,19 +204,15 @@ export class ShopifyPushEnqueuer {
     jobId: string,
     priority: Priority,
   ): Promise<boolean> {
-    const existing = await this.queue.getJob(jobId);
-    if (existing) {
-      const state = await existing.getState();
-      if (state === 'completed' || state === 'failed') {
-        await existing.remove();
-      } else {
-        this.logger.log(
-          `Shopify push ${jobId} already ${state} — not re-enqueued.`,
-        );
-        return true;
-      }
+    const outcome = await addDedupedPushJob(
+      this.queue,
+      name,
+      { ...data, priority },
+      { ...PUSH_JOB_OPTS, jobId, priority },
+    );
+    if (outcome !== 'added') {
+      this.logger.log(`Shopify push ${jobId} already ${outcome} — not re-enqueued.`);
     }
-    await this.queue.add(name, { ...data, priority }, { ...PUSH_JOB_OPTS, jobId, priority });
     return true;
   }
 }

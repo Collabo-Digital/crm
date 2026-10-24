@@ -811,55 +811,88 @@ export class DashboardService {
     window: Window,
     limit: number,
   ) {
-    // Group line items by externalProductId to get total quantity sold per
-    // product. Scoped through `placedBetween`, so manual/offline orders — whose
-    // `externalCreatedAt` is null — are no longer invisible in this panel.
-    const topItems = await this.prisma.orderLineItem.groupBy({
-      by: ['externalProductId'],
+    // Same sales filter as every other revenue figure: cancelled and unpaid
+    // orders did not sell anything.
+    //
+    // Grouped by variant AND Shopify product id, then folded into products
+    // here. Grouping by `externalProductId` alone dropped every counter sale
+    // and completed draft, whose lines carry no Shopify product id; a line
+    // whose variant has since been deleted still counts through that id.
+    const groups = await this.prisma.orderLineItem.groupBy({
+      by: ['variantId', 'externalProductId'],
       where: {
-        order: {
-          organizationId: orgId,
-          deletedAt: null,
-          ...(query.channelId && { channelId: query.channelId }),
-          ...placedBetween(window.from, window.to),
-        },
-        externalProductId: { not: null },
+        order: salesOrderWhere({
+          orgId,
+          channelId: query.channelId,
+          from: window.from,
+          to: window.to,
+        }),
+        OR: [{ variantId: { not: null } }, { externalProductId: { not: null } }],
       },
       _sum: { quantity: true },
       _count: true,
-      orderBy: { _sum: { quantity: 'desc' } },
-      take: limit,
     });
 
-    // Fetch product details for the top items
-    const productIds = topItems
-      .map((item) => item.externalProductId)
-      .filter(Boolean) as string[];
+    const variantIds = [...new Set(groups.map((g) => g.variantId).filter((id): id is string => !!id))];
+    const variants = variantIds.length
+      ? await this.prisma.productVariant.findMany({
+        where: { id: { in: variantIds }, organizationId: orgId },
+        select: { id: true, productId: true },
+      })
+      : [];
+    const productIdByVariant = new Map(variants.map((v) => [v.id, v.productId]));
+
+    const orphanExternalIds = [
+      ...new Set(
+        groups
+          .filter((g) => !(g.variantId && productIdByVariant.has(g.variantId)) && g.externalProductId)
+          .map((g) => g.externalProductId as string),
+      ),
+    ];
+    const byExternalId = orphanExternalIds.length
+      ? await this.prisma.product.findMany({
+        where: { organizationId: orgId, externalId: { in: orphanExternalIds } },
+        select: { id: true, externalId: true },
+      })
+      : [];
+    const productIdByExternal = new Map(byExternalId.map((p) => [p.externalId, p.id]));
+
+    const totals = new Map<string, { quantity: number; lines: number }>();
+    for (const g of groups) {
+      const productId =
+        (g.variantId ? productIdByVariant.get(g.variantId) : undefined) ??
+        (g.externalProductId ? productIdByExternal.get(g.externalProductId) : undefined);
+      if (!productId) continue;
+      const t = totals.get(productId) ?? { quantity: 0, lines: 0 };
+      t.quantity += g._sum.quantity ?? 0;
+      t.lines += g._count;
+      totals.set(productId, t);
+    }
+
+    const top = [...totals.entries()]
+      .sort(([, a], [, b]) => b.quantity - a.quantity)
+      .slice(0, limit);
 
     const products = await this.prisma.product.findMany({
-      where: {
-        organizationId: orgId,
-        externalId: { in: productIds },
-      },
+      where: { organizationId: orgId, id: { in: top.map(([id]) => id) } },
       include: {
         images: { take: 1, orderBy: { position: 'asc' } },
         variants: { select: { price: true, inventoryQuantity: true } },
       },
     });
+    const productMap = new Map(products.map((p) => [p.id, p]));
 
-    const productMap = new Map(products.map((p) => [p.externalId, p]));
-
-    return topItems.map((item) => {
-      const product = productMap.get(item.externalProductId!);
+    return top.map(([productId, t]) => {
+      const product = productMap.get(productId);
       const totalStock = product?.variants.reduce((sum, v) => sum + v.inventoryQuantity, 0) ?? 0;
       const prices = product?.variants.map((v) => parseFloat(String(v.price))) ?? [];
 
       return {
-        externalProductId: item.externalProductId,
+        externalProductId: product?.externalId ?? productId,
         title: product?.title ?? 'Unknown Product',
         image: product?.images[0]?.src ?? null,
-        totalQuantitySold: item._sum.quantity ?? 0,
-        totalOrders: item._count,
+        totalQuantitySold: t.quantity,
+        totalOrders: t.lines,
         currentStock: totalStock,
         price: prices.length > 0 ? Math.min(...prices).toFixed(2) : '0.00',
       };

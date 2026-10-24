@@ -94,7 +94,10 @@ function build({
     inventoryEvent: { create: jest.fn().mockResolvedValue(undefined) },
     orderTimelineEvent: { create: jest.fn().mockResolvedValue(undefined) },
   };
-  const prisma: any = { $transaction: jest.fn(async (fn: any) => fn(tx)) };
+  const prisma: any = {
+    $transaction: jest.fn(async (fn: any) => fn(tx)),
+    $executeRaw: jest.fn().mockResolvedValue(1),
+  };
   const ledger = {
     isWarehousingEnabled: jest.fn().mockResolvedValue(warehousing),
     applyMovement: jest.fn().mockResolvedValue({ skipped: false, inventoryQuantity: 48 }),
@@ -108,7 +111,10 @@ function build({
       autoSyncToShopify: autoSyncToShopify,
     }),
   };
-  const shopifyPushQueue = { add: jest.fn().mockResolvedValue(undefined) };
+  const shopifyPushQueue = {
+    add: jest.fn().mockResolvedValue(undefined),
+    getJob: jest.fn().mockResolvedValue(null),
+  };
   const shopifyPushService = {
     findShopifyChannel: jest.fn().mockResolvedValue(
       autoSyncToShopify ? { status: 'CONNECTED' } : null,
@@ -135,7 +141,7 @@ function build({
   // `markPendingSync` writes through prisma.order.update, which this harness
   // does not stub — the push path is what is under test, not that write.
   jest.spyOn(service as any, 'markPendingSync').mockResolvedValue(undefined);
-  return { service, tx, ledger, fx, shopifyPushQueue, settings };
+  return { service, tx, ledger, fx, shopifyPushQueue, settings, shopifyPushService, prisma };
 }
 
 const dto = (over: Record<string, unknown> = {}) =>
@@ -146,6 +152,22 @@ const dto = (over: Record<string, unknown> = {}) =>
     generateInvoice: false,
     ...over,
   }) as any;
+
+describe('createOfflineOrder — header discount', () => {
+  // It was written as 0, so a discounted sale's header disagreed with its own
+  // lines (and WhatsApp Pay billed the lines without the discount).
+  it('records the sum of the line discounts on the order', async () => {
+    const { service, tx } = build({ warehousing: false });
+
+    await service.createOfflineOrder(
+      ORG,
+      USER,
+      dto({ lineItems: [{ productVariantId: VARIANT, quantity: 2, discount: 1.25 }] }),
+    );
+
+    expect(tx.order.create.mock.calls[0][0].data.totalDiscounts).toBe(1.25);
+  });
+});
 
 describe('createOfflineOrder — stock leaves a warehouse', () => {
   it('moves stock out of AVAILABLE through the ledger for a warehousing org', async () => {
@@ -349,6 +371,34 @@ describe('createOfflineOrder - the sold quantity reaches Shopify', () => {
       ([name]: [string]) => name === 'push-availability',
     );
     expect(availabilityPushes).toHaveLength(0);
+  });
+
+  // That push sets Shopify to the stock left after the sale, so a later push
+  // of the order must not decrement Shopify again (pushOrder reads the flag).
+  it('records that the stock reached a connected store', async () => {
+    const { service, shopifyPushService, prisma } = build({
+      warehousing: true,
+      warehouseId: 'wh_default',
+      autoSyncToShopify: false,
+    });
+    shopifyPushService.findShopifyChannel.mockResolvedValue({ status: 'CONNECTED' });
+
+    await service.createOfflineOrder(ORG, USER, dto());
+
+    const patches = prisma.$executeRaw.mock.calls.map((c: unknown[]) => JSON.stringify(c.slice(1)));
+    expect(patches.some((p: string) => p.includes('shopifyStockPushed'))).toBe(true);
+  });
+
+  it('claims nothing when no store was connected to receive the push', async () => {
+    const { service, prisma } = build({
+      warehousing: true,
+      warehouseId: 'wh_default',
+      autoSyncToShopify: false,
+    });
+
+    await service.createOfflineOrder(ORG, USER, dto());
+
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 
   it('survives a queue outage without failing the sale', async () => {

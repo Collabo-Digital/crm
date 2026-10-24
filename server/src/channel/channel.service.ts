@@ -261,7 +261,7 @@ export class ChannelService {
     //
     // Mirrors ShopifyPushService.isAlreadySynced: only the exact string
     // 'SYNCED' counts as done, so a FAILED or absent marker is still pending.
-    const countPending = async (table: 'orders' | 'products') => {
+    const countPending = async (table: 'orders' | 'products', extra = Prisma.empty) => {
       const rows = await this.prisma.$queryRaw<Array<{ count: bigint }>>`
         SELECT count(*) AS count
         FROM ${Prisma.raw(`"${table}"`)} t
@@ -269,12 +269,18 @@ export class ChannelService {
           AND t.channel_id = ${manual.id}
           AND t.deleted_at IS NULL
           AND coalesce(t.metadata->'shopifySync'->>'status', '') <> 'SYNCED'
+          ${extra}
       `;
       return Number(rows[0]?.count ?? 0);
     };
 
     const [orders, products] = await Promise.all([
-      countPending('orders'),
+      // Mirrors PUSHABLE_ORDER_WHERE: cancelled, refunded and voided sales
+      // are never pushed, so they are not pending either.
+      countPending(
+        'orders',
+        Prisma.sql`AND t.cancelled_at IS NULL AND t.financial_status::text NOT IN ('REFUNDED', 'VOIDED')`,
+      ),
       countPending('products'),
     ]);
     return { orders, products };
@@ -304,8 +310,9 @@ export class ChannelService {
       );
       return {
         entityType,
-        // Absent row => enabled. Only an explicit `false` turns something off.
-        enabled: row?.enabled ?? true,
+        // Absent row: pull is on, push is off. Same rule as runSync's
+        // `enabledEntities` — a push writes to the live store, so it is opt-in.
+        enabled: row?.enabled ?? direction === 'pull',
         backfillDone: row?.backfillDone ?? false,
         watermark: row?.watermark ?? null,
       };

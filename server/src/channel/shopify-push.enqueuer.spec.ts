@@ -1,6 +1,6 @@
 import type { Queue } from 'bullmq';
 import { ShopifyPushEnqueuer } from './shopify-push.enqueuer';
-import type { ShopifyPushJobData } from './shopify-push.queue';
+import { addAvailabilityPush, addDedupedPushJob, type ShopifyPushJobData } from './shopify-push.queue';
 import { Priority } from '../rate-limit/rate-limit.types';
 
 type AddOpts = { jobId?: string; priority?: number; attempts?: number };
@@ -131,5 +131,47 @@ describe('ShopifyPushEnqueuer — priority and de-duplication on every add', () 
     await expect(
       enqueuer.enqueueProductPush({ type: 'product', productId: 'p1', organizationId: 'org' }),
     ).resolves.toBe(false);
+  });
+});
+
+/**
+ * BullMQ silently returns the existing job for any id it still holds, and
+ * finished push jobs are kept for 7 to 30 days. Stock adjustments and
+ * cancellation restocks used to add under a stable id directly, so a second
+ * change to the same variants within a week pushed nothing — and the next
+ * sync then reverted it from Shopify.
+ */
+describe('addDedupedPushJob', () => {
+  const data = { type: 'push-availability' as const, organizationId: 'org', variantIds: ['v1'] };
+  const opts = { jobId: 'push-availability-org-abc', attempts: 5 };
+
+  it.each(['completed', 'failed'])('replaces a %s job with the same id', async (state) => {
+    const { queue } = build();
+    const remove = jest.fn<Promise<void>, []>().mockResolvedValue(undefined);
+    queue.getJob.mockResolvedValue({ getState: () => Promise.resolve(state), remove });
+
+    await expect(addDedupedPushJob(queue as any, 'push-availability', data, opts)).resolves.toBe('added');
+    expect(remove).toHaveBeenCalled();
+    expect(queue.add).toHaveBeenCalledWith('push-availability', data, opts);
+  });
+
+  // A running job may have read the stock before this change.
+  it('queues one follow-up availability push behind a running one', async () => {
+    const { queue } = build();
+    queue.getJob.mockImplementation(async (id: string) =>
+      id.endsWith('-next') ? null : { getState: () => Promise.resolve('active') },
+    );
+
+    await expect(addAvailabilityPush(queue as any, 'org', ['v1'], Priority.NORMAL)).resolves.toBe('added');
+    expect(queue.add).toHaveBeenCalledTimes(1);
+    expect(queue.add.mock.calls[0][2].jobId).toMatch(/^push-availability-org-[0-9a-f]{12}-next$/);
+  });
+
+  it('leaves a live job alone and says what state it is in', async () => {
+    const { queue } = build();
+    queue.getJob.mockResolvedValue({ getState: () => Promise.resolve('active') });
+
+    await expect(addDedupedPushJob(queue as any, 'push-availability', data, opts)).resolves.toBe('active');
+    expect(queue.add).not.toHaveBeenCalled();
   });
 });

@@ -76,6 +76,22 @@ describe('OrderService.syncToShopify', () => {
     expect(Number.isFinite(Date.parse(patch.shopifySync.queuedAt))).toBe(true);
   });
 
+  // The push books a PAID Shopify order with a full SALE and decrements stock;
+  // for a cancelled sale its echo would also revive the order in the CRM.
+  it('refuses a cancelled sale with a plain reason, before claiming anything', async () => {
+    const { service, enqueuer, prisma } = build({
+      ...manualOrder(null),
+      cancelledAt: new Date(),
+      financialStatus: 'PAID',
+    } as any);
+
+    await expect(service.syncToShopify(ORDER_ID, ORG)).rejects.toThrow(
+      'This order was cancelled, so it is not sent to Shopify.',
+    );
+    expect(enqueuer.enqueueOrderPush).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
   it('refuses to re-queue while a recent claim is still in flight', async () => {
     const { service, enqueuer, prisma } = build(
       manualOrder({

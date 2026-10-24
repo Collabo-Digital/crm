@@ -16,6 +16,8 @@ import {
   PUSH_JOB_OPTS,
   SHOPIFY_PUSH_QUEUE,
   ShopifyPushJobData,
+  addAvailabilityPush,
+  addDedupedPushJob,
   pushJobId,
 } from '../channel/shopify-push.queue';
 import { Priority } from '../rate-limit/rate-limit.types';
@@ -231,12 +233,13 @@ export class InventoryService {
   /** Fire-and-forget: a missed location sync is recovered by the next channel sync. */
   private async enqueueLocationSync(orgId: string) {
     try {
-      await this.shopifyPushQueue.add(
+      await addDedupedPushJob(
+        this.shopifyPushQueue,
         'sync-locations',
         { type: 'sync-locations', organizationId: orgId, priority: Priority.NORMAL },
         {
+          ...PUSH_JOB_OPTS,
           attempts: 3,
-          backoff: { type: 'exponential', delay: 10_000 },
           jobId: pushJobId.locations(orgId),
           priority: Priority.NORMAL,
         },
@@ -799,16 +802,7 @@ export class InventoryService {
 
   async enqueueAvailabilityPush(orgId: string, variantIds: string[]) {
     try {
-      const ids = [...new Set(variantIds)];
-      await this.shopifyPushQueue.add(
-        'push-availability',
-        { type: 'push-availability', organizationId: orgId, variantIds: ids, priority: Priority.NORMAL },
-        {
-          ...PUSH_JOB_OPTS,
-          jobId: pushJobId.availability(orgId, ids),
-          priority: Priority.NORMAL,
-        },
-      );
+      await addAvailabilityPush(this.shopifyPushQueue, orgId, variantIds, Priority.NORMAL);
     } catch (err) {
       this.logger.warn(`Failed to enqueue availability push: ${err}`);
     }
