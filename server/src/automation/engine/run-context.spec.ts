@@ -15,6 +15,14 @@ describe('variablesFor', () => {
         expect(variablesFor(facts({ customer: { firstName: 'Riya', lastName: 'Kapoor', ordersCount: 2, tags: [] } }))).toMatchObject({ first_name: 'Riya', name: 'Riya Kapoor' });
         expect(variablesFor(facts({ contact: { ...facts().contact, name: '+91 98000 00000' } })).first_name).toBeNull();
     });
+
+    it('falls back to the name typed at checkout for a contact known only by number', () => {
+        const checkout = (contactName: string | null) =>
+            variablesFor(facts({ contact: { ...facts().contact, name: contactName }, context: parseRunContext({ vars: { 'checkout.first_name': 'Meera' } }) }));
+        expect(checkout(null)).toMatchObject({ first_name: 'Meera', name: 'Meera' });
+        expect(checkout('+91 98000 00000').first_name).toBe('Meera');
+        expect(checkout('Riya Kapoor')).toMatchObject({ first_name: 'Riya', name: 'Riya Kapoor' });
+    });
 });
 
 describe('conditionMatches', () => {

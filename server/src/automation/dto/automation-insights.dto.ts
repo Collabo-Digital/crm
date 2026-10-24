@@ -1,6 +1,6 @@
 import { AutomationRunStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsEnum, IsIn, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class QueryRunsDto {
     @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10_000)
@@ -22,6 +22,10 @@ export class TestAutomationDto {
     /** Their answer at each wait-for-reply; leave out to follow the timeout branch. */
     @IsOptional() @IsString() @MaxLength(1000)
     reply?: string;
+
+    /** Order triggers: how the sample order was paid. Cash on delivery when left out. */
+    @IsOptional() @IsIn(['cod', 'prepaid'])
+    order?: 'cod' | 'prepaid';
 }
 
 /** Body of PUT /automations/starters/:channelId; checked with zod in the service. */

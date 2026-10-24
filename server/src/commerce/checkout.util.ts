@@ -2,6 +2,7 @@
  * Shopify `checkouts/create` and `checkouts/update` webhook bodies (the REST
  * checkout shape). Pure: the webhook handler stores what this returns.
  */
+import { countryCodeOf, normalizePhone } from '../common/phone.util';
 
 export interface ParsedCheckout {
     externalId: string;
@@ -34,12 +35,15 @@ export function parseCheckout(raw: unknown): ParsedCheckout | null {
     const shipping = obj(c.shipping_address);
     const billing = obj(c.billing_address);
     const completed = str(c.completed_at);
+    // The number the buyer typed at checkout comes first; the profile's last.
+    const phone = str(c.phone) ?? str(c.sms_marketing_phone) ?? str(shipping?.phone) ?? str(billing?.phone) ?? str(customer?.phone);
+    // Address phones are kept as typed ("098765 43210"); their country makes them E.164.
+    const country = countryCodeOf(shipping) ?? countryCodeOf(billing) ?? countryCodeOf(obj(customer?.default_address));
     return {
         externalId: id,
         token: str(c.token),
         recoveryUrl: str(c.abandoned_checkout_url),
-        // The number the buyer typed at checkout comes first; the profile's last.
-        phone: str(c.phone) ?? str(c.sms_marketing_phone) ?? str(shipping?.phone) ?? str(billing?.phone) ?? str(customer?.phone),
+        phone: normalizePhone(phone, country) ?? phone,
         email: str(c.email) ?? str(customer?.email),
         firstName: str(customer?.first_name) ?? str(shipping?.first_name) ?? str(billing?.first_name),
         customerExternalId: str(customer?.id),

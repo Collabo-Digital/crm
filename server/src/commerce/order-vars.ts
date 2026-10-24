@@ -76,8 +76,10 @@ export function checkoutVars(c: {
     total: number | string | null;
     currency: string | null;
     items: Array<{ title: string; quantity: number }>;
+    firstName?: string | null;
 }): Record<string, string> {
     return {
+        'checkout.first_name': c.firstName?.trim() ?? '',
         'checkout.url': c.recoveryUrl ?? '',
         'checkout.url_path': pathOf(c.recoveryUrl),
         'checkout.total': formatMoney(c.total, c.currency),

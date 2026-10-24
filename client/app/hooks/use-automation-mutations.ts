@@ -89,7 +89,7 @@ export function useArchiveAutomationMutation() {
 
 export function useTestAutomationMutation() {
   return useMutation({
-    mutationFn: ({ id, ...data }: { id: string; text?: string; reply?: string }) => automationsService.test(id, data),
+    mutationFn: ({ id, ...data }: { id: string; text?: string; reply?: string; order?: "cod" | "prepaid" }) => automationsService.test(id, data),
     onError: (error) => handleMutationError(error, "The test did not run."),
   });
 }

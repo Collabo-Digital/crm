@@ -66,7 +66,7 @@ function variablesFor(ctx: EditorContext): string[] {
   if (event === "invoice_issued" || (ORDER_EVENTS.includes(event) && allSteps(ctx.steps).some((s) => s.type === "send_invoice"))) {
     ["invoice.number", "invoice.date", "invoice.total"].forEach((v) => saved.add(v));
   }
-  if (event === "checkout_abandoned") ["checkout.url", "checkout.url_path", "checkout.total", "checkout.items"].forEach((v) => saved.add(v));
+  if (event === "checkout_abandoned") ["checkout.first_name", "checkout.url", "checkout.url_path", "checkout.total", "checkout.items"].forEach((v) => saved.add(v));
   // A paid link carries {{payment.*}}; "Send a payment link" fills it for its own message and later steps.
   if (event === "payment_received") ["payment.amount", "payment.method", "payment.description"].forEach((v) => saved.add(v));
   if (event === "website_signup") ["signup.name", "signup.page"].forEach((v) => saved.add(v));
@@ -481,6 +481,11 @@ function TriggerForm({ config, set, ctx }: { config: Config; set: (p: Config) =>
               <option key={t} value={t} />
             ))}
           </datalist>
+          {ctx.channel === "whatsapp" && (
+            <p className="mt-1.5 text-micro text-muted-foreground">
+              A tag can be added long after their last message. If they have not written in 24 hours, WhatsApp delivers approved templates only.
+            </p>
+          )}
         </Field>
       )}
       {config.event === "webhook" && (
@@ -491,7 +496,13 @@ function TriggerForm({ config, set, ctx }: { config: Config; set: (p: Config) =>
           <Field label="URL">
             <WebhookUrl token={config.token ?? ""} phoneField={config.phoneField || "phone"} canEdit={ctx.canEdit} />
           </Field>
-          {ctx.channel !== "whatsapp" && <p className="text-micro text-muted-foreground">On {CHANNEL_LABEL[ctx.channel]} the person must already have messaged you, with that number saved on their contact.</p>}
+          {ctx.channel !== "whatsapp" ? (
+            <p className="text-micro text-muted-foreground">On {CHANNEL_LABEL[ctx.channel]} the person must already have messaged you, with that number saved on their contact.</p>
+          ) : (
+            <p className="rounded-lg bg-info-subtle p-2 text-micro text-info">
+              The number may be new or may not have written in 24 hours, so messages must be approved templates.
+            </p>
+          )}
         </>
       )}
     </div>
@@ -1032,7 +1043,7 @@ export function StepEditor({ step, onChange, ctx }: { step: AutomationStep; onCh
           )}
           {c.action === "cancel_order" && (
             <>
-              <Field label="Staff note" hint="Shown in the order’s timeline. The customer is notified, items are restocked and nothing is refunded." htmlFor="sa-cancel">
+              <Field label="Staff note" hint="Shown in the order’s timeline. The customer is notified, items are restocked and nothing is refunded. An order that is paid or shipped by then is not cancelled, and the automation stops so you can handle it." htmlFor="sa-cancel">
                 <Input id="sa-cancel" value={c.value ?? ""} maxLength={200} disabled={ro} placeholder="Customer declined on WhatsApp" onChange={(e) => set({ value: e.target.value })} />
               </Field>
             </>

@@ -125,6 +125,10 @@ describe('store triggers', () => {
 
     it('need templates, and know {{order.*}} and {{draft.*}}', () => {
         expect(wa('order_created', [{ id: 'm', type: 'send_message', config: { message: 'Thanks for {{order.name}}' } }])).toContain('template_needed');
+        // A webhook can name a number that has never written.
+        expect(wa('webhook', [{ id: 'm', type: 'send_message', config: { message: 'Your order is ready' } }])).toContain('template_needed');
+        expect(wa('webhook', [{ id: 'm', type: 'send_message', config: { kind: 'buttons', message: 'Confirm?', options: ['Yes', 'No'] } }])).toContain('template_needed');
+        expect(wa('message', [{ id: 'm', type: 'send_message', config: { message: 'Hi' } }])).not.toContain('template_needed');
         expect(wa('order_created', [{ id: 'n', type: 'add_note', config: { text: 'COD {{order.total}}' } }])).toEqual([]);
         expect(
             wa('cart', [

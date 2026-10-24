@@ -3,7 +3,8 @@ import { AutomationRunStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { contactName } from '../messaging/contact-name';
 import { replyWindow } from '../messaging/outbound';
-import { collectIssues, parseDefinition } from './blocks/definition.schema';
+import { ORDER_CONTEXT, collectIssues, parseDefinition } from './blocks/definition.schema';
+import { orderVars } from '../commerce/order-vars';
 import { RunFacts } from './engine/run-context';
 import { simulate } from './engine/simulate';
 
@@ -91,13 +92,20 @@ export class AutomationInsightsService {
         };
     }
 
-    /** Walk the draft for a contact (or a sample person) without sending anything. */
+    /**
+     * Walk the draft for a contact (or a sample person) without sending
+     * anything. An order trigger gets a sample order, cash on delivery
+     * unless a prepaid one is asked for, so order conditions can be tried.
+     */
     async test(
         orgId: string,
         automation: { definition: Prisma.JsonValue; platform: string | null; channelId: string | null },
-        input: { contactId?: string; text?: string; reply?: string | null },
+        input: { contactId?: string; text?: string; reply?: string | null; order?: 'cod' | 'prepaid' },
     ) {
         const steps = parseDefinition(automation.definition);
+        const order = ORDER_CONTEXT.includes(String(steps[0].config.event ?? ''))
+            ? sampleOrder(input.order ?? 'cod', (await this.prisma.organization.findUnique({ where: { id: orgId }, select: { currency: true } }))?.currency ?? 'INR')
+            : null;
         const issues = collectIssues(steps, { platform: automation.platform, knownMediaIds: null });
         const contact = input.contactId
             ? await this.prisma.channelContact.findFirst({
@@ -129,7 +137,8 @@ export class AutomationInsightsService {
             conversation: conversation
                 ? { assignedUserId: conversation.assignedUserId, windowOpen: replyWindow(conversation.platform, conversation.lastInboundAt).open }
                 : { assignedUserId: null, windowOpen: true },
-            context: { vars: { trigger_text: input.text ?? '' }, trigger: { eventType: 'test', commentId: 'test', postId: null }, depth: 0 },
+            order: order?.facts ?? null,
+            context: { vars: { trigger_text: input.text ?? '', ...(order?.vars ?? {}) }, trigger: { eventType: 'test', commentId: 'test', postId: null }, depth: 0 },
         };
         const templateIds = steps.flatMap((s) => collectTemplateIds(s));
         const templates = templateIds.length
@@ -137,10 +146,30 @@ export class AutomationInsightsService {
             : [];
         return {
             contact: { id: contact?.id ?? null, name: facts.contact.name },
+            order: order ? { name: order.vars['order.name'], payment: order.vars['order.payment'], total: order.vars['order.total'] } : null,
             issues,
             steps: simulate(steps, facts, { reply: input.reply ?? null, templateNames: Object.fromEntries(templates.map((t) => [t.id, t.name])) }),
         };
     }
+}
+
+/** A made-up order #1001 for 1,499 in the organization's currency, and its {{order.*}} values. */
+function sampleOrder(payment: 'cod' | 'prepaid', currency: string) {
+    const isCod = payment === 'cod';
+    const total = 1499;
+    return {
+        facts: { isCod, total },
+        vars: orderVars({
+            name: '#1001',
+            totalPrice: total,
+            currency,
+            financialStatus: isCod ? 'PENDING' : 'PAID',
+            fulfillmentStatus: 'UNFULFILLED',
+            paymentGateways: isCod ? ['Cash on Delivery (COD)'] : ['Razorpay'],
+            lineItems: [{ title: 'Sample item', quantity: 1 }],
+            fulfillments: [],
+        }),
+    };
 }
 
 function collectTemplateIds(step: { config: Record<string, unknown>; branches?: Record<string, Array<{ config: Record<string, unknown> }>> }): string[] {

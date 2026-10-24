@@ -11,7 +11,8 @@ import { AutomationHooksService, fullPhone } from './automation-hooks.service';
  * "A row is added to a sheet": every GOOGLE_SHEETS_POLL_SECONDS the sheets
  * that active automations watch are read, and each new row starts each of
  * them for the person in its phone column. A row raises one event per
- * automation (unique), so a second server reading the same sheet adds nothing.
+ * automation (unique), so a second server reading the same sheet, or a row
+ * read again after a failure, adds nothing.
  */
 @Injectable()
 export class SheetRowsWatcher implements OnModuleInit, OnModuleDestroy {
@@ -55,9 +56,18 @@ export class SheetRowsWatcher implements OnModuleInit, OnModuleDestroy {
                     this.logger.warn(`Sheet ${sheetId} could not be read: ${err instanceof Error ? err.message : err}`);
                     continue;
                 }
+                // The read position moves only past rows whose events are recorded; a failed row is read again next time.
+                let recorded = fresh.end;
                 for (const row of fresh.rows) {
-                    for (const t of watching) await this.start(t, sheetId, fresh.columns, row);
+                    try {
+                        for (const t of watching) await this.start(t, sheetId, fresh.columns, row);
+                    } catch (err) {
+                        this.logger.warn(`Sheet ${sheetId} row ${row.number} not recorded: ${err instanceof Error ? err.message : err}`);
+                        recorded = row.number - 1;
+                        break;
+                    }
                 }
+                await this.google.markRead(sheetId, recorded).catch((err) => this.logger.warn(`Sheet ${sheetId} position not saved: ${err instanceof Error ? err.message : err}`));
             }
         } catch (err) {
             this.logger.error(`Watching sheets failed: ${err instanceof Error ? err.stack : err}`);

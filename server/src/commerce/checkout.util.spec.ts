@@ -19,7 +19,7 @@ describe('parseCheckout', () => {
         expect(c).toMatchObject({
             externalId: '35168481427622',
             recoveryUrl: 'https://acme.example/12345/checkouts/b19/recover?key=abc',
-            phone: '+91 98000 00011',
+            phone: '+919800000011',
             firstName: 'Riya',
             customerExternalId: '9071',
             completedAt: null,
@@ -27,6 +27,17 @@ describe('parseCheckout', () => {
             total: 2398,
             items: [{ variantId: '444', productId: '33', title: 'Linen shirt', quantity: 2, price: 1199 }],
         });
+    });
+
+    it('reads a number typed without its country code by the address country', () => {
+        const typed = (phone: string, address: Record<string, unknown> = { country_code: 'IN' }) =>
+            parseCheckout({ id: 1, shipping_address: { phone, ...address } })?.phone;
+        expect(typed('98765 43210')).toBe('+919876543210');
+        expect(typed('098765 43210')).toBe('+919876543210');
+        expect(parseCheckout({ id: 1, billing_address: { phone: '9876543210', country_code: 'in' } })?.phone).toBe('+919876543210');
+        expect(parseCheckout({ id: 1, phone: '9876543210', customer: { default_address: { country_code: 'IN' } } })?.phone).toBe('+919876543210');
+        // Without a country it stays as typed.
+        expect(typed('98765 43210', {})).toBe('98765 43210');
     });
 
     it('marks completed checkouts and ignores bodies without an id', () => {

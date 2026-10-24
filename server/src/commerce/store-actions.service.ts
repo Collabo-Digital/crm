@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ChannelPlatform, InvoiceStatus, OrderCancelReason, UserRole } from '@prisma/client';
+import { ChannelPlatform, InvoiceStatus, OrderCancelReason, OrderFinancialStatus, OrderFulfillmentStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShopifyGraphqlClient } from '../channel/shopify-graphql.client';
 import { ShopifyOAuthService } from '../channel/shopify-oauth.service';
@@ -9,6 +9,14 @@ import { DraftOrderService } from '../draft-order/draft-order.service';
 import { formatMoney, invoiceVars } from './order-vars';
 import { InvoiceService } from '../invoice/invoice.service';
 import { MessagingMediaStorage } from '../messaging/media/messaging-media.storage';
+
+/** Money the customer has paid or authorised, which a cancel without a refund would keep. */
+const PAID_STATUSES: OrderFinancialStatus[] = [
+    OrderFinancialStatus.AUTHORIZED,
+    OrderFinancialStatus.PARTIALLY_PAID,
+    OrderFinancialStatus.PAID,
+    OrderFinancialStatus.PARTIALLY_REFUNDED,
+];
 
 export interface CartLine {
     retailerId: string;
@@ -94,9 +102,29 @@ export class StoreActionsService {
         await this.orders.update(orderId, orgId, actor, { note: order.note ? `${order.note}\n${text}` : text });
     }
 
-    async cancelOrder(orgId: string, orderId: string, actor: string, staffNote: string): Promise<void> {
-        const order = await this.order(orgId, orderId);
-        if (order.cancelledAt) return;
+    /**
+     * Cancels an unpaid order that has not shipped, as the order is now.
+     * Returns why it was left alone otherwise: cancelling here never refunds,
+     * and would cancel shipments and restock goods that are on their way.
+     */
+    async cancelOrder(orgId: string, orderId: string, actor: string, staffNote: string): Promise<string | null> {
+        const order = await this.prisma.order.findFirst({
+            where: { id: orderId, organizationId: orgId },
+            select: {
+                cancelledAt: true,
+                financialStatus: true,
+                fulfillmentStatus: true,
+                fulfillments: { where: { status: { not: 'cancelled' } }, select: { id: true }, take: 1 },
+            },
+        });
+        if (!order) throw new NotFoundException('Order not found');
+        if (order.cancelledAt) return null;
+        if (PAID_STATUSES.includes(order.financialStatus)) {
+            return 'The order was not cancelled because it has been paid, and cancelling here does not refund the customer. Cancel and refund it from the order page.';
+        }
+        if (order.fulfillments.length || order.fulfillmentStatus === OrderFulfillmentStatus.FULFILLED || order.fulfillmentStatus === OrderFulfillmentStatus.PARTIAL) {
+            return 'The order was not cancelled because it has already been shipped. Cancel it from the order page if the shipment can still be stopped.';
+        }
         await this.orders.cancel(orderId, orgId, actor, {
             reason: OrderCancelReason.CUSTOMER,
             refund: false,
@@ -104,6 +132,7 @@ export class StoreActionsService {
             notifyCustomer: true,
             ...(staffNote ? { staffNote } : {}),
         });
+        return null;
     }
 
     /** Local only: Shopify customer tags are not pushed. */

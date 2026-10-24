@@ -4583,6 +4583,8 @@ export interface AutomationTestStep {
 
 export interface AutomationTestResult {
   contact: { id: string | null; name: string | null };
+  /** The sample order an order trigger was tried with. */
+  order: { name: string; payment: string; total: string } | null;
   issues: AutomationIssue[];
   steps: AutomationTestStep[];
 }

@@ -317,6 +317,7 @@ export class AutomationService {
         const nextVersion = row.version + 1;
 
         await this.prisma.$transaction(async (tx) => {
+            if (trigger.config.event === 'sheet_row' && post) await this.watchSheetFromNow(tx, orgId, post);
             const version = await tx.automationVersion.create({
                 data: {
                     organizationId: orgId,
@@ -395,6 +396,8 @@ export class AutomationService {
         if (row.status !== AutomationStatus.PAUSED || !row.publishedVersionId) {
             throw new ConflictException('Only a paused, published automation can be resumed');
         }
+        const sheetId = row.triggers.find((t) => t.triggerType === 'crm.sheet.row')?.subjectId;
+        if (sheetId) await this.watchSheetFromNow(this.prisma, orgId, sheetId);
         await this.setActive(row.id, true, AutomationStatus.ACTIVE);
         return this.findOne(row.id, orgId, viewer);
     }
@@ -439,6 +442,19 @@ export class AutomationService {
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
+
+    /**
+     * Called before a sheet trigger goes live. A sheet no live automation
+     * watches kept filling unread; its read position is cleared so the next
+     * read starts from its end and those rows never start anything. A sheet
+     * still being watched is read up to date already, and keeps its place.
+     */
+    private async watchSheetFromNow(db: Prisma.TransactionClient, orgId: string, sheetId: string) {
+        const watched = await db.automationTrigger.count({
+            where: { organizationId: orgId, triggerType: 'crm.sheet.row', subjectId: sheetId, isActive: true, automation: { status: AutomationStatus.ACTIVE } },
+        });
+        if (!watched) await db.googleSheet.updateMany({ where: { id: sheetId, organizationId: orgId }, data: { seenRows: null } });
+    }
 
     /** Status and trigger.isActive always move together so the matcher never joins. */
     private setActive(automationId: string, isActive: boolean, status: AutomationStatus) {
