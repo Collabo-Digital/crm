@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AutomationStatus } from '@prisma/client';
@@ -27,6 +27,23 @@ export function sheetColumns(headers: string[]): SheetColumn[] {
         seen.add(key);
         return { header: header.trim() || `Column ${i + 1}`, key };
     });
+}
+
+/** A row's values, hashed: finds the last row read again after rows above it are deleted. */
+export function rowHash(cells: string[]): string {
+    return createHash('sha256').update(JSON.stringify(cells)).digest('hex').slice(0, 16);
+}
+
+/** A read position: the last row read, and its hash (null when the sheet had no rows). */
+export interface SheetMark {
+    number: number;
+    hash: string | null;
+}
+
+export interface SheetRow {
+    number: number;
+    cells: string[];
+    hash: string;
 }
 
 /**
@@ -192,30 +209,49 @@ export class GoogleService {
      * first read of a sheet only notes how many rows it has: rows already
      * there never start anything.
      */
-    async newRows(sheetId: string): Promise<{ columns: SheetColumn[]; rows: Array<{ number: number; cells: string[] }>; end: number }> {
+    async newRows(sheetId: string): Promise<{ columns: SheetColumn[]; rows: SheetRow[]; end: SheetMark }> {
         const sheet = await this.prisma.googleSheet.findUnique({ where: { id: sheetId } });
-        if (!sheet) return { columns: [], rows: [], end: 0 };
+        if (!sheet) return { columns: [], rows: [], end: { number: 0, hash: null } };
         const read = (range: string) => this.call(sheet.organizationId, (token) => this.google.values(token, sheet.spreadsheetId, a1(sheet.tab, range)));
-        const restart = async () => {
-            const all = await read(`A1:${LAST_COLUMN}`);
-            await this.prisma.googleSheet.update({ where: { id: sheet.id }, data: { seenRows: all.length, checkedAt: new Date(), lastError: null } });
-            return { columns: [], rows: [], end: all.length };
+        const restart = async (all?: string[][]) => {
+            all ??= await read(`A1:${LAST_COLUMN}`);
+            const end = { number: all.length, hash: all.length ? rowHash(all[all.length - 1]) : null };
+            await this.prisma.googleSheet.update({ where: { id: sheet.id }, data: { seenRows: end.number, lastRowHash: end.hash, checkedAt: new Date(), lastError: null } });
+            return { columns: [], rows: [], end };
         };
         try {
             if (sheet.seenRows === null) return await restart();
-            // From the last row already seen: when nothing is there any more, rows were deleted, and the position
-            // moves back to the sheet's end so the next new row is not taken for one already seen.
             const seen = sheet.seenRows;
+            // From the last row read (`at`) on: one read while it is where it was.
             const tail = await read(`A${Math.max(1, seen)}:${LAST_COLUMN}`);
-            if (seen > 0 && !tail.length) return await restart();
-            const fresh = seen > 0 ? tail.slice(1) : tail;
-            const from = seen + 1;
-            const [header = []] = fresh.length ? await read(`A1:${LAST_COLUMN}1`) : [[]];
-            await this.prisma.googleSheet.update({ where: { id: sheet.id }, data: { checkedAt: new Date(), lastError: null } });
+            let at = seen;
+            let from = tail;
+            let all: string[][] | undefined;
+            if (seen > 0 && (!tail.length || (sheet.lastRowHash !== null && rowHash(tail[0]) !== sheet.lastRowHash))) {
+                // It moved or changed. When rows above it were deleted it is found higher up, and reading goes on
+                // right after it. When it is not found (deleted, or edited), reading goes on from its place if the
+                // sheet still reaches it, or else from the sheet's end, so the next new row is not taken for one already seen.
+                all = await read(`A1:${LAST_COLUMN}`);
+                const found = sheet.lastRowHash === null ? -1 : all.slice(0, seen - 1).findLastIndex((cells) => rowHash(cells) === sheet.lastRowHash);
+                if (found >= 0) {
+                    at = found + 1;
+                    from = all.slice(found);
+                } else if (!tail.length) {
+                    return await restart(all);
+                }
+            }
+            const fresh = at > 0 ? from.slice(1) : from;
+            const atHash = at > 0 ? rowHash(from[0]) : null;
+            const [header = []] = fresh.length ? (all ?? await read(`A1:${LAST_COLUMN}1`)) : [[]];
+            // Moves back only to follow the last row read; a position cleared meanwhile (a publish restarting the watch) stays cleared.
+            await this.prisma.googleSheet.updateMany({
+                where: { id: sheet.id, seenRows: seen },
+                data: { seenRows: at, lastRowHash: atHash, checkedAt: new Date(), lastError: null },
+            });
             return {
                 columns: sheetColumns(header),
-                rows: fresh.map((cells, i) => ({ number: from + i, cells })).filter((r) => r.cells.some((c) => c.trim())),
-                end: seen + fresh.length,
+                rows: fresh.map((cells, i) => ({ number: at + 1 + i, cells, hash: rowHash(cells) })).filter((r) => r.cells.some((c) => c.trim())),
+                end: fresh.length ? { number: at + fresh.length, hash: rowHash(fresh[fresh.length - 1]) } : { number: at, hash: atHash },
             };
         } catch (err) {
             const message = (err instanceof Error ? err.message : String(err)).slice(0, 300);
@@ -225,11 +261,11 @@ export class GoogleService {
     }
 
     /**
-     * Every row up to `seenRows` has been recorded. Never moves back, and
+     * Every row up to `last` has been recorded. Never moves back, and
      * leaves a position cleared meanwhile (a publish restarting the watch).
      */
-    async markRead(sheetId: string, seenRows: number): Promise<void> {
-        await this.prisma.googleSheet.updateMany({ where: { id: sheetId, seenRows: { lt: seenRows } }, data: { seenRows } });
+    async markRead(sheetId: string, last: SheetMark): Promise<void> {
+        await this.prisma.googleSheet.updateMany({ where: { id: sheetId, seenRows: { lt: last.number } }, data: { seenRows: last.number, lastRowHash: last.hash } });
     }
 
     /** A new row that started nothing, for the Google Sheets page. */

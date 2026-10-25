@@ -4,15 +4,16 @@ import { AutomationStatus, ChannelPlatform, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AutomationEventService } from '../messaging/automation-event.service';
 import { AutomationJobs } from '../messaging/automation-jobs';
-import { GoogleService, SheetColumn } from '../integrations/google/google.service';
+import { GoogleService, SheetColumn, SheetMark, SheetRow } from '../integrations/google/google.service';
 import { AutomationHooksService, fullPhone } from './automation-hooks.service';
 
 /**
  * "A row is added to a sheet": every GOOGLE_SHEETS_POLL_SECONDS the sheets
  * that active automations watch are read, and each new row starts each of
  * them for the person in its phone column. A row raises one event per
- * automation (unique), so a second server reading the same sheet, or a row
- * read again after a failure, adds nothing.
+ * automation (unique by its place and its values), so a second server reading
+ * the same sheet, or a row read again after a failure, adds nothing, while a
+ * new row in the place of a deleted one still counts.
  */
 @Injectable()
 export class SheetRowsWatcher implements OnModuleInit, OnModuleDestroy {
@@ -57,17 +58,19 @@ export class SheetRowsWatcher implements OnModuleInit, OnModuleDestroy {
                     continue;
                 }
                 // The read position moves only past rows whose events are recorded; a failed row is read again next time.
-                let recorded = fresh.end;
+                let recorded: SheetMark | null = fresh.end;
+                let previous: SheetMark | null = null;
                 for (const row of fresh.rows) {
                     try {
                         for (const t of watching) await this.start(t, sheetId, fresh.columns, row);
                     } catch (err) {
                         this.logger.warn(`Sheet ${sheetId} row ${row.number} not recorded: ${err instanceof Error ? err.message : err}`);
-                        recorded = row.number - 1;
+                        recorded = previous;
                         break;
                     }
+                    previous = row;
                 }
-                await this.google.markRead(sheetId, recorded).catch((err) => this.logger.warn(`Sheet ${sheetId} position not saved: ${err instanceof Error ? err.message : err}`));
+                if (recorded) await this.google.markRead(sheetId, recorded).catch((err) => this.logger.warn(`Sheet ${sheetId} position not saved: ${err instanceof Error ? err.message : err}`));
             }
         } catch (err) {
             this.logger.error(`Watching sheets failed: ${err instanceof Error ? err.stack : err}`);
@@ -80,7 +83,7 @@ export class SheetRowsWatcher implements OnModuleInit, OnModuleDestroy {
         trigger: { automation: { id: string; organizationId: string }; channel: { id: string; platform: ChannelPlatform } | null; config: Prisma.JsonValue },
         sheetId: string,
         columns: SheetColumn[],
-        row: { number: number; cells: string[] },
+        row: SheetRow,
     ): Promise<void> {
         if (!trigger.channel) return;
         const phoneColumn = (((trigger.config ?? {}) as { phoneField?: string }).phoneField ?? '').trim();
@@ -101,7 +104,7 @@ export class SheetRowsWatcher implements OnModuleInit, OnModuleDestroy {
                 organizationId: trigger.automation.organizationId,
                 channelId: trigger.channel.id,
                 eventType: 'crm.sheet.row',
-                externalId: `${trigger.automation.id}:${sheetId}:${row.number}`,
+                externalId: `${trigger.automation.id}:${sheetId}:${row.number}:${row.hash}`,
                 occurredAt: new Date(),
                 contactId: contact.id,
                 actorExternalId: contact.externalId,
