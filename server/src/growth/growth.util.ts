@@ -26,8 +26,24 @@ export function referenceIn(text: string | null | undefined): string | null {
     return m ? m[1].toUpperCase() : null;
 }
 
+/** WhatsApp's pre-filled message for confirming a pop-up sign-up; the person sends it from their own number. */
+export function confirmationText(code: string): string {
+    return `Hi! Please confirm my sign-up. Code: ${code}`;
+}
+
+export function signupCodeIn(text: string | null | undefined): string | null {
+    const m = (text ?? '').match(/\bcode[:\s]+([2-9A-HJ-NP-Z]{6})\b/i);
+    return m ? m[1].toUpperCase() : null;
+}
+
 type Obj = Record<string, unknown>;
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+/** wa.me for a WhatsApp channel's number, opening with `text`. Null when the number is not known yet. */
+export function waMe(credentials: unknown, text: string): string | null {
+    const digits = (str(((credentials ?? {}) as Obj).displayPhoneNumber) ?? '').replace(/\D/g, '');
+    return digits.length < 8 ? null : `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+}
 
 /**
  * Where a chat link opens, per channel: wa.me with the pre-filled message,
@@ -41,11 +57,8 @@ export function chatTarget(
 ): string | null {
     const c = (channel.credentials ?? {}) as Obj;
     switch (channel.platform) {
-        case ChannelPlatform.WHATSAPP: {
-            const digits = (str(c.displayPhoneNumber) ?? '').replace(/\D/g, '');
-            if (digits.length < 8) return null;
-            return `https://wa.me/${digits}?text=${encodeURIComponent(withReference(prefilledText, code))}`;
-        }
+        case ChannelPlatform.WHATSAPP:
+            return waMe(c, withReference(prefilledText, code));
         case ChannelPlatform.FACEBOOK: {
             const page = str(c.pageId) ?? channel.externalStoreId;
             return page ? `https://m.me/${encodeURIComponent(page)}?ref=${code}` : null;
@@ -87,6 +100,8 @@ export const WidgetSettingsSchema = z.object({
         /** Added to everyone who signs up, for automations and segments. */
         tag: z.string().trim().max(60).default('website-signup'),
         defaultCountryCode: z.string().regex(/^\d{1,3}$/).default('91'),
+        /** Opt in only whoever then sends the sign-up's code from WhatsApp: a typed number proves nothing. */
+        confirmOnWhatsApp: z.boolean().default(true),
     }).prefault({}),
 });
 

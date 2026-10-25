@@ -4785,7 +4785,7 @@ export interface GrowthLink {
 
 export interface WidgetSettings {
   button: { label: string; color: string; position: "right" | "left"; greeting: string; greetingDelaySeconds: number; prefilledText: string; hideOnMobile: boolean };
-  popup: { enabled: boolean; title: string; text: string; buttonLabel: string; consentText: string; successText: string; delaySeconds: number; tag: string; defaultCountryCode: string };
+  popup: { enabled: boolean; title: string; text: string; buttonLabel: string; consentText: string; successText: string; delaySeconds: number; tag: string; defaultCountryCode: string; confirmOnWhatsApp: boolean };
 }
 
 export interface SiteWidgetView {

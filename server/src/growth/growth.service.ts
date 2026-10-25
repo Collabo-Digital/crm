@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ChannelPlatform, ChannelStatus, ConsentType, Prisma } from '@prisma/client';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { ChannelContact, ChannelPlatform, ChannelStatus, ConsentType, Prisma } from '@prisma/client';
 import * as QRCode from 'qrcode';
 import { PrismaService } from '../prisma/prisma.service';
 import { AutomationEventService } from '../messaging/automation-event.service';
@@ -9,7 +10,19 @@ import { AutomationJobs } from '../messaging/automation-jobs';
 import { ConsentService } from '../messaging/consent.service';
 import { ContactIdentityService } from '../messaging/contact-identity.service';
 import { normalizePhone } from '../common/phone.util';
-import { WidgetSettings, chatTarget, hostAllowed, hostOf, makeCode, normalizeDomain, parseWidgetSettings, referenceIn } from './growth.util';
+import {
+    WidgetSettings,
+    chatTarget,
+    confirmationText,
+    hostAllowed,
+    hostOf,
+    makeCode,
+    normalizeDomain,
+    parseWidgetSettings,
+    referenceIn,
+    signupCodeIn,
+    waMe,
+} from './growth.util';
 import { widgetScript } from './widget-script';
 
 const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
@@ -18,6 +31,8 @@ const BUTTON_LINK_NAME = 'Website chat button';
 /// Sign-ups one store accepts in an hour. The form can be posted by scripts that
 /// fake the Origin header, and every sign-up can start a template send.
 const SIGNUPS_PER_HOUR = 200;
+const SIGNUP_CODE_LENGTH = 6;
+const CONFIRM_WITHIN_MS = 24 * 3600_000;
 
 /**
  * Growth tools (Campaigns → Growth): chat links with QR codes, counted
@@ -220,73 +235,177 @@ export class GrowthService {
     /**
      * A number from the pop-up, with the visitor's explicit consent. Only
      * from the merchant's own sites (Origin/Referer), and a filled honeypot
-     * is answered as if it worked. The contact is opted in with the pop-up's
-     * consent text as evidence, tagged, and "Someone signs up on your
-     * website" automations start (they must send a template: the person has
-     * not written). Nothing here proves who typed the number, so a contact who
-     * opted out is not opted back in: they do that by writing START.
+     * is answered as if it worked. Neither proves who typed the number, so
+     * by default the sign-up waits for the person to confirm it on WhatsApp:
+     * the answer carries a wa.me link whose message holds the sign-up's code
+     * (see confirmSignup). With confirming turned off, the contact is opted
+     * in at once with the pop-up's consent text as evidence, tagged, and
+     * "Someone signs up on your website" automations start (they must send a
+     * template: the person has not written); a contact who opted out is then
+     * not opted back in: they do that by writing START.
      */
-    async signup(key: string, input: { phone?: string; name?: string; consent?: string; page?: string; website?: string }, origin: string | undefined): Promise<{ ok: true }> {
-        const widget = await this.prisma.siteWidget.findUnique({ where: { key }, include: { channel: { select: { id: true, organizationId: true, platform: true, status: true } } } });
+    async signup(
+        key: string,
+        input: { phone?: string; name?: string; consent?: string; page?: string; website?: string },
+        origin: string | undefined,
+    ): Promise<{ ok: true; confirmUrl?: string; code?: string }> {
+        const widget = await this.prisma.siteWidget.findUnique({ where: { key }, include: { channel: { select: { id: true, organizationId: true, platform: true, status: true, credentials: true } } } });
         if (!widget?.enabled) throw new NotFoundException();
         const settings = parseWidgetSettings(widget.settings);
         if (!settings.popup.enabled) throw new NotFoundException();
         if (!hostAllowed(hostOf(origin), widget.allowedDomains)) throw new ForbiddenException('Sign-ups are accepted from the store’s own website only.');
-        if (input.website) return { ok: true };
+        const confirm = settings.popup.confirmOnWhatsApp;
+        // saveWidget refuses a number without a wa.me address.
+        const confirmUrl = (code: string) => waMe(widget.channel.credentials, confirmationText(code)) ?? undefined;
+        if (input.website) {
+            const code = makeCode(SIGNUP_CODE_LENGTH);
+            return confirm ? { ok: true, confirmUrl: confirmUrl(code), code } : { ok: true };
+        }
         if (input.consent !== 'yes') throw new BadRequestException('Please tick the box to agree to messages on WhatsApp.');
         const e164 = normalizePhone(input.phone ?? null, null);
         const digits = e164?.replace(/\D/g, '') ?? '';
         if (!e164 || digits.length < 8 || digits.length > 15) throw new BadRequestException('Enter your WhatsApp number with its country code.');
         if (widget.channel.status !== ChannelStatus.CONNECTED) throw new BadRequestException('Sign-ups are paused right now. Please try again later.');
-        const lastHour = await this.prisma.consentEvent.count({
-            where: { organizationId: widget.organizationId, source: 'widget', occurredAt: { gt: new Date(Date.now() - 3600_000) } },
-        });
+        const hourAgo = new Date(Date.now() - 3600_000);
+        const lastHour = confirm
+            ? await this.prisma.widgetSignup.count({ where: { organizationId: widget.organizationId, createdAt: { gt: hourAgo } } })
+            : await this.prisma.consentEvent.count({ where: { organizationId: widget.organizationId, source: 'widget', occurredAt: { gt: hourAgo } } });
         if (lastHour >= SIGNUPS_PER_HOUR) {
             this.logger.warn(`Widget ${widget.id}: sign-up refused, ${lastHour} in the last hour`);
             throw new HttpException('Too many sign-ups right now. Please try again in a little while.', HttpStatus.TOO_MANY_REQUESTS);
         }
         const name = input.name?.trim().slice(0, 80) || null;
         const page = input.page?.slice(0, 500) ?? null;
+        // The pop-up's own wording, never text the request brings.
+        const consentText = settings.popup.consentText.slice(0, 300);
 
-        const result = await this.prisma.$transaction(async (tx) => {
+        if (confirm) {
+            // No contact yet: the number may not be the visitor's.
+            for (let attempt = 0; ; attempt++) {
+                try {
+                    const { code } = await this.prisma.widgetSignup.create({
+                        data: {
+                            organizationId: widget.organizationId,
+                            widgetId: widget.id,
+                            phone: digits,
+                            name,
+                            page,
+                            consentText,
+                            code: makeCode(SIGNUP_CODE_LENGTH),
+                            expiresAt: new Date(Date.now() + CONFIRM_WITHIN_MS),
+                        },
+                        select: { code: true },
+                    });
+                    return { ok: true, confirmUrl: confirmUrl(code), code };
+                } catch (err) {
+                    if (!isUniqueViolation(err) || attempt > 3) throw err;
+                }
+            }
+        }
+
+        const signedUp = await this.prisma.$transaction(async (tx) => {
             const contact = await this.identity.resolve(tx, { id: widget.channel.id, organizationId: widget.organizationId }, { platform: ChannelPlatform.WHATSAPP, waId: digits, profileName: name }, { kind: 'none' });
             if (contact.optedOutAt) return null;
-            // Repeated sign-ups within a day change nothing.
-            const recent = await tx.consentEvent.findFirst({ where: { contactId: contact.id, source: 'widget', occurredAt: { gt: new Date(Date.now() - 86_400_000) } }, select: { id: true } });
-            if (recent) return null;
-            // The pop-up's own wording, never text the request brings.
-            await this.consent.record(tx, contact, ConsentType.OPT_IN, 'widget', { page, consentText: settings.popup.consentText.slice(0, 300), widgetId: widget.id });
-            const customerId = contact.customerId ?? (await this.identity.linkCustomerByPhone(tx, contact));
-            const tag = settings.popup.tag && !contact.tags.some((t) => t.toLowerCase() === settings.popup.tag.toLowerCase()) ? settings.popup.tag : null;
-            if (tag) await tx.channelContact.update({ where: { id: contact.id }, data: { tags: [...contact.tags, tag] } });
-            await tx.siteWidget.update({ where: { id: widget.id }, data: { signups: { increment: 1 } } });
-            const tagEvents = tag ? await this.automationEvents.recordTagsAdded(tx, contact, [tag]) : [];
-            return { contact, customerId, tagEvents };
+            return this.optInFromWidget(tx, widget.id, settings, contact, { page, consentText, widgetId: widget.id });
         });
-        if (!result) return { ok: true };
-        // After the commit: a duplicate here must not undo the sign-up.
-        const signup = await this.prisma.automationEvent.create({
-            data: {
-                organizationId: widget.organizationId,
-                channelId: widget.channel.id,
-                eventType: 'crm.website.signup',
-                externalId: `${widget.id}:${result.contact.id}:${new Date().toISOString().slice(0, 10)}`,
-                occurredAt: new Date(),
-                contactId: result.contact.id,
-                customerId: result.customerId,
-                actorExternalId: result.contact.externalId,
-                payload: { raw: { vars: { 'signup.name': name ?? '', 'signup.page': page ?? '' } } } as Prisma.InputJsonValue,
-            },
-            select: { id: true },
-        }).catch((err) => (isUniqueViolation(err) ? null : Promise.reject(err)));
-        for (const id of [...result.tagEvents, ...(signup ? [signup.id] : [])]) await this.jobs.event(id);
+        if (signedUp) await this.startSignupAutomations(widget.id, signedUp, { name, page });
         return { ok: true };
+    }
+
+    /**
+     * An inbound WhatsApp text that may carry a pop-up sign-up's code.
+     * Sending it proves the sender owns the number it came from, which may
+     * not be the one typed: that contact is opted in with the sign-up's
+     * evidence, tagged, and the sign-up's automations start, as without
+     * confirming. The code works once. Asking in their own message is a
+     * confirmed reply, so someone who had opted out is opted back in.
+     */
+    async confirmSignup(organizationId: string, conversationId: string, wamid: string, text: string | null): Promise<void> {
+        const code = signupCodeIn(text);
+        if (!code) return;
+        try {
+            const pending = await this.prisma.widgetSignup.findUnique({
+                where: { organizationId_code: { organizationId, code } },
+                include: { widget: { select: { id: true, settings: true } } },
+            });
+            if (!pending || pending.confirmedAt || pending.expiresAt <= new Date()) return;
+            const conversation = await this.prisma.conversation.findUnique({ where: { id: conversationId }, select: { contactId: true } });
+            if (!conversation) return;
+            const settings = parseWidgetSettings(pending.widget.settings);
+            const signedUp = await this.prisma.$transaction(async (tx) => {
+                // Two deliveries of the message may race; one confirms.
+                const claimed = await tx.widgetSignup.updateMany({ where: { id: pending.id, confirmedAt: null }, data: { confirmedAt: new Date() } });
+                if (!claimed.count) return null;
+                const contact = await tx.channelContact.findUniqueOrThrow({ where: { id: conversation.contactId } });
+                return this.optInFromWidget(tx, pending.widget.id, settings, contact, {
+                    page: pending.page,
+                    consentText: pending.consentText,
+                    widgetId: pending.widget.id,
+                    code,
+                    wamid,
+                    ...(contact.waId !== pending.phone ? { typedPhone: pending.phone } : {}),
+                });
+            });
+            if (signedUp) await this.startSignupAutomations(pending.widget.id, signedUp, { name: pending.name, page: pending.page });
+        } catch (err) {
+            this.logger.warn(`Sign-up code ${code} not confirmed: ${err instanceof Error ? err.message : err}`);
+        }
+    }
+
+    /** Sign-ups past their confirmation window, confirmed or not; an opt-in keeps its evidence in consent_events. */
+    @Cron(CronExpression.EVERY_DAY_AT_4AM)
+    async pruneSignups(now = new Date()) {
+        const { count } = await this.prisma.widgetSignup.deleteMany({ where: { expiresAt: { lt: now } } });
+        if (count) this.logger.log(`Pruned ${count} expired pop-up sign-ups`);
+        return count;
     }
 
     // ─── Internals ─────────────────────────────────────────────────────
 
     shortUrl(code: string): string {
         return `${this.api}/l/${code}`;
+    }
+
+    /**
+     * The pop-up's opt-in, in the caller's transaction: consent with its
+     * evidence, the customer link, the pop-up's tag and the sign-up count.
+     * Null when the contact signed up within the day and is still opted in:
+     * repeated sign-ups change nothing.
+     */
+    private async optInFromWidget(tx: Prisma.TransactionClient, widgetId: string, settings: WidgetSettings, contact: ChannelContact, evidence: Record<string, unknown>) {
+        const recent = await tx.consentEvent.findFirst({ where: { contactId: contact.id, source: 'widget', occurredAt: { gt: new Date(Date.now() - 86_400_000) } }, select: { id: true } });
+        if (recent && !contact.optedOutAt) return null;
+        await this.consent.record(tx, contact, ConsentType.OPT_IN, 'widget', evidence);
+        const customerId = contact.customerId ?? (await this.identity.linkCustomerByPhone(tx, contact));
+        const tag = settings.popup.tag && !contact.tags.some((t) => t.toLowerCase() === settings.popup.tag.toLowerCase()) ? settings.popup.tag : null;
+        if (tag) await tx.channelContact.update({ where: { id: contact.id }, data: { tags: [...contact.tags, tag] } });
+        await tx.siteWidget.update({ where: { id: widgetId }, data: { signups: { increment: 1 } } });
+        const tagEvents = tag ? await this.automationEvents.recordTagsAdded(tx, contact, [tag]) : [];
+        return { contact, customerId, tagEvents };
+    }
+
+    /** After the opt-in commits, so a duplicate (once a day per person) cannot undo it. */
+    private async startSignupAutomations(
+        widgetId: string,
+        signedUp: { contact: ChannelContact; customerId: string | null; tagEvents: string[] },
+        vars: { name: string | null; page: string | null },
+    ) {
+        const { contact } = signedUp;
+        const signup = await this.prisma.automationEvent.create({
+            data: {
+                organizationId: contact.organizationId,
+                channelId: contact.channelId,
+                eventType: 'crm.website.signup',
+                externalId: `${widgetId}:${contact.id}:${new Date().toISOString().slice(0, 10)}`,
+                occurredAt: new Date(),
+                contactId: contact.id,
+                customerId: signedUp.customerId,
+                actorExternalId: contact.externalId,
+                payload: { raw: { vars: { 'signup.name': vars.name ?? '', 'signup.page': vars.page ?? '' } } } as Prisma.InputJsonValue,
+            },
+            select: { id: true },
+        }).catch((err) => (isUniqueViolation(err) ? null : Promise.reject(err)));
+        for (const id of [...signedUp.tagEvents, ...(signup ? [signup.id] : [])]) await this.jobs.event(id);
     }
 
     private linkView(

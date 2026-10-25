@@ -362,6 +362,7 @@ model Organization {
   paymentLinks           PaymentLink[]
   growthLinks            GrowthLink[]
   siteWidgets            SiteWidget[]
+  widgetSignups          WidgetSignup[]
   adReferrals            AdReferral[]
   adAccounts             AdAccount[]
   conversionEvents       ConversionEvent[]
@@ -3351,10 +3352,38 @@ model SiteWidget {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel        Channel        @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  pendingSignups WidgetSignup[]
 
   @@map("site_widgets")
+}
+
+/// A pop-up sign-up waiting to be confirmed on WhatsApp. The number typed
+/// proves nothing; a message carrying the code proves its sender owns the
+/// number it came from, and that contact is opted in. Pruned once expired.
+model WidgetSignup {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  widgetId       String    @map("widget_id")
+  /// Digits with the country code, as typed. The number that confirms may differ.
+  phone          String
+  name           String?
+  page           String?
+  /// The pop-up's consent wording the person agreed to.
+  consentText    String    @map("consent_text")
+  /// In WhatsApp's pre-filled message ("Code: K7Q2MX"); works once.
+  code           String
+  expiresAt      DateTime  @map("expires_at")
+  confirmedAt    DateTime? @map("confirmed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  widget       SiteWidget   @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, code])
+  @@index([organizationId, createdAt])
+  @@map("widget_signups")
 }
 
 // ─── Ads: chats from click-to-message ads, their results, and conversions ──

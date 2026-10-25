@@ -233,8 +233,11 @@ export class WhatsAppWebhookHandler {
             // A cart from the catalog starts cart automations, not message ones.
             event: imported ? undefined : { type: m.type === 'order' ? 'whatsapp.cart' : 'whatsapp.message', extraPayload: { referral: m.referral } },
         });
-        // A chat opened from a chat link carries its reference.
-        if (recorded && !imported && m.type === 'text') await this.growth.attribute(channel.id, recorded.conversationId, m.text);
+        // A chat opened from a chat link carries its reference; a pop-up sign-up's confirmation, its code.
+        if (recorded && !imported && m.type === 'text') {
+            await this.growth.attribute(channel.id, recorded.conversationId, m.text);
+            await this.growth.confirmSignup(channel.organizationId, recorded.conversationId, m.id, m.text);
+        }
         // The person's answer to "may we call you?".
         if (recorded && !imported && permissionReply?.type === 'call_permission_reply') {
             await this.calls.onPermissionReply(channel, from, raw, m.timestamp);
