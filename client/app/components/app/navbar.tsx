@@ -30,6 +30,7 @@ import {
   QrCode,
   Star,
   Target,
+  Store,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
@@ -68,6 +69,7 @@ type NavItem = {
 /** Sub-nav for the Orders section — these used to be four separate top-level pills. */
 const ORDERS_CHILDREN: NavChild[] = [
   { label: "All orders", href: "/orders", icon: ShoppingCart },
+  { label: "Point of sale", href: "/orders/pos", icon: Store },
   { label: "Drafts", href: "/orders/drafts", icon: FileText },
   { label: "Customers", href: "/orders/customers", icon: Users },
   { label: "Invoices", href: "/orders/invoices", icon: Receipt },

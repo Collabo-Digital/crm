@@ -14,9 +14,9 @@ import { useAuthStore } from "~/stores/auth.store";
 
 // Routes that fill the window height and scroll their own panes instead of the
 // page. The inbox needs this so its composer stays pinned and each column
-// scrolls independently. It does NOT change the content width — these pages sit
-// in the same container as every other page; only the order detail page opts
-// out of the shared width (see FULL_WIDTH_ROUTE_IDS below).
+// scrolls independently, and the point of sale so its Pay button never scrolls
+// away. It does NOT change the content width — that is FULL_WIDTH_ROUTE_IDS
+// below.
 //
 // Matched by route id, like FULL_WIDTH_ROUTE_IDS: /inbox/contacts is an
 // ordinary scrolling list under the same prefix.
@@ -26,11 +26,12 @@ import { useAuthStore } from "~/stores/auth.store";
 // appears for sections that have children, and ImpersonationBanner adds 40px
 // when a super admin is impersonating. Any calc() is wrong in at least one of
 // those states; the flex column is exact in all of them with no magic number.
-const FULL_HEIGHT_ROUTE_IDS = ["routes/app/inbox"];
+const FULL_HEIGHT_ROUTE_IDS = ["routes/app/inbox", "routes/app/orders/pos"];
 
 // Routes that drop the shared page width. The order detail page flanks its
 // line-items table with two fixed-width rails (200px + 240px), which leaves the
-// table cramped once the container caps the row at 1280px.
+// table cramped once the container caps the row at 1280px. The point of sale
+// uses a wide till screen for more product tiles beside the cart.
 //
 // Matched by route id rather than pathname prefix: "/orders/<x>" is also
 // /orders/new, /orders/drafts, /orders/customers and /orders/invoices, so a
@@ -40,7 +41,7 @@ const FULL_HEIGHT_ROUTE_IDS = ["routes/app/inbox"];
 //
 // The navbar keeps its own max-w-screen-xl, so on a wide viewport this page is
 // deliberately wider than the chrome above it.
-const FULL_WIDTH_ROUTE_IDS = ["routes/app/orders/$id"];
+const FULL_WIDTH_ROUTE_IDS = ["routes/app/orders/$id", "routes/app/orders/pos"];
 
 export default function AppLayout() {
   const { canAccess, landingPath } = useSectionAccess();

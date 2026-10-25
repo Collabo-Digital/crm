@@ -91,6 +91,7 @@ const VENDOR_DENIED_PREFIXES = [
   "/orders/customers",
   "/orders/invoices",
   "/orders/slips",
+  "/orders/pos",
   "/products/inventory",
 ];
 
