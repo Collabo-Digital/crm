@@ -14,11 +14,12 @@ export interface WidgetScriptConfig {
  * The script a merchant pastes into their site:
  *   <script src="https://…/api/v1/widget/KEY.js" async></script>
  * A floating WhatsApp button, an optional greeting bubble, and an optional
- * number-capture pop-up with an explicit consent checkbox. It lives in a
- * shadow root so the site's CSS cannot reach it, writes every merchant text
- * with textContent (never as HTML), sends sign-ups form-encoded (no CORS
- * preflight) and remembers per visitor, in localStorage, that the pop-up was
- * shown or the greeting dismissed.
+ * number-capture pop-up with an explicit consent checkbox, whose last step
+ * (unless turned off) is a button that sends the sign-up's code on WhatsApp.
+ * It lives in a shadow root so the site's CSS cannot reach it, writes every
+ * merchant text with textContent (never as HTML), sends sign-ups
+ * form-encoded (no CORS preflight) and remembers per visitor, in
+ * localStorage, that the pop-up was shown or the greeting dismissed.
  */
 export function widgetScript(config: WidgetScriptConfig): string {
     // JSON inside a script: "<" escaped so "</script>" in a setting cannot close it.
@@ -54,6 +55,7 @@ export function widgetScript(config: WidgetScriptConfig): string {
       'input.cc{width:72px;flex:none}' +
       '.consent{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:#444;margin:4px 0 14px;line-height:1.4}' +
       '.go{width:100%;border:0;border-radius:10px;padding:12px;color:#fff;font-size:15px;font-weight:600;cursor:pointer}.go[disabled]{opacity:.6}' +
+      'a.go{display:block;text-align:center;text-decoration:none}' +
       '.msg{font-size:13px;margin-top:10px}.hp{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}' +
       '@media (max-width:640px){.btn span{display:none}.btn{padding:14px}' + (B.hideOnMobile ? '.btn,.greet{display:none}' : '') + '}';
     root.appendChild(css);
@@ -113,7 +115,16 @@ export function widgetScript(config: WidgetScriptConfig): string {
       fetch(C.api + '/widget/' + C.key + '/signup', { method: 'POST', body: body, mode: 'cors', credentials: 'omit' })
         .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (res) {
-          if (res.ok) { card.innerHTML = ''; card.appendChild(x); card.appendChild(el('h2', '', P.successText)); }
+          if (res.ok) {
+            var url = res.j && res.j.data && res.j.data.confirmUrl;
+            card.innerHTML = ''; card.appendChild(x);
+            if (url) {
+              card.appendChild(el('h2', '', 'One last step'));
+              card.appendChild(el('p', '', 'Tap the button and send the message that opens in WhatsApp. It confirms this number is yours.'));
+              var wa = el('a', 'go', 'Confirm on WhatsApp'); wa.href = url; wa.target = '_blank'; wa.rel = 'noopener'; wa.style.background = B.color;
+              card.appendChild(wa);
+            } else card.appendChild(el('h2', '', P.successText));
+          }
           else { go.disabled = false; msg.textContent = (res.j && res.j.message) || 'Something went wrong. Please try again.'; }
         })
         .catch(function () { go.disabled = false; msg.textContent = 'Something went wrong. Please try again.'; });

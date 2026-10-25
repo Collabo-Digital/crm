@@ -1,5 +1,5 @@
 import { ChannelPlatform } from '@prisma/client';
-import { chatTarget, hostAllowed, makeCode, normalizeDomain, parseWidgetSettings, referenceIn, withReference } from './growth.util';
+import { chatTarget, confirmationText, hostAllowed, makeCode, normalizeDomain, parseWidgetSettings, referenceIn, signupCodeIn, withReference } from './growth.util';
 import { widgetScript } from './widget-script';
 
 describe('chat links', () => {
@@ -49,7 +49,19 @@ describe('the website widget', () => {
         expect(s.button.label).toBe('Chat with us');
         expect(s.popup.enabled).toBe(false);
         expect(s.popup.consentText.length).toBeGreaterThan(10);
+        expect(s.popup.confirmOnWhatsApp).toBe(true);
+        expect(parseWidgetSettings({ popup: { enabled: true, confirmOnWhatsApp: false } }).popup.confirmOnWhatsApp).toBe(false);
         expect(parseWidgetSettings({ button: { color: 'red' } }).button.color).toBe('#25D366');
+    });
+
+    it('finds a pop-up sign-up’s code in the confirmation people send, and only there', () => {
+        const code = makeCode(6);
+        expect(signupCodeIn(confirmationText(code))).toBe(code);
+        expect(signupCodeIn('hi code k7q2mx')).toBe('K7Q2MX');
+        expect(signupCodeIn('Hi! I have a question.')).toBeNull();
+        expect(signupCodeIn('Ref: K7Q2M9XD')).toBeNull();
+        expect(signupCodeIn('Code: K7Q2MXA')).toBeNull();
+        expect(signupCodeIn('code: OIL123')).toBeNull();
     });
 
     it('is a script browsers can run, whose settings cannot close it or run as HTML', () => {

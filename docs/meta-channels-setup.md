@@ -672,10 +672,17 @@ the customer's number, which is what Collabo matches.
   and asks for a number and an explicit consent tick; a sign-up is accepted
   only from the sites listed in the settings (checked against Origin/Referer),
   a filled honeypot field is answered as if it worked, and the same number
-  within a day changes nothing. A sign-up becomes a WhatsApp contact, opted in
-  with `source: widget` and the consent text and page as evidence, gets the
-  pop-up's tag, and starts "Someone signs up on your website" automations,
-  which must send a template since the person has not written. CORS for
+  within a day changes nothing. Neither check proves who typed the number, so
+  by default ("Ask people to confirm on WhatsApp", on for every widget) a
+  sign-up only waits, for 24 hours, in `widget_signups`, and the pop-up's last
+  step opens wa.me with "Hi! Please confirm my sign-up. Code: K7Q2MX". The
+  WhatsApp contact that sends a waiting code (whatever number was typed) is
+  opted in with `source: widget` and the consent text, page, widget, code and
+  wamid (plus the typed number when it differs) as evidence, even after an
+  earlier STOP; each code works once. With confirming off, the typed number
+  is opted in at once the same way, unless it opted out. Either way the
+  contact gets the pop-up's tag and starts "Someone signs up on your website"
+  automations, which must send a template. CORS for
   `/api/v1/widget/*` accepts any origin without credentials (like the
   storefront pixel); the rest of the API stays locked to the CRM.
 

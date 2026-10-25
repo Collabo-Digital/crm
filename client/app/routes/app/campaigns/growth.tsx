@@ -286,6 +286,13 @@ function WebsiteWidget({ canManage }: { canManage: boolean }) {
           </div>
           {p.enabled && (
             <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex items-center justify-between gap-4 sm:col-span-2">
+                <Label htmlFor="p-confirm" className="flex flex-col items-start gap-0.5 font-normal">
+                  <span className="text-body font-medium">Ask people to confirm on WhatsApp</span>
+                  <span className="text-micro text-muted-foreground">Recommended. After signing up, people send a short code to your WhatsApp number, and only then are they opted in. Without it, anyone can type someone else’s number, and WhatsApp may restrict your number if people report messages they didn’t ask for.</span>
+                </Label>
+                <Switch id="p-confirm" checked={p.confirmOnWhatsApp} disabled={ro} onCheckedChange={(v) => setPopup({ confirmOnWhatsApp: v })} />
+              </div>
               <Field id="p-title" label="Title">
                 <Input id="p-title" maxLength={80} value={p.title} disabled={ro} onChange={(e) => setPopup({ title: e.target.value })} />
               </Field>
@@ -302,7 +309,7 @@ function WebsiteWidget({ canManage }: { canManage: boolean }) {
                   <Textarea id="p-consent" rows={2} maxLength={300} value={p.consentText} disabled={ro} onChange={(e) => setPopup({ consentText: e.target.value })} />
                 </Field>
               </div>
-              <Field id="p-success" label="After signing up">
+              <Field id="p-success" label="After signing up" hint={p.confirmOnWhatsApp ? "Shown only while “Ask people to confirm on WhatsApp” is off." : undefined}>
                 <Input id="p-success" maxLength={200} value={p.successText} disabled={ro} onChange={(e) => setPopup({ successText: e.target.value })} />
               </Field>
               <Field id="p-tag" label="Tag sign-ups">
