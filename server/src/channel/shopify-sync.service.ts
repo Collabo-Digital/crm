@@ -103,6 +103,7 @@ import {
     OrderFulfillmentLocationsResponse,
 } from './shopify-graphql.types';
 import { singleDistinct } from './single-distinct.util';
+import { isTransientWebhookError } from './webhook-retry.util';
 import { pulledBarcodePatch } from './pulled-barcode.util';
 import { parseProductSettings } from '../organization-settings/schemas/product-settings.schema';
 
@@ -823,13 +824,21 @@ export class ShopifySyncService {
 
     private async checkoutTokens(getAuth: ShopifyAuthResolver, ids: string[]): Promise<Map<string, string>> {
         if (ids.length === 0) return new Map();
-        const res = await this.graphql.request<OrderCheckoutTokensResponse, OrderCheckoutTokensVariables>(
-            await getAuth(),
-            ORDER_CHECKOUT_TOKENS_QUERY,
-            { ids },
-            // See ORDER_CHECKOUT_TOKENS_QUERY.
-            '2026-10',
-        );
+        let res: OrderCheckoutTokensResponse;
+        try {
+            res = await this.graphql.request<OrderCheckoutTokensResponse, OrderCheckoutTokensVariables>(
+                await getAuth(),
+                ORDER_CHECKOUT_TOKENS_QUERY,
+                { ids },
+                // See ORDER_CHECKOUT_TOKENS_QUERY.
+                '2026-10',
+            );
+        } catch (err) {
+            // Without tokens the orders are still recovered, only their checkouts stay open.
+            if (isTransientWebhookError(err)) throw err;
+            this.logger.warn(`Checkout tokens could not be read: ${err instanceof Error ? err.message : err}`);
+            return new Map();
+        }
         const tokens = new Map<string, string>();
         for (const node of res.nodes) {
             if (node?.checkoutToken) tokens.set(node.id, node.checkoutToken);

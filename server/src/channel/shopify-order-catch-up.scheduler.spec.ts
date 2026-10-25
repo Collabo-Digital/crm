@@ -251,4 +251,23 @@ describe('ShopifySyncService.ordersUpdatedSince', () => {
     });
     expect(pages[0][1]).toMatchObject({ id: '9002', checkout_token: null });
   });
+
+  it('still gives the orders when their checkouts cannot be read', async () => {
+    const graphql = {
+      request: jest.fn(async (_auth: unknown, query: string) => {
+        if (query.includes('OrderCheckoutTokens')) throw new Error("Field 'checkoutToken' doesn't exist on type 'Order'");
+        return { orders: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node(9001)] } };
+      }),
+    };
+    const oauth = { getAccessToken: jest.fn().mockResolvedValue({ token: 't', shopDomain: 'shop.myshopify.com' }) };
+    const service = new ShopifySyncService(
+      {} as any, oauth as any, {} as any, graphql as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+    );
+
+    const pages: Array<Array<Record<string, any>>> = [];
+    for await (const page of service.ordersUpdatedSince('ch_1', new Date('2026-10-25T08:00:00Z'))) pages.push(page);
+
+    expect(pages[0][0]).toMatchObject({ id: '9001', checkout_token: null });
+  });
 });

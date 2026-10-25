@@ -49,7 +49,7 @@ export class ShopifyOrderCatchUpScheduler implements OnModuleInit, OnModuleDestr
     ) { }
 
     onModuleInit() {
-        this.intervalMs = (this.config.get<number>('shopify.reconcileMinutes') ?? 60) * 60_000;
+        this.intervalMs = (this.config.get<number>('shopify.reconcileMinutes') ?? 30) * 60_000;
         // A store is due once its interval has passed since its last run, and
         // ticks come at least every MAX_TICK_MS: on a plain interval timer each
         // restart (every deploy) would push the next run back a whole hour.
