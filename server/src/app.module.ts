@@ -41,6 +41,7 @@ import { DraftOrderModule } from './draft-order/draft-order.module';
 import { ProductModule } from './product/product.module';
 import { CustomerModule } from './customer/customer.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { PosReportsModule } from './pos/reports/pos-reports.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { GstModule } from './gst/gst.module';
 import { InvoiceModule } from './invoice/invoice.module';
@@ -119,6 +120,7 @@ import { DeveloperModule } from './developer/developer.module';
     ProductModule,
     CustomerModule,
     DashboardModule,
+    PosReportsModule,
     AnalyticsModule,
     GstModule,
     InvoiceModule,

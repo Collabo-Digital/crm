@@ -138,7 +138,18 @@ export function resolveAccess(
   };
 }
 
+// Pages whose API is ORG_MANAGERS-only (`@Roles(...ORG_MANAGERS)`) whatever the
+// member's sections. Checked first, so no other rule can open them.
+const MANAGER_ONLY_PREFIXES = ["/orders/pos/reports"];
+const MANAGER_ROLES: ReadonlyArray<UserRole | undefined> = ["OWNER", "ADMIN", "MANAGER"];
+
 export function canAccessPath(access: SectionAccess, pathname: string): boolean {
+  if (
+    MANAGER_ONLY_PREFIXES.some((p) => isUnder(pathname, p)) &&
+    !MANAGER_ROLES.includes(access.role)
+  ) {
+    return false;
+  }
   if (access.role === "VENDOR") {
     return (
       !VENDOR_DENIED_PREFIXES.some((p) => isUnder(pathname, p)) &&

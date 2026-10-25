@@ -68,6 +68,15 @@ export interface SalesProfitData {
   totals: SalesProfitTotals;
   /** Against the equally long window before this one. NULL when profit is. */
   profitTrend: StatMetric | null;
+  /**
+   * `totals.grossSales` and `totals.orders` split by where the sale was made:
+   * in store is a point-of-sale bill, online is every other order. The two
+   * halves add up to the totals. Optional: absent from servers that predate it.
+   */
+  inStoreVsOnline?: {
+    inStore: { sales: number; orders: number };
+    online: { sales: number; orders: number };
+  };
 }
 
 export interface SalesByCategoryData {

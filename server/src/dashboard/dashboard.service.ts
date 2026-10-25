@@ -57,6 +57,17 @@ export interface SalesProfitPoint extends ProfitBucket {
   newCustomers: number;
 }
 
+interface InStoreSplitRow {
+  pos_sale: boolean;
+  sales: number;
+  orders: number;
+}
+
+function splitOf(rows: InStoreSplitRow[], posSale: boolean) {
+  const row = rows.find((r) => r.pos_sale === posSale);
+  return { sales: row?.sales ?? 0, orders: row?.orders ?? 0 };
+}
+
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) { }
@@ -357,7 +368,7 @@ export class DashboardService {
     const window = await this.resolveWindow(orgId, query);
     const previous = this.precedingWindow(window);
 
-    const [rows, customerRows, previousRows, currencyRows, unconvertedOrders] = await Promise.all([
+    const [rows, customerRows, previousRows, currencyRows, unconvertedOrders, splitRows] = await Promise.all([
       this.fetchProfitRows(orgId, window, query.channelId),
       this.fetchNewCustomerRows(orgId, window, query.channelId),
       // The trend compares this window against the one immediately before it,
@@ -400,6 +411,7 @@ export class DashboardService {
           ],
         },
       }),
+      this.fetchInStoreSplit(orgId, window, query.channelId),
     ]);
 
     const newCustomersByBucket = new Map(
@@ -456,7 +468,45 @@ export class DashboardService {
               previousTotals.grossProfit ?? 0,
             ),
           },
+      // `totals.grossSales` and `totals.orders`, split by where the sale was
+      // made. In store is a POS bill; online is every other order.
+      inStoreVsOnline: {
+        inStore: splitOf(splitRows, true),
+        online: splitOf(splitRows, false),
+      },
     };
+  }
+
+  /**
+   * The same orders, rates and window as `fetchProfitRows`' `scoped` CTE,
+   * grouped by `pos_sale` — so the two halves add up to the headline. Keep the
+   * WHERE clauses in step with that CTE.
+   */
+  private async fetchInStoreSplit(
+    orgId: string,
+    window: Window,
+    channelId?: string,
+  ): Promise<InStoreSplitRow[]> {
+    const channelFilter = channelId
+      ? Prisma.sql`AND o."channel_id" = ${channelId}`
+      : Prisma.empty;
+
+    return this.prisma.$queryRaw<InStoreSplitRow[]>`
+      SELECT
+        o."pos_sale"                                               AS pos_sale,
+        ROUND(SUM(o."total_price" * o."exchange_rate"), 2)::float8 AS sales,
+        COUNT(*)::int                                              AS orders
+      FROM "orders" o
+      WHERE o."organization_id" = ${orgId}
+        AND o."deleted_at"   IS NULL
+        AND o."cancelled_at" IS NULL
+        AND o."exchange_rate" IS NOT NULL
+        AND UPPER(o."base_currency") = ${window.currency}
+        AND o."financial_status"::text IN (${Prisma.join(SALES_FINANCIAL_STATUSES)})
+        AND COALESCE(o."external_created_at", o."created_at") >= ${window.from}::timestamptz AT TIME ZONE 'UTC'
+        AND COALESCE(o."external_created_at", o."created_at") <  ${window.to}::timestamptz AT TIME ZONE 'UTC'
+        ${channelFilter}
+      GROUP BY o."pos_sale"`;
   }
 
   /**

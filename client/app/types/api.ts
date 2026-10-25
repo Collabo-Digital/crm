@@ -2477,6 +2477,89 @@ export interface DashboardOverview {
   recentOrders: DashboardRecentOrder[];
 }
 
+// ─── Store Report Types (point of sale) ─────────────────────────────────────
+
+export type PosPaymentMethod = "CASH" | "UPI" | "CARD" | "OTHER";
+
+/** Query for GET /pos/reports/summary. Days are `YYYY-MM-DD` in the org's reporting zone. */
+export interface PosReportParams {
+  from: string;
+  /** Included. */
+  to: string;
+  /** A warehouse id; omitted for every store. */
+  storeId?: string;
+}
+
+/**
+ * Store sales over a period: POS bills less cancelled and deleted ones, paid or
+ * not. Money is in `currency`, converted at each bill's stored rate.
+ */
+export interface PosReportSummary {
+  period: { from: string; to: string; timezone: string };
+  currency: string;
+  totals: {
+    sales: number;
+    /** Bills. */
+    orders: number;
+    avgBill: number;
+    discounts: number;
+    tax: number;
+    itemsSold: number;
+    /** Taken against these bills, by any method. */
+    paid: number;
+    /** Still to collect on part-paid and unpaid bills, round-off included. */
+    balanceDue: number;
+  };
+  /** Every day of the period, zero on days without bills. */
+  byDay: Array<{ date: string; sales: number; orders: number }>;
+  byStore: Array<{ storeId: string | null; storeName: string; sales: number; orders: number }>;
+  /** `posStaffId` null is bills rung up without a staff PIN. */
+  byStaff: Array<{
+    posStaffId: string | null;
+    name: string;
+    sales: number;
+    orders: number;
+    avgBill: number;
+  }>;
+  /** Always all four methods, in this order: cash, UPI, card, other. */
+  byPayment: Array<{ method: PosPaymentMethod; amount: number; count: number }>;
+  /** Top 10 by units sold. `variantId` null is an item typed in at the counter. */
+  topProducts: Array<{ variantId: string | null; title: string; quantity: number; sales: number }>;
+  partPaid: { orders: number; balanceDue: number };
+  /** Bills left out of every figure because their exchange rate is unknown. */
+  unconvertedOrders: number;
+}
+
+/** sale, unlock, pin_failed and approval are written today; others may follow. */
+export type PosActivityType = "sale" | "unlock" | "pin_failed" | "approval" | (string & {});
+
+export interface PosActivityParams {
+  from?: string;
+  to?: string;
+  type?: string;
+  limit?: number;
+}
+
+export interface PosActivityEntry {
+  id: string;
+  type: PosActivityType;
+  createdAt: string;
+  details: Record<string, unknown> | null;
+  /** Who was signed in at the till with their PIN. */
+  staff: { id: string; name: string } | null;
+  /** The manager whose PIN approved it. */
+  approvedBy: { id: string; name: string } | null;
+  order: { id: string; name: string } | null;
+  /** The Collabo member the device was signed in as. */
+  deviceUser: { id: string; name: string } | null;
+}
+
+export interface PosActivityResponse {
+  items: PosActivityEntry[];
+  /** More entries match than the page holds. */
+  hasMore: boolean;
+}
+
 // ─── Customer Stats Types ──────────────────────────────────────────────────
 
 /** New-customers metric with period-over-period comparison. */

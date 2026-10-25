@@ -34,6 +34,7 @@ import { StatCard } from "~/components/app/stat-card";
 import { MoneyTotal } from "~/components/app/money-total";
 import { ProductsPanel } from "~/components/app/products-panel";
 import { SectionCard } from "~/components/app/section-card";
+import { InStoreVsOnlineCard } from "~/components/app/in-store-vs-online-card";
 import { useAuthStore } from "~/stores/auth.store";
 import { useSectionAccess } from "~/hooks/use-section-access";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
@@ -107,6 +108,8 @@ export default function DashboardPage() {
   const series = sales?.data;
   const totals = sales?.totals;
   const periodLabel = sales?.period.label ?? "";
+  // Shown only once the store has billed at the point of sale in the period.
+  const split = sales?.inStoreVsOnline;
 
   return (
     <div className="space-y-6">
@@ -272,6 +275,16 @@ export default function DashboardPage() {
           {/* <SalesDonutChart currency={orgCurrency} /> */}
         </div>
       </div>
+
+      {split && split.inStore.orders > 0 && (
+        <InStoreVsOnlineCard
+          split={split}
+          currency={totals?.currency ?? orgCurrency}
+          periodLabel={periodLabel}
+          showReportsLink={canAccess("/orders/pos/reports")}
+          className={cn("transition-opacity", salesStale && "opacity-50")}
+        />
+      )}
 
       {/* Bottom row — recent orders table and top products */}
       <div
