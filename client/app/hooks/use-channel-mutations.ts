@@ -2,9 +2,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { channelService } from "~/services/channel.service";
 import { channelKeys } from "~/hooks/use-channel-queries";
+import { inventoryKeys } from "~/hooks/use-inventory-queries";
 import { orgKeys } from "~/hooks/use-org-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
-import type { UpdateChannelRequest, TriggerSyncRequest, ShopifyInstallRequest, ManualConnectShopifyRequest, UpdateSyncSettingsRequest, InstagramInstallRequest, CompleteInstagramRequest } from "~/types/api";
+import type { UpdateChannelRequest, TriggerSyncRequest, ShopifyInstallRequest, ManualConnectShopifyRequest, UpdateSyncSettingsRequest, InstagramInstallRequest, CompleteInstagramRequest, SaveShopifyLocationsRequest } from "~/types/api";
 
 /** Mutation hook for updating a channel's settings. */
 export function useUpdateChannelMutation() {
@@ -93,6 +94,25 @@ export function useManualConnectShopifyMutation() {
       toast.success(`Shopify store "${response.shopName}" connected!`);
     },
     onError: (error) => handleMutationError(error, "Failed to connect Shopify store."),
+  });
+}
+
+/**
+ * Saves the decision on several Shopify locations in one call. The caller
+ * shows the outcome from the response, so there is no toast on success.
+ */
+export function useSaveShopifyLocationsMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: SaveShopifyLocationsRequest }) =>
+      channelService.saveShopifyLocations(id, data),
+    onSuccess: (response, { id }) => {
+      queryClient.setQueryData(channelKeys.shopifyLocations(id), response);
+      // Linking and creating both change the Locations list.
+      queryClient.invalidateQueries({ queryKey: inventoryKeys.all });
+    },
+    onError: (error) => handleMutationError(error, "Could not save the Shopify locations."),
   });
 }
 

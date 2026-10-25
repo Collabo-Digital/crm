@@ -19,20 +19,6 @@ import type {
  * render variant.inventoryQuantity (the sellable cache) and must refresh.
  */
 
-export function useEnableInventoryMutation() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () => inventoryService.enable(),
-    onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: inventoryKeys.all });
-      if (res.status === "SEEDING") {
-        toast.success("Warehousing is being set up — seeding stock from your catalog.");
-      }
-    },
-    onError: (error) => handleMutationError(error, "Failed to enable warehousing."),
-  });
-}
-
 /**
  * `silent` hands the toast and the error to the caller. The variant editor
  * fires one adjustment per changed warehouse inside a larger save, so the
@@ -145,9 +131,9 @@ export function useCreateWarehouseMutation() {
     mutationFn: (data: CreateWarehouseRequest) => inventoryService.createWarehouse(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: inventoryKeys.all });
-      toast.success("Warehouse created.");
+      toast.success("Location created.");
     },
-    onError: (error) => handleMutationError(error, "Failed to create warehouse."),
+    onError: (error) => handleMutationError(error, "Could not create the location."),
   });
 }
 
@@ -158,9 +144,9 @@ export function useUpdateWarehouseMutation() {
       inventoryService.updateWarehouse(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: inventoryKeys.all });
-      toast.success("Warehouse updated.");
+      toast.success("Location updated.");
     },
-    onError: (error) => handleMutationError(error, "Failed to update warehouse."),
+    onError: (error) => handleMutationError(error, "Could not update the location."),
   });
 }
 
@@ -171,8 +157,8 @@ export function useBulkCreateLocationsMutation() {
       inventoryService.bulkCreateLocations(id, data),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: inventoryKeys.all });
-      toast.success(`Created ${res.created} locations.`);
+      toast.success(`Created ${res.created} racks, shelves and bins.`);
     },
-    onError: (error) => handleMutationError(error, "Failed to create locations."),
+    onError: (error) => handleMutationError(error, "Could not create the bins."),
   });
 }

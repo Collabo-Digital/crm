@@ -66,6 +66,7 @@ import { formatCurrency } from "~/lib/utils";
 import type { UserRole, OrgMember, OrganizationGstin, CreateGstinRequest, StateTaxRate, ProductTypeTaxRate, CollectionTaxOverride, ShopifyCollection, LoyaltyMetric, OrgResponse, Warehouse } from "~/types/api";
 import { readAddress } from "~/lib/address";
 import { useWarehouses } from "~/hooks/use-inventory-queries";
+import { LocationKindBadge } from "~/components/app/inventory/location-kind-badge";
 import { GstReturnSettings } from "~/components/app/settings/gst-return-settings";
 import { CatalogPricesSetting } from "~/components/app/settings/catalog-prices-setting";
 import { InvoiceSeriesSetting } from "~/components/app/settings/invoice-series-setting";
@@ -664,6 +665,7 @@ function PlacesOfBusiness({
       </p>
       {additional.map((w) => (
         <p key={w.id} className="text-xs md:text-[10px] text-muted-foreground">
+          <LocationKindBadge kind={w.kind} className="mr-1 align-middle" />
           <span className="text-gray-600 dark:text-gray-400">{w.name}:</span>{" "}
           {readAddress(w.address).lines.join(", ") || "No address"}
           {!w.apobDeclared && (
