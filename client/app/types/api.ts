@@ -5079,3 +5079,178 @@ export interface SheetColumn {
   header: string;
   key: string;
 }
+
+// ─── Point of sale (Orders → Point of sale) ─────────────────────────────────
+// Money is rupees as numbers. Prices are GST-inclusive.
+
+export interface PosSettings {
+  upiId: string | null;
+  upiPayeeName: string | null;
+  roundOff: boolean;
+  requireStaffPin: boolean;
+  /** A discount above this share of the price needs a manager's PIN. Null: never. */
+  discountApprovalPercent: number | null;
+  priceOverrideNeedsApproval: boolean;
+  receiptWidth: 58 | 80;
+  receiptFooter: string | null;
+  tileVariantIds: string[];
+  askCustomer: "optional" | "required";
+}
+
+export interface PosStore {
+  id: string;
+  name: string;
+  code: string | null;
+  isDefault: boolean;
+}
+
+export type PosStaffRole = "CASHIER" | "MANAGER";
+
+export interface PosStaffView {
+  id: string;
+  name: string;
+  role: PosStaffRole;
+  isActive: boolean;
+}
+
+export interface PosProduct {
+  variantId: string;
+  productId: string;
+  title: string;
+  variantTitle: string | null;
+  sku: string | null;
+  barcode: string | null;
+  price: number;
+  imageUrl: string | null;
+  /** Null when the store does not count this variant's stock. */
+  stockAtStore: number | null;
+  trackQuantity: boolean;
+  allowOversell: boolean;
+  /** Not in the contract yet; the GST estimate uses it when the server sends it. */
+  gstRate?: number | null;
+}
+
+export interface PosSetup {
+  settings: PosSettings;
+  stores: PosStore[];
+  warehousingEnabled: boolean;
+  /** Active staff only. */
+  staff: PosStaffView[];
+  tiles: PosProduct[];
+  gstEnabled: boolean;
+  storeName: string;
+  currency: "INR";
+}
+
+export interface PosUnlockResult {
+  staff: PosStaffView;
+  staffToken: string;
+  expiresAt: string;
+}
+
+export type PosApprovalReason = "discount" | "price_override";
+
+export interface PosApprovalResult {
+  approver: PosStaffView;
+  approvalToken: string;
+  expiresAt: string;
+}
+
+export interface PosCustomer {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  gstin: string | null;
+  ordersCount: number;
+  totalSpent: number;
+  vipLevel: VipLevel;
+  whatsappOptIn: boolean;
+}
+
+export type PosPaymentMethod = "CASH" | "UPI" | "CARD" | "OTHER";
+
+export interface PosDiscount {
+  type: "percent" | "amount";
+  value: number;
+}
+
+export interface PosPaymentInput {
+  method: PosPaymentMethod;
+  amount: number;
+  /** Cash handed over, when it is more than `amount`. */
+  tendered?: number;
+  reference?: string;
+}
+
+export interface PosSaleCustomerInput {
+  customerId?: string;
+  phone?: string;
+  name?: string;
+  email?: string;
+  gstin?: string;
+  billingStateCode?: string;
+  whatsappOptIn?: boolean;
+}
+
+export type PosSaleLineInput =
+  | { variantId: string; quantity: number; unitPrice?: number; discount?: PosDiscount }
+  | { custom: { title: string; unitPrice: number; gstRate?: number; hsn?: string }; quantity: number; discount?: PosDiscount };
+
+export interface PosSaleRequest {
+  /** Same id on a retry, so the server bills once. */
+  clientSaleId: string;
+  storeId?: string;
+  /** Omitted for a walk-in. */
+  customer?: PosSaleCustomerInput;
+  lines: PosSaleLineInput[];
+  cartDiscount?: PosDiscount;
+  payments: PosPaymentInput[];
+  note?: string;
+  staffToken?: string;
+  approvalToken?: string;
+}
+
+export interface PosSaleResult {
+  orderId: string;
+  orderName: string;
+  total: number;
+  payable: number;
+  roundOff: number;
+  paid: number;
+  balanceDue: number;
+  change: number;
+  financialStatus: "PAID" | "PARTIALLY_PAID" | "PENDING";
+  invoiceId: string | null;
+  invoiceNumber: string | null;
+  customerId: string | null;
+  whatsapp: { canSend: boolean; reason: string | null };
+}
+
+export interface PosReceipt {
+  width: 58 | 80;
+  footer: string | null;
+  store: { name: string; address: string | null; phone: string | null; gstin: string | null; logoUrl: string | null };
+  order: { id: string; name: string; createdAt: string; staffName: string | null; storeName: string | null };
+  invoice: { number: string; date: string; placeOfSupply: string | null; gstType: "INTRA" | "INTER" | null } | null;
+  customer: { name: string | null; phone: string | null; gstin: string | null } | null;
+  lines: Array<{
+    title: string;
+    variantTitle: string | null;
+    hsn: string | null;
+    quantity: number;
+    unitPrice: number;
+    discount: number;
+    taxableValue: number;
+    gstRate: number;
+    cgst: number;
+    sgst: number;
+    igst: number;
+    total: number;
+  }>;
+  totals: { subtotal: number; discount: number; taxable: number; cgst: number; sgst: number; igst: number; roundOff: number; total: number; payable: number };
+  gstSummary: Array<{ rate: number; taxable: number; cgst: number; sgst: number; igst: number }>;
+  payments: Array<{ method: PosPaymentMethod; amount: number; tendered: number | null; change: number | null; reference: string | null }>;
+  paid: number;
+  balanceDue: number;
+}
