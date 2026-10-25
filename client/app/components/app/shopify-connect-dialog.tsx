@@ -20,6 +20,8 @@ interface ShopifyConnectDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Pre-filled when the merchant arrives from the embedded Shopify app (?install_shop=). */
   initialDomain?: string;
+  /** A connect that needed no redirect, so the caller can go on to its locations. */
+  onConnected?: (channelId: string) => void;
 }
 
 /**
@@ -37,7 +39,7 @@ interface ShopifyConnectDialogProps {
  *        the same OAuth flow runs but with the entered credentials; the
  *        token is fetched automatically.
  */
-export function ShopifyConnectDialog({ open, onOpenChange, initialDomain }: ShopifyConnectDialogProps) {
+export function ShopifyConnectDialog({ open, onOpenChange, initialDomain, onConnected }: ShopifyConnectDialogProps) {
   // ── Public app section ──
   const [shopDomain, setShopDomain] = useState("");
 
@@ -93,9 +95,10 @@ export function ShopifyConnectDialog({ open, onOpenChange, initialDomain }: Shop
           accessToken: accessToken.trim(),
         },
         {
-          onSuccess: () => {
+          onSuccess: (response) => {
             resetCustomForm();
             onOpenChange(false);
+            onConnected?.(response.channelId);
           },
         },
       );

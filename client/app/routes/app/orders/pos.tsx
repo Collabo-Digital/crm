@@ -260,7 +260,7 @@ export default function PosPage() {
     [activeStore?.id, canSell, addProduct],
   );
 
-  useKeyboardWedge(scan, !!data && !locked && !anyDialog);
+  useKeyboardWedge(scan, !!data && stores.length > 0 && !locked && !anyDialog);
 
   const updateLine = (key: string, patch: Partial<PosCartLine>) => setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const removeLine = (key: string) => setLines((prev) => prev.filter((l) => l.key !== key));
@@ -396,7 +396,7 @@ export default function PosPage() {
   const ref = billRef(clientSaleId);
 
   // Hidden while locked: the lock screen is the PIN pad, and two pads would both take the digits.
-  const staffBadge = canSell && !locked && (
+  const staffBadge = canSell && !locked && stores.length > 0 && (
     <button
       type="button"
       onClick={() => {
@@ -456,6 +456,27 @@ export default function PosPage() {
       <div className="flex flex-1 items-center justify-center">
         <QueryErrorState resource="the till" onRetry={() => void setup.refetch()} />
       </div>
+    );
+  } else if (stores.length === 0) {
+    // The till sells from Store locations only, and the server refuses a sale
+    // without one.
+    body = (
+      <section className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto rounded-xl bg-card px-4 py-8 shadow-sm ring-1 ring-border">
+        <div className="max-w-sm space-y-3 text-center">
+          <Store className="mx-auto size-8 text-muted-foreground" />
+          <h2 className="font-heading text-subhead">Add a store location to start billing.</h2>
+          <p className="text-caption text-muted-foreground">
+            {canManage
+              ? "The point of sale sells from store locations. Warehouses keep stock but don't bill."
+              : "The point of sale sells from store locations. Ask a manager to add one."}
+          </p>
+          {canManage && (
+            <Button asChild variant="accent">
+              <Link to="/products/inventory/warehouses?new=store">Add a store location</Link>
+            </Button>
+          )}
+        </div>
+      </section>
     );
   } else if (locked) {
     body = (

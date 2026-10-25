@@ -11,6 +11,8 @@ import type {
   OAuthInstallResponse,
   ManualConnectShopifyRequest,
   ManualConnectShopifyResponse,
+  SaveShopifyLocationsRequest,
+  ShopifyLocationsResponse,
   WhatsAppInstallRequest,
   WhatsAppInstallResponse,
   WhatsAppCallbackRequest,
@@ -64,6 +66,14 @@ export const channelService = {
   /** Manually connect a Shopify store using custom app credentials. */
   manualConnectShopify: (data: ManualConnectShopifyRequest) =>
     apiClient.post<ManualConnectShopifyResponse>("/channels/shopify/manual-connect", data).then((response) => response.data),
+
+  /** The store's Shopify locations and what each one does in Collabo. */
+  getShopifyLocations: (id: string) =>
+    apiClient.get<ShopifyLocationsResponse>(`/channels/${id}/shopify/locations`).then((response) => response.data),
+
+  /** Decide several Shopify locations at once; answers with the updated list. */
+  saveShopifyLocations: (id: string, data: SaveShopifyLocationsRequest) =>
+    apiClient.post<ShopifyLocationsResponse>(`/channels/${id}/shopify/locations`, data).then((response) => response.data),
 
   /**
    * Start Facebook Login for Instagram. Pass `reconnectChannelId` to re-authorize

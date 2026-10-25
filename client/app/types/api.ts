@@ -918,6 +918,48 @@ export interface ManualConnectShopifyResponse {
   shopDomain: string;
 }
 
+/**
+ * What happens to one Shopify location's stock: it shares stock with an
+ * existing Collabo location, became a new one, or is not tracked. Null until
+ * the merchant decides — nothing syncs for that location before then.
+ */
+export type ShopifyLocationDecision =
+  | { action: "link"; warehouseId: string; warehouseName: string }
+  | { action: "create"; warehouseId: string; warehouseName: string }
+  | { action: "ignore" };
+
+export interface ShopifyLocation {
+  id: string;
+  name: string;
+  isPrimary: boolean;
+  isActive: boolean;
+  address: { city: string; stateCode: string } | null;
+  decision: ShopifyLocationDecision | null;
+}
+
+/** GET/POST /channels/:id/shopify/locations. PENDING while any location is undecided. */
+export interface ShopifyLocationsResponse {
+  status: "PENDING" | "DONE";
+  locations: ShopifyLocation[];
+  /** The workspace's own locations, as candidates to share stock with. */
+  warehouses: Array<{
+    id: string;
+    name: string;
+    kind: LocationKind;
+    hasStock: boolean;
+    shopifyLocationId: string | null;
+  }>;
+}
+
+export type ShopifyLocationDecisionInput =
+  | { shopifyLocationId: string; action: "link"; warehouseId: string; stockSource: LocationStockSource }
+  | { shopifyLocationId: string; action: "create"; kind: LocationKind; name?: string }
+  | { shopifyLocationId: string; action: "ignore" };
+
+export interface SaveShopifyLocationsRequest {
+  decisions: ShopifyLocationDecisionInput[];
+}
+
 /** Response containing the OAuth redirect URL. */
 export interface OAuthInstallResponse {
   authUrl: string;
@@ -3412,11 +3454,40 @@ export interface InventoryStatus {
   warehouseCount: number;
 }
 
+/** A Store sells with the point of sale; a Warehouse only holds stock. */
+export type LocationKind = "STORE" | "WAREHOUSE";
+
+/**
+ * Which GST registration a location's sales are billed under. `existing` uses
+ * one of the workspace's GSTINs for the location's state, `new` adds the
+ * location's own, and `none` leaves it without one.
+ */
+export type LocationGstChoice =
+  | { mode: "existing"; gstinId: string }
+  | { mode: "new"; gstin: string; legalName?: string; tradeName?: string }
+  | { mode: "none" };
+
+/** Whose counts win when a location that already holds stock is linked to Shopify. */
+export type LocationStockSource = "shopify" | "collabo";
+
+export interface LocationAddress {
+  address1: string;
+  address2?: string;
+  city: string;
+  zip: string;
+  stateCode: string;
+}
+
 export interface Warehouse {
   id: string;
   name: string;
   code: string;
+  kind: LocationKind;
   shopifyLocationId: string | null;
+  /** The Shopify location this one shares stock with. */
+  shopifyLocation: { id: string; name: string } | null;
+  /** A sentence about this location's GST setup that needs the merchant's attention. */
+  gstWarning: string | null;
   address: Record<string, unknown> | null;
   /** GST registration this warehouse is an additional place of business of. */
   gstinId: string | null;
@@ -3680,20 +3751,30 @@ export interface VariantStockDetail {
 export interface CreateWarehouseRequest {
   name: string;
   code: string;
-  address?: Record<string, unknown>;
-  gstinId?: string | null;
+  kind: LocationKind;
+  address: LocationAddress;
+  /** Sent only while GST is on for the workspace. */
+  gst?: LocationGstChoice;
+  /** Merchant's own confirmation that the address is declared on the GST portal. */
   apobDeclared?: boolean;
   isDefault?: boolean;
+  shopifyLocationId?: string;
+  /** Required when linking to Shopify a location that already holds stock. */
+  stockSource?: LocationStockSource;
 }
 
 export interface UpdateWarehouseRequest {
   name?: string;
-  address?: Record<string, unknown>;
-  /** null unlinks the registration; omit to leave it unchanged. */
-  gstinId?: string | null;
+  code?: string;
+  kind?: LocationKind;
+  address?: LocationAddress;
+  gst?: LocationGstChoice;
   apobDeclared?: boolean;
   isDefault?: boolean;
   isActive?: boolean;
+  /** null unlinks the Shopify location; omit to leave it unchanged. */
+  shopifyLocationId?: string | null;
+  stockSource?: LocationStockSource;
 }
 
 export interface BulkLocationsRequest {
