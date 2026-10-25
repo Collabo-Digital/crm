@@ -17,6 +17,14 @@ const THREAD_EVERY_MS = 1_500;
 /// per-member rate limit with every open tab.
 const LIST_EVERY_MS = 5_000;
 const MAX_BACKOFF_MS = 30_000;
+/// The server opens each stream with a newline at once and pings every 25 s.
+/// A stream that has said nothing within FIRST_BYTE_MS of opening, or for
+/// QUIET_MS since, is being held back on the way (Cloudflare quick tunnels and
+/// some office proxies buffer server-sent events), so what is on screen is
+/// refetched every POLL_MS instead, until the stream delivers again.
+const FIRST_BYTE_MS = 5_000;
+const QUIET_MS = 35_000;
+const POLL_MS = 5_000;
 
 /**
  * Runs `fn` soon after `request()`, then at most once per `everyMs`: the
@@ -62,6 +70,14 @@ export function useInboxStream(enabled = true): boolean {
     let controller: AbortController | null = null;
     const changedConversations = new Set<string>();
     const changedThreads = new Set<string>();
+    let openedAt = Date.now();
+    let lastByteAt: number | null = null;
+    const poll = setInterval(() => {
+      const quiet = lastByteAt === null ? Date.now() - openedAt > FIRST_BYTE_MS : Date.now() - lastByteAt > QUIET_MS;
+      if (!quiet || document.visibilityState !== "visible") return;
+      void queryClient.invalidateQueries({ queryKey: inboxKeys.all });
+      void queryClient.invalidateQueries({ queryKey: callKeys.live });
+    }, POLL_MS);
 
     // Only what is on screen refetches: invalidating an inactive query just marks it stale.
     const threads = paced(() => {
@@ -100,6 +116,7 @@ export function useInboxStream(enabled = true): boolean {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) return;
+        lastByteAt = Date.now();
         buffer += decoder.decode(value, { stream: true });
         let end: number;
         while ((end = buffer.indexOf("\n\n")) >= 0) {
@@ -127,6 +144,8 @@ export function useInboxStream(enabled = true): boolean {
       let hadConnection = false;
       while (!stopped) {
         controller = new AbortController();
+        openedAt = Date.now();
+        lastByteAt = null;
         try {
           const res = await fetch(`${BASE_URL}/inbox/stream`, {
             headers: {
@@ -160,6 +179,7 @@ export function useInboxStream(enabled = true): boolean {
     void run();
     return () => {
       stopped = true;
+      clearInterval(poll);
       controller?.abort();
       threads.cancel();
       lists.cancel();
