@@ -97,6 +97,9 @@ function build({
   const prisma: any = {
     $transaction: jest.fn(async (fn: any) => fn(tx)),
     $executeRaw: jest.fn().mockResolvedValue(1),
+    // Nothing chosen and no Shopify order: prices exclude GST.
+    organizationSettings: { findUnique: jest.fn().mockResolvedValue(null) },
+    order: { findFirst: jest.fn().mockResolvedValue(null) },
   };
   const ledger = {
     isWarehousingEnabled: jest.fn().mockResolvedValue(warehousing),

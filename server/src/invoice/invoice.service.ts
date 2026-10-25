@@ -11,6 +11,7 @@ import { invoicePdfFilename, renderInvoicePdf, type InvoiceForPdf } from './pdf/
 import { CommerceEventsService } from '../commerce/commerce-events.service';
 import { isCashOnDelivery } from '../commerce/order-vars';
 import {
+  ChannelPlatform,
   GstSupplyType,
   GstType,
   InvoiceStatus,
@@ -30,6 +31,8 @@ import {
 import { normalizeGstin } from '../gst/constants/gst-rates';
 import { resolveLineTaxClassification } from '../gst/line-tax-classification.util';
 import { apportionShipping } from '../gst/shipping-apportionment.util';
+import { catalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util';
+import { CRM_SOURCE_NAME } from '../channel/order-rebadge.util';
 import { parseTaxSettings } from '../organization-settings/schemas/tax-settings.schema';
 import { parseOrderSettings } from '../organization-settings/schemas/order-settings.schema';
 import { compareTax } from '../gst/tax-reconciliation.util';
@@ -508,6 +511,7 @@ export class InvoiceService {
           },
         },
         customer: true,
+        channel: { select: { platform: true } },
       },
     });
 
@@ -634,8 +638,14 @@ export class InvoiceService {
     // A Shopify store priced "taxes included" sends line prices (and shipping)
     // that already contain GST. Adding GST on top declared about 18% more
     // taxable value and tax than was collected, so those amounts are split
-    // into taxable value and tax instead.
-    const pricesIncludeTax = order.taxesIncluded === true;
+    // into taxable value and tax instead. A Shopify order synced before that
+    // was recorded takes the store's basis; a CRM sale without one predates
+    // tax-inclusive pricing and was priced before tax.
+    const pricesIncludeTax =
+      order.taxesIncluded ??
+      (order.channel.platform === ChannelPlatform.SHOPIFY &&
+        order.sourceName !== CRM_SOURCE_NAME &&
+        (await catalogPricesIncludeTax(tx, orgId)));
 
     // Rates for EVERY line in at most four queries, run on this transaction.
     //

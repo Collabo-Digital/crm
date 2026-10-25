@@ -8,7 +8,12 @@ import { DraftOrderService } from './draft-order.service';
  * the price on the product.
  */
 describe('DraftOrderService.create pricing', () => {
-  function build(opts: { storeTaxesIncluded: boolean | null }) {
+  /**
+   * `pricesIncludeTax` is the org's "Catalogue prices include GST" choice
+   * (null: not made); `storeTaxesIncluded` is what its latest Shopify order
+   * says (null: none synced).
+   */
+  function build(opts: { storeTaxesIncluded: boolean | null; pricesIncludeTax?: boolean | null }) {
     const created: any[] = [];
     const tx = {
       channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch_manual' }) },
@@ -27,6 +32,11 @@ describe('DraftOrderService.create pricing', () => {
       },
       organization: { findUnique: jest.fn().mockResolvedValue({ gstEnabled: true, currency: 'INR' }) },
       organizationGstin: { findFirst: jest.fn().mockResolvedValue({ stateCode: '29' }) },
+      organizationSettings: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ taxSettings: { pricesIncludeTax: opts.pricesIncludeTax ?? null } }),
+      },
       order: {
         findFirst: jest
           .fn()
@@ -80,15 +90,51 @@ describe('DraftOrderService.create pricing', () => {
     expect(created[0].metadata.pricesIncludeTax).toBeUndefined();
   });
 
-  it('takes a typed price as the order form shows it, before tax', async () => {
-    const { service, created, tx } = build({ storeTaxesIncluded: true });
+  it('reads a typed price on the same basis as the catalogue, as the order form previews it', async () => {
+    const { service, created } = build({ storeTaxesIncluded: true });
+
+    await service.create('org_1', 'u_1', {
+      lineItems: [{ productVariantId: 'v_1', quantity: 1, unitPriceOverride: 1180 }],
+    } as any);
+
+    expect(created[0]).toEqual(expect.objectContaining({ subtotalPrice: 1000, totalTax: 180, totalPrice: 1180 }));
+    expect(created[0].metadata.pricesIncludeTax).toBe(true);
+  });
+
+  it('adds GST on top of a typed price when prices exclude it', async () => {
+    const { service, created } = build({ storeTaxesIncluded: false });
 
     await service.create('org_1', 'u_1', {
       lineItems: [{ productVariantId: 'v_1', quantity: 1, unitPriceOverride: 1000 }],
     } as any);
 
     expect(created[0]).toEqual(expect.objectContaining({ subtotalPrice: 1000, totalTax: 180, totalPrice: 1180 }));
+  });
+
+  it('follows the org’s choice that prices include GST, even with no Shopify order to go by', async () => {
+    const { service, created } = build({ storeTaxesIncluded: null, pricesIncludeTax: true });
+
+    await service.create('org_1', 'u_1', { lineItems: [{ productVariantId: 'v_1', quantity: 1 }] } as any);
+
+    expect(created[0]).toEqual(expect.objectContaining({ subtotalPrice: 1000, totalTax: 180, totalPrice: 1180 }));
+  });
+
+  it('lets the org’s choice override what its Shopify orders say', async () => {
+    const { service, created, tx } = build({ storeTaxesIncluded: true, pricesIncludeTax: false });
+
+    await service.create('org_1', 'u_1', { lineItems: [{ productVariantId: 'v_1', quantity: 1 }] } as any);
+
+    expect(created[0]).toEqual(expect.objectContaining({ totalTax: 212.4, totalPrice: 1392.4 }));
+    expect(created[0].metadata.pricesIncludeTax).toBeUndefined();
     expect(tx.order.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('adds GST on top while nothing is chosen and no Shopify order has synced', async () => {
+    const { service, created } = build({ storeTaxesIncluded: null });
+
+    await service.create('org_1', 'u_1', { lineItems: [{ productVariantId: 'v_1', quantity: 1 }] } as any);
+
+    expect(created[0]).toEqual(expect.objectContaining({ totalPrice: 1392.4 }));
   });
 
   it('reads the store setting from its own Shopify orders, not ones the CRM pushed', async () => {

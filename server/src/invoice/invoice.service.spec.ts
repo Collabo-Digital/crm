@@ -425,6 +425,7 @@ describe('InvoiceService.createForOrderTx dating', () => {
       dispatchWarehouseId: null,
       placeOfSupplyCode: '29',
       customer: null,
+      channel: { platform: 'MANUAL' },
       lineItems: [
         {
           id: 'li_1',
@@ -613,6 +614,12 @@ describe('InvoiceService.createForOrderTx amounts', () => {
     shipping?: string;
     totalTax: string;
     taxShipping?: boolean;
+    platform?: 'MANUAL' | 'SHOPIFY';
+    sourceName?: string | null;
+    /** The org's "Catalogue prices include GST" choice. */
+    pricesIncludeTax?: boolean | null;
+    /** `taxesIncluded` on the store's latest Shopify order, if any. */
+    storeTaxesIncluded?: boolean;
   }) {
     const order = {
       id: 'order_1',
@@ -622,11 +629,13 @@ describe('InvoiceService.createForOrderTx amounts', () => {
       currency: 'INR',
       totalTax: opts.totalTax,
       taxesIncluded: opts.taxesIncluded ?? null,
+      sourceName: opts.sourceName ?? null,
       totalShippingPrice: opts.shipping ?? '0.00',
       billingAddress: null,
       dispatchWarehouseId: null,
       placeOfSupplyCode: '29',
       customer: null,
+      channel: { platform: opts.platform ?? 'MANUAL' },
       lineItems: [
         {
           id: 'li_1',
@@ -642,7 +651,16 @@ describe('InvoiceService.createForOrderTx amounts', () => {
     };
     const tx = {
       order: {
-        findFirst: jest.fn().mockResolvedValue(order),
+        // The order itself by id; otherwise the store's latest Shopify order.
+        findFirst: jest.fn(({ where }: any) =>
+          Promise.resolve(
+            where.id
+              ? order
+              : opts.storeTaxesIncluded === undefined
+                ? null
+                : { taxesIncluded: opts.storeTaxesIncluded },
+          ),
+        ),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       invoice: {
@@ -653,9 +671,12 @@ describe('InvoiceService.createForOrderTx amounts', () => {
         findUnique: jest.fn().mockResolvedValue({ gstEnabled: true, timezone: 'Asia/Kolkata' }),
       },
       organizationSettings: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue(opts.taxShipping ? { taxSettings: { taxShipping: true } } : null),
+        findUnique: jest.fn().mockResolvedValue({
+          taxSettings: {
+            taxShipping: opts.taxShipping ?? false,
+            pricesIncludeTax: opts.pricesIncludeTax ?? null,
+          },
+        }),
       },
       organizationGstin: {
         findFirst: jest.fn().mockResolvedValue({
@@ -725,6 +746,62 @@ describe('InvoiceService.createForOrderTx amounts', () => {
 
     expect(data.subtotal).toBe(1000);
     expect(data.totalTax).toBe(180);
+    expect(data.grandTotal).toBe(1180);
+  });
+
+  it('backs GST out of an old Shopify order with no recorded basis when the org says prices include it', async () => {
+    const data = await issue({
+      platform: 'SHOPIFY',
+      price: '1180.00',
+      totalTax: '180.00',
+      pricesIncludeTax: true,
+    });
+
+    expect(data.subtotal).toBe(1000);
+    expect(data.totalTax).toBe(180);
+    expect(data.grandTotal).toBe(1180);
+  });
+
+  it('reads an unset choice from the store’s own Shopify orders for an old Shopify order', async () => {
+    const data = await issue({
+      platform: 'SHOPIFY',
+      price: '1180.00',
+      totalTax: '180.00',
+      storeTaxesIncluded: true,
+    });
+
+    expect(data.grandTotal).toBe(1180);
+  });
+
+  it('lets the org’s choice override what its Shopify orders say', async () => {
+    const data = await issue({
+      platform: 'SHOPIFY',
+      price: '1000.00',
+      totalTax: '180.00',
+      pricesIncludeTax: false,
+      storeTaxesIncluded: true,
+    });
+
+    expect(data.subtotal).toBe(1000);
+    expect(data.grandTotal).toBe(1180);
+  });
+
+  it('keeps the basis an order recorded, whatever the org setting says', async () => {
+    const data = await issue({
+      platform: 'SHOPIFY',
+      taxesIncluded: false,
+      price: '1000.00',
+      totalTax: '180.00',
+      pricesIncludeTax: true,
+    });
+
+    expect(data.grandTotal).toBe(1180);
+  });
+
+  it('prices an old counter sale with no recorded basis before tax, as it was sold', async () => {
+    const data = await issue({ price: '1000.00', totalTax: '180.00', pricesIncludeTax: true });
+
+    expect(data.subtotal).toBe(1000);
     expect(data.grandTotal).toBe(1180);
   });
 

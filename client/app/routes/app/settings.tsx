@@ -65,6 +65,7 @@ import type { UserRole, OrgMember, OrganizationGstin, CreateGstinRequest, StateT
 import { readAddress } from "~/lib/address";
 import { useWarehouses } from "~/hooks/use-inventory-queries";
 import { GstReturnSettings } from "~/components/app/settings/gst-return-settings";
+import { CatalogPricesSetting } from "~/components/app/settings/catalog-prices-setting";
 import { InvoiceSeriesSetting } from "~/components/app/settings/invoice-series-setting";
 import { platformOffered } from "~/lib/channel-providers";
 import { roleLabel } from "~/lib/labels";
@@ -1027,6 +1028,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
       {gstEnabled && (
         <CollectionOverridesSection />
       )}
+
+      {/* Whether catalogue and typed prices already contain GST. */}
+      {gstEnabled && <CatalogPricesSetting />}
 
       {/* GST return settings — B2CL threshold and default UQC. */}
       {gstEnabled && <GstReturnSettings />}

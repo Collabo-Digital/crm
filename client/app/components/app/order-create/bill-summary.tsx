@@ -24,6 +24,7 @@ export function BillSummary({
    * route where the only path forward is to save a draft.
    */
   draftOnly = false,
+  pricesIncludeTax = false,
 }: {
   lines: CartLine[];
   currency: string;
@@ -42,14 +43,24 @@ export function BillSummary({
   onSaveDraft?: () => void;
   isSavingDraft?: boolean;
   draftOnly?: boolean;
+  /**
+   * The org's prices already include GST, so the server takes the tax out of
+   * each line instead of adding it: the total is the sum of the prices.
+   */
+  pricesIncludeTax?: boolean;
 }) {
   const subtotal = lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
   // Server-authoritative tax — UI estimate: assume 0 if gstRate unknown.
   const estimatedTax = lines.reduce((s, l) => {
     if (!l.gstRate) return s;
+    if (pricesIncludeTax) {
+      // Rounded per line as the server does, so the figures match to the paisa.
+      const amount = round2(l.unitPrice * l.quantity);
+      return s + round2(amount - round2((amount * 100) / (100 + l.gstRate)));
+    }
     return s + ((l.unitPrice * l.quantity * l.gstRate) / 100);
   }, 0);
-  const grandTotal = subtotal + estimatedTax;
+  const grandTotal = pricesIncludeTax ? subtotal : subtotal + estimatedTax;
 
   return (
     <div className="space-y-4 rounded-xl border bg-white dark:bg-gray-900 p-4 shadow-sm">
@@ -71,7 +82,7 @@ export function BillSummary({
         </div>
         <div className="flex justify-between">
           <span className="text-muted-foreground">
-            Tax (estimate)
+            {pricesIncludeTax ? "GST included (estimate)" : "Tax (estimate)"}
           </span>
           <span className="tabular-nums">
             {formatCurrency(estimatedTax, currency)}
@@ -174,4 +185,8 @@ export function BillSummary({
       )}
     </div>
   );
+}
+
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
 }

@@ -69,6 +69,14 @@ export const TaxSettingsSchema = z.object({
    * change and the settings screen says so before saving.
    */
   invoicePrefix: z.string().default(DEFAULT_INVOICE_PREFIX),
+
+  /**
+   * "Catalogue prices include GST": a product's price, or one typed into an
+   * order, already contains the tax, so GST is backed out of it rather than
+   * added on top. Null until the merchant chooses; until then the store's own
+   * Shopify orders decide (see `catalogPricesIncludeTax`).
+   */
+  pricesIncludeTax: z.boolean().nullable().default(null),
 });
 
 export type TaxSettings = z.infer<typeof TaxSettingsSchema>;
@@ -107,6 +115,7 @@ export const UpdateTaxSettingsSchema = z.object({
         'numbering series and break the consecutive invoice run.',
     })
     .optional(),
+  pricesIncludeTax: z.boolean().optional(),
 });
 export type UpdateTaxSettingsInput = z.infer<typeof UpdateTaxSettingsSchema>;
 

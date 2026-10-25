@@ -13,6 +13,7 @@ import {
   SyncStatus,
 } from '@prisma/client';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
+import { catalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -423,16 +424,14 @@ export class DraftOrderService {
         ? this.calculator.isIntraState(sellerState, placeOfSupplyCode)
         : true;
 
-      // A draft priced straight from the catalogue (a WhatsApp cart) charges
-      // what the catalogue says. In a store whose prices include GST, adding
-      // GST on top asked the customer for 18% more than the price they saw,
-      // and more than the Shopify draft's checkout. Typed prices are taken as
-      // the order form shows them, before tax. The draft keeps its basis for
-      // later edits and for completion.
+      // A draft charges the price it was given, catalogue (a WhatsApp cart) or
+      // typed (the order form, which previews it on the same basis). In a
+      // store whose prices include GST, adding GST on top asked the customer
+      // for 18% more than the price they saw, and more than the Shopify
+      // draft's checkout. The draft keeps its basis for later edits and for
+      // completion.
       const pricesIncludeTax =
-        sellerState !== null &&
-        dto.lineItems.every((li) => li.unitPriceOverride === undefined) &&
-        (await this.catalogPricesIncludeTax(tx, orgId));
+        sellerState !== null && (await catalogPricesIncludeTax(tx, orgId));
 
       const lineRows: Array<{
         variantId: string;
@@ -1363,30 +1362,6 @@ export class DraftOrderService {
     return this.prisma.channel.findFirst({
       where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
-  }
-
-  /**
-   * Whether this store's catalogue prices already include GST, as its own
-   * Shopify orders say (`taxes_included`). Orders the CRM pushed are left out:
-   * they were sent with tax on top whatever the store's setting. With no
-   * Shopify order to go by, prices are read as excluding GST, as before.
-   */
-  private async catalogPricesIncludeTax(
-    tx: Prisma.TransactionClient,
-    orgId: string,
-  ): Promise<boolean> {
-    const latest = await tx.order.findFirst({
-      where: {
-        organizationId: orgId,
-        deletedAt: null,
-        taxesIncluded: { not: null },
-        channel: { platform: ChannelPlatform.SHOPIFY },
-        OR: [{ sourceName: null }, { sourceName: { not: 'collabo-crm' } }],
-      },
-      orderBy: { createdAt: 'desc' },
-      select: { taxesIncluded: true },
-    });
-    return latest?.taxesIncluded === true;
   }
 
   /**

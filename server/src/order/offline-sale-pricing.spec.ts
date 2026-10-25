@@ -6,7 +6,12 @@ import { OrderService } from './order.service';
  * store) completes into a counter sale. The sale must charge what the draft
  * quoted — the payment link was for that amount — not add GST on top again.
  */
-function build() {
+/**
+ * `pricesIncludeTax` is the org's "Catalogue prices include GST" choice
+ * (null: not made); `storeTaxesIncluded` is what its latest Shopify order
+ * says (undefined: none synced).
+ */
+function build(opts: { pricesIncludeTax?: boolean | null; storeTaxesIncluded?: boolean } = {}) {
   const tx: any = {
     channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch_manual' }) },
     customer: {
@@ -44,7 +49,23 @@ function build() {
     inventoryEvent: { create: jest.fn().mockResolvedValue(undefined) },
     orderTimelineEvent: { create: jest.fn().mockResolvedValue(undefined) },
   };
-  const prisma: any = { $transaction: jest.fn(async (fn: any) => fn(tx)) };
+  // The org's basis is read on the root client, outside the sale's
+  // Serializable transaction.
+  const prisma: any = {
+    $transaction: jest.fn(async (fn: any) => fn(tx)),
+    organizationSettings: {
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ taxSettings: { pricesIncludeTax: opts.pricesIncludeTax ?? null } }),
+    },
+    order: {
+      findFirst: jest
+        .fn()
+        .mockResolvedValue(
+          opts.storeTaxesIncluded === undefined ? null : { taxesIncluded: opts.storeTaxesIncluded },
+        ),
+    },
+  };
   const service = new OrderService(
     prisma,
     new GstCalculatorService(),
@@ -65,7 +86,7 @@ function build() {
     { order: jest.fn(), invoiceIssued: jest.fn() } as any,
   );
   jest.spyOn(service as any, 'markPendingSync').mockResolvedValue(undefined);
-  return { service, tx };
+  return { service, tx, prisma };
 }
 
 const dto = (over: Record<string, unknown> = {}) =>
@@ -88,6 +109,74 @@ describe('createOfflineOrder pricing', () => {
       expect.objectContaining({ totalPrice: 1180, totalTax: 180, subtotalPrice: 1180, taxesIncluded: true }),
     );
     expect(data.lineItems.create[0]).toEqual(expect.objectContaining({ price: 1180, channelTaxAmount: 180 }));
+  });
+
+  it('takes the GST out of a typed price when the org says prices include it', async () => {
+    const { service, tx } = build({ pricesIncludeTax: true });
+
+    await service.createOfflineOrder('org_1', 'user_1', dto());
+
+    const data = tx.order.create.mock.calls[0][0].data;
+    expect(data).toEqual(
+      expect.objectContaining({ totalPrice: 1180, totalTax: 180, subtotalPrice: 1180, taxesIncluded: true }),
+    );
+    // ₹1,000 taxable, split CGST + SGST inside the ₹1,180.
+    expect(data.lineItems.create[0]).toEqual(
+      expect.objectContaining({
+        price: 1180,
+        channelTaxAmount: 180,
+        channelTaxLines: [
+          { title: 'CGST', rate: 0.09, price: '90.00' },
+          { title: 'SGST', rate: 0.09, price: '90.00' },
+        ],
+      }),
+    );
+  });
+
+  it('takes the GST out of a catalogue price too', async () => {
+    const { service, tx } = build({ pricesIncludeTax: true });
+
+    await service.createOfflineOrder('org_1', 'user_1', dto({ lineItems: [{ productVariantId: 'var_1', quantity: 1 }] }));
+
+    expect(tx.order.create.mock.calls[0][0].data).toEqual(
+      expect.objectContaining({ totalPrice: 1180, totalTax: 180, taxesIncluded: true }),
+    );
+  });
+
+  it('reads an unset choice from the store’s own Shopify orders', async () => {
+    const { service, tx } = build({ storeTaxesIncluded: true });
+
+    await service.createOfflineOrder('org_1', 'user_1', dto());
+
+    expect(tx.order.create.mock.calls[0][0].data).toEqual(
+      expect.objectContaining({ totalPrice: 1180, totalTax: 180, taxesIncluded: true }),
+    );
+  });
+
+  it('lets the org’s choice override what its Shopify orders say', async () => {
+    const { service, tx, prisma } = build({ pricesIncludeTax: false, storeTaxesIncluded: true });
+
+    await service.createOfflineOrder('org_1', 'user_1', dto({ lineItems: [{ productVariantId: 'var_1', quantity: 1, unitPriceOverride: 1000 }] }));
+
+    expect(tx.order.create.mock.calls[0][0].data).toEqual(
+      expect.objectContaining({ totalPrice: 1180, totalTax: 180, subtotalPrice: 1000, taxesIncluded: false }),
+    );
+    expect(prisma.order.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('charges a completing draft on the basis it was quoted, whatever the org says now', async () => {
+    const { service, tx, prisma } = build({ pricesIncludeTax: true });
+
+    await service.createOfflineOrder(
+      'org_1',
+      'user_1',
+      dto({ pricesIncludeTax: false, lineItems: [{ productVariantId: 'var_1', quantity: 1, unitPriceOverride: 1000 }] }),
+    );
+
+    expect(tx.order.create.mock.calls[0][0].data).toEqual(
+      expect.objectContaining({ totalPrice: 1180, totalTax: 180, taxesIncluded: false }),
+    );
+    expect(prisma.organizationSettings.findUnique).not.toHaveBeenCalled();
   });
 
   it('adds GST on top of an ordinary counter-sale price', async () => {

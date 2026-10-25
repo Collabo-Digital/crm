@@ -11,6 +11,7 @@ import { AddressFields, cleanAddress } from "./address-fields";
 import { isPhoneValidOrEmpty } from "~/components/app/phone-input";
 import { useSelectedLocation } from "~/hooks/use-selected-location";
 import { useCustomer } from "~/hooks/use-customer-queries";
+import { useOrganizationSettings } from "~/hooks/use-settings-queries";
 import type {
   CreateOfflineOrderRequest,
   CreateDraftOrderRequest,
@@ -46,6 +47,9 @@ export function OfflineOrderForm({
   const currency = org?.currency ?? "INR";
   const createOrder = useCreateOfflineOrderMutation();
   const createDraft = useCreateDraftOrderMutation();
+  // The basis the server prices typed and catalogue prices on, so the preview
+  // matches what is saved.
+  const { data: settings } = useOrganizationSettings();
 
   const [customer, setCustomer] = useState<CustomerSelection>({});
   const [lines, setLines] = useState<CartLine[]>([]);
@@ -344,6 +348,7 @@ export function OfflineOrderForm({
             onSaveDraft={allowDraft ? handleSaveDraft : undefined}
             isSavingDraft={createDraft.isPending}
             draftOnly={draftOnly}
+            pricesIncludeTax={settings?.pricesIncludeTax.effective ?? false}
           />
         </div>
       </div>
