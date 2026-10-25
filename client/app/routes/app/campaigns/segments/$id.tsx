@@ -62,7 +62,7 @@ export default function SegmentPage() {
         <ArrowLeft className="size-3.5" />
         Segments
       </Link>
-      <PageHeader>
+      <PageHeader data-mobile-title>
         <PageHeaderContent>
           <PageHeaderTitle>{isNew ? "New segment" : segment!.name}</PageHeaderTitle>
         </PageHeaderContent>

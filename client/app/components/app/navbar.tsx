@@ -43,6 +43,7 @@ import {
 import { cn } from "~/lib/utils";
 import { MobileNavigation } from "~/components/app/mobile-navigation";
 import { BrandLogo } from "~/components/app/brand-logo";
+import { APP_BAR_ACTIONS_ID } from "~/components/app/app-bar-actions";
 import { Tip } from "~/components/ui/tooltip";
 import { useAuthStore, normalizeOrganizations } from "~/stores/auth.store";
 import { signOut } from "~/lib/sign-out";
@@ -108,6 +109,9 @@ const ANALYTICS_CHILDREN: NavChild[] = [
   { label: "Messaging", href: "/analytics/messaging", icon: MessagesSquare },
 ];
 
+/** Phone app-bar titles for screens outside the main sections. */
+const SCREEN_TITLES: Record<string, string> = { settings: "Settings", profile: "Profile", admin: "Admin" };
+
 const NAV_LINKS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Orders", href: "/orders", icon: ShoppingCart, children: ORDERS_CHILDREN },
@@ -171,6 +175,11 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
   const activeTop = matchNav(navLinks, location.pathname);
   const sectionChildren = activeTop?.children;
   const activeChild = sectionChildren ? matchNav(sectionChildren, location.pathname) : undefined;
+  // Phones name the screen in the bar, as apps do; only Home shows the logo.
+  const mobileTitle =
+    location.pathname === "/dashboard"
+      ? null
+      : (activeTop?.label ?? SCREEN_TITLES[location.pathname.split("/")[1] ?? ""] ?? null);
   // On a phone the section tabs scroll sideways; keep the current one in view.
   const sectionNavRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -210,12 +219,15 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
   return (
     <>
     <header className={cn("app-header sticky top-0 z-40 w-full bg-surface-sunken", immersive && "hidden md:block")}>
-      <div className="mx-auto flex h-16 max-w-screen-xl items-center justify-between px-5 md:h-[72px] md:px-6">
+      <div className="mx-auto flex h-14 max-w-screen-xl items-center justify-between gap-2 px-4 md:h-[72px] md:px-6">
 
         {/* ── Logo ──────────────────────────────────────────────────── */}
-        <Link to={landingPath} className="flex shrink-0 items-center">
+        <Link to={landingPath} className={cn("shrink-0 items-center", mobileTitle ? "hidden md:flex" : "flex")}>
           <BrandLogo className="h-6 md:h-7" />
         </Link>
+        {mobileTitle && (
+          <span className="min-w-0 truncate font-heading text-[22px] font-semibold tracking-tight text-foreground md:hidden">{mobileTitle}</span>
+        )}
 
         {/* ── Nav — pill container ─────────────────────────────── */}
         <LayoutGroup id="navbar">
@@ -292,7 +304,8 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
         </LayoutGroup>
 
         {/* ── Right: icons + user ───────────────────────────────────── */}
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-1 md:gap-3">
+          <div id={APP_BAR_ACTIONS_ID} className="flex items-center gap-0.5 md:hidden" />
 
           <button aria-label="Settings" onClick={() => navigate("/settings")} className="hidden md:flex size-9 items-center justify-center rounded-full bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
             <Settings className="size-4" />
@@ -305,7 +318,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button aria-label="Account and workspace" className="flex min-h-11 items-center gap-2 rounded-full bg-white dark:bg-gray-900 py-1.5 pl-1.5 pr-3 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+              <button aria-label="Account and workspace" className="flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full transition-colors md:justify-start md:bg-white md:py-1.5 md:pl-1.5 md:pr-3 md:shadow-sm md:ring-1 md:ring-black/[0.06] md:hover:bg-gray-50 md:dark:bg-gray-900 md:dark:ring-gray-700 md:dark:hover:bg-gray-800">
                 <Avatar size="sm">
                   <AvatarImage src={user?.avatarUrl ?? ""} alt={user?.firstName} />
                   <AvatarFallback className="bg-[#CEF17B] text-gray-900 text-xs font-bold">
@@ -324,7 +337,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                         : roleLabel(currentOrg?.role)}
                   </span>
                 </div>
-                <ChevronDown className="size-3.5 text-gray-400" />
+                <ChevronDown className="hidden size-3.5 text-gray-400 md:block" />
               </button>
             </DropdownMenuTrigger>
 
@@ -391,10 +404,10 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
       {/* ── Section sub-nav — only for a section that has children ─── */}
       {sectionChildren && (
         <LayoutGroup id="section-nav">
-          <div ref={sectionNavRef} className="mobile-section-nav mx-auto max-w-screen-xl overflow-x-auto px-4 pb-2 md:px-6 md:pb-3 md:mt-3">
+          <div ref={sectionNavRef} className="mobile-section-nav mx-auto max-w-screen-xl overflow-x-auto px-1 max-md:border-b max-md:border-border/70 md:mt-3 md:px-6 md:pb-3">
             <nav
               aria-label={`${activeTop?.label} section`}
-              className="inline-flex min-w-max items-center gap-0.5 rounded-full bg-white dark:bg-gray-900 px-1.5 py-1 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700"
+              className="inline-flex min-w-max items-center gap-0.5 md:rounded-full md:bg-white md:px-1.5 md:py-1 md:shadow-sm md:ring-1 md:ring-black/[0.06] md:dark:bg-gray-900 md:dark:ring-gray-700"
             >
               {sectionChildren.map(({ label, href, icon: Icon }) => {
                 const isActive = activeChild?.href === href;
@@ -419,9 +432,9 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                     to={href}
                     aria-current={isActive ? "page" : undefined}
                     className={cn(
-                      "relative flex min-h-11 items-center gap-1.5 rounded-full px-4 py-2.5 text-sm md:min-h-0 md:p-2.5 md:text-xs select-none",
+                      "relative flex min-h-11 items-center gap-1.5 px-3 py-2.5 text-sm select-none md:min-h-0 md:rounded-full md:p-2.5 md:text-xs",
                       isActive
-                        ? "font-semibold text-gray-900"
+                        ? "font-semibold text-foreground md:text-gray-900"
                         : "font-medium text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
                     )}
                   >
@@ -429,11 +442,11 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                       <motion.span
                         layoutId="section-nav-pill"
                         initial={false}
-                        className="absolute inset-0 rounded-full bg-[#CEF17B]"
+                        className="absolute inset-x-3 bottom-0 h-[3px] rounded-full bg-foreground md:inset-0 md:h-auto md:bg-[#CEF17B]"
                         transition={{ type: "spring", stiffness: 380, damping: 32, mass: 1 }}
                       />
                     )}
-                    <Icon className="relative z-10 size-3.5" />
+                    <Icon className="relative z-10 size-3.5 max-md:hidden" />
                     <span className="relative z-10">{label}</span>
                   </Link>
                 );

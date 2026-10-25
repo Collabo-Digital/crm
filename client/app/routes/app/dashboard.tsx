@@ -113,7 +113,7 @@ export default function DashboardPage() {
 
       {/* Page header */}
       <div>
-        <PageHeader>
+        <PageHeader data-mobile-title>
           <PageHeaderContent>
             <PageHeaderTitle><span className="md:hidden">Hello{user?.firstName ? `, ${user.firstName}` : ""}.</span><span className="hidden md:inline">Overview</span></PageHeaderTitle>
             <PageHeaderDescription>

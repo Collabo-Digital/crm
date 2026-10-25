@@ -6,6 +6,7 @@ import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import { AvailabilityMenu } from "~/components/app/inbox/availability-menu";
+import { AppBarActions } from "~/components/app/app-bar-actions";
 import { CatalogPanel, type CatalogDrop } from "~/components/app/inbox/catalog-panel";
 import { ChatDropZone } from "~/components/app/inbox/chat-drop-zone";
 import { ContactPanel } from "~/components/app/inbox/contact-panel";
@@ -308,10 +309,39 @@ export default function InboxPage() {
           patchParams({ c: result.conversationId });
         }}
       />
-      <PageHeader className={cn("shrink-0 items-center", selectedId && "hidden md:flex")}>
+      {/* Phones: alerts and status sit in the app bar, and New chat floats above the tab bar. */}
+      <AppBarActions>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={alerts.toggle}
+          aria-label={alerts.on ? "Turn off new-message alerts" : "Turn on new-message alerts"}
+          className="rounded-full"
+        >
+          {alerts.on ? <Bell /> : <BellOff />}
+        </Button>
+        <AvailabilityMenu
+          compact
+          status={me?.status}
+          connected={connected}
+          disabled={setAvailability.isPending || !me?.access.canReply}
+          onChange={(status) => setAvailability.mutate(status)}
+        />
+      </AppBarActions>
+      {me?.access.canReply && !selectedId && (
+        <Button
+          variant="accent"
+          size="icon"
+          onClick={() => setNewChatOpen(true)}
+          aria-label="New chat"
+          className="fixed right-4 bottom-[calc(var(--mobile-nav-height)+16px)] z-30 size-14 rounded-2xl shadow-lg md:hidden [&_svg]:size-6"
+        >
+          <MessageSquarePlus />
+        </Button>
+      )}
+      <PageHeader className="shrink-0 items-center max-md:hidden">
         <PageHeaderContent>
           <PageHeaderTitle>Inbox</PageHeaderTitle>
-          <p className="text-sm text-muted-foreground md:hidden">Every conversation, in one place.</p>
         </PageHeaderContent>
         <PageHeaderActions>
           <Button
@@ -349,8 +379,9 @@ export default function InboxPage() {
       */}
       <div
         className={cn(
-          "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden rounded-[24px] bg-card shadow-sm ring-1 ring-border/60 md:rounded-xl md:ring-border",
-          selectedId && "max-md:rounded-none max-md:shadow-none max-md:ring-0",
+          "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden bg-card max-md:rounded-none md:rounded-xl md:shadow-sm md:ring-1 md:ring-border",
+          // Phones: the list runs edge to edge under the section tabs, like an app.
+          !selectedId && "max-md:-mx-4 max-md:-mt-4",
           "md:grid-cols-[300px_minmax(0,1fr)]",
           showPanel && "lg:grid-cols-[300px_minmax(0,1fr)_288px]",
         )}

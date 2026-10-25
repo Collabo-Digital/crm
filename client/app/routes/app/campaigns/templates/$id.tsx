@@ -34,7 +34,7 @@ export default function TemplatePage() {
         <ArrowLeft className="size-3.5" />
         Templates
       </Link>
-      <PageHeader>
+      <PageHeader data-mobile-title>
         <PageHeaderContent>
           <PageHeaderTitle className="flex flex-wrap items-center gap-3 font-mono">
             {template.name}

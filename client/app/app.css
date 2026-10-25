@@ -505,6 +505,11 @@ html.dark { color-scheme: dark; }
   [data-slot="page-header-title"] { font-size: 27px; line-height: 1.2; letter-spacing: -.8px; }
   [data-slot="page-header-description"] { line-height: 1.5; }
   [data-slot="page-header-actions"] { row-gap: 8px; }
+  /* The app bar names the screen, so a section page's own heading and blurb
+     would only repeat it. Detail pages keep theirs with data-mobile-title. */
+  .app-main [data-slot="page-header"]:not([data-mobile-title]) [data-slot="page-header-title"] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .app-main [data-slot="page-header"]:not([data-mobile-title]) [data-slot="page-header-description"] { display: none; }
+  .app-main [data-slot="page-header"]:not([data-mobile-title]):not(:has([data-slot="page-header-actions"] > *)) { display: none; }
   [data-slot="button"], [data-slot="select-trigger"] { min-height: 44px; }
   [data-slot="button"][data-size^="icon"] { min-width: 44px; }
   [data-slot="dropdown-menu-item"], [data-slot="select-item"] { min-height: 44px; }

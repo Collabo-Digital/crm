@@ -44,7 +44,7 @@ export default function NewTemplatePage() {
         <ArrowLeft className="size-3.5" />
         Templates
       </Link>
-      <PageHeader>
+      <PageHeader data-mobile-title>
         <PageHeaderContent>
           <PageHeaderTitle>New template</PageHeaderTitle>
           <PageHeaderDescription>

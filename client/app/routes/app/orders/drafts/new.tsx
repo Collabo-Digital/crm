@@ -36,7 +36,7 @@ export default function NewDraftPage() {
         <span className="font-medium text-foreground">New draft</span>
       </nav>
 
-      <PageHeader>
+      <PageHeader data-mobile-title>
         <PageHeaderContent>
           <PageHeaderTitle>New draft</PageHeaderTitle>
           <PageHeaderDescription>

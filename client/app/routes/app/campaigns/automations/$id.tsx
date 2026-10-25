@@ -220,7 +220,7 @@ export default function AutomationPage() {
         <ArrowLeft className="size-3.5" />
         Automations
       </Link>
-      <PageHeader>
+      <PageHeader data-mobile-title>
         <PageHeaderContent>
           {editingName ? (
             <form

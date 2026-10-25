@@ -117,7 +117,7 @@ export default function BroadcastPage() {
         <ArrowLeft className="size-3.5" />
         Broadcasts
       </Link>
-      <PageHeader>
+      <PageHeader data-mobile-title>
         <PageHeaderContent>
           <PageHeaderTitle className="flex flex-wrap items-center gap-3">
             {broadcast.name}

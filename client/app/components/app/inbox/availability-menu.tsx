@@ -23,22 +23,31 @@ export function AvailabilityMenu({
   connected,
   disabled,
   onChange,
+  compact = false,
 }: {
   status: InboxAvailability | undefined;
   connected: boolean;
   disabled: boolean;
   onChange: (status: InboxAvailability) => void;
+  /** Just the dot, for the phone's app bar. */
+  compact?: boolean;
 }) {
   const presence = !connected ? "offline" : status === "AWAY" ? "away" : "online";
   const label = !connected ? "Connecting…" : status === "AWAY" ? "Away" : "Online";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" disabled={disabled} aria-label={`Your status: ${label}`} className="min-h-11 rounded-full px-3 text-xs md:min-h-0 md:rounded-lg md:px-2.5">
-          <span className={cn("size-2 rounded-full", PRESENCE_DOT[presence])} />
-          {label}
-          <ChevronDown className="size-3 text-muted-foreground" />
-        </Button>
+        {compact ? (
+          <Button variant="ghost" size="icon" disabled={disabled} aria-label={`Your status: ${label}`} title={label} className="rounded-full">
+            <span className={cn("size-3 rounded-full ring-2 ring-background", PRESENCE_DOT[presence])} />
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" disabled={disabled} aria-label={`Your status: ${label}`} className="min-h-11 rounded-full px-3 text-xs md:min-h-0 md:rounded-lg md:px-2.5">
+            <span className={cn("size-2 rounded-full", PRESENCE_DOT[presence])} />
+            {label}
+            <ChevronDown className="size-3 text-muted-foreground" />
+          </Button>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-60">
         <DropdownMenuLabel className="font-normal text-muted-foreground">
