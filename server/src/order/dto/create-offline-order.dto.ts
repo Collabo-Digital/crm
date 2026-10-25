@@ -96,10 +96,10 @@ export class CreateOfflineOrderDto {
   @IsOptional() @IsBoolean() generateInvoice?: boolean;
 
   /**
-   * The unit prices already include GST, so the tax is taken out of them
-   * rather than added on top. Set when completing a draft that was priced
-   * that way (a WhatsApp cart from a tax-inclusive store), so the order
-   * charges what the draft quoted.
+   * Whether the unit prices already include GST, so the tax is taken out of
+   * them rather than added on top. Set when completing a draft, so the order
+   * charges what the draft quoted. Left out, the org's "Catalogue prices
+   * include GST" basis applies.
    */
   @IsOptional() @IsBoolean() pricesIncludeTax?: boolean;
 

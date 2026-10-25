@@ -18,6 +18,7 @@ import {
   StockBucket,
 } from '@prisma/client';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
+import { catalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util';
 import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { singleDistinct } from '../channel/single-distinct.util';
 import {
@@ -1137,6 +1138,12 @@ export class OrderService {
       );
     }
 
+    // Read here rather than in the Serializable transaction below, which has
+    // no reason to hold read locks across the org's Shopify orders.
+    const orgPricesIncludeTax =
+      dto.pricesIncludeTax === undefined &&
+      (await catalogPricesIncludeTax(this.prisma, orgId));
+
     const runSale = () => this.prisma.$transaction(
       async (tx) => {
         // Variants whose stock this sale actually moved. Declared per attempt,
@@ -1313,6 +1320,12 @@ export class OrderService {
           ? GstType.CGST_SGST
           : GstType.IGST;
 
+        // A completing draft passes the basis it was quoted on. Otherwise the
+        // org's, for a typed price as much as a catalogue one, when the sale
+        // is taxed at all.
+        const pricesIncludeTax =
+          dto.pricesIncludeTax ?? (sellerGstin !== null && orgPricesIncludeTax);
+
         const lineItemsToCreate: Array<{
           variantId: string;
           title: string;
@@ -1395,13 +1408,13 @@ export class OrderService {
           const gstRate = lineGstRates[lineIndex];
 
           const input = { unitPrice, quantity: li.quantity, discount, gstRate };
-          const calc = dto.pricesIncludeTax
+          const calc = pricesIncludeTax
             ? this.calculator.calculateInclusiveLineItem(input, isIntraState)
             : this.calculator.calculateLineItem(input, isIntraState);
 
           // Shopify's convention, which the dashboard and the rebadge read:
           // with taxes included, the subtotal carries the tax too.
-          subtotal += dto.pricesIncludeTax ? calc.totalAmount : calc.taxableValue;
+          subtotal += pricesIncludeTax ? calc.totalAmount : calc.taxableValue;
           totalTax += calc.totalTax;
 
           lineItemsToCreate.push({
@@ -1434,7 +1447,7 @@ export class OrderService {
         const round = (n: number) => Math.round(n * 100) / 100;
         subtotal = round(subtotal);
         totalTax = round(totalTax);
-        const grandTotal = dto.pricesIncludeTax ? subtotal : round(subtotal + totalTax);
+        const grandTotal = pricesIncludeTax ? subtotal : round(subtotal + totalTax);
 
         // 6. Generate the next sequential orderNumber for the MANUAL channel.
         //    Scoped to this channel so offline sales run their own sequence
@@ -1531,11 +1544,10 @@ export class OrderService {
             placeOfSupplyCode: sellerGstin ? placeOfSupplyCode : null,
             gstType: sellerGstin ? resolvedGstType : null,
             dispatchWarehouseId,
-            // Unit prices are pre-tax and the tax is on the lines — the same
-            // convention a Shopify order with `taxes_included: false` carries,
-            // so the push and the eventual rebadge agree on every total. A
-            // draft priced with tax included keeps that, as Shopify would.
-            taxesIncluded: dto.pricesIncludeTax === true,
+            // Whether the unit prices contain the tax on the lines, in the
+            // sense of Shopify's `taxes_included`, so the push and the eventual
+            // rebadge agree on every total. The invoice reads it back.
+            taxesIncluded: pricesIncludeTax,
             note: dto.note,
             metadata: {
               source: 'offline',

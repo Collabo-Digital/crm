@@ -32,6 +32,7 @@ import {
   StoreProfileSettingsSchema,
 } from './schemas/store-profile-settings.schema';
 import { generatedBarcodeProductsOutOfSyncStampSql } from '../channel/product-sync-stamp.util';
+import { detectCatalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util';
 
 /**
  * Resolves and persists per-org settings. Each domain (product, order, …)
@@ -57,17 +58,29 @@ export class OrganizationSettingsService {
     inventorySettings: InventorySettings;
     taxSettings: TaxSettings;
     storeProfileSettings: StoreProfileSettings;
+    /**
+     * How orders and drafts read a catalogue or typed price: `effective` is
+     * `taxSettings.pricesIncludeTax` once chosen, else `detected` — what the
+     * store's Shopify orders say, null with none — else false.
+     */
+    pricesIncludeTax: { effective: boolean; detected: boolean | null };
   }> {
     this.assertOrgId(orgId);
     const row = await this.prisma.organizationSettings.findUnique({
       where: { organizationId: orgId },
     });
+    const taxSettings = parseTaxSettings(row?.taxSettings ?? null);
+    const detected = await detectCatalogPricesIncludeTax(this.prisma, orgId);
     return {
       productSettings: parseProductSettings(row?.productSettings ?? null),
       orderSettings: parseOrderSettings(row?.orderSettings ?? null),
       inventorySettings: parseInventorySettings(row?.inventorySettings ?? null),
-      taxSettings: parseTaxSettings(row?.taxSettings ?? null),
+      taxSettings,
       storeProfileSettings: parseStoreProfileSettings(row?.storeProfileSettings ?? null),
+      pricesIncludeTax: {
+        effective: taxSettings.pricesIncludeTax ?? detected ?? false,
+        detected,
+      },
     };
   }
 

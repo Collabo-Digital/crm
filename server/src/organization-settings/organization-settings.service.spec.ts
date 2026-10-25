@@ -110,3 +110,49 @@ describe('OrganizationSettingsService.updateInventorySettings — barcode backlo
     expect(backlogStamps()).toEqual([]);
   });
 });
+
+/**
+ * The order form previews totals on the basis the server will save them on,
+ * and the Tax & GST screen shows what the server is going by when the
+ * merchant has not chosen.
+ */
+describe('OrganizationSettingsService.get — whether prices include GST', () => {
+  async function get(opts: { chosen?: boolean; storeTaxesIncluded?: boolean }) {
+    const prisma = {
+      organizationSettings: {
+        findUnique: jest.fn().mockResolvedValue(
+          opts.chosen === undefined ? null : { taxSettings: { pricesIncludeTax: opts.chosen } },
+        ),
+      },
+      order: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(
+            opts.storeTaxesIncluded === undefined ? null : { taxesIncluded: opts.storeTaxesIncluded },
+          ),
+      },
+    };
+    const service = new OrganizationSettingsService(prisma as unknown as PrismaService);
+    return service.get('org_1');
+  }
+
+  it('goes by the store’s Shopify orders while nothing is chosen', async () => {
+    const settings = await get({ storeTaxesIncluded: true });
+
+    expect(settings.taxSettings.pricesIncludeTax).toBeNull();
+    expect(settings.pricesIncludeTax).toEqual({ effective: true, detected: true });
+  });
+
+  it('goes by the merchant’s choice once made', async () => {
+    const settings = await get({ chosen: false, storeTaxesIncluded: true });
+
+    expect(settings.taxSettings.pricesIncludeTax).toBe(false);
+    expect(settings.pricesIncludeTax).toEqual({ effective: false, detected: true });
+  });
+
+  it('reads prices as excluding GST with neither', async () => {
+    const settings = await get({});
+
+    expect(settings.pricesIncludeTax).toEqual({ effective: false, detected: null });
+  });
+});

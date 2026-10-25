@@ -1935,6 +1935,13 @@ export interface TaxSettings {
    * number is read back per prefix.
    */
   invoicePrefix: string;
+  /**
+   * "Catalogue prices include GST": GST is taken out of a product's price, or
+   * one typed into an order, instead of added on top. Null until the merchant
+   * chooses; until then the store's Shopify orders decide (see
+   * `OrganizationSettingsResponse.pricesIncludeTax`).
+   */
+  pricesIncludeTax: boolean | null;
 }
 
 /**
@@ -1974,6 +1981,12 @@ export interface OrganizationSettingsResponse {
   inventorySettings: InventorySettings;
   taxSettings: TaxSettings;
   storeProfileSettings: StoreProfileSettings;
+  /**
+   * How orders and drafts read a catalogue or typed price. `effective` is
+   * `taxSettings.pricesIncludeTax` once chosen, else `detected` (what the
+   * store's own Shopify orders say, null with none), else false.
+   */
+  pricesIncludeTax: { effective: boolean; detected: boolean | null };
 }
 
 /** Patch payload for PATCH /organization/settings/store-profile. */
