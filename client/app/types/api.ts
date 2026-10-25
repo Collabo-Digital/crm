@@ -2478,8 +2478,7 @@ export interface DashboardOverview {
 }
 
 // ─── Store Report Types (point of sale) ─────────────────────────────────────
-
-export type PosPaymentMethod = "CASH" | "UPI" | "CARD" | "OTHER";
+// PosPaymentMethod is declared with the point-of-sale types further down.
 
 /** Query for GET /pos/reports/summary. Days are `YYYY-MM-DD` in the org's reporting zone. */
 export interface PosReportParams {
