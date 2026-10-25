@@ -37,6 +37,8 @@ export default [
     // Batch package slips, N-up. Static "slips" outranks ":id", and ending in
     // /print is what makes the app layout render it chrome-free.
     route("orders/slips/print", "routes/app/orders/slips-print.tsx"),
+    // Point-of-sale store reports. Managers only — see lib/sections.ts.
+    route("orders/pos/reports", "routes/app/orders/pos/reports.tsx"),
     route("orders/:id", "routes/app/orders/$id.tsx"),
     route("orders/:id/packing-slip", "routes/app/orders/packing-slip.tsx"),
     route("orders/:id/pick-slip", "routes/app/orders/pick-slip.tsx"),
