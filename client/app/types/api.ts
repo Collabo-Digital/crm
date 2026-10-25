@@ -3755,6 +3755,8 @@ export interface CreateWarehouseRequest {
   address: LocationAddress;
   /** Sent only while GST is on for the workspace. */
   gst?: LocationGstChoice;
+  /** Merchant's own confirmation that the address is declared on the GST portal. */
+  apobDeclared?: boolean;
   isDefault?: boolean;
   shopifyLocationId?: string;
   /** Required when linking to Shopify a location that already holds stock. */
@@ -3767,6 +3769,7 @@ export interface UpdateWarehouseRequest {
   kind?: LocationKind;
   address?: LocationAddress;
   gst?: LocationGstChoice;
+  apobDeclared?: boolean;
   isDefault?: boolean;
   isActive?: boolean;
   /** null unlinks the Shopify location; omit to leave it unchanged. */

@@ -542,6 +542,7 @@ function LocationDialog({
     tradeName: "",
   });
   const [changingGst, setChangingGst] = useState(false);
+  const [apobDeclared, setApobDeclared] = useState(location?.apobDeclared ?? false);
   const [isActive, setIsActive] = useState(location?.isActive ?? true);
 
   // Shopify: the first connected store. Its undecided and untracked
@@ -582,6 +583,12 @@ function LocationDialog({
     !!address.stateCode &&
     gstinStateCode !== address.stateCode;
   const gstOk = !askGst || (gstChoice !== null && !gstinMismatch);
+  // Declaring the address on the portal only means something under a GSTIN.
+  const usesGstin =
+    gstOn &&
+    (askGst
+      ? gstChoice?.mode === "existing" || gstChoice?.mode === "new"
+      : !!location?.gstinId);
 
   const linkOptions = (shopify.data?.locations ?? []).filter(
     (l) => !l.decision || l.decision.action === "ignore" || l.id === linkedId,
@@ -609,6 +616,7 @@ function LocationDialog({
           kind,
           address: toLocationAddress(address),
           ...(gstChoice ? { gst: gstChoice } : {}),
+          ...(usesGstin ? { apobDeclared } : {}),
           ...(shopifyLocationId
             ? { shopifyLocationId, stockSource: stockSource ?? "shopify" }
             : {}),
@@ -623,6 +631,9 @@ function LocationDialog({
     if (kind !== location.kind) data.kind = kind;
     if (addressChanged) data.address = toLocationAddress(address);
     if (gstChoice) data.gst = gstChoice;
+    if (usesGstin && (apobDeclared !== location.apobDeclared || data.gst)) {
+      data.apobDeclared = apobDeclared;
+    }
     if (shopifyLocationId !== linkedId) {
       // null unlinks; the server tells it apart from leaving the link alone.
       data.shopifyLocationId = shopifyLocationId;
@@ -744,6 +755,24 @@ function LocationDialog({
                   gstin={gstins.find((g) => g.id === location?.gstinId)}
                   onChange={() => setChangingGst(true)}
                 />
+              )}
+              {usesGstin && (
+                <label className="flex min-h-11 items-start gap-2 md:min-h-0">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 size-4 shrink-0 accent-[#CEF17B]"
+                    checked={apobDeclared}
+                    onChange={(e) => setApobDeclared(e.target.checked)}
+                  />
+                  <span className="text-caption text-foreground">
+                    Declared on the GST portal
+                    <span className="block text-muted-foreground">
+                      Add this address to that registration as an additional place of
+                      business on the GST portal. You or your CA file it there; Collabo
+                      can&apos;t do it for you.
+                    </span>
+                  </span>
+                </label>
               )}
             </section>
           )}
@@ -1133,16 +1162,10 @@ function LocationGstFields({
           Choose the state above to see which GSTIN applies.
         </p>
       ) : covering ? (
-        <div className="space-y-1 rounded-lg bg-muted px-3 py-2.5">
-          <p className="text-caption text-foreground">
-            Sales from here will use your {covering.stateName} GSTIN,{" "}
-            <span className="font-mono">{covering.gstin}</span>.
-          </p>
-          <p className="text-caption text-muted-foreground">
-            Add this address to that registration as an additional place of business on
-            the GST portal.
-          </p>
-        </div>
+        <p className="rounded-lg bg-muted px-3 py-2.5 text-caption text-foreground">
+          Sales from here will use your {covering.stateName} GSTIN,{" "}
+          <span className="font-mono">{covering.gstin}</span>.
+        </p>
       ) : (
         <p className="flex items-start gap-1.5 rounded-lg bg-warning-subtle px-3 py-2 text-caption text-foreground">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
