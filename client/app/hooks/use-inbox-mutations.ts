@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { customerKeys } from "~/hooks/use-customer-queries";
 import { inboxKeys } from "~/hooks/use-inbox-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { inboxService } from "~/services/inbox.service";
@@ -185,6 +186,21 @@ export function useUpdateContactMutation(contactId: string) {
       invalidate();
     },
     onError: (error) => handleMutationError(error, "The contact was not updated."),
+  });
+}
+
+/** Another chat is the same person. The linked customer shows on both chats and on the customer's page. */
+export function useSamePersonMutation(contactId: string) {
+  const invalidate = useInvalidateContact();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (otherContactId: string) => inboxService.samePerson(contactId, otherContactId),
+    onSuccess: (contact) => {
+      toast.success(contact.customer?.name ? `Both chats are now linked to ${contact.customer.name}.` : "Both chats are now linked to one customer.");
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: customerKeys.all });
+    },
+    onError: (error) => handleMutationError(error, "The chats were not linked."),
   });
 }
 

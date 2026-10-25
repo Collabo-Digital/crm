@@ -171,7 +171,7 @@ export class InboxService {
         const view = this.toConversationView(row, new Date());
         return {
             ...view,
-            contact: await this.contacts.view(row.contact),
+            contact: await this.contacts.view(row.contact, viewer),
             reply: {
                 canReply: canReply(viewer),
                 window: replyWindow(row.platform, row.lastInboundAt),

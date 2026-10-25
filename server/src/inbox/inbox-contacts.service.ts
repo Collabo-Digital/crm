@@ -1,8 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ChannelContact, ChannelPlatform, ChannelStatus, ConsentType, Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { countryCodeOf, normalizePhone as toE164 } from '../common/phone.util';
+import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { normalizePhone } from './contact-import.service';
-import { ContactIdentityService } from '../messaging/contact-identity.service';
+import { ContactIdentityService, storedPhoneIs } from '../messaging/contact-identity.service';
 import { MessagingSendService } from '../messaging/send/messaging-send.service';
 import { StartChatDto } from './dto/start-chat.dto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -144,7 +146,7 @@ export class InboxContactsService {
                 OR: [
                     { displayName: like },
                     { addressBookName: like },
-                    { username: like },
+                    { username: { ...like, contains: term.replace(/^@/, '') } },
                     ...(digits.length >= 3 ? [{ phone: { contains: digits } }] : []),
                     { customer: { email: like } },
                 ],
@@ -219,7 +221,7 @@ export class InboxContactsService {
 
     async get(orgId: string, viewer: InboxViewer, contactId: string) {
         const contact = await this.load(orgId, viewer, contactId);
-        return this.view(contact);
+        return this.view(contact, viewer);
     }
 
     async update(orgId: string, viewer: InboxViewer, contactId: string, dto: UpdateContactDto) {
@@ -262,7 +264,56 @@ export class InboxContactsService {
         });
         for (const id of tagEvents) await this.automationJobs.event(id);
         await this.publishFor(orgId, [contact.id]);
-        return this.view(updated);
+        return this.view(updated, viewer);
+    }
+
+    /**
+     * Two chats are one person: both end up on the same store customer. One
+     * customer between them is shared; two different ones are left for the
+     * team to sort out; with none, the customer is found by the WhatsApp
+     * number or made from the chat that says more about them. Each chat keeps
+     * its own thread, window and consent.
+     */
+    async samePerson(orgId: string, viewer: InboxViewer, contactId: string, otherId: string) {
+        if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot edit contacts.');
+        if (otherId === contactId) throw new BadRequestException('Choose another chat.');
+        const [contact, other] = await Promise.all([this.load(orgId, viewer, contactId), this.load(orgId, viewer, otherId)]);
+        if (contact.isGroup || other.isGroup) throw new BadRequestException('A group chat is not one person.');
+        if (contact.customerId && other.customerId && contact.customerId !== other.customerId) {
+            throw new BadRequestException('These chats are linked to two different store customers. Unlink one of them first.');
+        }
+        await this.prisma.$transaction(async (tx) => {
+            const customerId = contact.customerId ?? other.customerId ?? (await this.customerFor(tx, orgId, contact, other));
+            await tx.channelContact.updateMany({ where: { id: { in: [contact.id, other.id] } }, data: { customerId } });
+            await tx.conversation.updateMany({ where: { contactId: { in: [contact.id, other.id] } }, data: { customerId } });
+        });
+        await this.publishFor(orgId, [contact.id, other.id]);
+        return this.get(orgId, viewer, contact.id);
+    }
+
+    /** Link a chat to a customer from the customer's page. A chat already linked to someone else stays theirs. */
+    async linkToCustomer(orgId: string, viewer: InboxViewer, customerId: string, contactId: string) {
+        if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot edit contacts.');
+        const contact = await this.load(orgId, viewer, contactId);
+        if (contact.isGroup) throw new BadRequestException('A group chat cannot be linked to a customer.');
+        const customer = await this.prisma.customer.findFirst({
+            where: { id: customerId, organizationId: orgId, deletedAt: null },
+            select: { id: true },
+        });
+        if (!customer) throw new NotFoundException('Customer not found');
+        if (contact.customerId && contact.customerId !== customer.id) {
+            throw new BadRequestException('This chat is linked to another store customer. Unlink it there first.');
+        }
+        await this.setCustomer(orgId, contact.id, customer.id);
+        return { contactId: contact.id, customerId: customer.id };
+    }
+
+    async unlinkFromCustomer(orgId: string, viewer: InboxViewer, customerId: string, contactId: string) {
+        if (!canReply(viewer)) throw new ForbiddenException('Viewers cannot edit contacts.');
+        const contact = await this.load(orgId, viewer, contactId);
+        if (contact.customerId !== customerId) throw new NotFoundException('This chat is not linked to this customer.');
+        await this.setCustomer(orgId, contact.id, null);
+        return { contactId: contact.id, customerId: null };
     }
 
     async recordConsent(orgId: string, viewer: InboxViewer, contactId: string, dto: RecordConsentDto) {
@@ -328,8 +379,8 @@ export class InboxContactsService {
     }
 
     /** The profile the side panel shows. */
-    async view(contact: ChannelContact) {
-        const [customer, conversations, consent, owner, phoneMatches, fromAd] = await Promise.all([
+    async view(contact: ChannelContact, viewer: InboxViewer) {
+        const [customer, otherChats, consent, owner, phoneMatches, fromAd] = await Promise.all([
             contact.customerId
                 ? this.prisma.customer.findUnique({
                     where: { id: contact.customerId },
@@ -345,15 +396,7 @@ export class InboxContactsService {
                     },
                 })
                 : Promise.resolve(null),
-            // The same person on every channel, through the linked customer.
-            this.prisma.conversation.findMany({
-                where: contact.customerId
-                    ? { organizationId: contact.organizationId, customerId: contact.customerId }
-                    : { contactId: contact.id },
-                select: { id: true, platform: true, status: true, lastMessageAt: true, lastMessagePreview: true, channel: { select: { name: true } } },
-                orderBy: { lastMessageAt: 'desc' },
-                take: 10,
-            }),
+            this.otherChats(contact, viewer),
             this.prisma.consentEvent.findMany({
                 where: { contactId: contact.id },
                 orderBy: { occurredAt: 'desc' },
@@ -404,7 +447,7 @@ export class InboxContactsService {
                 : null,
             /** Store customers with this phone number. More than one means the link needs a person's judgement. */
             phoneMatches,
-            conversations,
+            otherChats,
             consent,
             fromAd,
         };
@@ -421,6 +464,90 @@ export class InboxContactsService {
         });
         if (!contact) throw new NotFoundException('Contact not found');
         return contact;
+    }
+
+    /**
+     * The same person's other numbers and profiles, through the linked
+     * customer. Like the contact list, a chat the member cannot open is left out.
+     */
+    private async otherChats(contact: ChannelContact, viewer: InboxViewer) {
+        if (!contact.customerId) return [];
+        const rows = await this.prisma.channelContact.findMany({
+            where: {
+                organizationId: contact.organizationId,
+                customerId: contact.customerId,
+                id: { not: contact.id },
+                ...(seesAll(viewer) ? {} : { conversations: { some: visibilityWhere(viewer) } }),
+            },
+            include: {
+                channel: { select: { name: true } },
+                conversations: { select: { id: true, lastMessageAt: true, lastMessagePreview: true }, take: 1 },
+            },
+            take: 20,
+        });
+        return rows
+            .map((c) => ({
+                contactId: c.id,
+                platform: c.platform,
+                channel: c.channel,
+                name: contactName(c),
+                phone: c.phone,
+                username: c.username,
+                optedIn: !!c.optInAt && !c.optedOutAt,
+                conversationId: c.conversations[0]?.id ?? null,
+                lastMessageAt: c.conversations[0]?.lastMessageAt ?? null,
+                lastMessagePreview: c.conversations[0]?.lastMessagePreview ?? null,
+            }))
+            .sort((a, b) => (b.lastMessageAt?.getTime() ?? 0) - (a.lastMessageAt?.getTime() ?? 0));
+    }
+
+    /**
+     * The store customer for two chats that have none: the one customer with
+     * the WhatsApp number, else a new one on the manual channel, as a chat's
+     * draft order makes it. Name and number come from the chat that says more.
+     */
+    private async customerFor(tx: Prisma.TransactionClient, orgId: string, a: ChannelContact, b: ChannelContact): Promise<string> {
+        const detail = (c: ChannelContact) => (c.platform === ChannelPlatform.WHATSAPP && c.phone ? 2 : 0) + (c.displayName || c.addressBookName ? 1 : 0);
+        const chats = detail(b) > detail(a) ? [b, a] : [a, b];
+        const phone = chats.find((c) => c.platform === ChannelPlatform.WHATSAPP && c.phone)?.phone ?? null;
+        if (phone) {
+            const matches = await tx.$queryRaw<Array<{ id: string }>>`
+                SELECT "id" FROM "customers"
+                WHERE "organization_id" = ${orgId}
+                  AND "deleted_at" IS NULL
+                  AND "phone" IS NOT NULL
+                  AND ${storedPhoneIs(Prisma.raw('"phone"'), phone.replace(/\D/g, ''))}
+                LIMIT 2
+            `;
+            if (matches.length > 1) {
+                throw new BadRequestException(`${phone} belongs to more than one store customer. Link the right one with Find customer first.`);
+            }
+            if (matches.length === 1) return matches[0].id;
+        }
+        const name = chats.map((c) => contactName(c).replace(/^@/, '')).find((n) => /\p{L}/u.test(n));
+        const [firstName, ...rest] = name ? name.trim().split(/\s+/) : [];
+        const channel = await ensureManualChannel(tx, orgId);
+        const customer = await tx.customer.create({
+            data: {
+                organizationId: orgId,
+                channelId: channel.id,
+                externalId: `manual_${randomUUID()}`,
+                firstName: firstName ?? null,
+                lastName: rest.join(' ') || null,
+                phone,
+            },
+            select: { id: true },
+        });
+        return customer.id;
+    }
+
+    /** Point a chat, and its conversation, at a store customer or at none. */
+    private async setCustomer(orgId: string, contactId: string, customerId: string | null) {
+        await this.prisma.$transaction(async (tx) => {
+            await tx.channelContact.update({ where: { id: contactId }, data: { customerId } });
+            await tx.conversation.updateMany({ where: { contactId }, data: { customerId } });
+        });
+        await this.publishFor(orgId, [contactId]);
     }
 
     private async owner(contact: ChannelContact) {

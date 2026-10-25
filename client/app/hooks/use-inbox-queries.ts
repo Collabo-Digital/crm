@@ -76,11 +76,12 @@ export function useInboxMessages(id: string | null) {
   });
 }
 
-export function useInboxContacts(query: InboxContactQuery) {
+export function useInboxContacts(query: InboxContactQuery, enabled = true) {
   return useQuery({
     queryKey: inboxKeys.contactList(query),
     queryFn: () => inboxService.listContacts(query),
     placeholderData: keepPreviousData,
+    enabled,
   });
 }
 

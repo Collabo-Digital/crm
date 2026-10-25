@@ -14,6 +14,7 @@ import { UpdateContactDto } from './dto/update-contact.dto';
 import { RecordConsentDto } from './dto/record-consent.dto';
 import { BulkTagContactsDto } from './dto/bulk-tag-contacts.dto';
 import { StartChatDto } from './dto/start-chat.dto';
+import { LinkContactDto } from './dto/link-contact.dto';
 
 type ImportFile = { buffer: Buffer; size: number; originalname: string } | undefined;
 
@@ -118,5 +119,11 @@ export class InboxContactsController {
     @Get(':id/customers')
     async customers(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Query('q') q?: string) {
         return this.contacts.customerCandidates(user.orgId!, await this.teams.viewer(user), id, q?.slice(0, 120));
+    }
+
+    /** Another chat is the same person: both go on one store customer. Find it with the list's search. */
+    @Post(':id/same-person')
+    async samePerson(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Body() dto: LinkContactDto) {
+        return this.contacts.samePerson(user.orgId!, await this.teams.viewer(user), id, dto.contactId);
     }
 }
