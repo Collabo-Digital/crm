@@ -280,7 +280,7 @@ function WebsiteWidget({ canManage }: { canManage: boolean }) {
           <div className="flex items-center justify-between gap-4">
             <Label htmlFor="w-popup" className="flex flex-col items-start gap-0.5 font-normal">
               <span className="text-body font-medium">Number-capture pop-up</span>
-              <span className="text-micro text-muted-foreground">Once a week per visitor. Sign-ups are opted in with your consent text, tagged, and start “Someone signs up on your website” automations.</span>
+              <span className="text-micro text-muted-foreground">Once a week per visitor. Each sign-up is opted in with your consent text, tagged, and starts “Someone signs up on your website” automations, once it is confirmed on WhatsApp if you ask for that below.</span>
             </Label>
             <Switch id="w-popup" checked={p.enabled} disabled={ro} onCheckedChange={(v) => setPopup({ enabled: v })} />
           </div>
