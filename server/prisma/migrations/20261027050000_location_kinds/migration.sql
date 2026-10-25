@@ -50,12 +50,16 @@ ALTER TABLE "shopify_location_links" ADD CONSTRAINT "shopify_location_links_ware
 
 -- Backfill: stores connected before this keep the links the old sync made,
 -- recorded as decided, so nothing already syncing turns into "needs linking".
+-- The old sync created every linked location except the default one, so those
+-- are recorded as created from Shopify and keep taking its names.
 INSERT INTO "shopify_location_links"
     ("id", "organization_id", "channel_id", "shopify_location_id", "name", "is_primary", "is_active",
      "address", "action", "warehouse_id", "decided_at", "updated_at")
 SELECT gen_random_uuid()::text, w."organization_id", c."id", w."shopify_location_id", w."name",
        COALESCE(c."metadata"->>'shopifyLocationId' = w."shopify_location_id", false), w."is_active",
-       w."address", 'LINK', w."id", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+       w."address",
+       (CASE WHEN w."is_default" THEN 'LINK' ELSE 'CREATE' END)::"ShopifyLocationAction",
+       w."id", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 FROM "warehouses" w
 JOIN "channels" c
   ON c."organization_id" = w."organization_id"
