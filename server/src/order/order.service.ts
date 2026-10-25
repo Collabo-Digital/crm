@@ -164,6 +164,33 @@ const FULFILLMENT_ORDER_PAGE_SIZE = 25;
  */
 const MAX_SLIP_ORDERS = 100;
 
+/**
+ * What a point-of-sale bill adds to a counter sale. Every field is optional,
+ * and without them `createOfflineOrder` makes exactly the order it always has.
+ */
+export interface CounterSaleOptions {
+  /** No customer at all: the order has none, `dto.customer` is not read and loyalty is skipped. */
+  walkIn?: boolean;
+  /**
+   * By index into `dto.lineItems`: a one-off item sold under this title on the
+   * org's hidden custom-item variant. Never stocked, and several such lines
+   * may share that variant.
+   */
+  customTitles?: Array<string | null>;
+  /** Stamps `Order.posSale` and the staff member who billed it. */
+  pos?: { staffId: string | null };
+  /**
+   * Called once the sale is priced, inside its transaction: the order's
+   * payment status and metadata to add. May throw to refuse the sale.
+   */
+  settle?: (grandTotal: number) => {
+    financialStatus: OrderFinancialStatus;
+    metadata: Record<string, unknown>;
+  };
+  /** Runs inside the sale's transaction once the order row exists. */
+  inTransaction?: (tx: Prisma.TransactionClient, order: { id: string; customerId: string | null }) => Promise<void>;
+}
+
 /** The window a comparison reports on, plus the one immediately before it. */
 /** Most order rows one CSV / JSON export will carry, newest first. */
 export const ORDER_EXPORT_ROW_CAP = 10_000;
@@ -1130,9 +1157,12 @@ export class OrderService {
     orgId: string,
     userId: string,
     dto: CreateOfflineOrderDto,
+    options?: CounterSaleOptions,
   ) {
+    const customTitleAt = (index: number) => options?.customTitles?.[index] ?? null;
     const variantIds = dto.lineItems.map((li) => li.productVariantId);
-    if (new Set(variantIds).size !== variantIds.length) {
+    const stockedVariantIds = variantIds.filter((_, i) => customTitleAt(i) === null);
+    if (new Set(stockedVariantIds).size !== stockedVariantIds.length) {
       throw new BadRequestException(
         'Duplicate variant IDs are not allowed; merge them into a single line item.',
       );
@@ -1155,13 +1185,15 @@ export class OrderService {
         const channel = await ensureManualChannel(tx, orgId);
 
         // 2. Resolve customer (existing by id/email/phone, else create).
-        const customer = await this.resolveCustomer(tx, orgId, channel.id, dto);
+        const customer = options?.walkIn
+          ? null
+          : await this.resolveCustomer(tx, orgId, channel.id, dto);
 
         // 2b. Remember where this customer's goods go, so picking them on the
         //     next order pre-fills it. Fill-if-empty: a saved address (e.g.
         //     Shopify's default) is never overwritten by one order's.
         const deliveredTo = dto.shippingAddress ?? dto.billingAddress;
-        if (deliveredTo && customer.defaultAddress == null) {
+        if (customer && deliveredTo && customer.defaultAddress == null) {
           await tx.customer.update({
             where: { id: customer.id },
             data: {
@@ -1202,7 +1234,8 @@ export class OrderService {
           await this.settings.getProductSettings(orgId);
         const oversellGlobally = productSettings.allowOversellGlobally === true;
         const trackGlobally = productSettings.trackQuantityGlobally === true;
-        for (const li of dto.lineItems) {
+        for (const [lineIndex, li] of dto.lineItems.entries()) {
+          if (customTitleAt(lineIndex) !== null) continue;
           const v = variantById.get(li.productVariantId)!;
           const tracks = trackGlobally || v.trackQuantity !== false;
           const allowOversell =
@@ -1280,8 +1313,8 @@ export class OrderService {
               billingAddress:
                 dto.billingAddress ?? dto.shippingAddress ?? dto.customer.address,
               customerBillingStateCode:
-                dto.customer.billingStateCode ?? customer.billingStateCode,
-              buyerGstin: dto.customer.gstin ?? customer.gstin,
+                dto.customer.billingStateCode ?? customer?.billingStateCode,
+              buyerGstin: dto.customer.gstin ?? customer?.gstin,
               sellerStateCode: sellerRegistrations.defaultStateCode,
             });
 
@@ -1305,8 +1338,8 @@ export class OrderService {
           billingAddress:
             dto.billingAddress ?? dto.shippingAddress ?? dto.customer.address,
           customerBillingStateCode:
-            dto.customer.billingStateCode ?? customer.billingStateCode,
-          buyerGstin: dto.customer.gstin ?? customer.gstin,
+            dto.customer.billingStateCode ?? customer?.billingStateCode,
+          buyerGstin: dto.customer.gstin ?? customer?.gstin,
           sellerStateCode: sellerGstin?.stateCode,
         });
 
@@ -1386,6 +1419,7 @@ export class OrderService {
 
         for (const [lineIndex, li] of dto.lineItems.entries()) {
           const v = variantById.get(li.productVariantId)!;
+          const customTitle = customTitleAt(lineIndex);
           // The cashier's typed price is authoritative and is already in the
           // order's currency; only the catalogue fallback needs converting.
           const unitPrice = li.unitPriceOverride ?? catalogueUnitPrices[lineIndex];
@@ -1399,7 +1433,7 @@ export class OrderService {
           const lineGross = this.calculator.round2(unitPrice * li.quantity);
           if (discount > lineGross) {
             throw new BadRequestException(
-              `Discount (${discount}) cannot exceed the line total (${lineGross}) for "${v.product.title}".`,
+              `Discount (${discount}) cannot exceed the line total (${lineGross}) for "${customTitle ?? v.product.title}".`,
             );
           }
 
@@ -1419,10 +1453,10 @@ export class OrderService {
 
           lineItemsToCreate.push({
             variantId: v.id,
-            title: v.product.title,
-            variantTitle: displayVariantTitle(v.title),
-            sku: v.sku ?? null,
-            vendor: v.product.vendorKey ?? v.product.vendor,
+            title: customTitle ?? v.product.title,
+            variantTitle: customTitle === null ? displayVariantTitle(v.title) : null,
+            sku: customTitle === null ? (v.sku ?? null) : null,
+            vendor: customTitle === null ? (v.product.vendorKey ?? v.product.vendor) : null,
             quantity: li.quantity,
             unitPrice,
             totalDiscount: discount,
@@ -1448,6 +1482,7 @@ export class OrderService {
         subtotal = round(subtotal);
         totalTax = round(totalTax);
         const grandTotal = pricesIncludeTax ? subtotal : round(subtotal + totalTax);
+        const settled = options?.settle?.(grandTotal);
 
         // 6. Generate the next sequential orderNumber for the MANUAL channel.
         //    Scoped to this channel so offline sales run their own sequence
@@ -1495,14 +1530,14 @@ export class OrderService {
           data: {
             organizationId: orgId,
             channelId: channel.id,
-            customerId: customer.id,
+            customerId: customer?.id ?? null,
             externalId: `manual_${randomUUID()}`,
             orderNumber: nextNumber,
             // "M" marks the order as manual/offline so it can never be confused
             // with a Shopify order carrying the same number on its own channel.
             name: `#M${nextNumber}`,
             financialStatus:
-              dto.financialStatus ?? OrderFinancialStatus.PAID,
+              settled?.financialStatus ?? dto.financialStatus ?? OrderFinancialStatus.PAID,
             // UNFULFILLED, not FULFILLED: nothing has shipped yet. The old
             // FULFILLED default put a header on every counter sale that its
             // own lines (0 shipped) contradicted, and the Shopify push read
@@ -1544,6 +1579,7 @@ export class OrderService {
             placeOfSupplyCode: sellerGstin ? placeOfSupplyCode : null,
             gstType: sellerGstin ? resolvedGstType : null,
             dispatchWarehouseId,
+            ...(options?.pos ? { posSale: true, posStaffId: options.pos.staffId } : {}),
             // Whether the unit prices contain the tax on the lines, in the
             // sense of Shopify's `taxes_included`, so the push and the eventual
             // rebadge agree on every total. The invoice reads it back.
@@ -1553,7 +1589,8 @@ export class OrderService {
               source: 'offline',
               paymentMethod: dto.paymentMethod,
               createdByUserId: userId,
-            },
+              ...settled?.metadata,
+            } as Prisma.InputJsonObject,
             externalCreatedAt: now,
             lineItems: {
               create: lineItemsToCreate.map((li) => ({
@@ -1584,6 +1621,7 @@ export class OrderService {
         //     With nothing shipped this is UNFULFILLED; a caller that passed
         //     a status but no shipped lines gets the truth, not its claim.
         await this.refreshOrderFulfillmentStatus(tx, order.id);
+        await options?.inTransaction?.(tx, { id: order.id, customerId: order.customerId });
 
         // 8. Inventory decrement + audit trail. Skipped per-variant when
         //    trackQuantity=false AND the org-level trackQuantityGlobally
@@ -1626,9 +1664,9 @@ export class OrderService {
         // Sorted by variantId: `applyMovement` takes a row lock per variant,
         // and every caller moving several variants in one transaction must take
         // those locks in the same order or two concurrent sales deadlock.
-        const saleLines = [...dto.lineItems].sort((a, b) =>
-          a.productVariantId.localeCompare(b.productVariantId),
-        );
+        const saleLines = dto.lineItems
+          .filter((_, i) => customTitleAt(i) === null)
+          .sort((a, b) => a.productVariantId.localeCompare(b.productVariantId));
 
         for (const li of saleLines) {
           const v = variantById.get(li.productVariantId)!;
@@ -1695,7 +1733,9 @@ export class OrderService {
             orderId: order.id,
             actorId: userId,
             action: 'created',
-            message: `Offline order created (${dto.paymentMethod})`,
+            message: options?.pos
+              ? 'Billed at the point of sale'
+              : `Offline order created (${dto.paymentMethod})`,
           },
         });
 
@@ -1873,13 +1913,15 @@ export class OrderService {
     // The sale just moved ordersCount/totalSpent, and the loyalty tier is
     // derived from them. Non-fatal and outside the transaction — a tier refresh
     // must never roll back a completed sale.
-    await this.loyalty
-      .recomputeForCustomer(result.order.customerId!, orgId)
-      .catch((err) =>
-        this.logger.warn(
-          `Loyalty recompute failed for order ${result.order.id}: ${err}`,
-        ),
-      );
+    if (result.order.customerId) {
+      await this.loyalty
+        .recomputeForCustomer(result.order.customerId, orgId)
+        .catch((err) =>
+          this.logger.warn(
+            `Loyalty recompute failed for order ${result.order.id}: ${err}`,
+          ),
+        );
+    }
 
     await this.commerceEvents.order(result.order.id, result.order.financialStatus === OrderFinancialStatus.PAID ? ['created', 'paid'] : ['created']);
     if (result.invoice) await this.commerceEvents.invoiceIssued(result.invoice.id);
