@@ -122,6 +122,22 @@ enum LocationType {
   BIN
 }
 
+/// What a stock location is for. A STORE is an offline shop and the only kind
+/// the point of sale bills at; a WAREHOUSE holds stock and has no till.
+enum StockLocationKind {
+  STORE
+  WAREHOUSE
+}
+
+/// The merchant's decision for one Shopify location: share stock with an
+/// existing location (LINK), make a new location for it (CREATE), or leave it
+/// out of stock sync (IGNORE). No decision yet = the location is pending.
+enum ShopifyLocationAction {
+  LINK
+  CREATE
+  IGNORE
+}
+
 // Physical stock buckets on StockLevel. Closed set for V1 — Picked/Packed/
 // Dispatched are PickTask statuses (stock stays RESERVED until dispatch),
 // transfers are paired ledger events, returns end in AVAILABLE or DAMAGED.
@@ -349,6 +365,7 @@ model Organization {
   rawAnalyticsEvents     RawAnalyticsEvent[]
   settings               OrganizationSettings?
   warehouses             Warehouse[]
+  shopifyLocationLinks   ShopifyLocationLink[]
   stockLevels            StockLevel[]
   stockReservations      StockReservation[]
   stockReceipts          StockReceipt[]
@@ -583,11 +600,11 @@ model Channel {
   createdAt        DateTime        @default(now()) @map("created_at")
   updatedAt        DateTime        @updatedAt @map("updated_at")
 
-  organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization       Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   /// SetNull, not Cascade: removing a person must not delete the channel and
   /// with it the orders and message logs that hang off it. The row survives as
   /// an org-level channel with no owner.
-  ownerUser          User?                @relation("ChannelOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerUser          User?                 @relation("ChannelOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   syncLogs           SyncLog[]
   syncStates         ChannelSyncState[]
   products           Product[]
@@ -609,6 +626,7 @@ model Channel {
   messages           Message[]
   messageTemplates   MessageTemplate[]
   broadcasts         Broadcast[]
+  shopifyLocations   ShopifyLocationLink[]
 
   /// ONE ROW = ONE CONNECTED ACCOUNT. An org may hold several rows of the same
   /// platform (many Instagram accounts); the limits are PARTIAL unique indexes,
@@ -1317,41 +1335,43 @@ model InventoryEvent {
 // ============================================================
 
 model Warehouse {
-  id                String   @id @default(cuid())
-  organizationId    String   @map("organization_id")
-  name              String // "Main Warehouse"
+  id                String            @id @default(cuid())
+  organizationId    String            @map("organization_id")
+  name              String // "Main warehouse"
   code              String // "WH1" — prefix of location fullCodes
-  // Numeric Shopify location id this warehouse mirrors (V1: at most one mapped
-  // warehouse per org — seeded from Channel.metadata.shopifyLocationId).
-  shopifyLocationId String?  @map("shopify_location_id")
+  kind              StockLocationKind @default(WAREHOUSE)
+  // Numeric Shopify location id this location shares stock with. Set by the
+  // merchant's decision (ShopifyLocationLink), never by a sync on its own.
+  shopifyLocationId String?           @map("shopify_location_id")
   // Canonical address keys ({ address1, address2, city, zip, province }) plus
   // `stateCode` (GST 2-digit) so both `extractStateFromAddress` (server) and
   // `readAddress` (client) can read it. Filled once from Shopify when absent,
   // then the merchant's to edit; the sync never overwrites it.
-  address           Json?    @db.JsonB
+  address           Json?             @db.JsonB
   /// Which GST registration this warehouse operates under — an *additional
   /// place of business* (APOB) of that GSTIN. Null = not linked. The state of
   /// `address` must match the registration's state (a place of business in
   /// another state needs its own GSTIN); enforced in WarehouseService.
-  gstinId           String?  @map("gstin_id")
+  gstinId           String?           @map("gstin_id")
   /// Merchant's confirmation that this APOB has been declared on the GST
   /// portal — a registration amendment the app cannot perform for them.
-  apobDeclared      Boolean  @default(false) @map("apob_declared")
-  isDefault         Boolean  @default(false) @map("is_default")
-  isActive          Boolean  @default(true) @map("is_active") // deactivate, never hard-delete (ledger references)
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  apobDeclared      Boolean           @default(false) @map("apob_declared")
+  isDefault         Boolean           @default(false) @map("is_default")
+  isActive          Boolean           @default(true) @map("is_active") // deactivate, never hard-delete (ledger references)
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
 
-  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization     Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   locations        WarehouseLocation[]
   stockLevels      StockLevel[]
   reservations     StockReservation[]
   receipts         StockReceipt[]
   pickTasks        PickTask[]
   inventoryEvents  InventoryEvent[]
-  gstin            OrganizationGstin?  @relation(fields: [gstinId], references: [id], onDelete: SetNull)
-  dispatchOrders   Order[]             @relation("OrderDispatchWarehouse")
-  dispatchInvoices Invoice[]           @relation("InvoiceDispatchWarehouse")
+  gstin            OrganizationGstin?    @relation(fields: [gstinId], references: [id], onDelete: SetNull)
+  dispatchOrders   Order[]               @relation("OrderDispatchWarehouse")
+  dispatchInvoices Invoice[]             @relation("InvoiceDispatchWarehouse")
+  shopifyLocations ShopifyLocationLink[]
 
   // SQL-only partial uniques:
   //   (organization_id) WHERE is_default          — one default per org
@@ -1363,6 +1383,39 @@ model Warehouse {
   @@index([organizationId])
   @@index([gstinId])
   @@map("warehouses")
+}
+
+/// One Shopify location of a connected store and what the merchant decided
+/// for it. Rows are refreshed from Shopify on every locations sync; a location
+/// that appears later arrives with no decision and waits for the merchant.
+/// Whether stock is shared is `Warehouse.shopifyLocationId`; `warehouseId`
+/// here only remembers which location the decision named.
+model ShopifyLocationLink {
+  id                String                 @id @default(cuid())
+  organizationId    String                 @map("organization_id")
+  channelId         String                 @map("channel_id")
+  /// Numeric Shopify location id, as stored on Warehouse.shopifyLocationId.
+  shopifyLocationId String                 @map("shopify_location_id")
+  name              String
+  isPrimary         Boolean                @default(false) @map("is_primary")
+  isActive          Boolean                @default(true) @map("is_active")
+  /// The location's address as Shopify sends it, in the warehouse address shape.
+  address           Json?                  @db.JsonB
+  /// Null while the merchant has not decided.
+  action            ShopifyLocationAction?
+  warehouseId       String?                @map("warehouse_id")
+  decidedAt         DateTime?              @map("decided_at")
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  warehouse    Warehouse?   @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+
+  @@unique([channelId, shopifyLocationId])
+  @@index([organizationId])
+  @@index([warehouseId])
+  @@map("shopify_location_links")
 }
 
 // Self-referencing location tree: Zone → Rack → Shelf → Bin at any depth.

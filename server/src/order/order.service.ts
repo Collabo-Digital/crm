@@ -1224,26 +1224,107 @@ export class OrderService {
           );
         }
 
-        // 3a. Stock validation — refuse line items that would oversell a
+        // 3a. Where the goods leave from — ONLY when the operator said so.
+        //
+        // Deliberately no default-warehouse fallback here. `Order.dispatch
+        // WarehouseId` records a FACT (an operator's explicit choice, or
+        // Shopify's real location assignment), and the invoice treats it as an
+        // assertion: a warehouse registered under a different GSTIN than the
+        // one issuing the invoice is refused outright. Stamping the org default
+        // would turn the app's own guess into that assertion and refuse
+        // ordinary sales — a supply into a state where the merchant holds a
+        // second registration resolves that seller GSTIN, which the default
+        // warehouse need have nothing to do with (fixture S5).
+        //
+        // With nothing stamped, the invoice falls back to the default itself,
+        // where the same contradiction is silently dropped instead of fatal.
+        let dispatchWarehouse: {
+          id: string;
+          name: string;
+          shopifyLocationId: string | null;
+          gstin: { id: string; stateCode: string; isActive: boolean } | null;
+        } | null = null;
+        if (dto.warehouseId) {
+          const picked = await tx.warehouse.findFirst({
+            where: { id: dto.warehouseId, organizationId: orgId, isActive: true },
+            select: {
+              id: true,
+              name: true,
+              shopifyLocationId: true,
+              gstin: { select: { id: true, stateCode: true, isActive: true } },
+            },
+          });
+          if (!picked) throw new NotFoundException('Warehouse not found');
+          dispatchWarehouse = {
+            id: picked.id,
+            name: picked.name,
+            shopifyLocationId: picked.shopifyLocationId ?? null,
+            gstin: picked.gstin ?? null,
+          };
+        }
+        const dispatchWarehouseId = dispatchWarehouse?.id ?? null;
+        const saleWarehousing = await this.ledger.isWarehousingEnabled(orgId);
+        // A sale from a chosen location in a workspace with stock locations:
+        // its stock is that location's, and so is its seller registration.
+        const saleLocation = saleWarehousing ? dispatchWarehouse : null;
+        // Where the stock leaves from in a workspace with stock locations: the
+        // chosen location, else the default — the same rule the restock uses
+        // to send it back, so a sale and its cancellation land on the same
+        // shelf instead of drifting stock between warehouses. Its Shopify link
+        // decides what Shopify hears of the sale (see the push after commit).
+        const stockLocation: { id: string; shopifyLocationId: string | null } | null = saleWarehousing
+          ? (dispatchWarehouse ??
+            (await tx.warehouse.findFirst({
+              where: { organizationId: orgId, isDefault: true },
+              select: { id: true, shopifyLocationId: true },
+            })))
+          : null;
+        if (saleWarehousing && !stockLocation) {
+          throw new BadRequestException(
+            'This organisation tracks stock per warehouse but has no default warehouse. ' +
+              'Set one under Products → Inventory → Warehouses, or choose a warehouse to dispatch from.',
+          );
+        }
+
+        // 3b. Stock validation — refuse line items that would oversell a
         //     tracked variant unless overselling is allowed.
         //     "Tracked" is true when EITHER the org's `trackQuantityGlobally`
         //     is on OR the variant's per-row `trackQuantity` is on.
         //     "Oversell allowed" is true when EITHER `allowOversellGlobally`
         //     is on OR `continueSellingWhenOutOfStock` is on for the variant.
+        //     The stock that counts is the chosen location's when there is
+        //     one, else the workspace's total.
         const productSettings =
           await this.settings.getProductSettings(orgId);
         const oversellGlobally = productSettings.allowOversellGlobally === true;
         const trackGlobally = productSettings.trackQuantityGlobally === true;
+        const availableAtLocation = saleLocation
+          ? new Map(
+            (
+              await tx.stockLevel.findMany({
+                where: {
+                  warehouseId: saleLocation.id,
+                  locationId: null,
+                  variantId: { in: stockedVariantIds },
+                },
+                select: { variantId: true, available: true },
+              })
+            ).map((level) => [level.variantId, level.available]),
+          )
+          : null;
         for (const [lineIndex, li] of dto.lineItems.entries()) {
           if (customTitleAt(lineIndex) !== null) continue;
           const v = variantById.get(li.productVariantId)!;
           const tracks = trackGlobally || v.trackQuantity !== false;
           const allowOversell =
             oversellGlobally || v.continueSellingWhenOutOfStock === true;
-          if (tracks && !allowOversell && v.inventoryQuantity < li.quantity) {
+          const available = availableAtLocation
+            ? (availableAtLocation.get(v.id) ?? 0)
+            : v.inventoryQuantity;
+          if (tracks && !allowOversell && available < li.quantity) {
             const vt = displayVariantTitle(v.title);
             throw new BadRequestException(
-              `Insufficient stock for "${v.product.title}${vt ? ` — ${vt}` : ''}": ${v.inventoryQuantity} available, ${li.quantity} requested.`,
+              `Insufficient stock for "${v.product.title}${vt ? ` — ${vt}` : ''}"${saleLocation ? ` at ${saleLocation.name}` : ''}: ${available} available, ${li.quantity} requested.`,
             );
           }
         }
@@ -1266,9 +1347,15 @@ export class OrderService {
           defaultStateCode: null,
           stateCodes: [],
         };
+        // The registration of the location the goods leave from: a place of
+        // business is supplied under its own GSTIN, whatever else was chosen.
+        const locationGstin = saleLocation?.gstin?.isActive ? saleLocation.gstin : null;
+        const sellerGstinId = locationGstin?.id ?? dto.sellerGstinId;
 
         if (generateInvoice && org.gstEnabled) {
-          if (dto.sellerGstinId) {
+          if (locationGstin) {
+            sellerGstin = { stateCode: locationGstin.stateCode };
+          } else if (dto.sellerGstinId) {
             sellerGstin = await tx.organizationGstin.findFirst({
               where: {
                 id: dto.sellerGstinId,
@@ -1500,30 +1587,6 @@ export class OrderService {
         });
         const nextNumber = (last?.orderNumber ?? 1000) + 1;
 
-        // 6a. Where the goods leave from — ONLY when the operator said so.
-        //
-        // Deliberately no default-warehouse fallback here. `Order.dispatch
-        // WarehouseId` records a FACT (an operator's explicit choice, or
-        // Shopify's real location assignment), and the invoice treats it as an
-        // assertion: a warehouse registered under a different GSTIN than the
-        // one issuing the invoice is refused outright. Stamping the org default
-        // would turn the app's own guess into that assertion and refuse
-        // ordinary sales — a supply into a state where the merchant holds a
-        // second registration resolves that seller GSTIN, which the default
-        // warehouse need have nothing to do with (fixture S5).
-        //
-        // With nothing stamped, the invoice falls back to the default itself,
-        // where the same contradiction is silently dropped instead of fatal.
-        let dispatchWarehouseId: string | null = null;
-        if (dto.warehouseId) {
-          const picked = await tx.warehouse.findFirst({
-            where: { id: dto.warehouseId, organizationId: orgId, isActive: true },
-            select: { id: true },
-          });
-          if (!picked) throw new NotFoundException('Warehouse not found');
-          dispatchWarehouseId = picked.id;
-        }
-
         // 7. Create the order with line items in a nested write.
         const now = new Date();
         const order = await tx.order.create({
@@ -1589,6 +1652,12 @@ export class OrderService {
               source: 'offline',
               paymentMethod: dto.paymentMethod,
               createdByUserId: userId,
+              // Read by the Shopify order push: this sale's stock is the
+              // location's, settled with Shopify by that location's own push
+              // (or not at all), so the order must never decrement Shopify's.
+              // Written with the order, not after it, so a push queued the
+              // moment the sale commits already sees it.
+              ...(stockLocation ? { shopifyStockPushed: true } : {}),
               ...settled?.metadata,
             } as Prisma.InputJsonObject,
             externalCreatedAt: now,
@@ -1639,27 +1708,7 @@ export class OrderService {
         //    stayed at 30, and the next sync put the cache back to 55.
         //    This is the mirror image of the restock in `cancel`, which was
         //    already fixed for exactly this reason.
-        const saleWarehousing = await this.ledger.isWarehousingEnabled(orgId);
-        // Goods leave the warehouse the order dispatches from; without an
-        // explicit pick that is the org default — the same rule the restock
-        // uses to send them back, so a sale and its cancellation land on the
-        // same shelf instead of drifting stock between warehouses.
-        const saleWarehouseId = saleWarehousing
-          ? (dispatchWarehouseId ??
-            (
-              await tx.warehouse.findFirst({
-                where: { organizationId: orgId, isDefault: true },
-                select: { id: true },
-              })
-            )?.id ??
-            null)
-          : null;
-        if (saleWarehousing && !saleWarehouseId) {
-          throw new BadRequestException(
-            'This organisation tracks stock per warehouse but has no default warehouse. ' +
-              'Set one under Products → Inventory → Warehouses, or choose a warehouse to dispatch from.',
-          );
-        }
+        const saleWarehouseId = stockLocation?.id ?? null;
 
         // Sorted by variantId: `applyMovement` takes a row lock per variant,
         // and every caller moving several variants in one transaction must take
@@ -1687,12 +1736,13 @@ export class OrderService {
                 referenceType: 'order',
                 referenceId: order.id,
                 actorId: userId,
-                // Step 3a already refused this sale if the variant is tracked,
-                // cannot oversell, and lacks the units ACROSS warehouses. Being
-                // short at this one specific warehouse must not then fail a
-                // counter sale the merchant is entitled to make — the shortfall
-                // is recorded as negative available and surfaced by the
-                // Inventory screen's "Oversold" filter.
+                // Step 3b already refused this sale if the variant is tracked,
+                // cannot oversell, and lacks the units — at the chosen location,
+                // or ACROSS warehouses when none was chosen. Being short at the
+                // default warehouse must not then fail a counter sale the
+                // merchant is entitled to make — the shortfall is recorded as
+                // negative available and surfaced by the Inventory screen's
+                // "Oversold" filter.
                 allowNegativeAvailable: true,
               },
               tx,
@@ -1752,7 +1802,7 @@ export class OrderService {
               orgId,
               order.id,
               {
-                sellerGstinId: dto.sellerGstinId,
+                sellerGstinId,
                 // The RESOLVED code, not the raw (usually undefined) DTO field.
                 // Passing the raw one made the invoice re-derive independently
                 // and disagree with the tax the order just charged.
@@ -1808,7 +1858,7 @@ export class OrderService {
           });
         }
 
-        return { order, invoice, invoiceError, soldVariantIds };
+        return { order, invoice, invoiceError, soldVariantIds, stockLocation };
       },
       {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -1882,9 +1932,33 @@ export class OrderService {
     // availability on top of that would take the units off twice. In that case
     // the pull reconciles us to Shopify's figure, which is already correct.
     //
+    // A workspace with stock locations is the exception both ways: its sale
+    // left one location (the chosen one, else the default), its order never
+    // decrements Shopify (`shopifyStockPushed`, written with the order), and
+    // so a location linked to Shopify has its own new figure pushed — that
+    // location only — while one that is not linked pushes nothing at all.
+    // Letting the order decrement instead would take the units off the
+    // PRIMARY Shopify location, which need not be the location they left.
+    //
     // Outside the transaction and non-fatal, exactly like the restock push in
     // `cancel`: a queue outage must not roll back a completed sale.
-    if (result.soldVariantIds.length > 0 && !orderPushedToShopify) {
+    if (result.stockLocation) {
+      if (result.soldVariantIds.length > 0 && result.stockLocation.shopifyLocationId) {
+        try {
+          await addAvailabilityPush(
+            this.shopifyPushQueue,
+            orgId,
+            result.soldVariantIds,
+            Priority.NORMAL,
+            result.stockLocation.id,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `Failed to enqueue availability push after offline sale ${result.order.id}: ${err}`,
+          );
+        }
+      }
+    } else if (result.soldVariantIds.length > 0 && !orderPushedToShopify) {
       try {
         const outcome = await addAvailabilityPush(
           this.shopifyPushQueue,
@@ -1925,7 +1999,12 @@ export class OrderService {
 
     await this.commerceEvents.order(result.order.id, result.order.financialStatus === OrderFinancialStatus.PAID ? ['created', 'paid'] : ['created']);
     if (result.invoice) await this.commerceEvents.invoiceIssued(result.invoice.id);
-    return result;
+    return {
+      order: result.order,
+      invoice: result.invoice,
+      invoiceError: result.invoiceError,
+      soldVariantIds: result.soldVariantIds,
+    };
   }
 
   // ─── MANUAL SYNC TO SHOPIFY ───

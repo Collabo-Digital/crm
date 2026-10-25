@@ -19,6 +19,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { BillingService } from '../billing/billing.service';
 import { ChannelService } from '../channel/channel.service';
+import { ensureDefaultLocation } from '../inventory/default-location';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { CreatePersonalDto } from './dto/create-personal.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
@@ -61,6 +62,7 @@ export class OrganizationService {
       });
 
       await this.billing.applyPendingSubscriptionToOrg(tx, userId, created.id);
+      await ensureDefaultLocation(tx, created.id);
 
       // Re-fetch so the returned object reflects the billing fields populated
       // by applyPendingSubscriptionToOrg.
@@ -113,6 +115,7 @@ export class OrganizationService {
       });
 
       await this.billing.applyPendingSubscriptionToOrg(tx, userId, created.id);
+      await ensureDefaultLocation(tx, created.id);
 
       return tx.organization.findUniqueOrThrow({
         where: { id: created.id },

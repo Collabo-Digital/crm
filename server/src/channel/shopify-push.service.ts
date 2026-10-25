@@ -551,6 +551,11 @@ export class ShopifyPushService {
     // sent to Shopify as an absolute figure (createOfflineOrder records that
     // as `shopifyStockPushed`). Decrementing again would take the units off
     // twice, and the inventory webhook would copy the drop back into the CRM.
+    //
+    // In a workspace with stock locations every sale carries the flag: its
+    // stock left one location, which had its own figure pushed when it is
+    // linked to Shopify — and when it is not, Shopify's stock must not change
+    // for it at all.
     const stockAlreadyPushed =
       !!order.metadata &&
       typeof order.metadata === 'object' &&
@@ -1665,6 +1670,7 @@ export class ShopifyPushService {
     orgId: string,
     variantIds: string[],
     priority: Priority = Priority.NORMAL,
+    warehouseId?: string,
   ): Promise<void> {
     if (variantIds.length === 0) return;
     const shopify = await this.findShopifyChannel(orgId);
@@ -1705,11 +1711,91 @@ export class ShopifyPushService {
       token,
       variants,
       invIdByVariant,
+      warehouseId,
     );
 
     if (quantities.length > 0) {
       await this.setInventoryQuantities(auth, quantities);
     }
+  }
+
+  /**
+   * Send one location's stock to the Shopify location it is linked to, for
+   * every tracked variant on Shopify — "keep Collabo's counts" when a location
+   * that already holds stock is linked. A variant the location holds no row
+   * for is sent as 0: that is Collabo's count there.
+   */
+  async pushWarehouseStock(
+    orgId: string,
+    warehouseId: string,
+    priority: Priority = Priority.NORMAL,
+  ): Promise<void> {
+    const warehouse = await this.prisma.warehouse.findFirst({
+      where: { id: warehouseId, organizationId: orgId },
+      select: { shopifyLocationId: true },
+    });
+    if (!warehouse?.shopifyLocationId) return;
+    // A location holding nothing has no counts worth keeping; sending its
+    // zeros would wipe the Shopify location's stock instead.
+    const holdsStock = await this.prisma.stockLevel.findFirst({
+      where: {
+        warehouseId,
+        OR: [{ available: { not: 0 } }, { reserved: { not: 0 } }, { qc: { not: 0 } }, { damaged: { not: 0 } }],
+      },
+      select: { id: true },
+    });
+    if (!holdsStock) {
+      this.logger.log(`Location ${warehouseId} holds no stock; keeping Shopify's counts instead.`);
+      return;
+    }
+    const shopify = await this.findShopifyChannel(orgId);
+    if (!shopify || shopify.status !== ChannelStatus.CONNECTED) return;
+    const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(shopify.id);
+    const auth: ShopifyAuthContext = { shopDomain, accessToken: token, channelId: shopify.id, priority };
+    const locationId = ShopifyGraphqlClient.toGid('Location', warehouse.shopifyLocationId);
+
+    // Shopify keeps no count for an untracked item, so there is none to set.
+    const trackGlobally = (await this.orgSettings.getProductSettings(orgId)).trackQuantityGlobally === true;
+    // inventorySetQuantities takes at most 250 writes per call.
+    const BATCH = 200;
+    let cursor: string | undefined;
+    let sent = 0;
+    for (;;) {
+      const variants = await this.prisma.productVariant.findMany({
+        where: {
+          organizationId: orgId,
+          inventoryItemId: { not: null },
+          ...(trackGlobally ? {} : { trackQuantity: true }),
+          product: { deletedAt: null },
+        },
+        orderBy: { id: 'asc' },
+        take: BATCH,
+        ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+        select: { id: true, inventoryItemId: true },
+      });
+      if (variants.length === 0) break;
+      const levels = await this.prisma.stockLevel.findMany({
+        where: { warehouseId, locationId: null, variantId: { in: variants.map((v) => v.id) } },
+        select: { variantId: true, available: true },
+      });
+      const available = new Map(levels.map((l) => [l.variantId, l.available]));
+      // Strict: the pull that follows overwrites with Shopify's figures, so a
+      // write that did not land must fail the job before that pull runs.
+      await this.setInventoryQuantities(
+        auth,
+        variants.map((v) => ({
+          inventoryItemId: ShopifyGraphqlClient.toGid('InventoryItem', v.inventoryItemId as string),
+          locationId,
+          quantity: available.get(v.id) ?? 0,
+        })),
+        { strict: true },
+      );
+      sent += variants.length;
+      cursor = variants[variants.length - 1].id;
+    }
+    this.logger.log(
+      `Sent ${sent} stock figure(s) of location ${warehouseId} to Shopify location ${warehouse.shopifyLocationId} (org ${orgId})`,
+    );
   }
 
   /**
@@ -1746,15 +1832,22 @@ export class ShopifyPushService {
    *    `available` to the location it mirrors. Pushing the org-wide total to
    *    the primary (as this did originally) left other locations untouched, so
    *    Shopify's displayed total became our number PLUS whatever they held.
-   *  - **Otherwise** → legacy orgs, and warehousing orgs whose locations sync
-   *    has not run yet. Falls back to the previous behaviour exactly.
+   *  - **Warehousing on, nothing linked** → nothing. A Shopify location's
+   *    stock syncs only once the merchant has decided what it shares stock
+   *    with; until then it is Shopify's alone.
+   *  - **Legacy orgs** → the previous behaviour exactly: the cached quantity
+   *    at the primary location.
+   *
+   * `onlyWarehouseId` narrows the push to one location — a sale or restock
+   * there says nothing new about the others.
    *
    * A variant with no stock row *at a mapped warehouse* emits nothing for that
    * location — symmetric with the pull, which treats an absent inventory level
    * as "not stocked here" rather than as zero. But a variant with no stock row
    * at ALL is not covered by the bucket model (created after the enable seed,
    * or trackQuantity:false so never seeded), and falls back to the primary
-   * location so it keeps syncing rather than silently dropping out.
+   * location — when that location is linked — so it keeps syncing rather than
+   * silently dropping out.
    */
   private async buildAvailabilityQuantities(
     orgId: string,
@@ -1763,6 +1856,7 @@ export class ShopifyPushService {
     token: string,
     variants: Array<{ id: string; inventoryQuantity: number }>,
     invIdByVariant: Map<string, string>,
+    onlyWarehouseId?: string,
   ): Promise<Array<{ inventoryItemId: string; locationId: string; quantity: number }>> {
     // The pre-multi-location behaviour, kept as a named helper because two
     // callers need it: whole-org fallback, and per-variant fallback below.
@@ -1789,18 +1883,18 @@ export class ShopifyPushService {
     };
 
     const warehousing = await this.inventoryLedger.isWarehousingEnabled(orgId);
-    const mapped = warehousing
-      ? await this.prisma.warehouse.findMany({
-          where: {
-            organizationId: orgId,
-            shopifyLocationId: { not: null },
-            isActive: true,
-          },
-          select: { id: true, shopifyLocationId: true },
-        })
-      : [];
+    if (!warehousing) return pushAtPrimary(variants);
+    const mapped = await this.prisma.warehouse.findMany({
+      where: {
+        organizationId: orgId,
+        shopifyLocationId: { not: null },
+        isActive: true,
+        ...(onlyWarehouseId ? { id: onlyWarehouseId } : {}),
+      },
+      select: { id: true, shopifyLocationId: true },
+    });
 
-    if (mapped.length === 0) return pushAtPrimary(variants);
+    if (mapped.length === 0) return [];
 
     const locationByWarehouse = new Map(
       mapped.map((w) => [w.id, w.shopifyLocationId as string]),
@@ -1837,6 +1931,7 @@ export class ShopifyPushService {
     // locations, and wrote its org-wide total onto the primary Shopify
     // location — stock that is not there. Once "Edit locations" could take a
     // variant out of its last Shopify location, every sync of it did that.
+    if (onlyWarehouseId) return perLocation;
     const variantsStockedAnywhere = await this.prisma.stockLevel.findMany({
       where: { variantId: { in: variants.map((v) => v.id) } },
       select: { variantId: true },
@@ -1845,7 +1940,10 @@ export class ShopifyPushService {
     const covered = new Set(variantsStockedAnywhere.map((level) => level.variantId));
     const uncovered = variants.filter((v) => !covered.has(v.id));
     if (uncovered.length > 0) {
-      perLocation.push(...(await pushAtPrimary(uncovered)));
+      const primary = await this.resolveLocationId(channelId, shopDomain, token);
+      if (primary && mapped.some((w) => w.shopifyLocationId === String(primary))) {
+        perLocation.push(...(await pushAtPrimary(uncovered)));
+      }
     }
 
     return perLocation;
@@ -1865,6 +1963,9 @@ export class ShopifyPushService {
   private async setInventoryQuantities(
     auth: ShopifyAuthContext,
     quantities: Array<{ inventoryItemId: string; locationId: string; quantity: number }>,
+    // Throw instead of logging — for a caller whose next step must not run
+    // unless every write landed. A rate limit then reaches the processor too.
+    { strict = false }: { strict?: boolean } = {},
   ): Promise<void> {
     try {
       let errors = await this.sendInventoryQuantities(auth, quantities);
@@ -1905,14 +2006,16 @@ export class ShopifyPushService {
         // here — that is the detail that makes it diagnosable, and it used to
         // be absent entirely.
         const locations = [...new Set(quantities.map((q) => q.locationId))].join(', ');
-        this.logger.error(
+        const message =
           `inventorySetQuantities rejected ${errors.length} of ${quantities.length} quantity write(s) ` +
-          `across location(s) ${locations}: ${errors.map((e) => e.message).join('; ')}`,
-        );
+          `across location(s) ${locations}: ${errors.map((e) => e.message).join('; ')}`;
+        if (strict) throw new Error(message);
+        this.logger.error(message);
       } else {
         this.logger.log(`Inventory set for ${quantities.length} variant/location pair(s)`);
       }
     } catch (err) {
+      if (strict) throw err;
       this.logger.error(
         `Inventory update failed for ${quantities.length} quantity write(s): ${err instanceof Error ? err.message : err}`,
       );

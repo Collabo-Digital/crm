@@ -186,11 +186,16 @@ export class OrganizationSettingsService {
    * flow, at the very end of the seed job (so legacy and bucket paths never
    * overlap for an org).
    */
-  async setWarehousingEnabled(orgId: string, enabled: boolean): Promise<InventorySettings> {
+  async setWarehousingEnabled(
+    orgId: string,
+    enabled: boolean,
+    extra: Partial<Pick<InventorySettings, 'linkShopifyLocations'>> = {},
+  ): Promise<InventorySettings> {
     this.assertOrgId(orgId);
     const current = await this.getInventorySettings(orgId);
     const next = InventorySettingsSchema.parse({
       ...current,
+      ...extra,
       warehousingEnabled: enabled,
     });
     await this.upsert(orgId, {

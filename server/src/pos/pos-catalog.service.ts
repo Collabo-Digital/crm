@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ChannelPlatform, Prisma, ProductStatus } from '@prisma/client';
+import { ChannelPlatform, Prisma, ProductStatus, StockLocationKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
@@ -26,7 +26,7 @@ export type PosProduct = {
     allowOversell: boolean;
 };
 
-/** The store a bill is rung up at: a warehouse, or the org itself when it has no warehouses. */
+/** The store a bill is rung up at: a Store location, or the org itself when it has no stock locations. */
 export interface PosStoreContext {
     id: string;
     /** Null for the org without warehousing: stock is one number per variant. */
@@ -105,21 +105,18 @@ export class PosCatalogService {
         if (!org) throw new NotFoundException('Organization not found');
         const storeName = profile.storeName.trim() || org.name;
         const stores: PosStore[] = warehousing
-            ? (
-                await this.prisma.warehouse.findMany({
-                    where: { organizationId: orgId, isActive: true },
-                    orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
-                    select: { id: true, name: true, code: true, isDefault: true },
-                })
-            ).map((w) => ({ id: w.id, name: w.name, code: w.code, isDefault: w.isDefault }))
+            ? (await this.storeLocations(orgId)).map((w) => ({ id: w.id, name: w.name, code: w.code, isDefault: w.isDefault }))
             : [{ id: DEFAULT_STORE_ID, name: storeName, code: null, isDefault: true }];
-        // With no default warehouse the first store stands in, so the till still opens.
-        const store = await this.resolveStore(orgId, storeId ?? stores[0]?.id);
+        // With no Store location there is nothing to bill at: the till opens
+        // to say so, with no stock to show — whatever store it last used,
+        // which may since have become a Warehouse.
+        const wanted = storeId && storeId !== DEFAULT_STORE_ID ? storeId : stores[0]?.id;
+        const store = stores.length > 0 && wanted ? await this.resolveStore(orgId, wanted) : null;
 
-        const tileRows = settings.tileVariantIds.length
+        const tileRows = store && settings.tileVariantIds.length
             ? await this.prisma.productVariant.findMany({ where: { ...sellable(orgId), id: { in: settings.tileVariantIds } }, select: variantSelect })
             : [];
-        const tiles = await this.toPosProducts(orgId, tileRows, store);
+        const tiles = store ? await this.toPosProducts(orgId, tileRows, store) : [];
         const order = new Map(settings.tileVariantIds.map((id, i) => [id, i]));
         tiles.sort((a, b) => order.get(a.variantId)! - order.get(b.variantId)!);
 
@@ -135,7 +132,20 @@ export class PosCatalogService {
         };
     }
 
-    /** The store a request names, or the default one; refuses a store that is not this org's or is switched off. */
+    /** Active Store locations, the default first: the only places the till bills at. */
+    private storeLocations(orgId: string) {
+        return this.prisma.warehouse.findMany({
+            where: { organizationId: orgId, isActive: true, kind: StockLocationKind.STORE },
+            orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+            select: { id: true, name: true, code: true, isDefault: true },
+        });
+    }
+
+    /**
+     * The store a request names, or the first Store location; refuses one that
+     * is not this org's, is switched off or is a Warehouse. Never falls back
+     * to a Warehouse: the till sells only where there is a shop.
+     */
     async resolveStore(orgId: string, storeId?: string | null): Promise<PosStoreContext> {
         const warehousing = await this.ledger.isWarehousingEnabled(orgId);
         const wanted = storeId && storeId !== DEFAULT_STORE_ID ? storeId : null;
@@ -148,13 +158,12 @@ export class PosCatalogService {
             return { id: DEFAULT_STORE_ID, warehouseId: null, name: profile.storeName.trim() || org?.name || '', stateCode: null };
         }
         const warehouse = await this.prisma.warehouse.findFirst({
-            where: { organizationId: orgId, isActive: true, ...(wanted ? { id: wanted } : { isDefault: true }) },
+            where: { organizationId: orgId, isActive: true, kind: StockLocationKind.STORE, ...(wanted ? { id: wanted } : {}) },
+            orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
             select: { id: true, name: true, address: true, gstin: { select: { stateCode: true, isActive: true } } },
         });
         if (!warehouse) {
-            throw new BadRequestException(
-                wanted ? "This store isn't available. Pick one from the list." : 'Set a default warehouse under Products → Inventory → Warehouses, or pick a store.',
-            );
+            throw new BadRequestException(wanted ? "This store isn't available. Pick one from the list." : 'Add a store location before billing.');
         }
         const stateCode = (warehouse.gstin?.isActive ? warehouse.gstin.stateCode : null) ?? extractStateFromAddress(warehouse.address);
         return { id: warehouse.id, warehouseId: warehouse.id, name: warehouse.name, stateCode };

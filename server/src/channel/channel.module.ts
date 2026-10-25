@@ -11,6 +11,7 @@ import { WhatsAppMessagingService } from './whatsapp-messaging.service';
 import { WhatsAppMessagingProcessor } from './whatsapp.processor';
 import { ShopifySyncService } from './shopify-sync.service';
 import { ShopifyLocationSyncService } from './shopify-location-sync.service';
+import { ShopifyLocationDecisionService } from './shopify-location-decision.service';
 import { ShopifyAnalyticsService } from './shopify-analytics.service';
 import { ShopifyPushService } from './shopify-push.service';
 import { ShopifyPushProcessor } from './shopify-push.processor';
@@ -67,7 +68,7 @@ import { CommerceEventsModule } from '../commerce/commerce-events.module';
     ChannelService, ShopifyOAuthService, InstagramOAuthService, InstagramTokenScheduler, WhatsAppOAuthService,
     WhatsAppMessagingService, WhatsAppMessagingProcessor,
     WhatsAppAccountService, WhatsAppOnboardingProcessor, MetaPagesOAuthService, WhatsAppHealthScheduler,
-    ShopifySyncService, ShopifyLocationSyncService, ShopifyAnalyticsService, SyncProcessor, EncryptionService,
+    ShopifySyncService, ShopifyLocationSyncService, ShopifyLocationDecisionService, ShopifyAnalyticsService, SyncProcessor, EncryptionService,
     ShopifyPushService, ShopifyPushProcessor, ShopifyPushEnqueuer,
     ShopifyGraphqlClient, MetaGraphClient, ShopifyPixelService, ShopifyOrderCatchUpScheduler,
   ],

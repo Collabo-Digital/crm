@@ -97,7 +97,9 @@ describe('createOfflineOrder — without the point-of-sale extras', () => {
         expect(data).not.toHaveProperty('posStaffId');
         expect(data.customerId).toBe('cust_1');
         expect(data.financialStatus).toBe(OrderFinancialStatus.PAID);
-        expect(data.metadata).toEqual({ source: 'offline', paymentMethod: 'CASH', createdByUserId: USER });
+        // A workspace with stock locations: the sale left its default location,
+        // which settles Shopify's stock itself, so the order never decrements it.
+        expect(data.metadata).toEqual({ source: 'offline', paymentMethod: 'CASH', createdByUserId: USER, shopifyStockPushed: true });
         expect(tx.orderTimelineEvent.create.mock.calls[0][0].data.message).toBe('Offline order created (CASH)');
     });
 
@@ -161,6 +163,7 @@ describe('createOfflineOrder — a point-of-sale bill', () => {
             source: 'offline',
             paymentMethod: 'UPI',
             createdByUserId: USER,
+            shopifyStockPushed: true,
             pos: { storeId: 'wh_1', roundOff: 0, clientSaleId: 'c1' },
         });
         expect(tx.orderTimelineEvent.create.mock.calls[0][0].data.message).toBe('Billed at the point of sale');

@@ -77,10 +77,18 @@ export class ShopifyPushProcessor extends WorkerHost {
             data.organizationId,
             data.variantIds,
             priority,
+            data.warehouseId,
           );
           break;
         case 'sync-locations':
-          await this.locationSync.runForOrganization(data.organizationId);
+          // Kept counts go out BEFORE the pull, which would otherwise
+          // overwrite them with Shopify's.
+          for (const warehouseId of data.pushWarehouseIds ?? []) {
+            await this.pushService.pushWarehouseStock(data.organizationId, warehouseId, priority);
+          }
+          await this.locationSync.runForOrganization(data.organizationId, {
+            autoLink: data.autoLink === true,
+          });
           break;
         default: {
           // Exhaustiveness check — if a new job type is added without a

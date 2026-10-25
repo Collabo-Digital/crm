@@ -481,6 +481,21 @@ export class ShopifySyncService {
                         this.logger.error(`Sync failed for ${entityType} on channel ${channelId}`, error);
                     }
                 }
+
+                // Every finished sync re-reads the store's Shopify locations,
+                // so one added in Shopify since appears as waiting for the
+                // merchant's decision. Nothing is linked by this. Best-effort:
+                // the next sync tries again, and the run's outcome is the
+                // entities' alone.
+                if (!parked && enabledPull.has('locations') && !completedEntities.has('locations')) {
+                    try {
+                        await this.locationSync.syncLocations(channelId, orgId, getAuth);
+                    } catch (error) {
+                        this.logger.warn(
+                            `Could not refresh the Shopify locations of channel ${channelId}: ${error instanceof Error ? error.message : error}`,
+                        );
+                    }
+                }
             }
         } finally {
             // Defensive: even if the update itself throws (e.g. DB hiccup),
@@ -1297,6 +1312,12 @@ export class ShopifySyncService {
         // warehousing org's stock never updated from Shopify at all.
         if (warehousing) {
             await this.completeSyncLog(syncLog.id, 0, 0);
+            // An enable flow whose linking has not happened yet links first,
+            // or this pull would read the store's stock into its default
+            // location alone.
+            if (await this.locationSync.autoLinkPending(orgId)) {
+                await this.locationSync.syncLocations(channelId, orgId, getAuth);
+            }
             await this.locationSync.pullLocationInventory(channelId, orgId, getAuth);
             return;
         }
