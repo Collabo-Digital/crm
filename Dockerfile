@@ -15,7 +15,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ─── Stage 1: Build the client (React SPA) ───────────────────────────────────
-FROM node:20-alpine AS client-builder
+FROM node:24-alpine AS client-builder
 
 WORKDIR /app/client
 
@@ -32,7 +32,7 @@ RUN npm run build
 
 
 # ─── Stage 2: Build the server (NestJS) ──────────────────────────────────────
-FROM node:20-alpine AS server-builder
+FROM node:24-alpine AS server-builder
 
 WORKDIR /app/server
 
@@ -54,7 +54,7 @@ RUN npm run build
 
 
 # ─── Stage 3: Runtime image (small, production only) ─────────────────────────
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
 
 WORKDIR /app/server
 
