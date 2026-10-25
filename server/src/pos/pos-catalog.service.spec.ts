@@ -20,15 +20,21 @@ function variant(id: string, over: Record<string, unknown> = {}) {
 
 function build(opts: { warehousing?: boolean; warehouses?: any[]; variants?: any[]; rate?: number | null; posSettings?: unknown } = {}) {
     const warehouses = opts.warehouses ?? [
-        { id: 'wh_mg', name: 'MG Road', code: 'MG', isDefault: true, isActive: true, address: { stateCode: '29' }, gstin: { stateCode: '29', isActive: true } },
-        { id: 'wh_ko', name: 'Kochi', code: 'KO', isDefault: false, isActive: true, address: { stateCode: '32' }, gstin: null },
+        { id: 'wh_mg', name: 'MG Road', code: 'MG', kind: 'STORE', isDefault: true, isActive: true, address: { stateCode: '29' }, gstin: { stateCode: '29', isActive: true } },
+        { id: 'wh_ko', name: 'Kochi', code: 'KO', kind: 'STORE', isDefault: false, isActive: true, address: { stateCode: '32' }, gstin: null },
     ];
+    // The where clauses the service sends: org-scoped by construction here, so
+    // only the active, kind and id filters matter, default first.
+    const matching = (where: any) =>
+        warehouses
+            .filter((w) => (where.kind === undefined || w.kind === where.kind) && (where.isActive === undefined || w.isActive === where.isActive) && (where.id === undefined || w.id === where.id))
+            .sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
     const prisma: any = {
         organizationSettings: { findUnique: jest.fn().mockResolvedValue({ posSettings: opts.posSettings ?? null }), upsert: jest.fn() },
         organization: { findUnique: jest.fn().mockResolvedValue({ name: 'Acme Pvt Ltd', gstEnabled: true, currency: 'INR' }) },
         warehouse: {
-            findMany: jest.fn().mockResolvedValue(warehouses),
-            findFirst: jest.fn(async ({ where }: any) => warehouses.find((w) => (where.id ? w.id === where.id : w.isDefault === where.isDefault)) ?? null),
+            findMany: jest.fn(async ({ where }: any) => matching(where)),
+            findFirst: jest.fn(async ({ where }: any) => matching(where)[0] ?? null),
         },
         productVariant: {
             findMany: jest.fn().mockResolvedValue(opts.variants ?? []),
@@ -69,10 +75,35 @@ describe('PosCatalogService stores', () => {
     });
 
     it('with no default warehouse the till still opens, on the first store', async () => {
-        const { service, prisma } = build({ warehouses: [{ id: 'wh_ko', name: 'Kochi', code: 'KO', isDefault: false, isActive: true, address: null, gstin: null }] });
+        const { service, prisma } = build({ warehouses: [{ id: 'wh_ko', name: 'Kochi', code: 'KO', kind: 'STORE', isDefault: false, isActive: true, address: null, gstin: null }] });
         const setup = await service.setup(ORG);
         expect(setup.stores.map((s) => s.id)).toEqual(['wh_ko']);
         expect(prisma.warehouse.findFirst.mock.calls.at(-1)[0].where.id).toBe('wh_ko');
+    });
+});
+
+describe('PosCatalogService stores are Store locations only', () => {
+    const MAIN = { id: 'wh_main', name: 'Main warehouse', code: 'WH1', kind: 'WAREHOUSE', isDefault: true, isActive: true, address: { stateCode: '29' }, gstin: null };
+    const KOCHI = { id: 'wh_ko', name: 'Kochi', code: 'KO', kind: 'STORE', isDefault: false, isActive: true, address: { stateCode: '32' }, gstin: null };
+
+    it('lists only Store locations, and never falls back to a Warehouse — not even the default', async () => {
+        const { service } = build({ warehouses: [MAIN, KOCHI] });
+        const setup = await service.setup(ORG);
+        expect(setup.stores.map((s) => s.id)).toEqual(['wh_ko']);
+        expect((await service.resolveStore(ORG)).id).toBe('wh_ko');
+        await expect(service.resolveStore(ORG, 'wh_main')).rejects.toThrow("This store isn't available. Pick one from the list.");
+    });
+
+    it('with no Store location there is nothing to bill at', async () => {
+        const { service } = build({ warehouses: [MAIN], posSettings: { tileVariantIds: ['v1'] }, variants: [variant('v1')] });
+        const setup = await service.setup(ORG);
+        expect(setup.stores).toEqual([]);
+        expect(setup.tiles).toEqual([]);
+        await expect(service.resolveStore(ORG)).rejects.toThrow('Add a store location before billing.');
+        // The store a till last used — the workspace itself, or what is now a
+        // Warehouse — still opens it, to say so.
+        expect((await service.setup(ORG, 'default')).stores).toEqual([]);
+        expect((await service.setup(ORG, 'wh_main')).stores).toEqual([]);
     });
 });
 

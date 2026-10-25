@@ -194,6 +194,12 @@ export default () => ({
             breakerMaxMs: 900_000,
         },
     },
+    inventory: {
+        // Switch every workspace still on a single stock quantity to stock
+        // locations at start-up (see LocationsSwitchOver). On unless set to
+        // "false"; a test harness that needs a legacy workspace turns it off.
+        locationsAutoEnable: process.env.LOCATIONS_AUTO_ENABLE !== 'false',
+    },
     queues: {
         // Read at decoration time in the processors (process.env directly) —
         // kept here too so the value is visible alongside its neighbours.

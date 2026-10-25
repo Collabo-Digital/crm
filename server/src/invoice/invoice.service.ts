@@ -568,12 +568,24 @@ export class InvoiceService {
       );
     }
 
-    // 3. Determine the seller GSTIN
+    // 3. Determine the seller GSTIN. Without an explicit choice, the
+    //    registration of the location the goods leave from comes first: a
+    //    place of business supplies under its own GSTIN, and picking another
+    //    one here is exactly what `resolveDispatchWarehouse` refuses.
     let sellerGstin;
+    const dispatchGstin = dto.sellerGstinId
+      ? null
+      : await this.dispatchLocationGstin(
+          tx,
+          orgId,
+          dto.dispatchWarehouseId ?? order.dispatchWarehouseId,
+        );
     if (dto.sellerGstinId) {
       sellerGstin = await tx.organizationGstin.findFirst({
         where: { id: dto.sellerGstinId, organizationId: orgId },
       });
+    } else if (dispatchGstin) {
+      sellerGstin = dispatchGstin;
     } else {
       // Auto-select: try matching place of supply first, then default
       const placeOfSupply = this.resolvePlaceOfSupply(dto, order);
@@ -2760,6 +2772,23 @@ export class InvoiceService {
    * where the goods actually went out from, and a warehouse retired afterwards
    * does not retroactively change that.
    */
+  /** The active GST registration of a dispatch location, when it has one. */
+  private async dispatchLocationGstin(
+    tx: Prisma.TransactionClient,
+    orgId: string,
+    warehouseId: string | null | undefined,
+  ) {
+    if (!warehouseId) return null;
+    const warehouse = await tx.warehouse.findFirst({
+      where: { id: warehouseId, organizationId: orgId },
+      select: { gstinId: true },
+    });
+    if (!warehouse?.gstinId) return null;
+    return tx.organizationGstin.findFirst({
+      where: { id: warehouse.gstinId, organizationId: orgId, isActive: true },
+    });
+  }
+
   private async resolveDispatchWarehouse(
     tx: Prisma.TransactionClient,
     orgId: string,

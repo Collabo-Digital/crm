@@ -6,11 +6,18 @@ import {
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { Prisma, StockBucket } from '@prisma/client';
+import {
+  ChannelPlatform,
+  ChannelStatus,
+  Prisma,
+  StockBucket,
+  StockLocationKind,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { InventoryLedgerService } from './inventory-ledger.service';
 import { WarehouseService } from './warehouse.service';
+import { DEFAULT_LOCATION_CODE, DEFAULT_LOCATION_NAME } from './default-location';
 import { INVENTORY_QUEUE, InventoryJobData } from './inventory.queue';
 import {
   PUSH_JOB_OPTS,
@@ -87,29 +94,7 @@ export class InventoryService {
     });
     if (!org) throw new NotFoundException('Organization not found');
 
-    // Default warehouse — idempotent: reuse one if a previous enable attempt
-    // got this far before the seed job failed.
-    let warehouse = await this.prisma.warehouse.findFirst({
-      where: { organizationId: orgId, isDefault: true },
-    });
-    if (!warehouse) {
-      const shopify = await this.prisma.channel.findFirst({
-        where: { organizationId: orgId, platform: 'SHOPIFY' },
-        select: { metadata: true },
-      });
-      const shopifyLocationId =
-        (shopify?.metadata as { shopifyLocationId?: string } | null)
-          ?.shopifyLocationId ?? null;
-      warehouse = await this.prisma.warehouse.create({
-        data: {
-          organizationId: orgId,
-          name: 'Main Warehouse',
-          code: 'WH1',
-          isDefault: true,
-          shopifyLocationId: shopifyLocationId ? String(shopifyLocationId) : null,
-        },
-      });
-    }
+    const warehouse = await this.ensureEnableWarehouse(orgId);
 
     await this.inventoryQueue.add(
       'enable-seed',
@@ -117,6 +102,46 @@ export class InventoryService {
       { attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
     );
     return { status: 'SEEDING' as const, warehouseId: warehouse.id };
+  }
+
+  /**
+   * The start-up switch of an existing workspace to stock locations: the
+   * enable flow above, run inside one queued job instead of from a click.
+   * Re-checks the flag, so a job left over from an earlier start is a no-op.
+   */
+  async runSwitchOver(orgId: string): Promise<void> {
+    const settings = await this.settings.getInventorySettings(orgId);
+    if (settings.warehousingEnabled) return;
+    await this.ensureEnableWarehouse(orgId);
+    await this.runEnableSeed(orgId);
+  }
+
+  /**
+   * Default warehouse — idempotent: reuse one if a previous enable attempt
+   * got this far before the seed job failed.
+   */
+  private async ensureEnableWarehouse(orgId: string) {
+    const existing = await this.prisma.warehouse.findFirst({
+      where: { organizationId: orgId, isDefault: true },
+    });
+    if (existing) return existing;
+    const shopify = await this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: 'SHOPIFY' },
+      select: { metadata: true },
+    });
+    const shopifyLocationId =
+      (shopify?.metadata as { shopifyLocationId?: string } | null)
+        ?.shopifyLocationId ?? null;
+    return this.prisma.warehouse.create({
+      data: {
+        organizationId: orgId,
+        name: DEFAULT_LOCATION_NAME,
+        code: DEFAULT_LOCATION_CODE,
+        kind: StockLocationKind.WAREHOUSE,
+        isDefault: true,
+        shopifyLocationId: shopifyLocationId ? String(shopifyLocationId) : null,
+      },
+    });
   }
 
   /**
@@ -211,17 +236,31 @@ export class InventoryService {
       cursor = variants[variants.length - 1].id;
     }
 
-    // Flip LAST — from this moment the bucket path owns the org.
-    await this.settings.setWarehousingEnabled(orgId, true);
+    // Flip LAST — from this moment the bucket path owns the org. A connected
+    // store's locations are marked to be linked as they always were; the
+    // locations sync that does it clears the mark, so a failed one is retried
+    // by the next sync rather than left to the merchant.
+    const shopify = await this.prisma.channel.findFirst({
+      where: {
+        organizationId: orgId,
+        platform: ChannelPlatform.SHOPIFY,
+        status: { not: ChannelStatus.DISCONNECTED },
+      },
+      select: { id: true },
+    });
+    await this.settings.setWarehousingEnabled(orgId, true, {
+      linkShopifyLocations: shopify !== null,
+    });
     this.ledger.invalidateFlagCache(orgId);
     this.logger.log(`enable-seed: org ${orgId} seeded ${seeded} stock lines`);
 
     // Everything above put the org-wide quantity into the single default
     // warehouse, which is right for an org with no Shopify store and only an
-    // approximation for one with several locations. This job mirrors the rest
-    // of the locations as warehouses and reconciles each against Shopify's
-    // per-location quantities — correcting the default warehouse down to its
-    // real number and distributing the remainder.
+    // approximation for one with several locations. This job links the rest
+    // of the locations to warehouses of their own (recording each as the
+    // merchant's decision) and reconciles each against Shopify's per-location
+    // quantities — correcting the default warehouse down to its real number
+    // and distributing the remainder.
     //
     // Deliberately AFTER the flag flip: the reconcile writes through
     // applyMovement, which only owns the org once warehousing is on. It is
@@ -236,7 +275,7 @@ export class InventoryService {
       await addDedupedPushJob(
         this.shopifyPushQueue,
         'sync-locations',
-        { type: 'sync-locations', organizationId: orgId, priority: Priority.NORMAL },
+        { type: 'sync-locations', organizationId: orgId, autoLink: true, priority: Priority.NORMAL },
         {
           ...PUSH_JOB_OPTS,
           attempts: 3,

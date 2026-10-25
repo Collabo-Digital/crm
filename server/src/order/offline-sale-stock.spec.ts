@@ -27,6 +27,11 @@ function build({
   price = 100,
   rate = null as number | null,
   autoSyncToShopify = false,
+  // What a chosen dispatch location looks like; just its id when not given.
+  picked = null as Record<string, unknown> | null,
+  gstEnabled = false,
+  // The Shopify location the default warehouse shares stock with, if any.
+  defaultShopifyLocationId = null as string | null,
 }) {
   const created = {
     id: 'order_1',
@@ -70,7 +75,7 @@ function build({
       update: jest.fn().mockResolvedValue({ inventoryQuantity: 48 }),
     },
     // GST off: the invoice branch is not what this spec is about.
-    organization: { findUnique: jest.fn().mockResolvedValue({ gstEnabled: false, currency: 'INR' }) },
+    organization: { findUnique: jest.fn().mockResolvedValue({ gstEnabled, currency: 'INR' }) },
     organizationGstin: { findMany: jest.fn().mockResolvedValue([]) },
     order: {
       findFirst: jest.fn().mockResolvedValue({ orderNumber: 1000 }),
@@ -88,8 +93,16 @@ function build({
       // Two different lookups hit this: resolving an explicitly picked dispatch
       // warehouse (by id) and falling back to the org default (by isDefault).
       findFirst: jest.fn(async ({ where }: any) =>
-        where?.id ? { id: where.id } : warehouseId ? { id: warehouseId } : null,
+        where?.id
+          ? (picked ?? { id: where.id })
+          : warehouseId
+            ? { id: warehouseId, shopifyLocationId: defaultShopifyLocationId }
+            : null,
       ),
+    },
+    // Stock at a chosen dispatch location, which the stock check reads.
+    stockLevel: {
+      findMany: jest.fn().mockResolvedValue([{ variantId: VARIANT, available: 50 }]),
     },
     inventoryEvent: { create: jest.fn().mockResolvedValue(undefined) },
     orderTimelineEvent: { create: jest.fn().mockResolvedValue(undefined) },
@@ -126,11 +139,12 @@ function build({
   };
   const fx = { getRate: jest.fn().mockResolvedValue(rate) };
 
+  const invoiceService = { createForOrderTx: jest.fn() };
   const service = new OrderService(
     prisma,
-    { toNumber: (v: any) => Number(v), toNullableNumber: () => null, round2: (n: number) => Math.round(n * 100) / 100, calculateLineItem: ({ unitPrice, quantity }: any) => ({ taxableValue: unitPrice * quantity, totalTax: 0, totalAmount: unitPrice * quantity, cgstRate: 0, sgstRate: 0, igstRate: 0, cgstAmount: 0, sgstAmount: 0, igstAmount: 0 }) } as any,
+    { toNumber: (v: any) => Number(v), toNullableNumber: () => null, round2: (n: number) => Math.round(n * 100) / 100, isIntraState: (a: string, b: string) => a === b, calculateLineItem: ({ unitPrice, quantity }: any) => ({ taxableValue: unitPrice * quantity, totalTax: 0, totalAmount: unitPrice * quantity, cgstRate: 0, sgstRate: 0, igstRate: 0, cgstAmount: 0, sgstAmount: 0, igstAmount: 0 }) } as any,
     { resolveLineGstRates: jest.fn().mockResolvedValue([0]) } as any,
-    { createForOrderTx: jest.fn() } as any,
+    invoiceService as any,
     { enqueueOrderPush: jest.fn().mockResolvedValue(true) } as any,
     shopifyPushService as any,
     {} as any,
@@ -144,7 +158,7 @@ function build({
   // `markPendingSync` writes through prisma.order.update, which this harness
   // does not stub — the push path is what is under test, not that write.
   jest.spyOn(service as any, 'markPendingSync').mockResolvedValue(undefined);
-  return { service, tx, ledger, fx, shopifyPushQueue, settings, shopifyPushService, prisma };
+  return { service, tx, ledger, fx, shopifyPushQueue, settings, shopifyPushService, prisma, invoiceService };
 }
 
 const dto = (over: Record<string, unknown> = {}) =>
@@ -301,6 +315,7 @@ describe('createOfflineOrder - the sold quantity reaches Shopify', () => {
     const { service, shopifyPushQueue } = build({
       warehousing: true,
       warehouseId: 'wh_default',
+      defaultShopifyLocationId: '111',
       autoSyncToShopify: false,
     });
 
@@ -312,6 +327,7 @@ describe('createOfflineOrder - the sold quantity reaches Shopify', () => {
         type: 'push-availability',
         organizationId: ORG,
         variantIds: [VARIANT],
+        warehouseId: 'wh_default',
       }),
       expect.anything(),
     );
@@ -380,8 +396,7 @@ describe('createOfflineOrder - the sold quantity reaches Shopify', () => {
   // of the order must not decrement Shopify again (pushOrder reads the flag).
   it('records that the stock reached a connected store', async () => {
     const { service, shopifyPushService, prisma } = build({
-      warehousing: true,
-      warehouseId: 'wh_default',
+      warehousing: false,
       autoSyncToShopify: false,
     });
     shopifyPushService.findShopifyChannel.mockResolvedValue({ status: 'CONNECTED' });
@@ -451,5 +466,115 @@ describe('createOfflineOrder — fulfilment header follows the lines', () => {
       where: { id: 'order_1' },
       data: { fulfillmentStatus: 'UNFULFILLED' },
     });
+  });
+});
+
+/**
+ * A sale from a chosen location — a store at the point of sale, or the counter
+ * form with a dispatch location — is that location's sale: its stock, its
+ * GST registration, and Shopify's stock only where the location shares it.
+ */
+describe('createOfflineOrder — a sale from a chosen location', () => {
+  const store = (over: Record<string, unknown> = {}) => ({
+    id: 'wh_store',
+    name: 'Kochi store',
+    shopifyLocationId: null,
+    gstin: null,
+    ...over,
+  });
+  const availabilityPushes = (queue: { add: jest.Mock }) =>
+    queue.add.mock.calls.filter(([name]: [string]) => name === 'push-availability');
+
+  it('leaves Shopify’s stock alone for a store not linked to Shopify', async () => {
+    const { service, shopifyPushQueue, tx } = build({ warehousing: true, picked: store() });
+
+    await service.createOfflineOrder(ORG, USER, dto({ warehouseId: 'wh_store' }));
+
+    expect(availabilityPushes(shopifyPushQueue)).toHaveLength(0);
+    // …and the order push, if it ever runs, must not decrement it either.
+    expect(tx.order.create.mock.calls[0][0].data.metadata.shopifyStockPushed).toBe(true);
+  });
+
+  it('pushes the linked location’s own figure once, even when the order goes to Shopify too', async () => {
+    const { service, shopifyPushQueue, tx } = build({
+      warehousing: true,
+      autoSyncToShopify: true,
+      picked: store({ shopifyLocationId: '2222' }),
+    });
+
+    await service.createOfflineOrder(ORG, USER, dto({ warehouseId: 'wh_store' }));
+
+    const pushes = availabilityPushes(shopifyPushQueue);
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0][1]).toEqual(
+      expect.objectContaining({ variantIds: [VARIANT], warehouseId: 'wh_store' }),
+    );
+    expect(tx.order.create.mock.calls[0][0].data.metadata.shopifyStockPushed).toBe(true);
+  });
+
+  // The default location need not be the one linked to Shopify's primary,
+  // which is where an order push would decrement.
+  it('without a chosen location, the default location is the one the stock left — by the same rule', async () => {
+    const linked = build({ warehousing: true, warehouseId: 'wh_default', defaultShopifyLocationId: '111', autoSyncToShopify: true });
+    await linked.service.createOfflineOrder(ORG, USER, dto());
+    expect(availabilityPushes(linked.shopifyPushQueue).map((c) => c[1].warehouseId)).toEqual(['wh_default']);
+    expect(linked.tx.order.create.mock.calls[0][0].data.metadata.shopifyStockPushed).toBe(true);
+    // Still not stamped as the dispatch location: that stays the operator's assertion.
+    expect(linked.tx.order.create.mock.calls[0][0].data.dispatchWarehouseId).toBeNull();
+
+    const unlinked = build({ warehousing: true, warehouseId: 'wh_default' });
+    await unlinked.service.createOfflineOrder(ORG, USER, dto());
+    expect(availabilityPushes(unlinked.shopifyPushQueue)).toHaveLength(0);
+    expect(unlinked.tx.order.create.mock.calls[0][0].data.metadata.shopifyStockPushed).toBe(true);
+  });
+
+  it('checks the stock at that location, not the workspace total', async () => {
+    const { service, tx, ledger } = build({ warehousing: true, picked: store() });
+    // 50 across the workspace, 1 at the store.
+    tx.stockLevel.findMany.mockResolvedValue([{ variantId: VARIANT, available: 1 }]);
+
+    await expect(
+      service.createOfflineOrder(ORG, USER, dto({ warehouseId: 'wh_store' })),
+    ).rejects.toThrow('Insufficient stock for "Widget — Default" at Kochi store: 1 available, 2 requested.');
+    expect(ledger.applyMovement).not.toHaveBeenCalled();
+    expect(tx.stockLevel.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ warehouseId: 'wh_store' }) }),
+    );
+  });
+
+  it('still sells past it when overselling is allowed', async () => {
+    const { service, tx, settings, ledger } = build({ warehousing: true, picked: store() });
+    tx.stockLevel.findMany.mockResolvedValue([{ variantId: VARIANT, available: 1 }]);
+    settings.getProductSettings.mockResolvedValue({ trackQuantityGlobally: true, allowOversellGlobally: true });
+
+    await service.createOfflineOrder(ORG, USER, dto({ warehouseId: 'wh_store' }));
+
+    expect(ledger.applyMovement).toHaveBeenCalledWith(
+      expect.objectContaining({ warehouseId: 'wh_store', quantity: 2 }),
+      tx,
+    );
+  });
+
+  it('is sold and invoiced under the location’s own GSTIN', async () => {
+    const { service, tx, invoiceService } = build({
+      warehousing: true,
+      gstEnabled: true,
+      picked: store({ gstin: { id: 'g_kl', stateCode: '32', isActive: true } }),
+    });
+    // The workspace's default registration is elsewhere; it must not be used.
+    tx.organizationGstin.findMany.mockResolvedValue([{ stateCode: '29', isDefault: true }]);
+
+    await service.createOfflineOrder(ORG, USER, dto({ warehouseId: 'wh_store', generateInvoice: true }));
+
+    const order = tx.order.create.mock.calls[0][0].data;
+    // A walk-in at the Kochi counter: supplied in Kerala, intra-state.
+    expect(order.placeOfSupplyCode).toBe('32');
+    expect(order.gstType).toBe('CGST_SGST');
+    expect(invoiceService.createForOrderTx).toHaveBeenCalledWith(
+      tx,
+      ORG,
+      'order_1',
+      expect.objectContaining({ sellerGstinId: 'g_kl', placeOfSupplyCode: '32' }),
+    );
   });
 });

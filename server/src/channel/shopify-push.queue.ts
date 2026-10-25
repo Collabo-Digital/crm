@@ -58,12 +58,18 @@ export type ShopifyPushJobData =
       type: 'push-availability';
       organizationId: string;
       variantIds: string[];
+      /**
+       * Only this location's figure: a sale or restock that moved stock at
+       * one location says nothing new about the others, and re-sending theirs
+       * would overwrite any change Shopify made since.
+       */
+      warehouseId?: string;
     })
   | (PushJobBase & {
       /**
-       * Mirror the store's Shopify locations as warehouses, then reconcile
-       * per-location stock into them. Enqueued by InventoryModule at the end
-       * of the warehousing enable flow, for the same reason as
+       * Refresh the store's Shopify locations, then reconcile per-location
+       * stock into the locations linked to them. Enqueued by InventoryModule
+       * at the end of the warehousing enable flow, for the same reason as
        * `push-availability` above: the queue name is the cycle-free seam, so
        * the inventory side can reach ChannelModule without importing it.
        *
@@ -72,6 +78,18 @@ export type ShopifyPushJobData =
        */
       type: 'sync-locations';
       organizationId: string;
+      /**
+       * The enable flow only: link every undecided Shopify location as the
+       * old sync did (the primary to the default location, each other one to
+       * a warehouse of its own) and record those links as decided.
+       */
+      autoLink?: boolean;
+      /**
+       * Locations just linked with "keep Collabo's counts": their stock is
+       * sent to their Shopify location BEFORE the pull, which would otherwise
+       * overwrite it with Shopify's.
+       */
+      pushWarehouseIds?: string[];
     });
 
 /**
@@ -81,9 +99,9 @@ export type ShopifyPushJobData =
 export const pushJobId = {
   order: (orderId: string) => `push-order-${orderId}`,
   product: (productId: string) => `push-product-${productId}`,
-  availability: (orgId: string, variantIds: string[]) =>
+  availability: (orgId: string, variantIds: string[], warehouseId?: string) =>
     `push-availability-${orgId}-${createHash('sha1')
-      .update([...new Set(variantIds)].sort().join(','))
+      .update([...new Set(variantIds)].sort().join(',') + (warehouseId ? `@${warehouseId}` : ''))
       .digest('hex')
       .slice(0, 12)}`,
   locations: (orgId: string) => `sync-locations-${orgId}`,
@@ -143,6 +161,7 @@ export async function addAvailabilityPush(
   orgId: string,
   variantIds: string[],
   priority: number,
+  warehouseId?: string,
 ): Promise<string> {
   const ids = [...new Set(variantIds)];
   const data: ShopifyPushJobData = {
@@ -150,8 +169,9 @@ export async function addAvailabilityPush(
     organizationId: orgId,
     variantIds: ids,
     priority,
+    ...(warehouseId ? { warehouseId } : {}),
   };
-  const jobId = pushJobId.availability(orgId, ids);
+  const jobId = pushJobId.availability(orgId, ids, warehouseId);
   const outcome = await addDedupedPushJob(queue, 'push-availability', data, {
     ...PUSH_JOB_OPTS,
     jobId,

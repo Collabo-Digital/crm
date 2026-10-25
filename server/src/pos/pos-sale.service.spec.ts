@@ -461,3 +461,13 @@ describe('PosSaleService.collectPayment', () => {
         await expect(service.collectPayment(ORG, USER, 'order_x', { method: 'CASH', amount: 10 })).rejects.toBeInstanceOf(NotFoundException);
     });
 });
+
+describe('PosSaleService — no store to bill at', () => {
+    it('refuses the bill, and makes no order, while the workspace has no Store location', async () => {
+        const { service, orders, catalog } = await build();
+        catalog.resolveStore.mockRejectedValueOnce(new BadRequestException('Add a store location before billing.'));
+
+        await expect(service.createSale(ORG, USER, input())).rejects.toThrow('Add a store location before billing.');
+        expect(orders.createOfflineOrder).not.toHaveBeenCalled();
+    });
+});

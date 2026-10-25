@@ -724,9 +724,10 @@ export class ShopifyWebhookController {
             select: { id: true },
         });
         if (!warehouse) {
-            // A location added in Shopify since the last locations sync. Doing
-            // nothing is correct: the next sync creates the warehouse and the
-            // reconcile picks up the current quantity anyway.
+            // A Shopify location no location is linked to: one the merchant
+            // has not decided on yet, or left out of stock sync. Nothing syncs
+            // for it until it is linked, when the reconcile picks up the
+            // current quantity anyway.
             this.logger.debug(
                 `inventory_levels/update for unmapped Shopify location ${locationId} (org ${orgId})`,
             );

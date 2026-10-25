@@ -58,6 +58,7 @@ export const validationSchema = Joi.object({
     RATE_LIMIT_SHOPIFY_BULK_WATERMARK: Joi.number().min(0).max(0.9).optional(),
     RATE_LIMIT_META_PHONE_MPS: Joi.number().integer().min(1).max(1000).optional(),
     SHOPIFY_PUSH_CONCURRENCY: Joi.number().integer().min(1).max(10).optional(),
+    LOCATIONS_AUTO_ENABLE: Joi.string().valid('true', 'false').optional(),
     WHATSAPP_MESSAGING_CONCURRENCY: Joi.number().integer().min(1).max(10).optional(),
     SUPER_ADMIN_EMAILS: Joi.string().allow('').optional(),
     RAZORPAY_KEY_ID: Joi.string().optional(),
