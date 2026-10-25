@@ -162,6 +162,40 @@ export function useUploadMutation() {
   });
 }
 
+/** Voice notes on their way, by conversation; the thread shows each one while it is pending. */
+export const voiceNoteKey = (conversationId: string) => [...inboxKeys.all, "voice-note", conversationId] as const;
+
+export interface VoiceNoteSend {
+  file: File;
+  durationMs: number;
+  replyToMessageId?: string;
+}
+
+/**
+ * Upload a recording and send it as a voice note. One mutation for both steps
+ * so the thread can show the note from the moment Send is pressed; it settles
+ * only once the thread has refetched, so the pending note hands over to the
+ * real message without a gap.
+ */
+export function useSendVoiceNoteMutation(conversationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: voiceNoteKey(conversationId),
+    mutationFn: async ({ file, replyToMessageId }: VoiceNoteSend) => {
+      const upload = await inboxService.upload(file, { voice: true });
+      const payload: InboxSendPayload = { type: "media", mediaKind: "audio", storageKey: upload.storageKey, mime: upload.mime, voice: true };
+      return inboxService.send(conversationId, { payload, replyToMessageId, clientId: nextClientId() });
+    },
+    onSuccess: (outcome) => {
+      if (!outcome.ok) toast.error(outcome.message);
+      void queryClient.invalidateQueries({ queryKey: inboxKeys.conversation(conversationId) });
+      void queryClient.invalidateQueries({ queryKey: inboxKeys.lists() });
+      return queryClient.invalidateQueries({ queryKey: inboxKeys.messages(conversationId) });
+    },
+    onError: (error) => handleMutationError(error, "The voice note was not sent."),
+  });
+}
+
 // ─── Contacts ────────────────────────────────────────────────────────────
 
 /** Contact edits show in the panel, the list rows (tags) and the contacts page. */

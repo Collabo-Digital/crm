@@ -107,9 +107,11 @@ export const inboxService = {
   addNote: (id: string, body: string) =>
     apiClient.post<InboxNote>(`/inbox/conversations/${id}/notes`, { body }).then((response) => response.data),
 
-  upload: (file: File) => {
+  /** `voice`: a recording from the composer, which the server converts to a voice note. */
+  upload: (file: File, options?: { voice?: boolean }) => {
     const form = new FormData();
     form.append("file", file);
+    if (options?.voice) form.append("voice", "true");
     return apiClient
       .post<InboxUpload>("/inbox/uploads", form, {
         headers: { "Content-Type": "multipart/form-data" },

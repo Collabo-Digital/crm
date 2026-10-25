@@ -3668,7 +3668,8 @@ export type ConversationStatus = "OPEN" | "SNOOZED" | "CLOSED";
 export type InboxListView = "all" | "mine" | "unassigned";
 export type InboxListStatus = "open" | "snoozed" | "closed" | "any";
 export type MessageDirection = "INBOUND" | "OUTBOUND";
-export type InboxMessageStatus = "QUEUED" | "SENT" | "DELIVERED" | "READ" | "FAILED";
+/** PLAYED: a voice note the customer has listened to; it comes after READ. */
+export type InboxMessageStatus = "QUEUED" | "SENT" | "DELIVERED" | "READ" | "PLAYED" | "FAILED";
 export type InboxMessageKind =
   | "TEXT"
   | "TEMPLATE"
@@ -3923,6 +3924,8 @@ export interface InboxMedia {
   filename: string | null;
   size: number | null;
   voice: boolean;
+  /** A voice note we sent: its length, as the server measured it. */
+  durationMs?: number | null;
   /** Signed, expiring link; null while the file is still downloading. */
   url: string | null;
   pending: boolean;
@@ -4094,12 +4097,14 @@ export interface InboxUpload {
   size: number;
   filename: string;
   mediaKind: InboxMediaKind;
+  /** Voice uploads only: the recording's length. */
+  durationMs?: number;
 }
 
 /** What the composer can send. Mirrors the server's send payload schema. */
 export type InboxSendPayload =
   | { type: "text"; text: string }
-  | { type: "media"; mediaKind: InboxMediaKind; storageKey: string; mime: string; filename?: string; caption?: string }
+  | { type: "media"; mediaKind: InboxMediaKind; storageKey: string; mime: string; filename?: string; caption?: string; voice?: boolean }
   | { type: "buttons"; text: string; buttons: Array<{ id: string; title: string }>; footer?: string }
   | { type: "quick_replies"; text: string; replies: Array<{ title: string; payload: string }> }
   | { type: "reaction"; messageId: string; emoji: string }
