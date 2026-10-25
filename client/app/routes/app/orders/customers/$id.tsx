@@ -6,11 +6,14 @@ import { useSectionAccess } from "~/hooks/use-section-access";
 import {
   ChevronLeft,
   ChevronRight,
+  Link2,
   Loader2,
+  MessageCircle,
   MoreHorizontal,
   Pencil,
   Plus,
   Receipt,
+  Unlink,
   X,
 } from "lucide-react";
 
@@ -28,10 +31,13 @@ import { QueryErrorState } from "~/components/app/query-error-state";
 import { CustomerGstDialog } from "~/components/app/customer-gst-dialog";
 import { CustomerOrdersPanel } from "~/components/app/customer-orders-panel";
 import { NotYet } from "~/components/app/not-yet";
+import { ContactSearchDialog, PlatformIcon, chatHandle } from "~/components/app/inbox/contact-search-dialog";
 import { useCustomer } from "~/hooks/use-customer-queries";
-import { useUpdateCustomerMutation } from "~/hooks/use-customer-mutations";
+import { useLinkChatMutation, useUnlinkChatMutation, useUpdateCustomerMutation } from "~/hooks/use-customer-mutations";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { VIP_CLASSES, VIP_LABELS } from "~/lib/customer-status";
+import { formatDateTime } from "~/lib/inbox-format";
 import { mapsEmbedUrl, mapsUrl, readAddress } from "~/lib/address";
 import { cn, formatCurrency } from "~/lib/utils";
 import type { CustomerDetail } from "~/types/api";
@@ -111,11 +117,11 @@ export default function CustomerDetailPage() {
   return (
     // `items-start` is load-bearing: without it the grid stretches both columns
     // to equal height and the sticky rail has nothing to scroll against.
-    <div className="flex gap-6 ">
-      <div className="space-y-5 flex-2">
+    <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+      <div className="min-w-0 space-y-5 lg:flex-2">
         {/* Header: identity + tabs */}
         <header className="rounded-xl bg-card p-5 shadow-sm ring-1 ring-border">
-          <div className="flex justify-between gap-4">
+          <div className="flex flex-wrap justify-between gap-4">
             {/* <div className="flex flex-1 items-center gap-3"> */}
 
             {/* <Button asChild variant="outline" size="icon-sm">
@@ -124,7 +130,7 @@ export default function CustomerDetailPage() {
                 </Link>
               </Button> */}
 
-            <div className="flex  gap-3">
+            <div className="flex min-w-0 gap-3">
               <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-brand text-body font-semibold text-brand-foreground">
                 {getInitials(customer.firstName, customer.lastName)}
               </span>
@@ -280,7 +286,7 @@ export default function CustomerDetailPage() {
         </div>
       </div>
 
-      <aside className="space-y-4 lg:sticky lg:top-6 flex-1">
+      <aside className="space-y-4 lg:sticky lg:top-6 lg:flex-1">
         {/* One card, internally divided — not four SectionCards. */}
         <div className="divide-y rounded-xl bg-card shadow-sm ring-1 ring-border">
           <CustomerDetailsSection customer={customer} currency={orgCurrency} />
@@ -288,6 +294,7 @@ export default function CustomerDetailPage() {
           <ContactSection customer={customer} />
           <TagsSection customer={customer} />
         </div>
+        <ChatsCard customer={customer} />
       </aside>
 
       {gstOpen && (
@@ -487,6 +494,92 @@ function ContactSection({ customer }: { customer: CustomerDetail }) {
         )}
       </div>
     </RailSection>
+  );
+}
+
+/**
+ * Every WhatsApp number and Instagram or Messenger profile linked to the
+ * customer. Each stays its own chat: the reply window and opt-in belong to
+ * the number. Linking needs the inbox, and is not for viewers.
+ */
+function ChatsCard({ customer }: { customer: CustomerDetail }) {
+  const { canAccess } = useSectionAccess();
+  const { role } = useCurrentRole();
+  const inbox = canAccess("/inbox");
+  const canEdit = inbox && role !== "VIEWER";
+  const link = useLinkChatMutation(customer.id);
+  const unlink = useUnlinkChatMutation(customer.id);
+  const [linking, setLinking] = useState(false);
+  const name = [customer.firstName, customer.lastName].filter(Boolean).join(" ") || "this customer";
+
+  return (
+    <div className="rounded-xl bg-card shadow-sm ring-1 ring-border">
+      <RailSection
+        title="Chats"
+        action={
+          canEdit && (
+            <Button variant="outline" size="xs" onClick={() => setLinking(true)}>
+              <Link2 />
+              Link a chat
+            </Button>
+          )
+        }
+      >
+        {customer.chats.length === 0 ? (
+          <p className="text-caption text-muted-foreground">No chats are linked to this customer yet.</p>
+        ) : (
+          <ul className="divide-y">
+            {customer.chats.map((chat) => {
+              const handle = chatHandle(chat);
+              return (
+                <li key={chat.contactId} className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0">
+                  <span className="mt-0.5">
+                    <PlatformIcon platform={chat.platform} size={16} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-caption font-medium text-foreground">{handle}</p>
+                    <p className="truncate text-micro text-muted-foreground">
+                      {[handle !== chat.name ? chat.name : null, chat.channel.name, chat.lastMessageAt ? `Last message ${formatDateTime(chat.lastMessageAt)}` : "No messages yet"]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                    {inbox && (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {chat.conversationId && (
+                          <Button asChild variant="outline" size="xs">
+                            <Link to={`/inbox?c=${chat.conversationId}`}>
+                              <MessageCircle />
+                              Open chat
+                            </Link>
+                          </Button>
+                        )}
+                        {canEdit && (
+                          <Button variant="ghost" size="xs" disabled={unlink.isPending} onClick={() => unlink.mutate(chat.contactId)}>
+                            <Unlink />
+                            Unlink
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </RailSection>
+      {canEdit && (
+        <ContactSearchDialog
+          open={linking}
+          onOpenChange={setLinking}
+          title="Link a chat"
+          description={`Find a chat by name, number or username to link it to ${name}. A chat linked to another customer has to be unlinked there first.`}
+          excludeIds={customer.chats.map((chat) => chat.contactId)}
+          isPending={link.isPending}
+          onPick={(contact) => link.mutate(contact.id, { onSuccess: () => setLinking(false) })}
+        />
+      )}
+    </div>
   );
 }
 

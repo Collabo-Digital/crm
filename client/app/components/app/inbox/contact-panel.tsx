@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent, type ReactNode } from "react";
-import { AlertTriangle, Ban, Link2, Package, Search, Unlink, X } from "lucide-react";
+import { AlertTriangle, Ban, Link2, Package, Search, Unlink, Users, X } from "lucide-react";
 import { Link } from "react-router";
 
 import { ChannelBadge } from "~/components/app/channel-badge";
@@ -16,13 +16,14 @@ import {
 import { Input } from "~/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
 import { useDebounced } from "~/hooks/use-debounced";
-import { useRecordConsentMutation, useUpdateContactMutation } from "~/hooks/use-inbox-mutations";
+import { useRecordConsentMutation, useSamePersonMutation, useUpdateContactMutation } from "~/hooks/use-inbox-mutations";
 import { useCustomerCandidates } from "~/hooks/use-inbox-queries";
 import { formatBubbleTime, formatDateTime, formatRowTime, noteAuthor } from "~/lib/inbox-format";
 import { FINANCIAL_CLASSES, FINANCIAL_LABELS, FULFILLMENT_LABELS } from "~/lib/order-status";
 import { cn, formatCurrency } from "~/lib/utils";
-import type { InboxContactDetail, InboxCustomerMatch, InboxMember, InboxNote, InboxTeamRef } from "~/types/api";
+import type { InboxContactDetail, InboxCustomerMatch, InboxMember, InboxNote, InboxOtherChat, InboxTeamRef } from "~/types/api";
 
+import { ContactSearchDialog, PlatformIcon, chatHandle } from "./contact-search-dialog";
 import { PaymentsSection } from "./payments-section";
 import { TagChip } from "./tag-chip";
 
@@ -130,6 +131,27 @@ function LinkCustomer({
   );
 }
 
+/** One of the same person's other chats; it opens that thread, which keeps its own window and consent. */
+function OtherChatRow({ chat }: { chat: InboxOtherChat }) {
+  const body = (
+    <>
+      <span className="flex items-center gap-2">
+        <PlatformIcon platform={chat.platform} size={13} />
+        <span className="min-w-0 flex-1 truncate text-caption text-foreground">{chatHandle(chat)}</span>
+        <span className="shrink-0 text-micro text-muted-foreground">{formatRowTime(chat.lastMessageAt, Date.now())}</span>
+      </span>
+      {chat.lastMessagePreview && <span className="block truncate pl-5 text-micro text-muted-foreground">{chat.lastMessagePreview}</span>}
+    </>
+  );
+  return chat.conversationId ? (
+    <Link to={`/inbox?c=${chat.conversationId}`} className="block rounded-md px-1.5 py-1 hover:bg-muted">
+      {body}
+    </Link>
+  ) : (
+    <div className="px-1.5 py-1">{body}</div>
+  );
+}
+
 /**
  * Column 3 — who this person is to the business: the store customer and
  * their orders, the same person on other channels, tags, owner, consent,
@@ -174,12 +196,13 @@ export function ContactPanel({
 }) {
   const update = useUpdateContactMutation(contact.id);
   const consent = useRecordConsentMutation(contact.id);
+  const samePerson = useSamePersonMutation(contact.id);
   const [attrKey, setAttrKey] = useState("");
   const [attrValue, setAttrValue] = useState("");
+  const [findingSamePerson, setFindingSamePerson] = useState(false);
 
   const { customer } = contact;
   const currency = customer?.recentOrders[0]?.currency ?? defaultCurrency;
-  const otherConversations = contact.conversations.filter((c) => c.id !== conversationId);
   const duplicateNumber = contact.phoneMatches.length > 1 || (!!customer && contact.phoneMatches.some((m) => m.id !== customer.id));
   const owners = canAssignOthers ? members : members.filter((m) => m.id === meId);
   const attributes = Object.entries(contact.attributes);
@@ -388,29 +411,38 @@ export function ContactPanel({
         ) : (
           <p className="text-caption text-muted-foreground">Not linked to a store customer.</p>
         )}
+        {contact.otherChats.length > 0 && (
+          <div className="mt-3 space-y-0.5">
+            <p className="text-micro font-medium text-muted-foreground">Also reaches you on</p>
+            <div className="-mx-1.5">
+              {contact.otherChats.map((chat) => (
+                <OtherChatRow key={chat.contactId} chat={chat} />
+              ))}
+            </div>
+          </div>
+        )}
+        {canEdit && (
+          <>
+            <Button variant="outline" size="xs" className="mt-3" disabled={samePerson.isPending} onClick={() => setFindingSamePerson(true)}>
+              <Users />
+              Same person as…
+            </Button>
+            <ContactSearchDialog
+              open={findingSamePerson}
+              onOpenChange={setFindingSamePerson}
+              title="Same person as…"
+              description="Find this person's other chat by name, number or username. Both chats are linked to one store customer, and each keeps its own thread."
+              excludeIds={[contact.id, ...contact.otherChats.map((chat) => chat.contactId)]}
+              isPending={samePerson.isPending}
+              onPick={(other) => samePerson.mutate(other.id, { onSuccess: () => setFindingSamePerson(false) })}
+            />
+          </>
+        )}
       </PanelSection>
 
       <PanelSection title="Payments">
         <PaymentsSection conversationId={conversationId} canEdit={canEdit} />
       </PanelSection>
-
-      {otherConversations.length > 0 && (
-        <PanelSection title="Other conversations">
-          <div className="space-y-1.5">
-            {otherConversations.map((c) => (
-              <Link
-                key={c.id}
-                to={`/inbox?c=${c.id}`}
-                className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted"
-              >
-                <ChannelBadge platform={c.platform} name={c.channel.name} size={11} className="shrink-0 text-micro" />
-                <span className="min-w-0 flex-1 truncate text-micro text-muted-foreground">{c.lastMessagePreview}</span>
-                <span className="shrink-0 text-micro text-muted-foreground">{formatRowTime(c.lastMessageAt, Date.now())}</span>
-              </Link>
-            ))}
-          </div>
-        </PanelSection>
-      )}
 
       <PanelSection title="Marketing consent">
         <div className="space-y-2">

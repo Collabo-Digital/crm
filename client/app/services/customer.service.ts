@@ -32,4 +32,11 @@ export const customerService = {
 
   stats: (params?: { channelId?: string }) =>
     apiClient.get<CustomerStatsResponse>("/customers/stats", { params }).then((response) => response.data),
+
+  /** Link a chat contact to this customer; a chat linked to another customer is refused. */
+  linkChat: (id: string, contactId: string) =>
+    apiClient.post<{ contactId: string; customerId: string }>(`/customers/${id}/chats`, { contactId }).then((response) => response.data),
+
+  unlinkChat: (id: string, contactId: string) =>
+    apiClient.delete<{ contactId: string; customerId: null }>(`/customers/${id}/chats/${contactId}`).then((response) => response.data),
 };

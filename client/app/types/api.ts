@@ -2272,6 +2272,8 @@ export interface CustomerDetail extends Customer {
    * form's shape (GST `stateCode` resolved, phone in E.164). Null if none.
    */
   prefillAddress?: OrderAddressInput | null;
+  /** Every WhatsApp number and Instagram or Messenger profile linked to this customer, latest first. */
+  chats: CustomerChat[];
 }
 
 /** Query parameters for the customer list endpoint. */
@@ -3844,6 +3846,24 @@ export interface InboxCustomerMatch {
   ordersCount: number;
 }
 
+/** One of a customer's chats: a WhatsApp number or an Instagram or Messenger profile. */
+export interface CustomerChat {
+  contactId: string;
+  platform: ChannelPlatform;
+  channel: { name: string };
+  name: string;
+  phone: string | null;
+  username: string | null;
+  /** Null for a contact who has no chat yet, such as an imported number. */
+  conversationId: string | null;
+  lastMessageAt: string | null;
+}
+
+export interface InboxOtherChat extends CustomerChat {
+  lastMessagePreview: string | null;
+  optedIn: boolean;
+}
+
 export interface InboxContactDetail {
   id: string;
   platform: ChannelPlatform;
@@ -3886,14 +3906,8 @@ export interface InboxContactDetail {
     }>;
   } | null;
   phoneMatches: InboxCustomerMatch[];
-  conversations: Array<{
-    id: string;
-    platform: ChannelPlatform;
-    status: ConversationStatus;
-    lastMessageAt: string | null;
-    lastMessagePreview: string | null;
-    channel: { name: string };
-  }>;
+  /** The same customer's other numbers and profiles, latest first. Chats the member cannot open are left out. */
+  otherChats: InboxOtherChat[];
   consent: Array<{ type: "OPT_IN" | "OPT_OUT"; source: string; occurredAt: string }>;
   /** The latest click-to-message ad this person came from. */
   fromAd: { adId: string; headline: string | null; body: string | null; sourceUrl: string | null; mediaUrl: string | null; occurredAt: string } | null;

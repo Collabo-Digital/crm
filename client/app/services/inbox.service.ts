@@ -149,6 +149,12 @@ export const inboxService = {
       })
       .then((response) => response.data),
 
+  /** Another chat is the same person: both go on one store customer. */
+  samePerson: (contactId: string, otherContactId: string) =>
+    apiClient
+      .post<InboxContactDetail>(`/inbox/contacts/${contactId}/same-person`, { contactId: otherContactId })
+      .then((response) => response.data),
+
   // ─── Team and workspace ────────────────────────────────────────────
 
   me: () => apiClient.get<InboxMe>("/inbox/me").then((response) => response.data),

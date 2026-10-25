@@ -5,6 +5,7 @@ import { LoyaltyService } from '../loyalty/loyalty.service';
 import { QueryCustomersDto } from './dto/query-customers.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { pickPrefillAddress } from './prefill-address.util';
+import { contactName } from '../messaging/contact-name';
 import {
   resolveReportingTimeZone,
   zonedMonthStartMonthsAgo,
@@ -108,7 +109,35 @@ export class CustomerService {
       }
     }
 
-    return { ...customer, prefillAddress };
+    return { ...customer, prefillAddress, chats: await this.chats(id, orgId) };
+  }
+
+  /**
+   * Every WhatsApp number and Instagram or Messenger profile linked to this
+   * customer, latest message first. Each is its own chat: the reply window
+   * and opt-in belong to the number, so they are not merged.
+   */
+  private async chats(customerId: string, orgId: string) {
+    const contacts = await this.prisma.channelContact.findMany({
+      where: { customerId, organizationId: orgId },
+      include: {
+        channel: { select: { name: true } },
+        conversations: { select: { id: true, lastMessageAt: true }, take: 1 },
+      },
+      take: 50,
+    });
+    return contacts
+      .map((c) => ({
+        contactId: c.id,
+        platform: c.platform,
+        channel: c.channel,
+        name: contactName(c),
+        phone: c.phone,
+        username: c.username,
+        conversationId: c.conversations[0]?.id ?? null,
+        lastMessageAt: c.conversations[0]?.lastMessageAt ?? null,
+      }))
+      .sort((a, b) => (b.lastMessageAt?.getTime() ?? 0) - (a.lastMessageAt?.getTime() ?? 0));
   }
 
   async update(id: string, orgId: string, userId: string, dto: UpdateCustomerDto) {
