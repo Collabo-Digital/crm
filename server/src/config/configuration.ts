@@ -81,6 +81,8 @@ export default () => ({
             process.env.SHOPIFY_INITIAL_ORDER_WINDOW_DAYS || '60',
             10,
         ),
+        // How often orders whose webhook never arrived are fetched and recovered.
+        reconcileMinutes: Number.parseFloat(process.env.SHOPIFY_RECONCILE_MINUTES || '60'),
         // MUST mirror [access_scopes] in the public app's shopify.app.toml —
         // with include_config_on_deploy, Shopify grants what the TOML declares,
         // regardless of the scope param in the authorize URL.

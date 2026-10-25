@@ -13,6 +13,21 @@ import { CheckoutService } from '../commerce/checkout.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { describeAccount } from './channel-connection.util';
 import { isTransientWebhookError } from './webhook-retry.util';
+import { isOlderShopifyPayload } from './shopify-payload-age.util';
+
+/** The inventory_levels/update fields the handler reads. */
+interface InventoryLevelPayload {
+    inventory_item_id: number;
+    location_id: number;
+    available: number;
+    updated_at?: string;
+}
+
+/** A Shopify timestamp, or null when absent or unreadable. */
+function shopifyTime(value: unknown): Date | null {
+    const at = typeof value === 'string' ? Date.parse(value) : NaN;
+    return Number.isFinite(at) ? new Date(at) : null;
+}
 
 /** Address fields that identify a person. City, state and country stay. */
 const ADDRESS_PII_KEYS = [
@@ -613,10 +628,16 @@ export class ShopifyWebhookController {
         return Number.isNaN(parsed.getTime()) ? null : parsed;
     }
 
+    /**
+     * Shopify does not deliver these in order: a store going 10 → 9 → 8 can
+     * send the 8 before the 9. Each level keeps the `updated_at` it was last
+     * set from, and a payload older than that is ignored. An equal one is
+     * applied, which is harmless because `available` is absolute.
+     */
     private async handleInventoryUpdate(
         channelId: string,
         orgId: string,
-        body: { inventory_item_id: number; available: number; location_id: number },
+        body: InventoryLevelPayload,
     ) {
         const variant = await this.prisma.productVariant.findFirst({
             where: {
@@ -642,17 +663,21 @@ export class ShopifyWebhookController {
         // variant and nowhere to put a per-location split, so fixing it means
         // moving them to warehousing, not patching this branch.
         const newQuantity = body.available;
+        const updatedAt = shopifyTime(body.updated_at);
         // Locked and re-read so the ledger's before/after match what was
         // actually replaced when two updates for one variant arrive together.
         const before = await this.prisma.$transaction(async (tx) => {
-            const rows = await tx.$queryRaw<Array<{ inventory_quantity: number }>>`
-                SELECT "inventory_quantity" FROM "product_variants" WHERE "id" = ${variant.id} FOR UPDATE`;
+            const rows = await tx.$queryRaw<Array<{ inventory_quantity: number; shopify_inventory_updated_at: Date | null }>>`
+                SELECT "inventory_quantity", "shopify_inventory_updated_at" FROM "product_variants" WHERE "id" = ${variant.id} FOR UPDATE`;
+            if (isOlderShopifyPayload(updatedAt, rows[0]?.shopify_inventory_updated_at ?? null)) return 'stale' as const;
             const current = rows[0]?.inventory_quantity ?? variant.inventoryQuantity;
-            if (current === newQuantity) return null;
+            // The time is stored even when the quantity is unchanged (the echo
+            // of a push), so an older payload still in flight is recognised.
             await tx.productVariant.update({
                 where: { id: variant.id },
-                data: { inventoryQuantity: newQuantity },
+                data: { inventoryQuantity: newQuantity, shopifyInventoryUpdatedAt: updatedAt ?? undefined },
             });
+            if (current === newQuantity) return null;
             await tx.inventoryEvent.create({
                 data: {
                     organizationId: orgId,
@@ -666,6 +691,12 @@ export class ShopifyWebhookController {
             });
             return current;
         });
+        if (before === 'stale') {
+            this.logger.debug(
+                `Ignored an out-of-order inventory update for variant ${variant.id}: ${newQuantity} as of ${body.updated_at} is older than the stored level.`,
+            );
+            return;
+        }
         if (before === null) return;
 
         this.logger.log(
@@ -684,9 +715,10 @@ export class ShopifyWebhookController {
     private async applyWarehousedInventoryUpdate(
         orgId: string,
         variantId: string,
-        body: { available: number; location_id: number },
+        body: Pick<InventoryLevelPayload, 'available' | 'location_id' | 'updated_at'>,
     ) {
         const locationId = String(body.location_id);
+        const updatedAt = shopifyTime(body.updated_at);
         const warehouse = await this.prisma.warehouse.findFirst({
             where: { organizationId: orgId, shopifyLocationId: locationId, isActive: true },
             select: { id: true },
@@ -709,28 +741,43 @@ export class ShopifyWebhookController {
             await tx.$queryRaw`SELECT 1 FROM "product_variants" WHERE "id" = ${variantId} FOR UPDATE`;
             const level = await tx.stockLevel.findFirst({
                 where: { variantId, warehouseId: warehouse.id, locationId: null },
-                select: { available: true },
+                select: { available: true, shopifyUpdatedAt: true },
             });
+            if (isOlderShopifyPayload(updatedAt, level?.shopifyUpdatedAt ?? null)) return null;
             const change = body.available - (level?.available ?? 0);
-            if (change === 0) return 0;
-
-            await this.inventoryLedger.applyMovement({
-                orgId,
-                variantId,
-                warehouseId: warehouse.id,
-                fromBucket: change < 0 ? StockBucket.AVAILABLE : null,
-                toBucket: change > 0 ? StockBucket.AVAILABLE : null,
-                quantity: Math.abs(change),
-                reason: 'webhook',
-                referenceType: 'webhook',
-                referenceId: locationId,
-                // Shopify is authoritative on what was sold. Refusing a decrease
-                // that crosses zero would desync the two systems permanently;
-                // oversold surfaces as an alert on the stock screen instead.
-                allowNegativeAvailable: true,
-            }, tx);
+            if (change !== 0) {
+                await this.inventoryLedger.applyMovement({
+                    orgId,
+                    variantId,
+                    warehouseId: warehouse.id,
+                    fromBucket: change < 0 ? StockBucket.AVAILABLE : null,
+                    toBucket: change > 0 ? StockBucket.AVAILABLE : null,
+                    quantity: Math.abs(change),
+                    reason: 'webhook',
+                    referenceType: 'webhook',
+                    referenceId: locationId,
+                    // Shopify is authoritative on what was sold. Refusing a decrease
+                    // that crosses zero would desync the two systems permanently;
+                    // oversold surfaces as an alert on the stock screen instead.
+                    allowNegativeAvailable: true,
+                }, tx);
+            }
+            // Stored even when nothing moved (the echo of a push), so an older
+            // payload still in flight is recognised.
+            if (updatedAt) {
+                await tx.stockLevel.updateMany({
+                    where: { variantId, warehouseId: warehouse.id, locationId: null },
+                    data: { shopifyUpdatedAt: updatedAt },
+                });
+            }
             return change;
         });
+        if (delta === null) {
+            this.logger.debug(
+                `Ignored an out-of-order inventory update for variant ${variantId} at warehouse ${warehouse.id}: ${body.available} as of ${body.updated_at} is older than the stored level.`,
+            );
+            return;
+        }
         if (delta === 0) return;
 
         this.logger.log(

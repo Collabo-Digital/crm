@@ -74,6 +74,9 @@ import {
     ORDER_REFUNDS_QUERY,
     OrderRefundsResponse,
     OrderRefundsVariables,
+    ORDER_CHECKOUT_TOKENS_QUERY,
+    OrderCheckoutTokensResponse,
+    OrderCheckoutTokensVariables,
     OrderNode,
     ORDERS_LIST_QUERY,
     ORDERS_COUNT_QUERY,
@@ -793,6 +796,47 @@ export class ShopifySyncService {
         }
     }
 
+    /**
+     * Orders updated in Shopify since `since`, a page at a time, in the shape
+     * the orders webhooks carry, checkout token included. For
+     * ShopifyOrderCatchUpScheduler, which passes each through the webhook's
+     * own path.
+     */
+    async *ordersUpdatedSince(
+        channelId: string,
+        since: Date,
+    ): AsyncGenerator<Array<Record<string, any>>> {
+        const getAuth = this.authResolver(channelId, Priority.NORMAL);
+        const query = `updated_at:>='${since.toISOString()}'`;
+        for await (const page of this.paginateOrdersGraphql(getAuth, null, query)) {
+            for (const node of page.orders) {
+                await this.drainLineItems(getAuth, node);
+                await this.drainRefunds(getAuth, node);
+            }
+            const tokens = await this.checkoutTokens(getAuth, page.orders.map((o) => o.id));
+            yield page.orders.map((node) => ({
+                ...this.transformGraphqlOrder(node),
+                checkout_token: tokens.get(node.id) ?? null,
+            }));
+        }
+    }
+
+    private async checkoutTokens(getAuth: ShopifyAuthResolver, ids: string[]): Promise<Map<string, string>> {
+        if (ids.length === 0) return new Map();
+        const res = await this.graphql.request<OrderCheckoutTokensResponse, OrderCheckoutTokensVariables>(
+            await getAuth(),
+            ORDER_CHECKOUT_TOKENS_QUERY,
+            { ids },
+            // See ORDER_CHECKOUT_TOKENS_QUERY.
+            '2026-10',
+        );
+        const tokens = new Map<string, string>();
+        for (const node of res.nodes) {
+            if (node?.checkoutToken) tokens.set(node.id, node.checkoutToken);
+        }
+        return tokens;
+    }
+
     // ─── ORDERS GRAPHQL PAGINATION ───
     // Yields each page of orders. Sorted by UPDATED_AT ascending so the cursor
     // checkpoint stored in syncLog walks forward chronologically — matches
@@ -1071,6 +1115,7 @@ export class ShopifySyncService {
             source_identifier: node.sourceIdentifier ?? null,
             source_name: node.sourceName ?? null,
             source_label: node.app?.name ?? null,
+            payment_gateway_names: node.paymentGatewayNames,
             financial_status: node.displayFinancialStatus
                 ? node.displayFinancialStatus.toLowerCase()
                 : null,
