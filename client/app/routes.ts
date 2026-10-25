@@ -34,6 +34,11 @@ export default [
     route("orders/invoices", "routes/app/orders/invoices.tsx"),
     route("orders/invoices/:id", "routes/app/orders/invoices/$id.tsx"),
     route("orders/invoices/:id/print", "routes/app/orders/invoices/print.tsx"),
+    // Point of sale. Static "pos" outranks ":id"; the receipt ends in /print
+    // so it renders without the app chrome.
+    route("orders/pos", "routes/app/orders/pos.tsx"),
+    route("orders/pos/settings", "routes/app/orders/pos/settings.tsx"),
+    route("orders/pos/receipts/:orderId/print", "routes/app/orders/pos/receipt-print.tsx"),
     // Batch package slips, N-up. Static "slips" outranks ":id", and ending in
     // /print is what makes the app layout render it chrome-free.
     route("orders/slips/print", "routes/app/orders/slips-print.tsx"),
