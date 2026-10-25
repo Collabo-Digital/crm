@@ -27,13 +27,13 @@ export function ThreadSkeleton() {
   const widths = ["w-3/5", "w-2/5", "w-1/2", "w-3/5"];
 
   return (
-    <div className="flex flex-col gap-4 p-5" aria-hidden>
+    <div className="chat-wallpaper flex min-h-0 flex-1 flex-col gap-4 p-5" aria-hidden>
       {widths.map((width, index) => (
         <div
           key={index}
           className={index % 2 === 1 ? "flex justify-end" : "flex justify-start"}
         >
-          <Skeleton className={`h-12 rounded-xl ${width}`} />
+          <Skeleton className={`h-12 rounded-lg bg-chat-bubble-in/70 ${width}`} />
         </div>
       ))}
     </div>

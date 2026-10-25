@@ -1,14 +1,16 @@
 import { useImperativeHandle, useRef, useState, type KeyboardEvent, type Ref } from "react";
-import { FileText, LayoutTemplate, ListPlus, Lock, MessageCircle, Paperclip, Plus, Send, X, Zap } from "lucide-react";
+import { FileText, LayoutTemplate, ListPlus, Lock, MessageCircle, Mic, Paperclip, Plus, SendHorizontal, X, Zap } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
 import { Textarea } from "~/components/ui/textarea";
+import { useSendVoiceNoteMutation } from "~/hooks/use-inbox-mutations";
 import { useMediaQuery } from "~/hooks/use-media-query";
 import { fillQuickReply, formatBytes, replyBlockedReason, windowPhase } from "~/lib/inbox-format";
 import { cn } from "~/lib/utils";
 import type {
+  ChannelPlatform,
   InboxConversationDetail,
   InboxMediaKind,
   InboxMessage,
@@ -22,6 +24,7 @@ import type { CommentReplyMode } from "./message-bubble";
 import { MAX_PRODUCTS, ProductPickerButton, ProductTray, productsPayload, type ProductsFormat } from "./product-picker";
 import { QuickReplyPicker, matchQuickReplies } from "./quick-reply-picker";
 import { ReplyWindowHint } from "./reply-window";
+import { VoiceRecorder, canRecordVoice } from "./voice-recorder";
 
 /** Drafts survive switching between conversations for the life of the tab. */
 const drafts = new Map<string, string>();
@@ -43,6 +46,9 @@ export interface ComposerHandle {
   /** Adds text (a link, say) to the reply; returns why it cannot, if it cannot. */
   insertText: (text: string) => string | null;
 }
+
+/** WhatsApp takes a voice note; Instagram and Messenger take it as an audio file. */
+const VOICE_PLATFORMS: ChannelPlatform[] = ["WHATSAPP", "INSTAGRAM", "FACEBOOK"];
 
 /** WhatsApp reply buttons: up to 3. Messenger and Instagram quick replies: up to 13. */
 const OPTION_LIMIT = { WHATSAPP: 3, OTHER: 13 };
@@ -102,6 +108,9 @@ export function MessageComposer({
   const [productsHeader, setProductsHeader] = useState<string | undefined>();
   const [productsFormat, setProductsFormat] = useState<ProductsFormat>("cards");
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [voiceSupported] = useState(canRecordVoice);
+  const voiceNote = useSendVoiceNoteMutation(conversation.id);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const fileRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -146,6 +155,19 @@ export function MessageComposer({
     !uploading &&
     !composeProblem &&
     (isNoteMode ? trimmed.length > 0 : !replyLocked && (trimmed.length > 0 || (!!staged && !commentMode) || (products.length > 0 && !commentMode)));
+
+  /** An empty box offers the mic, where a voice note could go out. */
+  const showMic =
+    voiceSupported &&
+    VOICE_PLATFORMS.includes(platform) &&
+    !isNoteMode &&
+    !commentMode &&
+    !replyLocked &&
+    !trimmed &&
+    !staged &&
+    !uploading &&
+    products.length === 0 &&
+    options.length === 0;
 
   /** Why products or a file cannot join this message right now, if they cannot. */
   const productsBlocked = replyLocked
@@ -254,6 +276,12 @@ export function MessageComposer({
     return { type: "text", text: trimmed };
   }
 
+  function sendVoiceNote(file: File, durationMs: number) {
+    setRecording(false);
+    voiceNote.mutate({ file, durationMs, replyToMessageId: quote?.id });
+    onClearQuote();
+  }
+
   async function submit() {
     if (!canSubmit) return;
     if (isNoteMode) {
@@ -312,13 +340,18 @@ export function MessageComposer({
         : isMobile ? "Message…" : "Write a reply… type / for quick replies";
 
   return (
-    <div className={cn("relative shrink-0 border-t border-border/60 bg-card px-3 pt-3 pb-[max(.75rem,env(safe-area-inset-bottom))] transition-colors md:px-4 md:py-3", isNoteMode && "bg-warning-subtle")}>
+    <div
+      className={cn(
+        "relative shrink-0 bg-chat-bar px-2 pt-2 pb-[max(.5rem,env(safe-area-inset-bottom))] transition-colors md:px-4 md:pb-2.5",
+        isNoteMode && "bg-card bg-linear-to-b from-warning-subtle to-warning-subtle",
+      )}
+    >
       {matches && (
         <QuickReplyPicker replies={matches} activeIndex={Math.min(pickerIndex, Math.max(0, matches.length - 1))} onPick={pickQuickReply} onHover={setPickerIndex} />
       )}
 
       {commentTarget && !isNoteMode && (
-        <div className="mb-2 flex items-start gap-2 rounded-lg bg-muted px-3 py-2">
+        <div className="mb-2 flex items-start gap-2 rounded-lg bg-chat-input px-3 py-2">
           {commentTarget.mode === "private" ? <Lock className="mt-0.5 size-3.5 shrink-0" /> : <MessageCircle className="mt-0.5 size-3.5 shrink-0" />}
           <div className="min-w-0 flex-1">
             <p className="text-micro font-medium text-foreground">
@@ -333,10 +366,10 @@ export function MessageComposer({
       )}
 
       {quote && !commentTarget && !isNoteMode && (
-        <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand bg-muted px-3 py-2">
+        <div className="mb-2 flex items-start gap-2 overflow-hidden rounded-lg border-l-4 border-chat-send bg-chat-input px-3 py-2">
           <div className="min-w-0 flex-1">
-            <p className="text-micro font-medium text-foreground">Replying to {quote.direction === "INBOUND" ? contact.name : "your message"}</p>
-            <p className="truncate text-micro text-muted-foreground">{quote.text ?? quote.kind.toLowerCase()}</p>
+            <p className="text-micro font-medium text-chat-send">Replying to {quote.direction === "INBOUND" ? contact.name : "your message"}</p>
+            <p className="truncate text-caption text-chat-meta">{quote.text ?? quote.kind.toLowerCase()}</p>
           </div>
           <Button variant="ghost" size="icon-xs" onClick={onClearQuote} aria-label="Cancel quoted reply">
             <X />
@@ -345,8 +378,8 @@ export function MessageComposer({
       )}
 
       {staged && !isNoteMode && !commentMode && (
-        <div className="mb-2 flex w-fit max-w-full items-center gap-2 rounded-lg border bg-card px-3 py-1.5">
-          <FileText className="size-4 shrink-0 text-muted-foreground" />
+        <div className="mb-2 flex w-fit max-w-full items-center gap-2 rounded-lg bg-chat-input px-3 py-1.5">
+          <FileText className="size-4 shrink-0 text-chat-icon" />
           <span className="truncate text-caption">{staged.filename}</span>
           {staged.size && <span className="text-micro text-muted-foreground">{formatBytes(staged.size)}</span>}
           <Button variant="ghost" size="icon-xs" onClick={() => setStaged(null)} aria-label="Remove attachment">
@@ -383,7 +416,7 @@ export function MessageComposer({
                 onChange={(event) => setOptions((list) => list.map((o, i) => (i === index ? event.target.value : o)))}
                 placeholder={`Option ${index + 1}`}
                 aria-label={`Reply option ${index + 1}`}
-                className="h-7 w-32 text-caption"
+                className="h-7 w-32 bg-chat-input text-caption dark:bg-chat-input"
               />
               <Button
                 variant="ghost"
@@ -404,123 +437,22 @@ export function MessageComposer({
         </div>
       )}
 
-      <div className={cn("flex-wrap items-center gap-1 rounded-2xl bg-muted/50 p-1 md:flex md:gap-0.5 md:rounded-none md:bg-transparent md:p-0 max-md:[&_button]:min-h-11 max-md:[&_button]:min-w-11 max-md:[&_button]:rounded-xl", toolsOpen ? "flex" : "hidden")}>
-        <input
-          ref={fileRef}
-          type="file"
-          className="hidden"
-          accept="image/jpeg,image/png,video/mp4,video/3gpp,audio/mpeg,audio/mp4,audio/aac,audio/ogg,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) void attach(file);
-          }}
-        />
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => fileRef.current?.click()}
-          disabled={replyLocked || isNoteMode || commentMode || uploading}
-          aria-label="Attach a file"
-          title={uploading ? "Uploading…" : "Attach a file"}
-        >
-          <Paperclip className={cn("size-3.5", uploading && "animate-pulse")} />
-        </Button>
-
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="ghost" size="icon-sm" disabled={replyLocked || isNoteMode || commentMode} aria-label="Quick replies" title="Quick replies">
-              <Zap className="size-3.5" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent align="start" side="top" className="max-h-72 w-80 overflow-y-auto p-1">
-            {quickReplies.length === 0 ? (
-              <p className="px-3 py-2 text-caption text-muted-foreground">No quick replies yet. Add them in Settings → Inbox.</p>
-            ) : (
-              quickReplies.map((reply) => (
-                <button
-                  key={reply.id}
-                  type="button"
-                  onClick={() => pickQuickReply(reply)}
-                  className="flex w-full flex-col rounded-md px-2.5 py-2 text-left hover:bg-muted"
-                >
-                  <span className="text-caption font-medium">/{reply.shortcut}</span>
-                  <span className="line-clamp-2 text-micro text-muted-foreground">{reply.body}</span>
-                </button>
-              ))
-            )}
-          </PopoverContent>
-        </Popover>
-
-        {!isGroup && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setOptions((list) => (list.length ? [] : ["", ""]))}
-            disabled={replyLocked || isNoteMode || commentMode || !!staged}
-            aria-pressed={options.length > 0}
-            aria-label={platform === "WHATSAPP" ? "Add reply buttons" : "Add quick reply options"}
-            title={platform === "WHATSAPP" ? "Reply buttons (up to 3)" : "Quick reply options (up to 13)"}
-          >
-            <ListPlus className="size-3.5" />
-          </Button>
-        )}
-
-        {!isGroup && (
-          <ProductPickerButton
-            conversationId={conversation.id}
-            selected={products}
-            disabled={replyLocked || isNoteMode || commentMode || !!staged || options.length > 0}
-            onToggle={(product, asCards) => {
-              setProductsAsCards(asCards);
-              setProducts((list) =>
-                list.some((p) => p.variantId === product.variantId)
-                  ? list.filter((p) => p.variantId !== product.variantId)
-                  : [...list, product].slice(0, MAX_PRODUCTS),
-              );
-            }}
-          />
-        )}
-
-        {onOpenTemplates && canReply && !contact.blockedAt && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onOpenTemplates}
-            disabled={isNoteMode || commentMode}
-            aria-label="Send a template"
-            title="Send a template"
-          >
-            <LayoutTemplate className="size-3.5" />
-          </Button>
-        )}
-
-        {canReply && (
-          <Button
-            variant={isNoteMode ? "accent" : "ghost"}
-            size="sm"
-            aria-pressed={isNoteMode}
-            onClick={() => setIsNoteMode((previous) => !previous)}
-          >
-            <Lock className="size-3.5" />
-            Note
-          </Button>
-        )}
-
-        <div className="ml-auto hidden min-w-0 text-right md:block">
+      {!replyLocked && !recording && (
+        <div className="mb-1.5 hidden justify-end px-2 empty:hidden md:flex">
           {isNoteMode ? (
-            <p className="text-micro font-medium text-warning">Internal note — the customer will not see this</p>
+            <p className="text-micro font-medium text-warning-strong">Internal note — the customer will not see this</p>
           ) : (
             !blockedReason && !commentMode && <ReplyWindowHint platform={platform} window={conversation.window} />
           )}
         </div>
-      </div>
+      )}
 
-      {isNoteMode && <p className="mb-1 mt-2 px-1 text-xs font-medium text-warning-strong md:hidden">Internal note · Only your team can see this</p>}
+      {isNoteMode && <p className="mb-1.5 px-2 text-xs font-medium text-warning-strong md:hidden">Internal note · Only your team can see this</p>}
 
       {replyLocked ? (
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted px-3 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-chat-input px-3 py-2.5">
           <p className="text-caption text-muted-foreground">{blockedReason}</p>
-          {canReply && <Button size="sm" variant="ghost" onClick={() => setIsNoteMode(true)} className="min-h-11 md:hidden"><Lock className="size-4" />Add internal note</Button>}
+          {canReply && <Button size="sm" variant="ghost" onClick={() => setIsNoteMode(true)} className="max-md:min-h-11"><Lock className="size-4" />Add internal note</Button>}
           {phase.phase === "template_only" && canReply && !contact.blockedAt && onOpenTemplates && (
             <Button size="sm" variant="accent" onClick={onOpenTemplates}>
               <LayoutTemplate className="size-3.5" />
@@ -528,38 +460,176 @@ export function MessageComposer({
             </Button>
           )}
         </div>
+      ) : recording ? (
+        <VoiceRecorder onCancel={() => setRecording(false)} onSend={sendVoiceNote} />
       ) : (
-        <div className={cn("flex items-end gap-2 md:mt-2", toolsOpen && "mt-2")}>
-          <Button
-            variant={toolsOpen ? "secondary" : "ghost"}
-            size="icon"
-            onClick={() => setToolsOpen((previous) => !previous)}
-            aria-label={toolsOpen ? "Hide message tools" : "Show message tools"}
-            aria-expanded={toolsOpen}
-            className="size-12 shrink-0 rounded-full md:hidden"
+        <div className="flex items-end gap-2">
+          {/* One rounded box, as on the phone: the tools, then the text. On a phone the tools fold behind +. */}
+          <div
+            className={cn(
+              "flex min-w-0 flex-1 flex-wrap items-end rounded-[24px] bg-chat-input px-1 md:flex-nowrap md:px-1.5",
+              isNoteMode && "outline-1 outline-warning outline-dashed",
+            )}
           >
-            {toolsOpen ? <X className="size-5" /> : <Plus className="size-5" />}
-          </Button>
-          <Textarea
-            ref={textRef}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            aria-label={isNoteMode ? "Write an internal note" : "Write a reply"}
-            placeholder={placeholder}
-            className="max-h-40 min-h-12 min-w-0 flex-1 resize-none rounded-[22px] border-transparent bg-muted/70 px-4 py-3 text-base leading-6 shadow-none md:min-h-10 md:rounded-lg md:border-input md:bg-transparent md:px-3 md:py-2 md:text-body"
-          />
-          <Button
-            variant="accent"
-            size="icon"
-            onClick={() => void submit()}
-            disabled={!canSubmit}
-            aria-label={isNoteMode ? "Save note" : "Send message"}
-            className="size-12 shrink-0 rounded-full md:size-10 md:rounded-lg"
-          >
-            {isNoteMode ? <Lock className="size-3.5" /> : <Send className="size-3.5" />}
-          </Button>
+            <div
+              className={cn(
+                "items-center gap-0.5 md:flex md:self-end md:py-1 [&_[data-slot=button]]:text-chat-icon",
+                toolsOpen ? "flex w-full flex-wrap border-b border-chat-divider py-1 md:w-auto md:border-0" : "hidden",
+              )}
+            >
+              <input
+                ref={fileRef}
+                type="file"
+                className="hidden"
+                accept="image/jpeg,image/png,video/mp4,video/3gpp,audio/mpeg,audio/mp4,audio/aac,audio/ogg,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void attach(file);
+                }}
+              />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => fileRef.current?.click()}
+                disabled={isNoteMode || commentMode || uploading}
+                aria-label="Attach a file"
+                title={uploading ? "Uploading…" : "Attach a file"}
+                className="rounded-full md:size-9"
+              >
+                <Paperclip className={cn("size-[18px]", uploading && "animate-pulse")} />
+              </Button>
+
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" disabled={isNoteMode || commentMode} aria-label="Quick replies" title="Quick replies" className="rounded-full md:size-9">
+                    <Zap className="size-[18px]" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" side="top" className="max-h-72 w-80 overflow-y-auto p-1">
+                  {quickReplies.length === 0 ? (
+                    <p className="px-3 py-2 text-caption text-muted-foreground">No quick replies yet. Add them in Settings → Inbox.</p>
+                  ) : (
+                    quickReplies.map((reply) => (
+                      <button
+                        key={reply.id}
+                        type="button"
+                        onClick={() => pickQuickReply(reply)}
+                        className="flex w-full flex-col rounded-md px-2.5 py-2 text-left hover:bg-muted"
+                      >
+                        <span className="text-caption font-medium">/{reply.shortcut}</span>
+                        <span className="line-clamp-2 text-micro text-muted-foreground">{reply.body}</span>
+                      </button>
+                    ))
+                  )}
+                </PopoverContent>
+              </Popover>
+
+              {!isGroup && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setOptions((list) => (list.length ? [] : ["", ""]))}
+                  disabled={isNoteMode || commentMode || !!staged}
+                  aria-pressed={options.length > 0}
+                  aria-label={platform === "WHATSAPP" ? "Add reply buttons" : "Add quick reply options"}
+                  title={platform === "WHATSAPP" ? "Reply buttons (up to 3)" : "Quick reply options (up to 13)"}
+                  className="rounded-full md:size-9"
+                >
+                  <ListPlus className="size-[18px]" />
+                </Button>
+              )}
+
+              {!isGroup && (
+                <ProductPickerButton
+                  conversationId={conversation.id}
+                  selected={products}
+                  disabled={isNoteMode || commentMode || !!staged || options.length > 0}
+                  onToggle={(product, asCards) => {
+                    setProductsAsCards(asCards);
+                    setProducts((list) =>
+                      list.some((p) => p.variantId === product.variantId)
+                        ? list.filter((p) => p.variantId !== product.variantId)
+                        : [...list, product].slice(0, MAX_PRODUCTS),
+                    );
+                  }}
+                />
+              )}
+
+              {onOpenTemplates && canReply && !contact.blockedAt && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={onOpenTemplates}
+                  disabled={isNoteMode || commentMode}
+                  aria-label="Send a template"
+                  title="Send a template"
+                  className="rounded-full md:size-9"
+                >
+                  <LayoutTemplate className="size-[18px]" />
+                </Button>
+              )}
+
+              {canReply && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-pressed={isNoteMode}
+                  onClick={() => setIsNoteMode((previous) => !previous)}
+                  className={cn("rounded-full md:h-9", isNoteMode && "bg-warning-subtle !text-warning-strong")}
+                >
+                  <Lock className="size-3.5" />
+                  Note
+                </Button>
+              )}
+            </div>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setToolsOpen((previous) => !previous)}
+              aria-label={toolsOpen ? "Hide message tools" : "Show message tools"}
+              aria-expanded={toolsOpen}
+              className="size-11 shrink-0 rounded-full text-chat-icon md:hidden"
+            >
+              {toolsOpen ? <X className="size-5" /> : <Plus className="size-5" />}
+            </Button>
+            <Textarea
+              ref={textRef}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={handleKeyDown}
+              rows={1}
+              aria-label={isNoteMode ? "Write an internal note" : "Write a reply"}
+              placeholder={placeholder}
+              className="max-h-40 min-h-11 min-w-0 flex-1 resize-none rounded-none border-0 bg-transparent px-2 py-2.5 text-base leading-6 shadow-none placeholder:text-chat-meta focus-visible:ring-0 md:min-h-11 md:text-[15px] md:leading-[22px] dark:bg-transparent"
+            />
+          </div>
+
+          {showMic ? (
+            <Button
+              size="icon"
+              onClick={() => setRecording(true)}
+              aria-label="Record a voice note"
+              title="Record a voice note"
+              className="size-12 shrink-0 rounded-full bg-chat-send text-chat-send-foreground shadow-sm hover:bg-chat-send-hover"
+            >
+              <Mic className="size-5" />
+            </Button>
+          ) : (
+            <Button
+              size="icon"
+              onClick={() => void submit()}
+              disabled={!canSubmit}
+              aria-label={isNoteMode ? "Save note" : "Send message"}
+              title={isNoteMode ? "Save note" : "Send"}
+              className={cn(
+                "size-12 shrink-0 rounded-full shadow-sm",
+                isNoteMode ? "bg-warning text-background hover:bg-warning/90" : "bg-chat-send text-chat-send-foreground hover:bg-chat-send-hover",
+              )}
+            >
+              {isNoteMode ? <Lock className="size-5" /> : <SendHorizontal className="size-5" />}
+            </Button>
+          )}
         </div>
       )}
     </div>

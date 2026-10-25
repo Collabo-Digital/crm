@@ -75,8 +75,8 @@ export function ProductPickerButton({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon-sm" disabled={disabled} aria-label="Share products" title="Share products">
-          <Package className="size-3.5" />
+        <Button variant="ghost" size="icon-sm" disabled={disabled} aria-label="Share products" title="Share products" className="rounded-full md:size-9">
+          <Package className="size-[18px]" />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" side="top" className="w-96 p-0">

@@ -94,6 +94,31 @@ html.dark { color-scheme: dark; }
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* ── Inbox chat ─ the thread is styled after a phone's WhatsApp, so the
+        conversation reads the way the customer sees it. ── */
+  --chat-wallpaper:         #efeae2;
+  --chat-doodle:            rgb(84 70 50 / 9%);
+  --chat-bar:               #f0f2f5;
+  --chat-input:             #ffffff;
+  --chat-divider:           rgb(11 20 26 / 10%);
+  --chat-bubble-in:         #ffffff;
+  --chat-bubble-out:        #d9fdd3;
+  --chat-bubble-foreground: #111b21;
+  --chat-quote:             rgb(11 20 26 / 5%);
+  --chat-meta:              #667781;
+  --chat-icon:              #54656f;
+  --chat-pill:              #ffffff;
+  --chat-pill-foreground:   #54656f;
+  --chat-system:            #fff3c4;
+  --chat-system-foreground: #54656f;
+  --chat-accent:            #027eb5;
+  --chat-read:              #53bdeb;
+  --chat-send:              #00a884;
+  --chat-send-hover:        #008f6f;
+  --chat-send-foreground:   #ffffff;
+  --chat-recording:         #ea0038;
+  --chat-shadow:            0 1px 0.5px rgb(11 20 26 / 13%);
 }
 
 .dark {
@@ -149,6 +174,29 @@ html.dark { color-scheme: dark; }
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  --chat-wallpaper:         #0b141a;
+  --chat-doodle:            rgb(255 255 255 / 5%);
+  --chat-bar:               #202c33;
+  --chat-input:             #2a3942;
+  --chat-divider:           rgb(233 237 239 / 12%);
+  --chat-bubble-in:         #202c33;
+  --chat-bubble-out:        #005c4b;
+  --chat-bubble-foreground: #e9edef;
+  --chat-quote:             rgb(0 0 0 / 18%);
+  --chat-meta:              rgb(233 237 239 / 60%);
+  --chat-icon:              #aebac1;
+  --chat-pill:              #182229;
+  --chat-pill-foreground:   #8696a0;
+  --chat-system:            #182229;
+  --chat-system-foreground: #ffd279;
+  --chat-accent:            #53bdeb;
+  --chat-read:              #53bdeb;
+  --chat-send:              #00a884;
+  --chat-send-hover:        #06cf9c;
+  --chat-send-foreground:   #111b21;
+  --chat-recording:         #f15c6d;
+  --chat-shadow:            0 1px 0.5px rgb(11 20 26 / 40%);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -221,6 +269,30 @@ html.dark { color-scheme: dark; }
   --color-danger-subtle:         var(--danger-subtle);
   --color-info:                  var(--info);
   --color-info-subtle:           var(--info-subtle);
+
+  /* ── Inbox chat ── */
+  --color-chat-wallpaper:         var(--chat-wallpaper);
+  --color-chat-bar:               var(--chat-bar);
+  --color-chat-input:             var(--chat-input);
+  --color-chat-divider:           var(--chat-divider);
+  --color-chat-bubble-in:         var(--chat-bubble-in);
+  --color-chat-bubble-out:        var(--chat-bubble-out);
+  --color-chat-bubble-foreground: var(--chat-bubble-foreground);
+  --color-chat-quote:             var(--chat-quote);
+  --color-chat-meta:              var(--chat-meta);
+  --color-chat-icon:              var(--chat-icon);
+  --color-chat-pill:              var(--chat-pill);
+  --color-chat-pill-foreground:   var(--chat-pill-foreground);
+  --color-chat-system:            var(--chat-system);
+  --color-chat-system-foreground: var(--chat-system-foreground);
+  --color-chat-accent:            var(--chat-accent);
+  --color-chat-read:              var(--chat-read);
+  --color-chat-send:              var(--chat-send);
+  --color-chat-send-hover:        var(--chat-send-hover);
+  --color-chat-send-foreground:   var(--chat-send-foreground);
+  --color-chat-recording:         var(--chat-recording);
+  --shadow-chat:                  var(--chat-shadow);
+  --drop-shadow-chat:             var(--chat-shadow);
 
   /* ── shadcn mappings (unchanged) ── */
   --color-sidebar-ring: var(--sidebar-ring);
@@ -335,6 +407,38 @@ html.dark { color-scheme: dark; }
   -webkit-mask: url(/brand/collabo-wordmark.webp?v=2) center / contain no-repeat;
   mask: url(/brand/collabo-wordmark.webp?v=2) center / contain no-repeat;
 }
+
+/* ── Chat wallpaper (components/app/inbox/conversation-thread) ─ a doodle tile
+      drawn for Collabo, used as a mask so its colour is a theme token. It sits
+      on a non-scrolling wrapper so the pattern stays put while messages move. */
+.chat-wallpaper { position: relative; isolation: isolate; background-color: var(--chat-wallpaper); }
+.chat-wallpaper::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--chat-doodle);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300' viewBox='0 0 300 300' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 22h26a6 6 0 0 1 6 6v13a6 6 0 0 1-6 6H35l-8 7v-7h-5a6 6 0 0 1-6-6V28a6 6 0 0 1 6-6z'/%3E%3Cpath d='M25 32h20M25 38h12'/%3E%3Cpath d='M124 46c-7-5-13-9-13-16a6.5 6.5 0 0 1 13-1.5 6.5 6.5 0 0 1 13 1.5c0 7-6 11-13 16z'/%3E%3Cpath d='M214 18l3.5 8.5 9 .7-6.9 5.9 2.1 8.9-7.7-4.8-7.7 4.8 2.1-8.9-6.9-5.9 9-.7z'/%3E%3Cpath d='M252 78h24l-2.5 24h-19zM258 78v-4a6 6 0 0 1 12 0v4'/%3E%3Crect x='40' y='92' width='22' height='36' rx='4'/%3E%3Cpath d='M48 123h6'/%3E%3Cpath d='M146 132v-24l16-4v22'/%3E%3Ccircle cx='142' cy='132' r='4'/%3E%3Ccircle cx='158' cy='126' r='4'/%3E%3Ccircle cx='226' cy='128' r='13'/%3E%3Cpath d='M221 124v1M231 124v1M220 132c3 4 9 4 12 0'/%3E%3Cpath d='M68 186l36-15-13 33-6-12zM85 192l19-21'/%3E%3Crect x='160' y='182' width='26' height='20' rx='2'/%3E%3Cpath d='M157 176h32v6h-32zM173 176v26M173 176c-4-8-12-6-9-1M173 176c4-8 12-6 9-1'/%3E%3Cpath d='M246 196h20v12a8 8 0 0 1-8 8h-4a8 8 0 0 1-8-8zM266 200h3a4 4 0 0 1 0 8h-3M252 190c0-3 3-3 3-6M259 190c0-3 3-3 3-6'/%3E%3Cpath d='M24 272c0-18 12-28 30-28 0 18-12 28-30 28zM24 272l18-18'/%3E%3Cpath d='M128 238a14 14 0 1 0 14 20 11 11 0 0 1-14-20z'/%3E%3Crect x='196' y='248' width='30' height='21' rx='3'/%3E%3Cpath d='M197 250l14 10 14-10'/%3E%3Cpath d='M262 254l14-4 10 10-4 14-14 4-10-10z'/%3E%3Ccircle cx='272' cy='264' r='2'/%3E%3Ccircle cx='92' cy='60' r='2.5'/%3E%3Ccircle cx='186' cy='82' r='2'/%3E%3Ccircle cx='112' cy='290' r='2'/%3E%3Ccircle cx='20' cy='160' r='2.5'/%3E%3Ccircle cx='286' cy='150' r='2'/%3E%3Cpath d='M96 106l4 4 8-8'/%3E%3Cpath d='M188 132h8M192 128v8'/%3E%3Cpath d='M60 228h8M64 224v8'/%3E%3Cpath d='M280 26h6M283 23v6'/%3E%3C/svg%3E") 0 0 / 300px repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300' viewBox='0 0 300 300' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 22h26a6 6 0 0 1 6 6v13a6 6 0 0 1-6 6H35l-8 7v-7h-5a6 6 0 0 1-6-6V28a6 6 0 0 1 6-6z'/%3E%3Cpath d='M25 32h20M25 38h12'/%3E%3Cpath d='M124 46c-7-5-13-9-13-16a6.5 6.5 0 0 1 13-1.5 6.5 6.5 0 0 1 13 1.5c0 7-6 11-13 16z'/%3E%3Cpath d='M214 18l3.5 8.5 9 .7-6.9 5.9 2.1 8.9-7.7-4.8-7.7 4.8 2.1-8.9-6.9-5.9 9-.7z'/%3E%3Cpath d='M252 78h24l-2.5 24h-19zM258 78v-4a6 6 0 0 1 12 0v4'/%3E%3Crect x='40' y='92' width='22' height='36' rx='4'/%3E%3Cpath d='M48 123h6'/%3E%3Cpath d='M146 132v-24l16-4v22'/%3E%3Ccircle cx='142' cy='132' r='4'/%3E%3Ccircle cx='158' cy='126' r='4'/%3E%3Ccircle cx='226' cy='128' r='13'/%3E%3Cpath d='M221 124v1M231 124v1M220 132c3 4 9 4 12 0'/%3E%3Cpath d='M68 186l36-15-13 33-6-12zM85 192l19-21'/%3E%3Crect x='160' y='182' width='26' height='20' rx='2'/%3E%3Cpath d='M157 176h32v6h-32zM173 176v26M173 176c-4-8-12-6-9-1M173 176c4-8 12-6 9-1'/%3E%3Cpath d='M246 196h20v12a8 8 0 0 1-8 8h-4a8 8 0 0 1-8-8zM266 200h3a4 4 0 0 1 0 8h-3M252 190c0-3 3-3 3-6M259 190c0-3 3-3 3-6'/%3E%3Cpath d='M24 272c0-18 12-28 30-28 0 18-12 28-30 28zM24 272l18-18'/%3E%3Cpath d='M128 238a14 14 0 1 0 14 20 11 11 0 0 1-14-20z'/%3E%3Crect x='196' y='248' width='30' height='21' rx='3'/%3E%3Cpath d='M197 250l14 10 14-10'/%3E%3Cpath d='M262 254l14-4 10 10-4 14-14 4-10-10z'/%3E%3Ccircle cx='272' cy='264' r='2'/%3E%3Ccircle cx='92' cy='60' r='2.5'/%3E%3Ccircle cx='186' cy='82' r='2'/%3E%3Ccircle cx='112' cy='290' r='2'/%3E%3Ccircle cx='20' cy='160' r='2.5'/%3E%3Ccircle cx='286' cy='150' r='2'/%3E%3Cpath d='M96 106l4 4 8-8'/%3E%3Cpath d='M188 132h8M192 128v8'/%3E%3Cpath d='M60 228h8M64 224v8'/%3E%3Cpath d='M280 26h6M283 23v6'/%3E%3C/svg%3E") 0 0 / 300px repeat;
+}
+
+/* ── Voice note seek bar (components/app/inbox/voice-note-player) ─ the fill
+      colour and the played share come in as --voice-fill and --voice-progress. */
+.voice-seek { appearance: none; background: transparent; cursor: pointer; }
+.voice-seek:disabled { cursor: default; }
+.voice-seek::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--voice-fill) var(--voice-progress, 0%), var(--chat-divider) var(--voice-progress, 0%));
+}
+.voice-seek::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--voice-fill) var(--voice-progress, 0%), var(--chat-divider) var(--voice-progress, 0%));
+}
+.voice-seek::-webkit-slider-thumb { appearance: none; width: 13px; height: 13px; margin-top: -4.5px; border-radius: 50%; background: var(--voice-fill); }
+.voice-seek::-moz-range-thumb { width: 13px; height: 13px; border: 0; border-radius: 50%; background: var(--voice-fill); }
 
 /* Phone layouts share one touch and safe-area contract. */
 :root { --mobile-nav-height: calc(76px + env(safe-area-inset-bottom, 0px)); }

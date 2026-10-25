@@ -86,13 +86,15 @@ export function formatDateTime(iso: string | null): string {
   });
 }
 
-/** Day-separator label: "Today" · "Yesterday" · "Tue, 12 Aug". */
+/** Day-separator label, as WhatsApp words it: "Today" · "Yesterday" · "Tuesday" this past week · "12 Aug 2026". */
 export function formatDaySeparator(iso: string, now: number): string {
   const then = new Date(iso).getTime();
   if (!Number.isFinite(then)) return "";
   if (isSameDay(then, now)) return "Today";
   if (isYesterday(then, now)) return "Yesterday";
-  return new Date(then).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+  const midnight = (t: number) => new Date(t).setHours(0, 0, 0, 0);
+  if (Math.round((midnight(now) - midnight(then)) / DAY) < 7) return new Date(then).toLocaleDateString("en-IN", { weekday: "long" });
+  return new Date(then).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
 /** Stable YYYY-MM-DD key for grouping a thread into days, in local time. */
@@ -120,6 +122,7 @@ export const MESSAGE_STATUS_LABEL: Record<InboxMessageStatus, string> = {
   SENT: "Sent",
   DELIVERED: "Delivered",
   READ: "Read",
+  PLAYED: "Played",
   FAILED: "Not sent",
 };
 
