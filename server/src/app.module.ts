@@ -58,6 +58,7 @@ import { AdsModule } from './ads/ads.module';
 import { ReviewsModule } from './reviews/reviews.module';
 import { GoogleModule } from './integrations/google/google.module';
 import { DeveloperModule } from './developer/developer.module';
+import { PosModule } from './pos/pos.module';
 
 @Module({
   imports: [
@@ -136,6 +137,7 @@ import { DeveloperModule } from './developer/developer.module';
     ReviewsModule,
     GoogleModule,
     DeveloperModule,
+    PosModule,
   ],
   controllers: [AppController],
   providers: [
