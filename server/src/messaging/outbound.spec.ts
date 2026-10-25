@@ -270,3 +270,28 @@ describe('call permission requests', () => {
     });
 });
 
+
+describe('voice notes', () => {
+    const note = { type: 'media' as const, mediaKind: 'audio' as const, storageKey: 'org1/n.ogg', mime: 'audio/ogg', voice: true, durationMs: 1500 };
+    const to = { waId: '919800000001', userId: null };
+
+    it('marks the WhatsApp audio as a voice message, and plain audio not', () => {
+        expect(buildWhatsAppBody(note, to, { mediaId: 'MEDIA1' })).toMatchObject({ type: 'audio', audio: { id: 'MEDIA1', voice: true } });
+        expect(buildWhatsAppBody({ ...note, voice: undefined }, to, { mediaId: 'MEDIA1' }).audio).toEqual({ id: 'MEDIA1' });
+    });
+
+    it('goes to Instagram and Messenger as an audio attachment', () => {
+        expect(gate({ platform: ChannelPlatform.INSTAGRAM, payload: note })).toEqual({ ok: true, humanAgentTag: false });
+        expect(gate({ platform: ChannelPlatform.FACEBOOK, payload: note })).toEqual({ ok: true, humanAgentTag: false });
+        expect(buildMessengerBody(note, 'PSID1', { attachmentId: 'ATT1' }).message).toEqual({ attachment: { type: 'audio', payload: { attachment_id: 'ATT1' } } });
+    });
+
+    it('is refused where there is no audio to send it as', () => {
+        expect(gate({ platform: ChannelPlatform.TIKTOK, payload: note })).toEqual({
+            ok: false,
+            code: 'unsupported_on_platform',
+            message: 'Voice messages can be sent on WhatsApp, Instagram and Messenger only.',
+        });
+        expect(gate({ platform: ChannelPlatform.WHATSAPP, payload: { ...note, mediaKind: 'video' } })).toMatchObject({ ok: false, code: 'invalid_payload' });
+    });
+});

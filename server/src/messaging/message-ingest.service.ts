@@ -81,7 +81,8 @@ const STATUS_RANK: Record<MessageStatus, number> = {
     [MessageStatus.SENT]: 1,
     [MessageStatus.DELIVERED]: 2,
     [MessageStatus.READ]: 3,
-    [MessageStatus.FAILED]: 4,
+    [MessageStatus.PLAYED]: 4,
+    [MessageStatus.FAILED]: 5,
 };
 
 /**
@@ -91,7 +92,7 @@ const STATUS_RANK: Record<MessageStatus, number> = {
  */
 export function statusAdvances(current: MessageStatus, next: MessageStatus): boolean {
     if (current === next) return false;
-    if (next === MessageStatus.FAILED) return current !== MessageStatus.READ && current !== MessageStatus.DELIVERED;
+    if (next === MessageStatus.FAILED) return STATUS_RANK[current] < STATUS_RANK.DELIVERED;
     if (current === MessageStatus.FAILED) return false;
     return STATUS_RANK[next] > STATUS_RANK[current];
 }
@@ -396,7 +397,7 @@ export class MessageIngestService {
                         externalId: input.externalId,
                         sentAt: input.occurredAt,
                         deliveredAt: STATUS_RANK[status] >= STATUS_RANK.DELIVERED && status !== MessageStatus.FAILED ? input.occurredAt : null,
-                        readAt: status === MessageStatus.READ ? input.occurredAt : null,
+                        readAt: status === MessageStatus.READ || status === MessageStatus.PLAYED ? input.occurredAt : null,
                         replyToExternalId: input.replyToExternalId ?? null,
                         replyToMessageId: replyTo?.id ?? null,
                         imported: !live,
@@ -449,6 +450,8 @@ export class MessageIngestService {
                 ...(update.status === MessageStatus.SENT && !message.sentAt ? { sentAt: update.at } : {}),
                 ...(advance && update.status === MessageStatus.DELIVERED ? { deliveredAt: update.at } : {}),
                 ...(advance && update.status === MessageStatus.READ ? { readAt: update.at } : {}),
+                // Played without a read receipt first: it was read too.
+                ...(advance && update.status === MessageStatus.PLAYED && STATUS_RANK[message.status] < STATUS_RANK.READ ? { readAt: update.at } : {}),
                 ...(advance && update.status === MessageStatus.FAILED
                     ? {
                         failedAt: update.at,

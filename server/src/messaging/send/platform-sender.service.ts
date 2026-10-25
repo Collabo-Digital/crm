@@ -9,6 +9,7 @@ import { ChannelAccess, ChannelAccessService } from '../channel-access.service';
 import { InboxEventsService } from '../inbox-events.service';
 import { BroadcastTracker } from '../broadcast-tracker';
 import { MessagingMediaStorage } from '../media/messaging-media.storage';
+import { VoiceNoteConverter, VoiceNoteError } from '../media/voice-note.converter';
 import { OutboundPayload, buildMessengerBody, buildWhatsAppBody } from '../outbound';
 import { groupIdOfContact } from '../group-contact';
 import { patchChannelMetadataSql } from '../../channel/channel-metadata.util';
@@ -179,6 +180,7 @@ export class PlatformSenderService {
         private readonly events: InboxEventsService,
         private readonly broadcasts: BroadcastTracker,
         private readonly usageMeter: UsageMeter,
+        private readonly voiceNotes: VoiceNoteConverter,
     ) { }
 
     async deliver(messageId: string, humanAgentTag: boolean): Promise<'sent' | 'failed' | 'skipped'> {
@@ -475,11 +477,14 @@ export class PlatformSenderService {
         if (!channel.pageId) {
             throw new UnsupportedSend('Files can only be sent to Instagram accounts connected through a Facebook Page.');
         }
-        const file = await this.storage.read(payload.storageKey);
+        const stored = await this.storage.read(payload.storageKey);
+        const { file, mime, filename } = payload.voice
+            ? { file: await this.asM4a(stored), mime: 'audio/mp4', filename: 'voice-note.m4a' }
+            : { file: stored, mime: payload.mime, filename: payload.filename ?? 'file' };
         const type = payload.mediaKind === 'document' ? 'file' : payload.mediaKind;
         const form = new FormData();
         form.append('message', JSON.stringify({ attachment: { type, payload: { is_reusable: true } } }));
-        form.append('filedata', new Blob([new Uint8Array(file)], { type: payload.mime }), payload.filename ?? 'file');
+        form.append('filedata', new Blob([new Uint8Array(file)], { type: mime }), filename);
         const res = await this.metaGraph.request<{ attachment_id?: string }>({
             method: 'POST',
             path: `/${channel.pageId}/message_attachments`,
@@ -494,6 +499,16 @@ export class PlatformSenderService {
         });
         if (!res.data.attachment_id) throw new MetaGraphError('Meta returned no attachment id', 'API_ERROR');
         return res.data.attachment_id;
+    }
+
+    /** Instagram and Messenger take audio as AAC, not the Ogg/Opus a voice note is stored as. */
+    private async asM4a(voiceNote: Buffer): Promise<Buffer> {
+        try {
+            return await this.voiceNotes.toM4a(voiceNote);
+        } catch (err) {
+            if (err instanceof VoiceNoteError) throw new UnsupportedSend('This voice message could not be converted for Instagram or Messenger. Record it again.');
+            throw err;
+        }
     }
 
     /** Marks the row as on its way to Meta. False when another attempt already has. */

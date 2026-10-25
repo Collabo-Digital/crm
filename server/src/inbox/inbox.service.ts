@@ -10,6 +10,7 @@ import { InboxEventsService } from '../messaging/inbox-events.service';
 import { MessagingSendService, SendOutcome } from '../messaging/send/messaging-send.service';
 import type { OutboundPayload } from '../messaging/outbound';
 import { MessagingMediaStorage } from '../messaging/media/messaging-media.storage';
+import { VOICE_INPUT_FORMATS, VoiceNoteConverter, VoiceNoteError, voiceNoteDurationMs } from '../messaging/media/voice-note.converter';
 import { signMediaPath, verifyMediaSignature } from '../messaging/media/media-url';
 import { replyWindow } from '../messaging/outbound';
 import { InboxViewer, canAssign, canAssignOthers, canReply, visibilityWhere } from './inbox-visibility';
@@ -55,6 +56,9 @@ const UPLOAD_MAX_BYTES: Record<'image' | 'video' | 'audio' | 'document', number>
     document: 100 * 1024 * 1024,
 };
 
+/// Two minutes of uncompressed 48 kHz stereo WAV; recorders' compressed audio is far smaller.
+const VOICE_UPLOAD_MAX_BYTES = 24 * 1024 * 1024;
+
 export interface UploadedFile {
     originalname: string;
     mimetype: string;
@@ -88,6 +92,7 @@ export class InboxService {
         private readonly prisma: PrismaService,
         private readonly sender: MessagingSendService,
         private readonly storage: MessagingMediaStorage,
+        private readonly voiceNotes: VoiceNoteConverter,
         private readonly events: InboxEventsService,
         private readonly teams: InboxTeamService,
         private readonly contacts: InboxContactsService,
@@ -304,6 +309,9 @@ export class InboxService {
         }
         if (input.type === 'products') {
             return this.sender.send({ ...base, payload: await this.catalog.productPayload(orgId, conversation.channelId, input) });
+        }
+        if (input.type === 'media' && input.voice) {
+            return this.sender.send({ ...base, payload: { ...input, mime: 'audio/ogg', durationMs: await this.voiceNoteLength(orgId, input.storageKey) } });
         }
         return this.sender.send({ ...base, payload: asOutbound(input) });
     }
@@ -556,9 +564,10 @@ export class InboxService {
 
     // ─── Media ────────────────────────────────────────────────────────
 
-    async upload(orgId: string, file: UploadedFile | undefined) {
+    async upload(orgId: string, file: UploadedFile | undefined, opts: { voice?: boolean } = {}) {
         if (!file) throw new BadRequestException('Choose a file to attach.');
         const mime = file.mimetype.split(';')[0].trim().toLowerCase();
+        if (opts.voice) return this.uploadVoiceNote(orgId, file, mime);
         const mediaKind = UPLOAD_KINDS[mime];
         if (!mediaKind && mime.startsWith('image/')) {
             throw new BadRequestException('WhatsApp sends pictures as JPEG or PNG only. Save this picture as JPEG or PNG and attach it again.');
@@ -569,6 +578,30 @@ export class InboxService {
         }
         const saved = await this.storage.save(orgId, file.buffer, mime);
         return { storageKey: saved.storageKey, mime, size: saved.size, filename: file.originalname, mediaKind };
+    }
+
+    /** A recording from the composer, stored as the Ogg/Opus voice note WhatsApp plays. */
+    private async uploadVoiceNote(orgId: string, file: UploadedFile, mime: string) {
+        if (!VOICE_INPUT_FORMATS[mime]) throw new BadRequestException('Voice messages can be recorded as WebM, Ogg, MP4, MP3 or WAV audio only.');
+        if (file.size > VOICE_UPLOAD_MAX_BYTES) throw new BadRequestException('This recording is too large. Voice messages can be at most 2 minutes long.');
+        let note: { buffer: Buffer; durationMs: number };
+        try {
+            note = await this.voiceNotes.toVoiceNote(file.buffer, mime);
+        } catch (err) {
+            if (err instanceof VoiceNoteError) throw new BadRequestException(err.message);
+            throw err;
+        }
+        const saved = await this.storage.save(orgId, note.buffer, 'audio/ogg');
+        return { storageKey: saved.storageKey, mime: 'audio/ogg', size: saved.size, filename: 'voice-note.ogg', mediaKind: 'audio' as const, durationMs: note.durationMs };
+    }
+
+    /** The length of a voice note about to be sent, read from the stored file the upload made. */
+    private async voiceNoteLength(orgId: string, storageKey: string): Promise<number> {
+        // The send service refuses other organizations' files too, but only after this read.
+        if (!storageKey.startsWith(`${orgId}/`)) throw new BadRequestException('Upload the file again before sending it.');
+        const durationMs = voiceNoteDurationMs(await this.storage.read(storageKey));
+        if (durationMs === null) throw new BadRequestException('This is not a voice message recorded in the inbox. Record it again.');
+        return durationMs;
     }
 
     /** Stream a stored file behind a signed link. */
@@ -678,13 +711,14 @@ export class InboxService {
     }
 
     private mediaView(messageId: string, media: Prisma.JsonValue) {
-        const m = media as { storageKey?: string; mime?: string; filename?: string; size?: number; voice?: boolean; url?: string; doNotStore?: boolean; error?: string } | null;
+        const m = media as { storageKey?: string; mime?: string; filename?: string; size?: number; voice?: boolean; durationMs?: number; url?: string; doNotStore?: boolean; error?: string } | null;
         if (!m) return null;
         return {
             mime: m.mime ?? null,
             filename: m.filename ?? null,
             size: m.size ?? null,
             voice: m.voice ?? false,
+            durationMs: m.durationMs ?? null,
             // Story mentions may not be stored; Meta's own link is shown until it expires.
             url: m.storageKey ? signMediaPath(this.linkSecret, messageId) : m.doNotStore ? (m.url ?? null) : null,
             pending: !m.storageKey && !m.doNotStore && !m.error,

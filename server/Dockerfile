@@ -37,8 +37,8 @@ FROM node:24-alpine AS runtime
 
 WORKDIR /app
 
-# Prisma + healthcheck use these
-RUN apk add --no-cache openssl wget
+# Prisma + healthcheck use these; ffmpeg converts inbox voice notes
+RUN apk add --no-cache openssl wget ffmpeg
 
 # Install only production dependencies (smaller image)
 COPY package.json package-lock.json ./

@@ -39,9 +39,9 @@ export class AutomationInsightsService {
             skipReasons: Object.fromEntries(skipped.map((s) => [s.skipReason ?? 'other', s._count._all])),
             steps: perStep,
             messages: {
-                sent: (sent.SENT ?? 0) + (sent.DELIVERED ?? 0) + (sent.READ ?? 0),
-                delivered: (sent.DELIVERED ?? 0) + (sent.READ ?? 0),
-                read: sent.READ ?? 0,
+                sent: (sent.SENT ?? 0) + (sent.DELIVERED ?? 0) + (sent.READ ?? 0) + (sent.PLAYED ?? 0),
+                delivered: (sent.DELIVERED ?? 0) + (sent.READ ?? 0) + (sent.PLAYED ?? 0),
+                read: (sent.READ ?? 0) + (sent.PLAYED ?? 0),
                 failed: sent.FAILED ?? 0,
                 queued: sent.QUEUED ?? 0,
             },

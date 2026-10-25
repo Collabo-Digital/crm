@@ -205,6 +205,8 @@ export default () => ({
         mediaDir: process.env.MESSAGING_MEDIA_DIR || undefined,
         // Signs short-lived media links; rotating it only expires open links.
         linkSecret: process.env.MESSAGING_MEDIA_SECRET || process.env.JWT_ACCESS_SECRET,
+        // Converts recorded voice notes; the Docker images install it.
+        ffmpegPath: process.env.FFMPEG_PATH || 'ffmpeg',
     },
     encryptionKey: process.env.ENCRYPTION_KEY || undefined,
     superAdminEmails: (process.env.SUPER_ADMIN_EMAILS || '')
