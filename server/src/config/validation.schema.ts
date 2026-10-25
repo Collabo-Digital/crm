@@ -47,6 +47,7 @@ export const validationSchema = Joi.object({
     MESSENGER_WEBHOOK_VERIFY_TOKEN: Joi.string().optional(),
     MESSAGING_MEDIA_DIR: Joi.string().optional(),
     MESSAGING_MEDIA_SECRET: Joi.string().min(32).optional(),
+    FFMPEG_PATH: Joi.string().optional(),
     WHATSAPP_GRAPH_VERSION: Joi.string().optional(),
     META_GRAPH_VERSION: Joi.string().optional(),
     META_GRAPH_BASE_URL: Joi.string().uri().optional(),

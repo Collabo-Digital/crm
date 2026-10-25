@@ -12,14 +12,18 @@ const button = z.object({ id: z.string().min(1).max(256), title: z.string().trim
  */
 const SendPayloadSchema = z.discriminatedUnion('type', [
     z.object({ type: z.literal('text'), text, previewUrl: z.boolean().optional() }),
-    z.object({
-        type: z.literal('media'),
-        mediaKind: z.enum(['image', 'video', 'audio', 'document']),
-        storageKey: z.string().min(1).max(200),
-        mime: z.string().min(1).max(100),
-        filename: z.string().max(200).optional(),
-        caption: z.string().max(1024).optional(),
-    }),
+    z
+        .object({
+            type: z.literal('media'),
+            mediaKind: z.enum(['image', 'video', 'audio', 'document']),
+            storageKey: z.string().min(1).max(200),
+            mime: z.string().min(1).max(100),
+            filename: z.string().max(200).optional(),
+            caption: z.string().max(1024).optional(),
+            /** A recording from the composer, uploaded with `voice`. */
+            voice: z.boolean().optional(),
+        })
+        .refine((m) => !m.voice || m.mediaKind === 'audio', { path: ['voice'], message: 'Only audio can be sent as a voice message.' }),
     z.object({
         type: z.literal('template'),
         name: z.string().regex(/^[a-z0-9_]+$/).max(512),

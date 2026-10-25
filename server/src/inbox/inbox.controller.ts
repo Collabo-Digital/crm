@@ -141,8 +141,8 @@ export class InboxController {
     @Post('uploads')
     @Roles(UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.AGENT)
     @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 100 * 1024 * 1024 } }))
-    upload(@CurrentUser() user: SessionPayload, @UploadedFile() file: InboxUpload) {
-        return this.inbox.upload(user.orgId!, file);
+    upload(@CurrentUser() user: SessionPayload, @UploadedFile() file: InboxUpload, @Body('voice') voice?: string) {
+        return this.inbox.upload(user.orgId!, file, { voice: voice === 'true' });
     }
 
     /**

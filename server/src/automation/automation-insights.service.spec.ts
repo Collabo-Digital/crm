@@ -39,3 +39,17 @@ describe('AutomationInsightsService.test', () => {
         expect(result.order).toBeNull();
     });
 });
+
+describe('AutomationInsightsService.stats', () => {
+    it('counts a played voice message as sent, delivered and read', async () => {
+        const count = (n: number) => ({ _count: { _all: n } });
+        const prisma = {
+            automationRun: { groupBy: jest.fn(async () => []) },
+            automationRunStep: { groupBy: jest.fn(async () => []) },
+            message: { groupBy: jest.fn(async () => [{ status: 'DELIVERED', ...count(1) }, { status: 'READ', ...count(2) }, { status: 'PLAYED', ...count(3) }]) },
+            $queryRaw: jest.fn(async () => []),
+        };
+        const { messages } = await new AutomationInsightsService(prisma as never).stats({ id: 'a1' });
+        expect(messages).toMatchObject({ sent: 6, delivered: 6, read: 5 });
+    });
+});

@@ -23,7 +23,9 @@ const FROM: Partial<Record<MessageStatus, R[]>> = {
 export class BroadcastTracker {
     constructor(private readonly prisma: PrismaService) { }
 
-    async onStatus(messageId: string, status: MessageStatus, at: Date, error?: { code: string | null; message: string | null } | null) {
+    async onStatus(messageId: string, messageStatus: MessageStatus, at: Date, error?: { code: string | null; message: string | null } | null) {
+        // A recipient's statuses stop at read; a played voice note is one.
+        const status = messageStatus === MessageStatus.PLAYED ? MessageStatus.READ : messageStatus;
         const from = FROM[status];
         if (!from) return;
         await this.prisma.broadcastRecipient.updateMany({

@@ -58,8 +58,8 @@ FROM node:24-alpine AS runtime
 
 WORKDIR /app/server
 
-# OpenSSL for Prisma at runtime
-RUN apk add --no-cache openssl
+# OpenSSL for Prisma at runtime; ffmpeg converts inbox voice notes
+RUN apk add --no-cache openssl ffmpeg
 
 # Install only production dependencies (smaller image)
 COPY server/package.json server/package-lock.json ./

@@ -155,7 +155,7 @@ export class MessagingSendService {
         const now = new Date();
         const text = outboundText(input.payload);
         const kind = kindOf(input.payload);
-        const preview = previewOf({ kind, text, media: input.payload.type === 'media' ? {} : null });
+        const preview = previewOf({ kind, text, media: input.payload.type === 'media' ? { voice: input.payload.voice } : null });
 
         let messageId: string;
         try {
@@ -188,6 +188,7 @@ export class MessagingSendService {
                                     storageKey: input.payload.storageKey,
                                     mime: input.payload.mime,
                                     filename: input.payload.filename,
+                                    ...(input.payload.voice ? { voice: true, durationMs: input.payload.durationMs } : {}),
                                 } as Prisma.InputJsonValue)
                                 : undefined,
                         status: MessageStatus.QUEUED,

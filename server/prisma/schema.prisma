@@ -2071,6 +2071,8 @@ enum MessageStatus {
   SENT
   DELIVERED
   READ
+  /// WhatsApp: the customer played a voice message. Ranks above READ.
+  PLAYED
   FAILED
 }
 

@@ -25,8 +25,7 @@ const STATUS_MAP: Record<string, MessageStatus> = {
     sent: MessageStatus.SENT,
     delivered: MessageStatus.DELIVERED,
     read: MessageStatus.READ,
-    // A voice note played counts as read.
-    played: MessageStatus.READ,
+    played: MessageStatus.PLAYED,
     failed: MessageStatus.FAILED,
 };
 
@@ -35,7 +34,7 @@ const HISTORY_STATUS: Record<string, MessageStatus> = {
     SENT: MessageStatus.SENT,
     DELIVERED: MessageStatus.DELIVERED,
     READ: MessageStatus.READ,
-    PLAYED: MessageStatus.READ,
+    PLAYED: MessageStatus.PLAYED,
     ERROR: MessageStatus.FAILED,
     PENDING: MessageStatus.QUEUED,
 };
