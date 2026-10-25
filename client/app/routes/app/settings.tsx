@@ -15,6 +15,8 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "~/components/ui/select";
+import { Button } from "~/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { cn } from "~/lib/utils";
 import { useAuthStore } from "~/stores/auth.store";
 import { useThemeStore } from "~/stores/theme.store";
@@ -232,6 +234,36 @@ type PasswordForm = z.infer<typeof passwordSchema>;
 
 // ── Invite dialog inline ─────────────────────────────────────────────────────
 
+/** Which vendor a Vendor member supplies: they only see that vendor's products and orders. */
+function VendorPicker({ value, onChange }: { value: string; onChange: (vendor: string) => void }) {
+  // Distinct Product.vendor values to scope a vendor to.
+  const { data: vendorOptions = [] } = useQuery({
+    queryKey: ["products", "vendors"],
+    queryFn: () => apiClient.get<string[]>("/products/vendors").then((r) => r.data),
+  });
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <Package className="size-3.5 shrink-0 text-gray-400" />
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger className="flex-1 h-9 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs shadow-sm">
+            <SelectValue placeholder={vendorOptions.length ? "Select the vendor…" : "No vendors found in products"} />
+          </SelectTrigger>
+          <SelectContent>
+            {vendorOptions.map((v) => (
+              <SelectItem key={v} value={v}>{v}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <p className="pl-6 text-[10px] text-muted-foreground">
+        This vendor will only see products and orders for <strong>{value || "the selected vendor"}</strong>.
+      </p>
+    </div>
+  );
+}
+
 /** Inline form for inviting a new team member by email with a selected role. */
 function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
   const [email, setEmail] = useState("");
@@ -244,13 +276,6 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
 
   const needsVendor = role === "VENDOR";
   const needsSections = isSectionScopedRole(role);
-
-  // Distinct Product.vendor values to scope a vendor invite to.
-  const { data: vendorOptions = [] } = useQuery({
-    queryKey: ["products", "vendors"],
-    queryFn: () => apiClient.get<string[]>("/products/vendors").then((r) => r.data),
-    enabled: needsVendor,
-  });
 
   const canSend = !!email.trim() && (!needsVendor || !!vendorScope);
 
@@ -303,26 +328,7 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
         </button>
       </div>
 
-      {needsVendor && (
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Package className="size-3.5 shrink-0 text-gray-400" />
-            <Select value={vendorScope} onValueChange={setVendorScope}>
-              <SelectTrigger className="flex-1 h-9 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs shadow-sm">
-                <SelectValue placeholder={vendorOptions.length ? "Select the vendor…" : "No vendors found in products"} />
-              </SelectTrigger>
-              <SelectContent>
-                {vendorOptions.map((v) => (
-                  <SelectItem key={v} value={v}>{v}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <p className="pl-6 text-[10px] text-muted-foreground">
-            This vendor will only see products and orders for <strong>{vendorScope || "the selected vendor"}</strong>.
-          </p>
-        </div>
-      )}
+      {needsVendor && <VendorPicker value={vendorScope} onChange={setVendorScope} />}
 
       {needsSections && (
         <div className="space-y-1.5 pt-1">
@@ -399,6 +405,38 @@ function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: 
         </button>
       </div>
     </div>
+  );
+}
+
+// ── Vendor role dialog ──────────────────────────────────────────────────────
+
+/** Moving a member to Vendor: the role needs the vendor they supply, so it is asked for first. */
+function VendorRoleDialog({ orgId, member, onClose }: { orgId: string; member: OrgMember; onClose: () => void }) {
+  const [vendorScope, setVendorScope] = useState("");
+  const updateRole = useUpdateMemberRoleMutation(orgId);
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Make {member.user.firstName} a vendor</DialogTitle>
+          <DialogDescription>Choose which vendor {member.user.firstName} supplies.</DialogDescription>
+        </DialogHeader>
+        <VendorPicker value={vendorScope} onChange={setVendorScope} />
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="accent"
+            disabled={!vendorScope || updateRole.isPending}
+            onClick={() => updateRole.mutate({ memberId: member.id, data: { role: "VENDOR", vendorScope } }, { onSuccess: onClose })}
+          >
+            {updateRole.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Change role"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1511,6 +1549,8 @@ export default function SettingsPage() {
   const [showInvite, setShowInvite] = useState(false);
   // Member whose section-access editor is open.
   const [accessMemberId, setAccessMemberId] = useState<string | null>(null);
+  // Member being moved to Vendor, while their vendor is chosen.
+  const [vendorMember, setVendorMember] = useState<OrgMember | null>(null);
   /**
    * Drives the org-setup sheet:
    *   - `null`     — sheet closed
@@ -2038,7 +2078,13 @@ export default function SettingsPage() {
                           ) : (
                             <Select
                               value={member.role}
-                              onValueChange={(selectedRole) =>
+                              onValueChange={(selectedRole) => {
+                                // Vendor needs the vendor they supply first; the role
+                                // shown stays as it is until that is saved.
+                                if (selectedRole === "VENDOR") {
+                                  setVendorMember(member);
+                                  return;
+                                }
                                 updateRole.mutate(
                                   { memberId: member.id, data: { role: selectedRole as UserRole } },
                                   {
@@ -2053,19 +2099,15 @@ export default function SettingsPage() {
                                       }
                                     },
                                   },
-                                )
-                              }
+                                );
+                              }}
                             >
                               <SelectTrigger className="h-7 w-[100px] shrink-0 border-input bg-white dark:bg-gray-900 text-xs">
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
-                                {/* A vendor needs the vendor they are scoped to, which only
-                                    the invite asks for: a member switched to Vendor here
-                                    would be refused everywhere. Listed only so a current
-                                    vendor's role still shows. */}
-                                {ROLE_OPTIONS.filter((roleOption) => roleOption.value !== "VENDOR" || member.role === "VENDOR").map((roleOption) => (
-                                  <SelectItem key={roleOption.value} value={roleOption.value} disabled={roleOption.value === "VENDOR"}>{roleOption.label}</SelectItem>
+                                {ROLE_OPTIONS.map((roleOption) => (
+                                  <SelectItem key={roleOption.value} value={roleOption.value}>{roleOption.label}</SelectItem>
                                 ))}
                               </SelectContent>
                             </Select>
@@ -2095,6 +2137,10 @@ export default function SettingsPage() {
                       );
                     })}
                   </div>
+                )}
+
+                {vendorMember && canManageTeam && currentOrgId && (
+                  <VendorRoleDialog orgId={currentOrgId} member={vendorMember} onClose={() => setVendorMember(null)} />
                 )}
               </Section>
 

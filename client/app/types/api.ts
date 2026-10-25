@@ -557,6 +557,8 @@ export interface OrgMember {
 /** Payload for changing a member's role. */
 export interface UpdateMemberRoleRequest {
   role: UserRole;
+  /** Required when role is VENDOR: the Product.vendor value to scope them to. */
+  vendorScope?: string;
 }
 
 // ─── Team Invite Types ────────────────────────────────────────────────────

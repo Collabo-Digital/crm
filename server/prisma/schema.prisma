@@ -3806,6 +3806,8 @@ model GoogleSheet {
   origin         String
   /// Rows (the header included) already seen; null until an automation watches the sheet.
   seenRows       Int?      @map("seen_rows")
+  /// A hash of the last row seen's values, to find it again when rows above it are deleted.
+  lastRowHash    String?   @map("last_row_hash")
   checkedAt      DateTime? @map("checked_at")
   /// Why the sheet could not be read last time; cleared when it can.
   lastError      String?   @map("last_error")
