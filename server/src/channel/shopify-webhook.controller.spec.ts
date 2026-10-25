@@ -179,3 +179,103 @@ describe('ShopifyWebhookController — order webhooks', () => {
     );
   });
 });
+
+describe.each([
+  ['an org without warehousing', false],
+  ['a warehousing org', true],
+])('ShopifyWebhookController — inventory_levels/update out of order, %s', (_name, warehousing) => {
+  // One stock level, held where each path keeps it: the variant's quantity, or
+  // the warehouse's AVAILABLE bucket.
+  function build(start: { qty: number; at: string }) {
+    const level = { qty: start.qty, at: new Date(start.at) as Date | null };
+    const tx = {
+      $queryRaw: jest.fn(async () => [{ inventory_quantity: level.qty, shopify_inventory_updated_at: level.at }]),
+      productVariant: {
+        update: jest.fn(async ({ data }: any) => {
+          level.qty = data.inventoryQuantity;
+          if (data.shopifyInventoryUpdatedAt) level.at = data.shopifyInventoryUpdatedAt;
+        }),
+      },
+      inventoryEvent: { create: jest.fn().mockResolvedValue({}) },
+      stockLevel: {
+        findFirst: jest.fn(async () => ({ available: level.qty, shopifyUpdatedAt: level.at })),
+        updateMany: jest.fn(async ({ data }: any) => {
+          level.at = data.shopifyUpdatedAt;
+          return { count: 1 };
+        }),
+      },
+    };
+    const prisma = {
+      productVariant: { findFirst: jest.fn().mockResolvedValue({ id: 'var_1', inventoryQuantity: start.qty }) },
+      warehouse: { findFirst: jest.fn().mockResolvedValue({ id: 'wh_1' }) },
+      $transaction: jest.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
+    };
+    const ledger = {
+      isWarehousingEnabled: jest.fn().mockResolvedValue(warehousing),
+      applyMovement: jest.fn(async (m: any) => {
+        level.qty += m.toBucket ? m.quantity : -m.quantity;
+        return { skipped: false };
+      }),
+    };
+    const controller = new ShopifyWebhookController(
+      prisma as any, {} as any, {} as any, {} as any, { get: jest.fn() } as any, ledger as any,
+    );
+    for (const l of ['log', 'debug'] as const) {
+      jest.spyOn((controller as any).logger, l).mockImplementation(() => undefined);
+    }
+    const deliver = (available: number, updatedAt: string) =>
+      (controller as any).handleInventoryUpdate('ch_1', 'org_1', {
+        inventory_item_id: 501, location_id: 42, available, updated_at: updatedAt,
+      });
+    // Stock history rows: inventory events directly, or ledger movements.
+    const historyRows = () =>
+      warehousing ? ledger.applyMovement.mock.calls.length : tx.inventoryEvent.create.mock.calls.length;
+    return { level, deliver, historyRows };
+  }
+
+  // Shopify's own format, with the shop's offset.
+  const T0 = '2026-10-25T15:30:00+05:30';
+  const T1 = '2026-10-25T15:30:01+05:30';
+  const T2 = '2026-10-25T15:30:02+05:30';
+  const T3 = '2026-10-25T15:30:03+05:30';
+
+  it('ignores the 9 of 10 → 9 → 8 when it arrives after the 8', async () => {
+    const { level, deliver, historyRows } = build({ qty: 10, at: T0 });
+
+    await deliver(8, T2);
+    await deliver(9, T1);
+
+    expect(level.qty).toBe(8);
+    expect(level.at).toEqual(new Date(T2));
+    expect(historyRows()).toBe(1);
+  });
+
+  it('applies a newer update and keeps its time', async () => {
+    const { level, deliver } = build({ qty: 8, at: T1 });
+
+    await deliver(7, T3);
+
+    expect(level.qty).toBe(7);
+    expect(level.at).toEqual(new Date(T3));
+  });
+
+  it('applies an update with the same time as the stored one', async () => {
+    const { level, deliver } = build({ qty: 9, at: T1 });
+
+    await deliver(8, T1);
+
+    expect(level.qty).toBe(8);
+  });
+
+  it("still takes the echo of the CRM's own push: no stock history, and an older update after it is ignored", async () => {
+    // The merchant set 12 in the CRM, which pushed it; Shopify echoes 12.
+    const { level, deliver, historyRows } = build({ qty: 12, at: T0 });
+
+    await deliver(12, T3);
+    await deliver(10, T2);
+
+    expect(level.qty).toBe(12);
+    expect(level.at).toEqual(new Date(T3));
+    expect(historyRows()).toBe(0);
+  });
+});

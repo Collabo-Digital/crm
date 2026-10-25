@@ -28,6 +28,7 @@ import { WhatsAppAccountService } from './whatsapp-account.service';
 import { WhatsAppOnboardingProcessor } from './whatsapp-onboarding.processor';
 import { MetaPagesOAuthService } from './meta-pages-oauth.service';
 import { WhatsAppHealthScheduler } from './whatsapp-health.scheduler';
+import { ShopifyOrderCatchUpScheduler } from './shopify-order-catch-up.scheduler';
 import { DRAFT_MIRROR_QUEUE } from '../draft-order/draft-mirror.queue';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { OrganizationSettingsModule } from '../organization-settings/organization-settings.module';
@@ -68,7 +69,7 @@ import { CommerceEventsModule } from '../commerce/commerce-events.module';
     WhatsAppAccountService, WhatsAppOnboardingProcessor, MetaPagesOAuthService, WhatsAppHealthScheduler,
     ShopifySyncService, ShopifyLocationSyncService, ShopifyAnalyticsService, SyncProcessor, EncryptionService,
     ShopifyPushService, ShopifyPushProcessor, ShopifyPushEnqueuer,
-    ShopifyGraphqlClient, MetaGraphClient, ShopifyPixelService,
+    ShopifyGraphqlClient, MetaGraphClient, ShopifyPixelService, ShopifyOrderCatchUpScheduler,
   ],
   exports: [
     ChannelService, ShopifyOAuthService, InstagramOAuthService, WhatsAppOAuthService,

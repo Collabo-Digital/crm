@@ -144,6 +144,8 @@ export interface OrderNode {
   sourceName: string | null;
   /** The app that created the order — "Online Store", "Point of Sale", … */
   app: { name: string } | null;
+  /** What tells a cash-on-delivery order from a prepaid one. */
+  paymentGatewayNames: string[];
   createdAt: string;
   updatedAt: string;
   currencyCode: string;
@@ -263,6 +265,7 @@ export const ORDERS_LIST_QUERY = /* GraphQL */ `
         sourceIdentifier
         sourceName
         app { name }
+        paymentGatewayNames
         createdAt
         updatedAt
         currencyCode
@@ -362,6 +365,29 @@ export interface OrderRefundsResponse {
 
 export interface OrderRefundsVariables {
   id: string;
+}
+
+/**
+ * The checkout each order came from, which is what lets a recovered order
+ * complete its checkout. `Order.checkoutToken` exists only from Admin API
+ * 2026-10, so this is sent at that version on its own rather than moving
+ * ORDERS_LIST_QUERY to it.
+ */
+export const ORDER_CHECKOUT_TOKENS_QUERY = /* GraphQL */ `
+  query OrderCheckoutTokens($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Order { id checkoutToken }
+    }
+  }
+`;
+
+export interface OrderCheckoutTokensResponse {
+  /** Null for an id that no longer resolves (a deleted order). */
+  nodes: Array<{ id: string; checkoutToken: string | null } | null>;
+}
+
+export interface OrderCheckoutTokensVariables {
+  ids: string[];
 }
 
 // ─── Common shapes for Phase 1 mutations ────────────────────────────────────

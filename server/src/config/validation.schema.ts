@@ -32,6 +32,8 @@ export const validationSchema = Joi.object({
     // Floor for the first orders backfill. Bounded so a typo cannot turn the
     // initial pull into an unbounded full-history scan (or into nothing).
     SHOPIFY_INITIAL_ORDER_WINDOW_DAYS: Joi.number().integer().min(1).max(3650).optional(),
+    // Fractions allowed so a test can run the catch-up every few seconds.
+    SHOPIFY_RECONCILE_MINUTES: Joi.number().positive().max(1440).optional(),
     // Encrypts channel credentials; without it every channel connect fails.
     ENCRYPTION_KEY: Joi.string().length(32).when('NODE_ENV', { is: 'production', then: Joi.required() }),
     META_APP_ID: Joi.string().optional(),

@@ -544,6 +544,10 @@ model Channel {
   /// is dollars or rupees. Null until a first order reveals it.
   currency         String?
   lastSyncedAt     DateTime?       @map("last_synced_at")
+  /// Start of the last scheduled order catch-up that finished for this store
+  /// (ShopifyOrderCatchUpScheduler). The next one reads orders updated since
+  /// then, less an overlap.
+  orderCatchUpAt   DateTime?       @map("order_catch_up_at")
   syncStatus       SyncStatus      @default(IDLE) @map("sync_status")
   /// When this account was linked. NOT the same as `createdAt`: a row that is
   /// disconnected and later reconnected keeps its original creation date, so
@@ -785,6 +789,9 @@ model ProductVariant {
   cost                          Decimal?       @db.Decimal(12, 2) // Cost per item (COGS) — drives margin display
   inventoryItemId               String?        @map("inventory_item_id")
   inventoryQuantity             Int            @default(0) @map("inventory_quantity")
+  /// StockLevel.shopifyUpdatedAt for orgs without warehousing, whose
+  /// inventory_levels/update webhooks write `inventoryQuantity` directly.
+  shopifyInventoryUpdatedAt     DateTime?      @map("shopify_inventory_updated_at")
   weight                        Decimal?       @db.Decimal(10, 4)
   weightUnit                    String?        @map("weight_unit") // "kg", "lb"
   option1                       String? // "Small"
@@ -1374,19 +1381,23 @@ model WarehouseLocation {
 // CHECKs reserved>=0, qc>=0, damaged>=0. `available` may go negative ONLY via
 // the Shopify order-mirror path (oversold — surfaced as an alert, not an error).
 model StockLevel {
-  id                String   @id @default(cuid())
-  organizationId    String   @map("organization_id") // denormalized for org-scoped listing
-  variantId         String   @map("variant_id")
-  warehouseId       String   @map("warehouse_id")
-  locationId        String?  @map("location_id")
-  available         Int      @default(0)
-  reserved          Int      @default(0)
-  qc                Int      @default(0)
-  damaged           Int      @default(0)
+  id                String    @id @default(cuid())
+  organizationId    String    @map("organization_id") // denormalized for org-scoped listing
+  variantId         String    @map("variant_id")
+  warehouseId       String    @map("warehouse_id")
+  locationId        String?   @map("location_id")
+  available         Int       @default(0)
+  reserved          Int       @default(0)
+  qc                Int       @default(0)
+  damaged           Int       @default(0)
   // Informational putaway/pick hint shown on pick lists in V1 (true bin-level
   // quantities are V2).
-  defaultLocationId String?  @map("default_location_id")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  defaultLocationId String?   @map("default_location_id")
+  /// Shopify's `updated_at` from the inventory_levels/update webhook that last
+  /// set `available`. Shopify does not deliver those in order, so one older
+  /// than this is ignored rather than winding stock back.
+  shopifyUpdatedAt  DateTime? @map("shopify_updated_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
   organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   variant         ProductVariant     @relation(fields: [variantId], references: [id], onDelete: Restrict)
