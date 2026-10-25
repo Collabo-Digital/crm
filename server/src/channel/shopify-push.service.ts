@@ -269,6 +269,46 @@ export function shopifyOrderCustomer(
 }
 
 /**
+ * One SALE per payment taken at the point of sale, as the push sends them.
+ *
+ * Payments are taken against the bill rounded to the rupee while the order's
+ * total stays exact, so the amounts are fitted to the total: a paid bill's
+ * transactions add up to exactly the total, and a part-paid one's stay below
+ * it — otherwise Shopify would mark a bill with a balance still due as paid.
+ */
+export function posSaleTransactions(
+  order: {
+    totalPrice: Prisma.Decimal;
+    financialStatus: OrderFinancialStatus;
+    payments: Array<{ method: string; amount: Prisma.Decimal }>;
+  },
+  storeLocationId: number | null,
+): Array<{ amount: string; gateway: string; locationId: string | null }> {
+  const total = new Prisma.Decimal(order.totalPrice);
+  const paid = order.financialStatus === OrderFinancialStatus.PAID;
+  // A part-paid bill whose payments cover the exact total owes only round-off.
+  const ceiling = paid ? total : Prisma.Decimal.max(total.minus('0.01'), 0);
+  const amounts: Array<{ amount: Prisma.Decimal; method: string }> = [];
+  let sent = new Prisma.Decimal(0);
+  for (const p of order.payments) {
+    const amount = Prisma.Decimal.min(new Prisma.Decimal(p.amount), ceiling.minus(sent));
+    if (amount.lte(0)) break;
+    amounts.push({ amount, method: p.method });
+    sent = sent.plus(amount);
+  }
+  // Paid against a bill rounded down: the last payment carries the paise.
+  if (paid && amounts.length > 0 && sent.lt(total)) {
+    amounts[amounts.length - 1].amount = amounts[amounts.length - 1].amount.plus(total.minus(sent));
+  }
+  const locationId = storeLocationId ? ShopifyGraphqlClient.toGid('Location', storeLocationId) : null;
+  return amounts.map((a) => ({
+    amount: a.amount.toFixed(2),
+    gateway: `manual_${a.method.toLowerCase()}`,
+    locationId,
+  }));
+}
+
+/**
  * Pushes a locally-created (offline / in-store) order to the merchant's
  * connected Shopify store. Inventory is decremented automatically by Shopify
  * via `inventory_behaviour: 'decrement_obeying_policy'` — we do NOT make a
@@ -346,6 +386,8 @@ export class ShopifyPushService {
         customer: true,
         channel: { select: { platform: true } },
         lineItems: { include: { variant: true } },
+        dispatchWarehouse: { select: { shopifyLocationId: true } },
+        payments: { orderBy: { createdAt: 'asc' } },
       },
     });
     if (!order) {
@@ -384,9 +426,12 @@ export class ShopifyPushService {
       channel.id,
     );
 
-    // Resolve (or cache) the primary location id. Shopify decrements inventory
+    // The store the goods left from when it is a Shopify location, else the
+    // primary (resolved once and cached). Shopify decrements inventory
     // against the location set on the order's fulfillment.
-    const locationId = await this.resolveLocationId(channel.id, shopDomain, token);
+    const storeLocationId = Number(order.dispatchWarehouse?.shopifyLocationId) || null;
+    const locationId =
+      storeLocationId ?? (await this.resolveLocationId(channel.id, shopDomain, token));
 
     // Build the orderCreate input. Variants with a real Shopify variant_id
     // (externalId on the local ProductVariant) reference that variant by GID.
@@ -482,14 +527,24 @@ export class ShopifyPushService {
         : {}),
       ...(customerBlock ? { customer: customerBlock } : {}),
       // A successful SALE transaction covering the total marks the order paid.
-      transactions: [
-        {
-          kind: 'SALE',
-          status: 'SUCCESS',
-          amountSet: money(grandTotal),
-          gateway: this.resolveGateway(order.metadata),
-        },
-      ],
+      // A point-of-sale bill sends what was actually taken instead.
+      transactions:
+        order.posSale || order.payments?.length
+          ? posSaleTransactions(order, storeLocationId).map((t) => ({
+            kind: 'SALE',
+            status: 'SUCCESS',
+            amountSet: money(t.amount),
+            gateway: t.gateway,
+            ...(t.locationId ? { locationId: t.locationId } : {}),
+          }))
+          : [
+            {
+              kind: 'SALE',
+              status: 'SUCCESS',
+              amountSet: money(grandTotal),
+              gateway: this.resolveGateway(order.metadata),
+            },
+          ],
     };
 
     // A counter sale that was not pushed at sale time already had its stock
