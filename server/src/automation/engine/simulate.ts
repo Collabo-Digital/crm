@@ -35,6 +35,11 @@ export function simulate(
         contact: { ...facts.contact, tags: [...facts.contact.tags], attributes: { ...facts.contact.attributes } },
         context: { ...facts.context, vars: { ...facts.context.vars } },
     };
+    /** The step's template as the merchant reads it: the chosen one, or the pack's recommended one. */
+    const templateName = (c: Record<string, unknown>) =>
+        typeof c.templateSlot === 'string' && c.templateSlot && !c.templateId
+            ? `the recommended template "${packSlot('', c.templateSlot)?.title ?? c.templateSlot}"`
+            : `the template "${opts.templateNames?.[String(c.templateId ?? '')] ?? 'not chosen'}"`;
     let step = flow.first();
     while (step && trace.length < MAX_TRACE) {
         const c = step.config;
@@ -46,10 +51,8 @@ export function simulate(
         switch (step.type) {
             case 'send_message': {
                 const m = c as SendMessageConfigT;
-                if (m.kind === 'template' && m.templateSlot && !m.templateId) {
-                    push('done', `Sends the recommended template "${packSlot('', m.templateSlot)?.title ?? m.templateSlot}".`);
-                } else if (m.kind === 'template') {
-                    push('done', `Sends the template "${opts.templateNames?.[m.templateId ?? ''] ?? 'not chosen'}".`);
+                if (m.kind === 'template') {
+                    push('done', `Sends ${templateName(c)}.`);
                 } else {
                     const options = m.options.filter((o) => o.trim());
                     const text = interpolate(m.message, vars);
@@ -61,12 +64,12 @@ export function simulate(
                 push('done', `${c.mode === 'public' ? 'Replies under the comment' : 'Replies privately'}: ${interpolate(String(c.message ?? ''), vars)}`);
                 break;
             case 'send_invoice':
-                push('done', `Sends the order's GST invoice as a PDF with the template "${opts.templateNames?.[String(c.templateId ?? '')] ?? 'not chosen'}".`);
+                push('done', `Sends the order's GST invoice as a PDF with ${templateName(c)}.`);
                 break;
             case 'send_payment_link':
                 push('done', c.method === 'whatsapp_pay' ? 'Sends a WhatsApp Pay bill to review and pay in the chat.' : c.kind === 'text'
                     ? `Sends a Razorpay payment link: ${interpolate(String(c.message ?? ''), { ...vars, 'payment.link': 'https://rzp.io/rzp/example' })}`
-                    : `Sends a Razorpay payment link with the template "${opts.templateNames?.[String(c.templateId ?? '')] ?? 'not chosen'}".`);
+                    : `Sends a Razorpay payment link with ${templateName(c)}.`);
                 break;
             case 'wait':
                 push('waits', `Waits ${unitLabel(Number(c.amount), String(c.unit))}.`);
