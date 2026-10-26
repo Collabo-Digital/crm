@@ -410,6 +410,7 @@ model Organization {
   quickReplies           QuickReply[]
   inboxViews             InboxView[]
   messageTemplates       MessageTemplate[]
+  templatePacks          TemplatePack[]
   segments               Segment[]
   broadcasts             Broadcast[]
   broadcastRecipients    BroadcastRecipient[]
@@ -625,6 +626,7 @@ model Channel {
   automationEvents   AutomationEvent[]
   messages           Message[]
   messageTemplates   MessageTemplate[]
+  templatePacks      TemplatePack[]
   broadcasts         Broadcast[]
   shopifyLocations   ShopifyLocationLink[]
 
@@ -1137,18 +1139,20 @@ model OrderLineItem {
 }
 
 model OrderFulfillment {
-  id              String    @id @default(cuid())
-  orderId         String    @map("order_id")
-  externalId      String?   @map("external_id")
-  status          String    @default("pending")
-  trackingNumber  String?   @map("tracking_number")
-  trackingUrl     String?   @map("tracking_url")
-  trackingCompany String?   @map("tracking_company")
-  shippedAt       DateTime? @map("shipped_at")
-  deliveredAt     DateTime? @map("delivered_at")
-  metadata        Json?     @db.JsonB
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  id               String    @id @default(cuid())
+  orderId          String    @map("order_id")
+  externalId       String?   @map("external_id")
+  status           String    @default("pending")
+  trackingNumber   String?   @map("tracking_number")
+  trackingUrl      String?   @map("tracking_url")
+  trackingCompany  String?   @map("tracking_company")
+  shippedAt        DateTime? @map("shipped_at")
+  deliveredAt      DateTime? @map("delivered_at")
+  /// First time the carrier reported it out for delivery; announced once.
+  outForDeliveryAt DateTime? @map("out_for_delivery_at")
+  metadata         Json?     @db.JsonB
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
@@ -2317,13 +2321,19 @@ model Automation {
   settings           Json?     @db.JsonB
 
   // Health and list-page counters.
-  triggeredCount  Int       @default(0) @map("triggered_count")
-  lastTriggeredAt DateTime? @map("last_triggered_at")
-  lastError       String?   @map("last_error")
-  lastErrorAt     DateTime? @map("last_error_at")
-  archivedAt      DateTime? @map("archived_at")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  triggeredCount    Int       @default(0) @map("triggered_count")
+  lastTriggeredAt   DateTime? @map("last_triggered_at")
+  lastError         String?   @map("last_error")
+  lastErrorAt       DateTime? @map("last_error_at")
+  archivedAt        DateTime? @map("archived_at")
+  /// Set on the automations Collabo's recommended pack made: which one it is
+  /// (order_confirmed, cod_confirmation, cart_recovery, ...).
+  packKey           String?   @map("pack_key")
+  /// A pack automation waiting to go live: it is published by itself once
+  /// every template it sends is approved.
+  activateWhenReady Boolean   @default(false) @map("activate_when_ready")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
   organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   channel          Channel?            @relation(fields: [channelId], references: [id], onDelete: SetNull)
@@ -2335,6 +2345,7 @@ model Automation {
   runSteps         AutomationRunStep[]
   messages         Message[]
 
+  @@unique([organizationId, packKey])
   @@index([organizationId, status])
   @@index([organizationId, ownerUserId])
   @@map("automations")
@@ -2999,36 +3010,49 @@ enum TemplateCategory {
 /// A WhatsApp message template. Meta owns its status and quality; rows are
 /// kept current by sync and by the template webhooks.
 model MessageTemplate {
-  id                String            @id @default(cuid())
-  organizationId    String            @map("organization_id")
-  channelId         String            @map("channel_id")
-  wabaId            String            @map("waba_id")
+  id                  String            @id @default(cuid())
+  organizationId      String            @map("organization_id")
+  channelId           String            @map("channel_id")
+  wabaId              String            @map("waba_id")
   /// Meta's template id.
-  externalId        String?           @map("external_id")
-  name              String
-  language          String
-  category          TemplateCategory
+  externalId          String?           @map("external_id")
+  name                String
+  language            String
+  category            TemplateCategory
   /// The category the business asked for, when Meta approved it as another.
-  requestedCategory TemplateCategory? @map("requested_category")
+  requestedCategory   TemplateCategory? @map("requested_category")
   /// Meta's status: PENDING, APPROVED, REJECTED, PAUSED, DISABLED, ...
-  status            String
+  status              String
   /// Rejection or pause reason as Meta gave it.
-  statusReason      String?           @map("status_reason")
+  statusReason        String?           @map("status_reason")
   /// GREEN, YELLOW, RED or UNKNOWN.
-  qualityScore      String?           @map("quality_score")
+  qualityScore        String?           @map("quality_score")
   /// NAMED or POSITIONAL.
-  parameterFormat   String            @default("POSITIONAL") @map("parameter_format")
+  parameterFormat     String            @default("POSITIONAL") @map("parameter_format")
   /// Meta's `components` array, as created or as last synced.
-  components        Json              @db.JsonB
+  components          Json              @db.JsonB
   /// The starter it was made from, if any.
-  starterKey        String?           @map("starter_key")
-  submittedAt       DateTime?         @map("submitted_at")
+  starterKey          String?           @map("starter_key")
+  /// Set when Collabo's recommended pack made this template: the slot it fills
+  /// (order_confirmed, cod_confirm, ...; see campaigns/templates/pack).
+  packSlot            String?           @map("pack_slot")
+  /// The pack version that created it; a replacement is the next version.
+  packVersion         Int?              @map("pack_version")
+  /// 'library' (created from Meta's Template Library) or 'collabo' (our wording).
+  packSource          String?           @map("pack_source")
+  /// The Meta Template Library template it was created from.
+  libraryTemplateName String?           @map("library_template_name")
+  /// Meta's rejection_info from the status webhook: { reason, recommendation }.
+  rejectionInfo       Json?             @map("rejection_info") @db.JsonB
+  /// When Meta's last status event for it happened; older events are ignored.
+  statusUpdatedAt     DateTime?         @map("status_updated_at")
+  submittedAt         DateTime?         @map("submitted_at")
   /// Approved templates may be edited once a day and ten times in 30 days.
-  editedAt          DateTime[]        @default([]) @map("edited_at")
-  syncedAt          DateTime?         @map("synced_at")
-  createdById       String?           @map("created_by_id")
-  createdAt         DateTime          @default(now()) @map("created_at")
-  updatedAt         DateTime          @updatedAt @map("updated_at")
+  editedAt            DateTime[]        @default([]) @map("edited_at")
+  syncedAt            DateTime?         @map("synced_at")
+  createdById         String?           @map("created_by_id")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
@@ -3036,7 +3060,41 @@ model MessageTemplate {
 
   @@unique([wabaId, name, language])
   @@index([organizationId, status])
+  @@index([organizationId, packSlot])
   @@map("message_templates")
+}
+
+/// Collabo's recommended template pack on one WhatsApp Business Account: what
+/// has been created there, and whether its automations go live by themselves.
+model TemplatePack {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  channelId      String    @map("channel_id")
+  wabaId         String    @map("waba_id")
+  /// True when WhatsApp was connected after the pack shipped: its automations
+  /// go live as soon as their templates are approved. Accounts connected
+  /// before stay off until the merchant turns them on.
+  autoActivate   Boolean   @default(false) @map("auto_activate")
+  /// 'connect', 'backfill' or 'manual'.
+  origin         String
+  /// The pack version last fully ensured on this account; 0 before the first run.
+  version        Int       @default(0)
+  /// 'pending', 'running', 'ready' or 'stopped'.
+  status         String    @default("pending")
+  /// Why the pack stopped (Meta's template limit, a restricted account, ...).
+  stoppedReason  String?   @map("stopped_reason")
+  lastRunAt      DateTime? @map("last_run_at")
+  /// { cartDiscount?: { code, text, validDays } }
+  settings       Json?     @db.JsonB
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([wabaId])
+  @@index([organizationId])
+  @@map("template_packs")
 }
 
 /// A saved audience: rules over contacts, their store customer and their

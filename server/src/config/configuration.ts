@@ -194,6 +194,13 @@ export default () => ({
             breakerMaxMs: 900_000,
         },
     },
+    templatePack: {
+        // Create Collabo's recommended WhatsApp templates at start-up on every
+        // connected WhatsApp account that does not have them yet (see
+        // TemplatePackBackfill). On unless set to "false"; a test harness whose
+        // workspaces must keep exactly the templates it made turns it off.
+        autoEnable: process.env.TEMPLATE_PACK_AUTO_ENABLE !== 'false',
+    },
     inventory: {
         // Switch every workspace still on a single stock quantity to stock
         // locations at start-up (see LocationsSwitchOver). On unless set to
