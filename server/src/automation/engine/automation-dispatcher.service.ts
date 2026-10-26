@@ -55,6 +55,8 @@ interface EventPayload {
         button?: { payload?: string };
         /** A WhatsApp reply-button tap. */
         interactive?: { button_reply?: { id?: string } };
+        /** Order events: WhatsApp Pay told the customer itself, on its order page (see CommerceEventsService). */
+        whatsAppPayNotice?: boolean;
     };
 }
 
@@ -62,9 +64,11 @@ interface EventPayload {
 interface OrderLimits {
     skipPos?: boolean;
     orderWithinDays?: number;
+    skipWhatsAppPay?: boolean;
+    oneRunAtATime?: boolean;
 }
 
-type SkipReason = 'once_per_contact' | 'once_per_day';
+type SkipReason = 'once_per_contact' | 'once_per_day' | 'already_running';
 
 // Limits come from the published version: a setting changed in the draft is not live until it is published.
 const triggerInclude = {
@@ -248,7 +252,7 @@ export class AutomationDispatcher {
     /** Start the automations this event triggers. Returns the runs to execute. */
     private async start(event: AutomationEvent, payload: EventPayload): Promise<string[]> {
         if (!event.contactId) return [];
-        let matched = await this.orderAllows((await this.candidates(event)).filter((t) => this.matches(t, event, payload)), event);
+        let matched = await this.orderAllows((await this.candidates(event)).filter((t) => this.matches(t, event, payload)), event, payload);
         const skips = new Map<string, SkipReason | null>();
         for (const t of matched) skips.set(t.id, await this.onceSkip(t, event));
         if (ONE_WINNER.has(event.eventType) && matched.length > 1) matched = [pickWinner(matched, (t) => !skips.get(t.id))];
@@ -266,8 +270,10 @@ export class AutomationDispatcher {
      * out, a trigger starts no run at all (not a skipped one): a sale at the
      * till, or an order older than the trigger looks at, is not what it is for.
      */
-    private async orderAllows(matched: CandidateTrigger[], event: AutomationEvent): Promise<CandidateTrigger[]> {
+    private async orderAllows(matched: CandidateTrigger[], event: AutomationEvent, payload: EventPayload): Promise<CandidateTrigger[]> {
         const limits = (t: CandidateTrigger) => (t.config ?? {}) as OrderLimits;
+        // The customer already had WhatsApp Pay's own notice of this: a message too would say it twice.
+        if (payload.raw?.whatsAppPayNotice === true) matched = matched.filter((t) => !limits(t).skipWhatsAppPay);
         if (!event.orderId || !matched.some((t) => limits(t).skipPos || limits(t).orderWithinDays)) return matched;
         const order = await this.prisma.order.findUnique({
             where: { id: event.orderId },
@@ -351,6 +357,18 @@ export class AutomationDispatcher {
 
     /** Why the automation's "once" setting keeps it from starting for this person again, or null. */
     private async onceSkip(trigger: CandidateTrigger, event: AutomationEvent): Promise<SkipReason | null> {
+        if (((trigger.config ?? {}) as OrderLimits).oneRunAtATime) {
+            const live = await this.prisma.automationRun.findFirst({
+                where: {
+                    automationId: trigger.automation.id,
+                    contactId: event.contactId,
+                    isTest: false,
+                    status: { in: [AutomationRunStatus.PENDING, AutomationRunStatus.RUNNING, AutomationRunStatus.WAITING] },
+                },
+                select: { id: true },
+            });
+            if (live) return 'already_running';
+        }
         const settings = (trigger.automation.publishedVersion?.settings ?? {}) as { oncePerContact?: 'ever' | 'perDay' | 'never' };
         const chosen = settings.oncePerContact ?? 'ever';
         const once = chosen === 'ever' && ONE_PER_SUBJECT(event.eventType) ? 'never' : chosen;

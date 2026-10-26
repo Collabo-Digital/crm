@@ -22,6 +22,8 @@ export type AutomationJobData =
 export const MANAGED_SYNC_JOB = 'managed-sync';
 export interface ManagedSyncJobData {
     organizationId: string;
+    /** The cart discount changed and its route could not rebuild the cart recovery itself. */
+    rebuildCart?: boolean;
 }
 
 const OPTS = { attempts: 5, backoff: { type: 'exponential' as const, delay: 5_000 }, removeOnComplete: 1000, removeOnFail: { count: 1000 } };

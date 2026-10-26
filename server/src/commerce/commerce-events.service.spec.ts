@@ -4,8 +4,9 @@ import { readStoreLinkToken, storeLinkKey } from './store-links';
 
 type Row = Record<string, any>;
 
-function harness() {
+function harness(told?: () => Promise<string[] | void>) {
     const events: Row[] = [];
+    const listened: string[][] = [];
     const prisma = {
         order: {
             findUnique: jest.fn(async () => ({
@@ -37,7 +38,13 @@ function harness() {
     };
     const jobs = { event: jest.fn() };
     const config = { get: (key: string) => (key === 'encryptionKey' ? 'enc-secret' : undefined) };
-    return { service: new CommerceEventsService(prisma as never, jobs as never, config as never), events, jobs };
+    const service = new CommerceEventsService(prisma as never, jobs as never, config as never);
+    // As WhatsApp Pay's listener does: it returns what it put on the customer's order page.
+    service.onOrder(async (_id, kinds) => {
+        listened.push(kinds);
+        return (await told?.()) as never;
+    });
+    return { service, events, jobs, prisma, listened };
 }
 
 const key = storeLinkKey('enc-secret');
@@ -75,10 +82,37 @@ describe('CommerceEventsService — the pack’s store events', () => {
             firstName: 'Ritu',
             customerExternalId: null,
             channelId: 'ch_shop',
+            updatedAt: new Date('2026-10-26T10:00:00Z'),
         });
         const raw = h.events[0].payload.raw;
         expect(raw.checkoutId).toBe('cm3checkout00000000000001');
+        expect(raw.quietSince).toBe('2026-10-26T10:00:00.000Z');
         expect(readStoreLinkToken(key, 'cart', raw.vars['checkout.cart_path'])).toBe('cm3checkout00000000000001');
         expect(raw.vars['checkout.url']).toBe('https://shop.example/7001/checkouts/ctok/recover?key=k');
+    });
+});
+
+describe('CommerceEventsService — WhatsApp Pay’s own notices', () => {
+    const flags = (h: ReturnType<typeof harness>) => Object.fromEntries(h.events.map((e) => [e.eventType, e.payload.raw.whatsAppPayNotice === true]));
+
+    it('marks the events WhatsApp Pay told the customer of itself, and only those', async () => {
+        const h = harness(async () => ['fulfilled', 'delivered']);
+        await h.service.order('cm3order0000000000000001', ['fulfilled', 'out_for_delivery', 'delivered']);
+        expect(h.listened).toEqual([['fulfilled', 'out_for_delivery', 'delivered']]);
+        expect(flags(h)).toEqual({ 'crm.order.fulfilled': true, 'crm.order.out_for_delivery': false, 'crm.order.delivered': true });
+    });
+
+    it('marks nothing when WhatsApp Pay told nothing (its window closed, or not its order), or its listener failed', async () => {
+        const quiet = harness(async () => []);
+        await quiet.service.order('cm3order0000000000000001', ['fulfilled', 'cancelled']);
+        expect(flags(quiet)).toEqual({ 'crm.order.fulfilled': false, 'crm.order.cancelled': false });
+        const silent = harness(async () => undefined);
+        await silent.service.order('cm3order0000000000000001', ['delivered']);
+        expect(flags(silent)).toEqual({ 'crm.order.delivered': false });
+        const failed = harness(async () => {
+            throw new Error('Graph down');
+        });
+        await failed.service.order('cm3order0000000000000001', ['cancelled']);
+        expect(flags(failed)).toEqual({ 'crm.order.cancelled': false });
     });
 });

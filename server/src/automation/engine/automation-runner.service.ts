@@ -161,12 +161,11 @@ export class AutomationRunner {
         if (!flow) return;
         const start = run.currentStepKey ? flow.step(run.currentStepKey) : flow.first();
         const ctx = parseRunContext(run.context);
-        // A held send whose wake-up was cut short (its worker died): it gets the checks its resume would have made.
-        if (start && ctx.hold?.stepId === start.id) {
-            const stopped = await this.stopReason(run, flow.trigger.config, ctx, 'timer');
-            if (stopped) return this.stop(run, start, ctx, stopped);
-            delete ctx.hold;
-        }
+        // Before the first send as well as at every wake-up: the shopper may have ordered before the run began.
+        const stopped = start ? await this.stopReason(run, flow.trigger.config, ctx, 'timer') : null;
+        if (stopped) return this.stop(run, start!, ctx, stopped);
+        // A held send whose wake-up was cut short (its worker died) runs again.
+        if (ctx.hold?.stepId === start?.id) delete ctx.hold;
         await this.execute(run, flow, start, ctx);
     }
 
@@ -866,11 +865,12 @@ export class AutomationRunner {
     }
 
     /**
-     * The trigger's stop conditions, checked whenever the run wakes from a
-     * wait: the shopper placed an order (its checkout completed, or an order
-     * of theirs came in), wrote to the business, or opted out, all since the
-     * run started. A reply a wait-for-reply step was waiting for is no reason
-     * to stop.
+     * The trigger's stop conditions, checked before the first step and
+     * whenever the run wakes from a wait: the shopper placed an order (its
+     * checkout completed, or an order of theirs came in since the checkout
+     * went quiet), or wrote to the business or opted out since the run
+     * started. A reply a wait-for-reply step was waiting for is no reason to
+     * stop.
      */
     private async stopReason(run: LoadedRun, trigger: Record<string, unknown>, ctx: RunContext, reason: 'timer' | 'reply'): Promise<StopReason | null> {
         const when = (trigger.stopWhen ?? {}) as { orderPlaced?: boolean; replied?: boolean; optedOut?: boolean };
@@ -897,14 +897,24 @@ export class AutomationRunner {
         }
         if (when.orderPlaced) {
             const event = run.eventId ? await this.prisma.automationEvent.findUnique({ where: { id: run.eventId }, select: { payload: true } }) : null;
-            const checkoutId = (event?.payload as { raw?: { checkoutId?: unknown } } | null)?.raw?.checkoutId;
-            const checkout = typeof checkoutId === 'string'
-                ? await this.prisma.checkout.findUnique({ where: { id: checkoutId }, select: { completedAt: true } })
+            const raw = (event?.payload as { raw?: { checkoutId?: unknown; quietSince?: unknown } } | null)?.raw;
+            const checkout = typeof raw?.checkoutId === 'string'
+                ? await this.prisma.checkout.findUnique({ where: { id: raw.checkoutId }, select: { completedAt: true } })
                 : null;
             if (checkout?.completedAt) return 'order_placed';
+            // From when the checkout went quiet: an order placed through another checkout before the run began counts.
+            const quiet = typeof raw?.quietSince === 'string' ? new Date(raw.quietSince) : null;
+            const from = quiet && !Number.isNaN(quiet.getTime()) ? quiet : since;
             const customers = [...new Set([run.customerId, contact?.customerId].filter((c): c is string => !!c))];
             const ordered = customers.length
-                ? await this.prisma.order.findFirst({ where: { organizationId: run.organizationId, customerId: { in: customers }, createdAt: { gt: since } }, select: { id: true } })
+                ? await this.prisma.order.findFirst({
+                    where: {
+                        organizationId: run.organizationId,
+                        customerId: { in: customers },
+                        OR: [{ externalCreatedAt: { gt: from } }, { externalCreatedAt: null, createdAt: { gt: from } }],
+                    },
+                    select: { id: true },
+                })
                 : null;
             if (ordered) return 'order_placed';
         }

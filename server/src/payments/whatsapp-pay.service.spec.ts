@@ -17,7 +17,7 @@ function build(open: Array<ReturnType<typeof request>> = []) {
             updateMany: jest.fn(async () => ({ count: 1 })),
         },
     };
-    const sender = { send: jest.fn(async () => ({ ok: true, messageId: 'wamid' })) };
+    const sender = { send: jest.fn(async (): Promise<Record<string, unknown>> => ({ ok: true, messageId: 'wamid' })) };
     const links = { onClose: jest.fn(), toView: jest.fn() };
     const events = { onOrder: jest.fn() };
     const service = new WhatsAppPayService(prisma as any, {} as any, {} as any, sender as any, links as any, events as any);
@@ -58,5 +58,34 @@ describe('WhatsAppPayService closing other bills', () => {
             { status: 'CREATED' },
             { status: 'CANCELLED', expiresAt: { gt: expect.any(Date) } },
         ]);
+    });
+});
+
+describe('WhatsAppPayService updating the order page', () => {
+    const statuses = (sender: ReturnType<typeof build>['sender']) => sender.send.mock.calls.map((c) => ((c as any)[0].payload as { status: string }).status);
+
+    it('says shipped and delivered for an order paid by WhatsApp Pay, and returns what it told', async () => {
+        const { service, sender } = build([request({ status: 'PAID' })]);
+        await expect((service as any).orderChanged('order_1', ['fulfilled', 'out_for_delivery', 'delivered'])).resolves.toEqual(['fulfilled', 'delivered']);
+        expect(statuses(sender)).toEqual(['shipped', 'completed']);
+    });
+
+    it('returns nothing it could not tell: window closed, no chat, or a paid order cancelled', async () => {
+        const closed = build([request({ status: 'PAID' })]);
+        closed.sender.send.mockResolvedValue({ ok: false, code: 'window_closed', message: 'The 24-hour reply window closed.' });
+        await expect((closed.service as any).orderChanged('order_1', ['fulfilled'])).resolves.toEqual([]);
+        const noChat = build([request({ status: 'PAID', conversationId: null })]);
+        await expect((noChat.service as any).orderChanged('order_1', ['delivered'])).resolves.toEqual([]);
+        expect(noChat.sender.send).not.toHaveBeenCalled();
+        const paidCancel = build([request({ status: 'PAID' })]);
+        await expect((paidCancel.service as any).orderChanged('order_1', ['cancelled'])).resolves.toEqual([]);
+        expect(paidCancel.sender.send).not.toHaveBeenCalled();
+    });
+
+    it('closes an unpaid request on a cancelled order, and returns the cancellation it told', async () => {
+        const { service, sender, prisma } = build([request()]);
+        await expect((service as any).orderChanged('order_1', ['cancelled'])).resolves.toEqual(['cancelled']);
+        expect(statuses(sender)).toEqual(['canceled']);
+        expect(prisma.paymentLink.updateMany).toHaveBeenCalledWith({ where: { id: 'wp_old', status: 'CREATED' }, data: { status: 'CANCELLED' } });
     });
 });

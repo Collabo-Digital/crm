@@ -1,7 +1,10 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
 import { AutomationStatus, ChannelPlatform, ChannelStatus, Prisma } from '@prisma/client';
+import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../../redis/redis.service';
+import { AUTOMATION_QUEUE, MANAGED_SYNC_JOB, ManagedSyncJobData } from '../../messaging/automation-jobs';
 import { PACK_LANGUAGE, templatePack, type PackSet, type PackSlot } from '../../campaigns/templates/pack/template-pack';
 import { pickPackTemplate, type PackTemplateRow } from '../../campaigns/templates/pack/pick-pack-template';
 import { parseDefinition, triggerTypeFor, type StepDef } from '../blocks/definition.schema';
@@ -38,6 +41,7 @@ export class ManagedAutomationsService {
         private readonly prisma: PrismaService,
         private readonly automations: AutomationService,
         private readonly redis: RedisService,
+        @InjectQueue(AUTOMATION_QUEUE) private readonly queue: Queue<ManagedSyncJobData>,
     ) { }
 
     /**
@@ -122,7 +126,21 @@ export class ManagedAutomationsService {
                 WHERE "id" = ${found.pack.id}
             `;
         }
-        await this.sync(orgId, { rebuildCart: true });
+        try {
+            await this.sync(orgId, { rebuildCart: true });
+        } catch (err) {
+            // Saved either way: the rebuild follows as a job, which waits its turn for the lock and retries.
+            this.logger.warn(`Cart recovery of ${orgId} not rebuilt now, queued: ${err instanceof Error ? err.message : err}`);
+            await this.queue
+                .add(MANAGED_SYNC_JOB, { organizationId: orgId, rebuildCart: true }, {
+                    jobId: `managed-sync-${orgId}-cart-${Date.now()}`,
+                    attempts: 5,
+                    backoff: { type: 'exponential', delay: 5_000 },
+                    removeOnComplete: 1000,
+                    removeOnFail: { count: 1000 },
+                })
+                .catch((e) => this.logger.error(`Cart recovery rebuild of ${orgId} not queued: ${e instanceof Error ? e.message : e}`));
+        }
         return { cartDiscount: discount };
     }
 
@@ -156,8 +174,9 @@ export class ManagedAutomationsService {
         }
         rows = await this.packRows(orgId);
 
+        // Drafts only: a live one is on already, and one the merchant paused or archived stays as they left it.
         const turnOn = rows
-            .filter((r) => opts.turnOn?.includes(r.packKey!) && r.status !== AutomationStatus.ACTIVE && r.status !== AutomationStatus.ARCHIVED && !r.activateWhenReady)
+            .filter((r) => opts.turnOn?.includes(r.packKey!) && r.status === AutomationStatus.DRAFT && !r.activateWhenReady)
             .filter((r) => registryMatch(MANAGED_BY_KEY.get(r.packKey!)!, r.definition, settings) !== 'edited');
         if (turnOn.length) {
             await this.prisma.automation.updateMany({ where: { id: { in: turnOn.map((r) => r.id) } }, data: { activateWhenReady: true } });
@@ -172,14 +191,25 @@ export class ManagedAutomationsService {
             if (match === 'edited') continue;
             const steps = entry.steps(settings);
             let draft: unknown = row.definition;
+            let republish = false;
+            // WhatsApp reconnected on another channel: its events, and its messages, are on that one now.
+            if (row.channelId !== channelId) {
+                await this.prisma.$transaction([
+                    this.prisma.automation.update({ where: { id: row.id }, data: { channelId } }),
+                    this.prisma.automationTrigger.updateMany({ where: { automationId: row.id }, data: { channelId } }),
+                ]);
+                republish = true;
+            }
             // Only on a change of the discount: at other times a draft equal to another build may be the merchant's own edit.
             if (match === 'stale' && opts.rebuildCart) {
                 const saved = await this.automations.saveSystemDefinition(row.id, orgId, steps, row.definition);
-                if (!saved) continue;
-                draft = saved;
-                if (row.status === AutomationStatus.ACTIVE) await this.publish(row.id, orgId, row.packKey!, draft);
+                if (saved) {
+                    draft = saved;
+                    republish = true;
+                }
             }
-            if (!row.activateWhenReady || row.status === AutomationStatus.ACTIVE) continue;
+            if (republish && row.status === AutomationStatus.ACTIVE) await this.publish(row.id, orgId, row.packKey!, draft);
+            if (!row.activateWhenReady || row.status !== AutomationStatus.DRAFT) continue;
             if (!templateSlotsIn(steps).every((slot) => this.approved(templates, slot))) continue;
             const triggerType = triggerTypeFor(steps[0]);
             const duplicate = await this.prisma.automationTrigger.findFirst({
@@ -230,7 +260,7 @@ export class ManagedAutomationsService {
     private packRows(orgId: string) {
         return this.prisma.automation.findMany({
             where: { organizationId: orgId, packKey: { not: null } },
-            select: { id: true, packKey: true, status: true, activateWhenReady: true, definition: true },
+            select: { id: true, packKey: true, status: true, activateWhenReady: true, definition: true, channelId: true },
         });
     }
 

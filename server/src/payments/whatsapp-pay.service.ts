@@ -335,8 +335,15 @@ export class WhatsAppPayService implements OnModuleInit {
         return true;
     }
 
-    /** Shipped and delivered orders that were paid by WhatsApp Pay update the order page; an unpaid request on a cancelled order is closed. */
-    private async orderChanged(orderId: string, kinds: StoreEventKind[]) {
+    /**
+     * Shipped and delivered orders that were paid by WhatsApp Pay update the
+     * order page; an unpaid request on a cancelled order is closed. Returns
+     * the events the customer was told of here, so the automations that would
+     * say the same skip them: one WhatsApp refuses (its 24-hour window closed)
+     * was not told.
+     */
+    private async orderChanged(orderId: string, kinds: StoreEventKind[]): Promise<StoreEventKind[]> {
+        const told = new Set<StoreEventKind>();
         const requests = await this.prisma.paymentLink.findMany({
             where: { provider: PaymentProvider.WHATSAPP_PAY, OR: [{ orderId }, { draftOrder: { completedOrderId: orderId } }] },
         });
@@ -344,14 +351,15 @@ export class WhatsAppPayService implements OnModuleInit {
             if (link.status === PaymentLinkStatus.PAID) {
                 for (const kind of kinds) {
                     const status = ORDER_PAGE[kind];
-                    if (status) await this.orderStatus(link, status, status === 'shipped' ? 'Your order is on its way.' : 'Your order was delivered.');
+                    if (status && (await this.orderStatus(link, status, status === 'shipped' ? 'Your order is on its way.' : 'Your order was delivered.'))) told.add(kind);
                 }
             } else if (link.status === PaymentLinkStatus.CREATED && kinds.includes('cancelled')) {
                 // A paid order cannot be marked cancelled on the order page (Meta error 2047); an unpaid one can.
-                await this.orderStatus(link, 'canceled', 'This order was cancelled.');
+                if (await this.orderStatus(link, 'canceled', 'This order was cancelled.')) told.add('cancelled');
                 await this.prisma.paymentLink.updateMany({ where: { id: link.id, status: PaymentLinkStatus.CREATED }, data: { status: PaymentLinkStatus.CANCELLED } });
             }
         }
+        return [...told];
     }
 
     /**
@@ -376,9 +384,9 @@ export class WhatsAppPayService implements OnModuleInit {
         }
     }
 
-    /** One order_status message per request and status; outside the 24-hour window WhatsApp refuses it and that is logged. */
-    private async orderStatus(link: PaymentLink, status: 'processing' | 'shipped' | 'completed' | 'canceled', text: string) {
-        if (!link.conversationId) return;
+    /** One order_status message per request and status; outside the 24-hour window WhatsApp refuses it and that is logged. True when it went out. */
+    private async orderStatus(link: PaymentLink, status: 'processing' | 'shipped' | 'completed' | 'canceled', text: string): Promise<boolean> {
+        if (!link.conversationId) return false;
         const outcome = await this.sender.send({
             organizationId: link.organizationId,
             conversationId: link.conversationId,
@@ -387,6 +395,7 @@ export class WhatsAppPayService implements OnModuleInit {
             idempotencyKey: `wapay:${link.id}:${status}`,
         });
         if (!outcome.ok) this.logger.log(`WhatsApp Pay order page for ${link.id} not updated to ${status}: ${outcome.message}`);
+        return outcome.ok;
     }
 
     private async orderBill(orgId: string, orderId: string) {

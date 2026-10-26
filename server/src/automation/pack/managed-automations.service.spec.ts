@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { BadRequestException } from '@nestjs/common';
 import { parseDefinition } from '../blocks/definition.schema';
+import { LockTimeoutError } from '../engine/redis-lock';
 import { MANAGED_BY_KEY, templateSlotsIn } from './managed-automations';
 import { ManagedAutomationsService } from './managed-automations.service';
 
@@ -27,13 +28,13 @@ const approved = (...slots: string[]) =>
     slots.map((slot, i) => ({ id: `t${i}`, packSlot: slot, packVersion: 1, status: 'APPROVED', category: SLOT_CATEGORY[slot] ?? 'UTILITY', language: 'en', updatedAt: new Date() }));
 const ALL = ['order_confirmed', 'cod_confirm', 'order_shipped', 'out_for_delivery', 'order_delivered', 'order_cancelled', 'refund_processed', 'gst_invoice', 'review_request', 'optin_confirmed', 'cart_reminder_1', 'cart_reminder_2', 'cart_reminder_3'];
 
-function harness(opts: { pack?: Row | null; shopify?: boolean; templates?: Row[]; merchantOn?: string[]; existing?: Row[] } = {}) {
+function harness(opts: { pack?: Row | null; shopify?: boolean; templates?: Row[]; merchantOn?: string[]; existing?: Row[]; channelId?: string } = {}) {
     const pack = opts.pack === null ? null : { id: 'pack1', organizationId: 'o', wabaId: 'waba1', autoActivate: true, settings: {}, ...opts.pack };
     const rows: Row[] = [...(opts.existing ?? [])];
     const published: string[] = [];
     const prisma = {
         channel: {
-            findFirst: jest.fn(async () => ({ id: 'ch_wa', externalStoreId: 'waba1' })),
+            findFirst: jest.fn(async () => ({ id: opts.channelId ?? 'ch_wa', externalStoreId: 'waba1' })),
             count: jest.fn(async () => (opts.shopify ? 1 : 0)),
         },
         templatePack: { findUnique: jest.fn(async () => pack) },
@@ -49,7 +50,9 @@ function harness(opts: { pack?: Row | null; shopify?: boolean; templates?: Row[]
         automationTrigger: {
             findFirst: jest.fn(async ({ where }: Row) => ((opts.merchantOn ?? []).includes(where.triggerType) ? { automation: { name: 'My own flow' } } : null)),
             findMany: jest.fn(async () => (opts.merchantOn ?? []).map((triggerType) => ({ triggerType, automation: { name: 'My own flow' } }))),
+            updateMany: jest.fn(async () => ({ count: 1 })),
         },
+        $transaction: jest.fn(async (ops: Array<Promise<unknown>>) => Promise.all(ops)),
         $executeRaw: jest.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
             const sql = strings.join('?');
             if (pack) pack.settings = sql.includes('jsonb_set') ? { cartDiscount: JSON.parse(String(values[1])) } : {};
@@ -58,7 +61,7 @@ function harness(opts: { pack?: Row | null; shopify?: boolean; templates?: Row[]
     };
     const automations = {
         createSystem: jest.fn(async (_org: string, input: Row) => {
-            const row = { id: `a_${input.packKey}`, packKey: input.packKey, status: 'DRAFT', activateWhenReady: input.activateWhenReady, definition: { steps: parseDefinition({ steps: input.steps }) } };
+            const row = { id: `a_${input.packKey}`, packKey: input.packKey, status: 'DRAFT', activateWhenReady: input.activateWhenReady, channelId: input.channelId, definition: { steps: parseDefinition({ steps: input.steps }) } };
             rows.push(row);
             return { id: row.id };
         }),
@@ -78,10 +81,12 @@ function harness(opts: { pack?: Row | null; shopify?: boolean; templates?: Row[]
         }),
         packList: jest.fn(async () => rows.filter((r) => r.status !== 'ARCHIVED').map((r) => ({ id: r.id, packKey: r.packKey, status: r.status, name: r.packKey }))),
     };
-    const service = new ManagedAutomationsService(prisma as never, automations as never, fakeRedis() as never);
+    const queue = { add: jest.fn(async () => ({})) };
+    const service = new ManagedAutomationsService(prisma as never, automations as never, fakeRedis() as never, queue as never);
     jest.spyOn((service as unknown as { logger: { log: () => void } }).logger, 'log').mockImplementation(() => undefined);
+    jest.spyOn((service as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => undefined);
     const state = (key: string) => rows.find((r) => r.packKey === key);
-    return { service, prisma, automations, rows, published, state, pack };
+    return { service, prisma, automations, rows, published, state, pack, queue };
 }
 
 describe('ManagedAutomationsService.sync', () => {
@@ -227,5 +232,70 @@ describe('ManagedAutomationsService.withPackState', () => {
             ['a_order_shipped', 'attention', 'Meta rejected its “Order shipped” template.'],
             ['a_order_delivered', 'waiting', 'Goes live by itself when Meta approves its templates.'],
         ]);
+    });
+});
+
+describe('ManagedAutomationsService — what the merchant left as it is', () => {
+    it('turns on drafts only: one the merchant paused stays paused, with or without keys', async () => {
+        const h = harness({ pack: { autoActivate: false }, templates: approved(...ALL) });
+        await h.service.sync('o');
+        h.state('order_shipped')!.status = 'PAUSED';
+        await h.service.turnOn('o');
+        await h.service.turnOn('o', ['order_shipped']);
+        expect(h.state('order_shipped')).toMatchObject({ status: 'PAUSED', activateWhenReady: false });
+        expect(h.published).not.toContain('a_order_shipped');
+        expect(h.state('order_delivered')!.status).toBe('ACTIVE');
+    });
+
+    it('never publishes a paused one that was waiting to go live', async () => {
+        const h = harness({ templates: approved(...ALL), existing: [] });
+        await h.service.sync('o');
+        Object.assign(h.state('order_delivered')!, { status: 'PAUSED', activateWhenReady: true });
+        const before = h.published.length;
+        await h.service.sync('o');
+        expect(h.published.length).toBe(before);
+    });
+});
+
+describe('ManagedAutomationsService — the cart discount when the sync is busy', () => {
+    it('still saves, answers, and queues the rebuild as a job carrying rebuildCart', async () => {
+        const h = harness({ shopify: true });
+        // Another sync holds the lock for longer than the route waits.
+        jest.spyOn(h.service, 'sync').mockRejectedValueOnce(new LockTimeoutError('automation:pack-sync:o is still held after 30 seconds.'));
+        await expect(h.service.setCartDiscount('o', { code: 'save10', text: '10%', validDays: 7 })).resolves.toEqual({ cartDiscount: { code: 'SAVE10', text: '10%', validDays: 7 } });
+        expect(h.pack!.settings).toEqual({ cartDiscount: { code: 'SAVE10', text: '10%', validDays: 7 } });
+        expect(h.queue.add).toHaveBeenCalledWith('managed-sync', { organizationId: 'o', rebuildCart: true }, expect.objectContaining({ jobId: expect.stringMatching(/^managed-sync-o-cart-\d+$/) }));
+    });
+
+    it('the job does the rebuild', async () => {
+        const h = harness({ shopify: true, templates: approved(...ALL) });
+        await h.service.sync('o');
+        h.pack!.settings = { cartDiscount: { code: 'SAVE10', text: '10%', validDays: 7 } };
+        await h.service.sync('o');
+        expect(templateSlotsIn(parseDefinition(h.state('cart_recovery')!.definition))).not.toContain('cart_reminder_3');
+        await h.service.sync('o', { rebuildCart: true });
+        expect(templateSlotsIn(parseDefinition(h.state('cart_recovery')!.definition))).toContain('cart_reminder_3');
+    });
+});
+
+describe('ManagedAutomationsService — a new WhatsApp channel', () => {
+    it('moves the pack’s automations to it and republishes the live ones, but not one the merchant edited', async () => {
+        const h = harness({ templates: approved(...ALL) });
+        await h.service.sync('o');
+        const shipped = MANAGED_BY_KEY.get('order_shipped')!.steps({ cartDiscount: null });
+        Object.assign(h.state('order_shipped')!, { definition: { steps: parseDefinition({ steps: shipped.map((x) => (x.id === 'pk_send' ? { ...x, config: { kind: 'template', templateId: 'tpl_mine' } } : x)) }) } });
+        h.state('review_request')!.status = 'DRAFT';
+        const before = h.published.length;
+
+        (h.prisma.channel.findFirst as jest.Mock).mockResolvedValue({ id: 'ch_wa_new', externalStoreId: 'waba1' });
+        await h.service.sync('o');
+        expect(h.state('order_delivered')).toMatchObject({ channelId: 'ch_wa_new', status: 'ACTIVE' });
+        expect(h.state('review_request')).toMatchObject({ channelId: 'ch_wa_new', status: 'DRAFT' });
+        expect(h.state('order_shipped')!.channelId).toBe('ch_wa');
+        expect(h.prisma.automationTrigger.updateMany).toHaveBeenCalledWith({ where: { automationId: 'a_order_delivered' }, data: { channelId: 'ch_wa_new' } });
+        const republished = h.published.slice(before);
+        expect(republished).toContain('a_order_delivered');
+        expect(republished).not.toContain('a_order_shipped');
+        expect(republished).not.toContain('a_review_request');
     });
 });

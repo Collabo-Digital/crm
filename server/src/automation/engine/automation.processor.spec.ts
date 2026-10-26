@@ -23,8 +23,15 @@ describe('AutomationProcessor', () => {
         const runner = { run: jest.fn(), resume: jest.fn() };
         const processor = new AutomationProcessor({} as never, runner as never, managed as never);
         await processor.process({ name: 'managed-sync', data: { organizationId: 'org_1' } } as never);
-        expect(managed.sync).toHaveBeenCalledWith('org_1');
+        expect(managed.sync).toHaveBeenCalledWith('org_1', { rebuildCart: false });
         await processor.process({ name: 'run', data: { kind: 'run', runId: 'r1' } } as never);
         expect(runner.run).toHaveBeenCalledWith('r1');
+    });
+
+    it('passes on the cart rebuild a busy cart-discount route left to the job', async () => {
+        const managed = { sync: jest.fn(async () => undefined) };
+        const processor = new AutomationProcessor({} as never, { run: jest.fn(), resume: jest.fn() } as never, managed as never);
+        await processor.process({ name: 'managed-sync', data: { organizationId: 'org_1', rebuildCart: true } } as never);
+        expect(managed.sync).toHaveBeenCalledWith('org_1', { rebuildCart: true });
     });
 });
