@@ -11,7 +11,7 @@ import type {
   AutomationStatus,
   AutomationStep,
   AutomationTestResult,
-  CartDiscount,
+  CartDiscountUpdate,
   CatalogView,
   ConversationStarters,
   InboxRulesSettings,
@@ -45,9 +45,9 @@ export const automationsService = {
   /** Turns on the recommended-template automations (by default every one that is on by default); each goes live once its templates are approved. */
   turnOnPack: (keys?: string[]) =>
     apiClient.post<{ automations: AutomationListItem[] }>("/automations/pack/turn-on", keys ? { keys } : {}).then((r) => r.data),
-  /** The discount cart recovery's third reminder offers; null removes it, and the reminder with it. */
-  saveCartDiscount: (discount: CartDiscount | null) =>
-    apiClient.put<{ cartDiscount: CartDiscount | null }>("/automations/pack/cart-discount", discount).then((r) => r.data),
+  /** The discount cart recovery's third reminder offers; `cartDiscount: null` removes it, and the reminder with it. */
+  saveCartDiscount: (body: CartDiscountUpdate) =>
+    apiClient.put<CartDiscountUpdate>("/automations/pack/cart-discount", body).then((r) => r.data),
   posts: (channelId: string, refresh = false) =>
     apiClient
       .get<{ data: InstagramPost[]; syncedAt: string | null; stale: boolean; syncError: string | null }>("/automations/media", {

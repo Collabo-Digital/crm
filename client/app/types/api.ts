@@ -4500,6 +4500,11 @@ export interface CartDiscount {
   validDays: number;
 }
 
+/** PUT /automations/pack/cart-discount, and its answer. `cartDiscount: null` removes the discount. */
+export interface CartDiscountUpdate {
+  cartDiscount: CartDiscount | null;
+}
+
 export interface TemplatePackSlot {
   slot: PackSlotKey;
   set: PackSet;

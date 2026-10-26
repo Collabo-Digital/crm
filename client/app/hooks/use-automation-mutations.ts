@@ -112,7 +112,7 @@ export function useSaveCartDiscountMutation() {
   const refresh = useRefresh();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (discount: CartDiscount | null) => automationsService.saveCartDiscount(discount),
+    mutationFn: (cartDiscount: CartDiscount | null) => automationsService.saveCartDiscount({ cartDiscount }),
     onSuccess: ({ cartDiscount }) => {
       toast.success(cartDiscount ? `Saved. The third cart reminder offers ${cartDiscount.text} off with ${cartDiscount.code}.` : "Removed. Cart recovery sends two reminders.");
       queryClient.setQueryData<TemplatePackView>(campaignKeys.pack(), (view) => (view?.pack ? { ...view, pack: { ...view.pack, cartDiscount } } : view));
