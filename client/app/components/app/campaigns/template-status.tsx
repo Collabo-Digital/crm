@@ -20,6 +20,18 @@ export function TemplateCategoryLabel({ template }: { template: Pick<MessageTemp
   );
 }
 
+/** A template Collabo created for its recommended automations, and keeps up. */
+export function ManagedBadge({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn("inline-flex h-5 w-fit shrink-0 items-center whitespace-nowrap rounded-full bg-brand/30 px-2 font-sans text-micro font-medium text-brand-strong", className)}
+      title="Collabo created this template for its recommended automations, and sends it from them."
+    >
+      Managed by Collabo
+    </span>
+  );
+}
+
 export function QualityDot({ score }: { score: string | null }) {
   if (!score) return null;
   return (

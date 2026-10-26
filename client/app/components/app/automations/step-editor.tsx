@@ -1,7 +1,7 @@
 import { serverMessage } from "~/lib/handle-mutation-error";
 import { useRef, useState } from "react";
 import { Link } from "react-router";
-import { Check, Copy, Loader2, Paperclip, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Check, Copy, Loader2, Moon, Paperclip, Plus, RefreshCw, Trash2, X } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
@@ -11,10 +11,21 @@ import { Textarea } from "~/components/ui/textarea";
 import { useInstagramPosts } from "~/hooks/use-automation-queries";
 import { useSheetColumns } from "~/hooks/use-google";
 import { useCampaignUploadMutation } from "~/hooks/use-campaign-mutations";
-import { useTemplates } from "~/hooks/use-campaign-queries";
+import { useTemplatePack, useTemplates } from "~/hooks/use-campaign-queries";
 import { BLOCKS, CHANNEL_LABEL, EVENTS, ORDER_EVENTS, STORE_EVENTS, allSteps } from "~/lib/automation-blocks";
+import { PACK_SLOTS, PACK_SLOT_STATE_LABEL, approvedAsMarketing, packSlotTitle } from "~/lib/template-pack";
 import { cn } from "~/lib/utils";
-import type { AutomationChannelKey, AutomationIssue, AutomationStep, SheetColumn } from "~/types/api";
+import type {
+  AutomationChannelKey,
+  AutomationIssue,
+  AutomationStep,
+  AutomationStopWhen,
+  MessageTemplate,
+  PackSlotKey,
+  PackSlotState,
+  SheetColumn,
+  TemplatePackSlot,
+} from "~/types/api";
 
 type Config = AutomationStep["config"];
 
@@ -61,12 +72,17 @@ function variablesFor(ctx: EditorContext): string[] {
     if (s.type === "store_action" && s.config.action === "create_draft_order") ["draft.checkout_url", "draft.total", "draft.name"].forEach((v) => saved.add(v));
   }
   const event = String(trigger.event ?? "");
-  if (ORDER_EVENTS.includes(event)) ["order.name", "order.total", "order.items", "order.payment", "order.status", "order.tracking_url", "order.tracking_number", "order.carrier"].forEach((v) => saved.add(v));
+  if (ORDER_EVENTS.includes(event)) ["order.name", "order.total", "order.items", "order.payment", "order.status", "order.tracking_url", "order.tracking_number", "order.carrier", "order.track_path"].forEach((v) => saved.add(v));
+  if (event === "order_refunded") saved.add("refund.amount");
   // The invoice event carries {{invoice.*}}; "Send the invoice" fills it on order events.
   if (event === "invoice_issued" || (ORDER_EVENTS.includes(event) && allSteps(ctx.steps).some((s) => s.type === "send_invoice"))) {
     ["invoice.number", "invoice.date", "invoice.total"].forEach((v) => saved.add(v));
   }
-  if (event === "checkout_abandoned") ["checkout.first_name", "checkout.url", "checkout.url_path", "checkout.total", "checkout.items"].forEach((v) => saved.add(v));
+  if (event === "checkout_abandoned") {
+    ["checkout.first_name", "checkout.url", "checkout.url_path", "checkout.cart_path", "checkout.total", "checkout.items"].forEach((v) => saved.add(v));
+    // The cart recovery discount, set in Campaigns → Automations.
+    ["cart.discount_code", "cart.discount_text", "cart.discount_expiry"].forEach((v) => saved.add(v));
+  }
   // A paid link carries {{payment.*}}; "Send a payment link" fills it for its own message and later steps.
   if (event === "payment_received") ["payment.amount", "payment.method", "payment.description"].forEach((v) => saved.add(v));
   if (event === "website_signup") ["signup.name", "signup.page"].forEach((v) => saved.add(v));
@@ -78,6 +94,7 @@ function variablesFor(ctx: EditorContext): string[] {
     ...(ctx.channel === "whatsapp" ? ["phone"] : ["username"]),
     "trigger_text",
     "last_reply",
+    "store.name",
     ...saved,
     ...(trigger.event === "webhook" ? ["webhook.<field>"] : []),
     ...(trigger.event === "sheet_row" ? ["sheet.row", ...ctx.sheetColumns.map((c) => `sheet.${c.key}`)] : []),
@@ -386,10 +403,19 @@ function SheetRowFields({ config, set, ctx }: { config: Config; set: (p: Config)
   );
 }
 
+const STOP_WHEN: Array<[keyof AutomationStopWhen, string]> = [
+  ["orderPlaced", "They place an order"],
+  ["replied", "They reply"],
+  ["optedOut", "They opt out of marketing messages"],
+];
+
 function TriggerForm({ config, set, ctx }: { config: Config; set: (p: Config) => void; ctx: EditorContext }) {
   const events = EVENTS[ctx.channel];
   const ro = ctx.readOnly;
   const hint = events.find((e) => e.value === config.event)?.hint || undefined;
+  const stopWhen: AutomationStopWhen = config.stopWhen ?? {};
+  // Stop conditions are checked when a run wakes from a wait, so they only matter in a flow that waits.
+  const waits = allSteps(ctx.steps).some((s) => s.type === "wait" || s.type === "wait_for_reply");
   return (
     <div className="space-y-4">
       <Field label={`On ${CHANNEL_LABEL[ctx.channel]}`} htmlFor="t-event" hint={hint}>
@@ -472,6 +498,27 @@ function TriggerForm({ config, set, ctx }: { config: Config; set: (p: Config) =>
         <p className="rounded-lg bg-info-subtle p-2 text-micro text-info">
           The buyer is found by the phone number on the order or checkout; a new number becomes a contact. Messages must be approved templates, since they may not have written in 24 hours.
         </p>
+      )}
+      {(String(config.event).startsWith("order_") || config.event === "invoice_issued") && (
+        <label className="flex items-start gap-2 text-body">
+          <Checkbox checked={!!config.skipPos} disabled={ro} onCheckedChange={(v) => set({ skipPos: v === true })} />
+          <span>
+            Skip till (point-of-sale) sales
+            <span className="block text-micro text-muted-foreground">Sales rung up at your shop’s till, and their invoices, don’t start it.</span>
+          </span>
+        </label>
+      )}
+      {ctx.channel === "whatsapp" && waits && (
+        <Field label="End the run early when" hint="Checked each time a run wakes from a wait. A run that ends this way counts as finished.">
+          <div className="space-y-2">
+            {STOP_WHEN.map(([key, label]) => (
+              <label key={key} className="flex items-start gap-2 text-body">
+                <Checkbox checked={!!stopWhen[key]} disabled={ro} onCheckedChange={(v) => set({ stopWhen: { ...stopWhen, [key]: v === true } })} />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+        </Field>
       )}
       {config.event === "tag_added" && (
         <Field label="Tag" hint="Added by a person in the inbox, an import or another automation." htmlFor="t-tag">
@@ -586,6 +633,105 @@ function FileField({ media, onChange, readOnly, label }: { media: Config["media"
   );
 }
 
+/** On a step whose template is marketing: automations hold those overnight (store time). */
+function QuietHoursNote() {
+  return (
+    <p className="flex items-center gap-1.5 text-micro text-muted-foreground" title="Automations send marketing messages from 9 AM, in your store’s time zone.">
+      <Moon className="size-3.5 shrink-0" />
+      Held between 9 PM and 9 AM (store time)
+    </p>
+  );
+}
+
+const SLOT_STATE_TEXT: Record<PackSlotState, string> = {
+  approved: "text-success",
+  pending: "text-info",
+  paused: "text-warning-strong",
+  attention: "text-danger",
+  not_created: "text-muted-foreground",
+};
+
+/** What a run does with the step while its template is not simply approved. */
+function slotNote(info: TemplatePackSlot): string | null {
+  switch (info.state) {
+    case "pending":
+      return "Meta is reviewing it. Until it is approved, runs skip this step.";
+    case "paused":
+      return "Meta paused it. Runs wait for the pause to end, for up to 12 hours, then skip this step.";
+    case "not_created":
+      return "Collabo has not created it yet. Until it is approved, runs skip this step.";
+    case "attention":
+      return info.template && approvedAsMarketing(info.template)
+        ? "Meta approved it as marketing, not utility: it is still sent, at Meta’s marketing rate."
+        : "It needs your attention in Templates. Until it is approved, runs skip this step.";
+    default:
+      return null;
+  }
+}
+
+/**
+ * A step that sends one of Collabo's recommended templates: Collabo sends its
+ * approved version and fills in the values. "Use my own template" pins a
+ * template instead; the step then stops following Collabo's.
+ */
+function ManagedTemplateFields({ slot, templates, set, ctx }: { slot: PackSlotKey; templates: MessageTemplate[]; set: (p: Config) => void; ctx: EditorContext }) {
+  const { data: view } = useTemplatePack();
+  const [confirming, setConfirming] = useState(false);
+  const info = view?.slots.find((s) => s.slot === slot);
+  const current = templates.find((t) => t.id === info?.template?.id);
+  const marketing = (info?.template?.category ?? info?.category ?? PACK_SLOTS[slot]?.category) === "MARKETING";
+  const note = info ? slotNote(info) : null;
+  return (
+    <Field label="Template">
+      <div className="space-y-2 rounded-lg border p-3">
+        <p className="text-body">
+          Recommended template: <span className="font-medium">{info?.title ?? packSlotTitle(slot)}</span>
+          {info && (
+            <>
+              {" · "}
+              <span className={cn("whitespace-nowrap font-medium", SLOT_STATE_TEXT[info.state])}>{PACK_SLOT_STATE_LABEL[info.state]}</span>
+            </>
+          )}
+        </p>
+        <p className="text-micro text-muted-foreground">Collabo sends its approved version and fills in the values. If Collabo replaces the template, this step sends the new one.</p>
+        {note && (
+          <p className="text-micro text-muted-foreground">
+            {note}{" "}
+            {info?.template && (
+              <Link to={`/campaigns/templates/${info.template.id}`} className="underline">
+                Open the template
+              </Link>
+            )}
+          </p>
+        )}
+        {current && <p className="whitespace-pre-wrap rounded-lg bg-muted p-2 text-caption">{current.preview.body}</p>}
+        {marketing && <QuietHoursNote />}
+        {!ctx.readOnly &&
+          (confirming ? (
+            <div className="space-y-2 rounded-lg bg-warning-subtle p-3">
+              <p className="text-caption font-medium">This step will no longer follow Collabo’s template.</p>
+              <p className="text-caption text-muted-foreground">
+                If Collabo replaces the template, for example after Meta rejects it, this step keeps sending the one you choose, and you fill in its values yourself.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => setConfirming(false)}>
+                  Keep Collabo’s template
+                </Button>
+                <Button type="button" variant="accent" size="sm" onClick={() => set({ templateSlot: undefined, templateId: current?.id })}>
+                  Use my own template
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button type="button" variant="outline" size="sm" onClick={() => setConfirming(true)}>
+              Use my own template
+            </Button>
+          ))}
+      </div>
+    </Field>
+  );
+}
+
 /**
  * `invoice`: only templates with a document header, which carries the invoice PDF.
  * `payment`: only templates without a media header; the link goes in a button or the text.
@@ -597,6 +743,7 @@ function TemplateFields({ config, set, ctx, invoice = false, payment = false }: 
     : payment
       ? all.filter((t) => !t.params.some((p) => p.component === "header" && p.kind !== "text"))
       : all;
+  if (config.templateSlot && !config.templateId) return <ManagedTemplateFields slot={config.templateSlot} templates={templates} set={set} ctx={ctx} />;
   const template = templates.find((t) => t.id === config.templateId);
   const values: Record<string, string> = config.templateValues ?? {};
   return (
@@ -624,6 +771,7 @@ function TemplateFields({ config, set, ctx, invoice = false, payment = false }: 
       {template && (
         <>
           <p className="whitespace-pre-wrap rounded-lg bg-muted p-2 text-caption">{template.preview.body}</p>
+          {template.category === "MARKETING" && <QuietHoursNote />}
           {template.params.map((p) =>
             p.component === "header" && p.kind !== "text" && invoice ? (
               <p key={p.key} className="rounded-lg border border-dashed p-2 text-caption text-muted-foreground">
@@ -702,6 +850,7 @@ function SendMessageForm({ config, set, ctx }: { config: Config; set: (p: Config
 
 const RULE_FIELDS: Array<{ field: string; label: string; ops: Array<[string, string]>; values?: Array<[string, string]> }> = [
   { field: "last_reply", label: "Their last reply", ops: [["contains", "has the words"], ["equals", "is"], ["exists", "was given"], ["not_exists", "was not given"]] },
+  { field: "reply_payload", label: "The button they tapped", ops: [["equals", "is"]] },
   { field: "trigger_text", label: "The message that started it", ops: [["contains", "has the words"], ["equals", "is"]] },
   { field: "tag", label: "Tag", ops: [["has", "they have"], ["not_has", "they don’t have"]] },
   { field: "attribute", label: "Contact field", ops: [["equals", "is"], ["contains", "has the words"], ["exists", "is set"], ["not_exists", "is not set"], ["gte", "is at least"], ["lte", "is at most"]] },
@@ -780,7 +929,7 @@ function ConditionForm({ config, set, ctx }: { config: Config; set: (p: Config) 
                     value={rule.value}
                     list={rule.field === "tag" ? "cond-tags" : undefined}
                     inputMode={rule.field === "orders_count" ? "numeric" : undefined}
-                    placeholder={rule.field === "tag" ? "vip" : rule.op === "contains" ? "yes, sure" : "value"}
+                    placeholder={rule.field === "tag" ? "vip" : rule.field === "reply_payload" ? "collabo_cod_confirm" : rule.op === "contains" ? "yes, sure" : "value"}
                     maxLength={500}
                     disabled={ctx.readOnly}
                     onChange={(e) => setRule(i, { value: e.target.value })}
@@ -788,6 +937,11 @@ function ConditionForm({ config, set, ctx }: { config: Config; set: (p: Config) 
                   />
                 ))}
             </div>
+            {rule.field === "reply_payload" && (
+              <p className="text-micro text-muted-foreground">
+                The payload of the template button they tapped, exactly. Collabo’s cash-on-delivery buttons send collabo_cod_confirm and collabo_cod_cancel.
+              </p>
+            )}
           </div>
         );
       })}

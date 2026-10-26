@@ -1,8 +1,8 @@
 import { apiClient } from "~/lib/api-client";
 import type {
-  Automation,
   AutomationDetail,
   AutomationIssue,
+  AutomationListItem,
   AutomationPlatform,
   AutomationRunRow,
   AutomationRunStatus,
@@ -11,6 +11,7 @@ import type {
   AutomationStatus,
   AutomationStep,
   AutomationTestResult,
+  CartDiscount,
   CatalogView,
   ConversationStarters,
   InboxRulesSettings,
@@ -22,7 +23,7 @@ import type {
 /** Service layer for automations (`/automations/*`) and the inbox's own rules (`/inbox/settings`). */
 export const automationsService = {
   list: (params: { status?: AutomationStatus; platform?: AutomationPlatform; search?: string; page?: number; limit?: number }) =>
-    apiClient.get<PaginatedResponse<Automation>>("/automations", { params }).then((r) => r.data),
+    apiClient.get<PaginatedResponse<AutomationListItem>>("/automations", { params }).then((r) => r.data),
   get: (id: string) => apiClient.get<AutomationDetail>(`/automations/${id}`).then((r) => r.data),
   create: (data: { name: string; platform: AutomationPlatform; channelId: string; description?: string }) =>
     apiClient.post<AutomationDetail>("/automations", data).then((r) => r.data),
@@ -41,6 +42,12 @@ export const automationsService = {
     apiClient.get<PaginatedResponse<AutomationRunRow>>(`/automations/${id}/runs`, { params }).then((r) => r.data),
   test: (id: string, data: { text?: string; reply?: string; contactId?: string; order?: "cod" | "prepaid" }) =>
     apiClient.post<AutomationTestResult>(`/automations/${id}/test`, data).then((r) => r.data),
+  /** Turns on the recommended-template automations (by default every one that is on by default); each goes live once its templates are approved. */
+  turnOnPack: (keys?: string[]) =>
+    apiClient.post<{ automations: AutomationListItem[] }>("/automations/pack/turn-on", keys ? { keys } : {}).then((r) => r.data),
+  /** The discount cart recovery's third reminder offers; null removes it, and the reminder with it. */
+  saveCartDiscount: (discount: CartDiscount | null) =>
+    apiClient.put<{ cartDiscount: CartDiscount | null }>("/automations/pack/cart-discount", discount).then((r) => r.data),
   posts: (channelId: string, refresh = false) =>
     apiClient
       .get<{ data: InstagramPost[]; syncedAt: string | null; stale: boolean; syncError: string | null }>("/automations/media", {

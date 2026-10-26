@@ -4448,6 +4448,95 @@ export interface MessageTemplate {
   submittedAt: string | null;
   syncedAt: string | null;
   updatedAt: string;
+  /** The recommended-pack slot this template fills; null for the merchant's own templates. */
+  packSlot: PackSlotKey | null;
+  packVersion: number | null;
+  /** Created from Meta's Template Library, or from Collabo's own wording. */
+  packSource: "library" | "collabo" | null;
+  libraryTemplateName: string | null;
+  /** Meta's structured reason for a rejection, and what it recommends. */
+  rejectionInfo: TemplateRejectionInfo | null;
+  /** When Meta last changed the status. */
+  statusUpdatedAt: string | null;
+}
+
+export interface TemplateRejectionInfo {
+  reason?: string;
+  recommendation?: string;
+}
+
+// ─── Recommended template pack ──────────────────────────────────────────────
+// Mirrors server/src/campaigns/templates/pack (GET /campaigns/templates/pack).
+
+export type PackSet = "core" | "payment" | "online_store";
+
+export type PackSlotKey =
+  | "order_confirmed"
+  | "cod_confirm"
+  | "order_shipped"
+  | "out_for_delivery"
+  | "order_delivered"
+  | "order_cancelled"
+  | "refund_processed"
+  | "gst_invoice"
+  | "store_bill"
+  | "review_request"
+  | "optin_confirmed"
+  | "payment_link"
+  | "pay_online"
+  | "cart_reminder_1"
+  | "cart_reminder_2"
+  | "cart_reminder_3";
+
+/** approved · pending (in review) · paused by Meta · attention (rejected, disabled or filed as marketing) · not created yet */
+export type PackSlotState = "approved" | "pending" | "paused" | "attention" | "not_created";
+
+export interface CartDiscount {
+  /** 3 to 20 characters, A–Z and 0–9. */
+  code: string;
+  /** What the shopper gets, like "₹200" or "10%". */
+  text: string;
+  /** 1 to 30. */
+  validDays: number;
+}
+
+export interface TemplatePackSlot {
+  slot: PackSlotKey;
+  set: PackSet;
+  title: string;
+  description: string;
+  category: "UTILITY" | "MARKETING";
+  state: PackSlotState;
+  template: null | {
+    id: string;
+    name: string;
+    status: string;
+    category: string;
+    requestedCategory: string | null;
+    statusReason: string | null;
+    rejectionInfo: TemplateRejectionInfo | null;
+    qualityScore: string | null;
+    source: "library" | "collabo";
+    packVersion: number;
+  };
+}
+
+export interface TemplatePackView {
+  pack: null | {
+    status: "pending" | "running" | "ready" | "stopped";
+    origin: "connect" | "backfill" | "manual";
+    /** Pack automations go live by themselves once their templates are approved. */
+    autoActivate: boolean;
+    version: number;
+    stoppedReason: string | null;
+    lastRunAt: string | null;
+    cartDiscount: CartDiscount | null;
+  };
+  /** The sets that apply to this organization now. */
+  sets: PackSet[];
+  /** Only slots of the sets that apply. */
+  slots: TemplatePackSlot[];
+  counts: { total: number; approved: number; pending: number; attention: number };
 }
 
 export interface TemplateStarter {
@@ -4716,9 +4805,18 @@ export interface AutomationStep {
   id: string;
   type: AutomationBlockType;
   // Each block type has its own config; lib/automation-blocks.ts knows them.
+  // Pack fields: a trigger may carry `skipPos` and `stopWhen` (AutomationStopWhen);
+  // a template step may carry `templateSlot` (PackSlotKey) instead of `templateId`.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   config: Record<string, any>;
   branches?: Record<string, AutomationStep[]>;
+}
+
+/** Trigger `stopWhen`: checked each time a run wakes from a wait; a stopped run ends as completed. */
+export interface AutomationStopWhen {
+  orderPlaced?: boolean;
+  replied?: boolean;
+  optedOut?: boolean;
 }
 
 export interface AutomationIssue {
@@ -4747,6 +4845,23 @@ export interface Automation {
   updatedAt: string;
   channel: { id: string; name: string; platform: AutomationPlatform } | null;
   ownerUser: { id: string; firstName: string; lastName: string; email: string } | null;
+}
+
+/**
+ * Where a recommended-pack automation stands: live · waiting (goes live by
+ * itself once Meta approves its templates) · ready (off, templates approved) ·
+ * off · attention (a template was rejected, disabled or moved to marketing) ·
+ * duplicate (held back: one of the merchant's automations does the same job).
+ */
+export type AutomationPackState = "live" | "waiting" | "ready" | "off" | "attention" | "duplicate";
+
+/** A row of GET /automations. */
+export interface AutomationListItem extends Automation {
+  /** Set on the automations Collabo creates for its recommended templates. */
+  packKey: string | null;
+  packState: AutomationPackState | null;
+  /** A plain sentence about the pack state. */
+  packNote: string | null;
 }
 
 export interface AutomationDetail extends Automation {
@@ -5465,4 +5580,30 @@ export interface PosReceipt {
   payments: Array<{ method: PosPaymentMethod; amount: number; tendered: number | null; change: number | null; reference: string | null }>;
   paid: number;
   balanceDue: number;
+}
+
+// ─── Public store links ─────────────────────────────────────────────────────
+// What a customer's /t/:token and /c/:token links show. Public: no customer
+// name, phone or address.
+
+export type PublicOrderStatus = "confirmed" | "shipped" | "out_for_delivery" | "delivered" | "cancelled";
+
+/** GET /public/links/order/:token */
+export interface PublicOrderLink {
+  storeName: string;
+  order: {
+    name: string;
+    status: PublicOrderStatus;
+    carrier: string | null;
+    trackingNumber: string | null;
+    trackingUrl: string | null;
+  };
+}
+
+/** GET /public/links/cart/:token */
+export interface PublicCartLink {
+  storeName: string;
+  /** The checkout's recovery URL; null unless it is https. */
+  url: string | null;
+  completed: boolean;
 }

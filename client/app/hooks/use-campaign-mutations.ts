@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { campaignKeys } from "~/hooks/use-campaign-queries";
+import { campaignKeys, notePackRequested } from "~/hooks/use-campaign-queries";
 import { inboxKeys } from "~/hooks/use-inbox-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { campaignsService, type SaveBroadcastRequest } from "~/services/campaigns.service";
@@ -50,6 +50,20 @@ export function useDeleteTemplateMutation() {
       void queryClient.invalidateQueries({ queryKey: campaignKeys.templates() });
     },
     onError: (error) => handleMutationError(error, "The template was not deleted."),
+  });
+}
+
+/** Sets up Collabo's recommended templates, or repairs them. The server answers at once and works in the background. */
+export function useRunTemplatePackMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => campaignsService.runTemplatePack(),
+    onSuccess: (view) => {
+      toast.success(view.counts.approved || view.counts.pending ? "Collabo is checking your recommended templates and fixing what it can." : "Collabo is creating your recommended templates. Meta reviews each one, usually within minutes.");
+      notePackRequested();
+      queryClient.setQueryData(campaignKeys.pack(), view);
+    },
+    onError: (error) => handleMutationError(error, "The recommended templates were not set up."),
   });
 }
 

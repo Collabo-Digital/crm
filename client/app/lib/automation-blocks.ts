@@ -27,6 +27,7 @@ import type {
   AutomationStatus,
   AutomationStep,
 } from "~/types/api";
+import { packSlotTitle } from "~/lib/template-pack";
 
 // ─── Blocks ─────────────────────────────────────────────────────────────────
 
@@ -67,7 +68,17 @@ export const BLOCKS: Record<AutomationBlockType, BlockSpec> = {
 export const BLOCK_GROUPS: Array<BlockSpec["group"]> = ["Messages", "Flow", "Contact", "Conversation", "Store", "Connect"];
 
 /** Store triggers: the order or checkout they are about gives {{order.*}} or {{checkout.*}}. */
-export const ORDER_EVENTS = ["order_created", "order_paid", "order_fulfilled", "order_delivered", "order_cancelled", "invoice_issued", "payment_received"];
+export const ORDER_EVENTS = [
+  "order_created",
+  "order_paid",
+  "order_fulfilled",
+  "order_out_for_delivery",
+  "order_delivered",
+  "order_cancelled",
+  "order_refunded",
+  "invoice_issued",
+  "payment_received",
+];
 export const STORE_EVENTS = [...ORDER_EVENTS, "checkout_abandoned", "website_signup"];
 
 export const BRANCH_LABEL: Partial<Record<AutomationBlockType, Record<string, string>>> = {
@@ -111,9 +122,11 @@ export const EVENTS: Record<AutomationChannelKey, Array<{ value: string; label: 
     { value: "invoice_issued", label: "A GST invoice is issued", hint: "On payment or when a cash-on-delivery order ships (with automatic invoices on), by hand, in bulk, or with an offline sale. Send it with “Send the invoice”." },
     { value: "payment_received", label: "A payment link is paid", hint: "A Razorpay link sent in chat, by your team or by “Send a payment link”. The amount is in {{payment.amount}}." },
     { value: "order_fulfilled", label: "An order ships", hint: "Tracking details are in {{order.tracking_url}}." },
+    { value: "order_out_for_delivery", label: "An order is out for delivery", hint: "When Shopify’s tracking says the courier is out to deliver it. Not once it is delivered." },
     { value: "order_delivered", label: "An order is delivered", hint: "When the carrier or your team marks it delivered." },
     { value: "order_cancelled", label: "An order is cancelled", hint: "" },
-    { value: "checkout_abandoned", label: "A checkout is left unfinished", hint: "An hour after a Shopify checkout with a phone number goes quiet." },
+    { value: "order_refunded", label: "An order is refunded", hint: "Each refund with an amount, when it is issued. The amount is in {{refund.amount}}." },
+    { value: "checkout_abandoned", label: "A checkout is left unfinished", hint: "30 minutes after a Shopify checkout with a phone number goes quiet." },
     { value: "website_signup", label: "Someone signs up on your website", hint: "From the pop-up in Campaigns → Growth, with their consent. {{signup.name}} and {{signup.page}} are filled in." },
     { value: "sheet_row", label: "A row is added to a Google sheet", hint: "A form response, or a lead your team types in. Each cell is in {{sheet.<column>}}; rows already there when you publish are left alone." },
     { value: "tag_added", label: "A contact gets a tag", hint: "A chat link’s tag too, when a chat starts from it." },
@@ -289,10 +302,14 @@ export function triggerSummary(config: AutomationStep["config"]): string {
       return config.keyword ? `A chat from ad ${String(config.keyword).split(",").length > 1 ? "ids " : ""}${config.keyword}` : "A chat from any ad";
     case "order_fulfilled":
       return "An order ships";
+    case "order_out_for_delivery":
+      return "An order is out for delivery";
     case "order_delivered":
       return "An order is delivered";
     case "order_cancelled":
       return "An order is cancelled";
+    case "order_refunded":
+      return "An order is refunded";
     default:
       return "Choose what starts it";
   }
@@ -301,11 +318,13 @@ export function triggerSummary(config: AutomationStep["config"]): string {
 export function stepSummary(step: AutomationStep, templateName?: (id: string) => string | undefined): string {
   const c = step.config;
   const clip = (text: string, n = 90) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
+  // A step that sends one of Collabo's recommended templates names the slot, not a template.
+  const managed = c.templateSlot && !c.templateId ? `Collabo’s “${packSlotTitle(c.templateSlot)}” template` : null;
   switch (step.type) {
     case "trigger":
       return triggerSummary(c);
     case "send_message": {
-      if (c.kind === "template") return c.templateId ? `Template “${templateName?.(c.templateId) ?? "…"}”` : "Choose a template";
+      if (c.kind === "template") return managed ?? (c.templateId ? `Template “${templateName?.(c.templateId) ?? "…"}”` : "Choose a template");
       if (c.kind === "media") return c.media ? `${c.media.filename ?? c.media.kind}${c.message ? ` · ${clip(c.message, 50)}` : ""}` : "Add a file";
       const options = (c.options ?? []).filter((o: string) => o.trim());
       return `${c.message ? clip(c.message) : "Write the message"}${options.length ? ` · ${options.join(" / ")}` : ""}`;
@@ -332,10 +351,12 @@ export function stepSummary(step: AutomationStep, templateName?: (id: string) =>
     case "http_request":
       return c.url ? `${c.method} ${clip(c.url, 60)}` : "Add the URL";
     case "send_invoice":
+      if (managed) return `The invoice PDF with ${managed}`;
       return c.templateId ? (templateName?.(c.templateId) ? `The invoice PDF with “${templateName(c.templateId)}”` : "Choose the template again: it is no longer approved") : "Choose the template";
     case "send_payment_link":
       if (c.method === "whatsapp_pay") return "A WhatsApp Pay bill in the chat";
       if (c.kind === "text") return c.message ? clip(c.message) : "Write the message";
+      if (managed) return `A payment link with ${managed}`;
       return c.templateId ? `A payment link with “${templateName?.(c.templateId) ?? "a template"}”` : "Choose a template";
     case "store_action":
       return (
@@ -397,6 +418,7 @@ export const RUN_STATUS_CLASS: Record<AutomationRunStatus, string> = {
 export const SKIP_REASON_LABEL: Record<string, string> = {
   once_per_contact: "Already went through it",
   once_per_day: "Already went through it today",
+  template_unavailable: "Its template was not approved",
 };
 
 // ─── Playbooks ──────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { campaignsService } from "~/services/campaigns.service";
 import { pollWhile } from "~/lib/poll-while";
+import { packBusy } from "~/lib/template-pack";
 import type {
   Broadcast,
   BroadcastDetail,
@@ -9,6 +10,7 @@ import type {
   MessageTemplate,
   PaginatedResponse,
   SegmentDefinition,
+  TemplatePackView,
 } from "~/types/api";
 
 /** React Query key factory for Campaigns. */
@@ -21,6 +23,7 @@ export const campaignKeys = {
   starters: () => [...campaignKeys.templates(), "starters"] as const,
   writer: () => [...campaignKeys.templates(), "writer"] as const,
   inboxTemplates: () => [...campaignKeys.templates(), "inbox"] as const,
+  pack: () => [...campaignKeys.templates(), "pack"] as const,
   segments: () => [...campaignKeys.all, "segments"] as const,
   segment: (id: string) => [...campaignKeys.segments(), "detail", id] as const,
   segmentPreview: (definition: SegmentDefinition) => [...campaignKeys.segments(), "preview", definition] as const,
@@ -38,6 +41,16 @@ const isLive = (status?: BroadcastStatus) => status === "SENDING" || status === 
 // Module-level on purpose: each poller keeps its own "busy since" clock (see poll-while.ts).
 /// Meta's review takes minutes to hours; the webhook updates the row and this shows it.
 const pollWhileReviewing = pollWhile<MessageTemplate[]>((rows) => rows?.some((t) => t.status === "PENDING") ?? false);
+// Setting up or repairing the pack answers before the work starts, so a
+// request counts as busy for a couple of minutes whatever the answer said.
+let packRequestedAt = 0;
+export const notePackRequested = () => {
+  packRequestedAt = Date.now();
+};
+const packChanging = (view: TemplatePackView | undefined) => packBusy(view) || Date.now() - packRequestedAt < 2 * 60_000;
+const pollWhilePackBusy = pollWhile<TemplatePackView>(packChanging);
+/// Where the merchant watches the pack come together: Meta can take up to a day.
+const pollUntilPackSettled = pollWhile<TemplatePackView>(packChanging, { giveUpAfterMs: 24 * 3600_000 });
 const pollWhileAnySending = pollWhile<PaginatedResponse<Broadcast>>((page) => page?.data.some((b) => isLive(b.status)) ?? false);
 /// Sending, and the delivery receipts that keep arriving for a while after it.
 const pollWhileDelivering = pollWhile<BroadcastDetail>(
@@ -60,6 +73,20 @@ export function useTemplates(params: { status?: string; category?: string; searc
 
 export function useTemplate(id: string | undefined) {
   return useQuery({ queryKey: campaignKeys.template(id ?? ""), queryFn: () => campaignsService.getTemplate(id!), enabled: !!id });
+}
+
+/**
+ * Collabo's recommended templates and where each stands. `untilSettled` keeps
+ * polling past 15 minutes while Meta reviews. A role without Campaigns access
+ * gets a 403, which callers treat as "nothing to show".
+ */
+export function useTemplatePack({ enabled = true, untilSettled = false }: { enabled?: boolean; untilSettled?: boolean } = {}) {
+  return useQuery({
+    queryKey: campaignKeys.pack(),
+    queryFn: () => campaignsService.templatePack(),
+    enabled,
+    refetchInterval: untilSettled ? pollUntilPackSettled : pollWhilePackBusy,
+  });
 }
 
 export function useTemplateStarters() {

@@ -1,10 +1,20 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { automationKeys } from "~/hooks/use-automation-queries";
+import { campaignKeys } from "~/hooks/use-campaign-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { automationsService } from "~/services/automations.service";
 import { inboxService } from "~/services/inbox.service";
-import type { AutomationDetail, AutomationPlatform, AutomationSettings, AutomationStep, ConversationStarters, InboxRulesSettings } from "~/types/api";
+import type {
+  AutomationDetail,
+  AutomationPlatform,
+  AutomationSettings,
+  AutomationStep,
+  CartDiscount,
+  ConversationStarters,
+  InboxRulesSettings,
+  TemplatePackView,
+} from "~/types/api";
 
 function useRefresh() {
   const queryClient = useQueryClient();
@@ -84,6 +94,31 @@ export function useArchiveAutomationMutation() {
       toast.success("Archived. Its history is kept.");
     },
     onError: (error) => handleMutationError(error, "It was not archived."),
+  });
+}
+
+/** Turns on the recommended WhatsApp messages; the page reports what went live and what waits for Meta. */
+export function useTurnOnPackMutation() {
+  const refresh = useRefresh();
+  return useMutation({
+    mutationFn: (keys?: string[]) => automationsService.turnOnPack(keys),
+    onSuccess: () => refresh(),
+    onError: (error) => handleMutationError(error, "The automations were not turned on."),
+  });
+}
+
+/** Saves (or, with null, removes) the discount cart recovery's third reminder offers. */
+export function useSaveCartDiscountMutation() {
+  const refresh = useRefresh();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (discount: CartDiscount | null) => automationsService.saveCartDiscount(discount),
+    onSuccess: ({ cartDiscount }) => {
+      toast.success(cartDiscount ? `Saved. The third cart reminder offers ${cartDiscount.text} off with ${cartDiscount.code}.` : "Removed. Cart recovery sends two reminders.");
+      queryClient.setQueryData<TemplatePackView>(campaignKeys.pack(), (view) => (view?.pack ? { ...view, pack: { ...view.pack, cartDiscount } } : view));
+      refresh();
+    },
+    onError: (error) => handleMutationError(error, "The cart discount was not saved."),
   });
 }
 

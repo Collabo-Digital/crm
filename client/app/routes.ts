@@ -6,6 +6,10 @@ export default [
   // The bill a customer opens from the link sent after a counter sale. Public:
   // outside the app layout and its sign-in.
   route("b/:token", "routes/public/bill.tsx"),
+  // The order tracking and cart links in Collabo's recommended WhatsApp
+  // templates. Public, like the bill.
+  route("t/:token", "routes/public/track.tsx"),
+  route("c/:token", "routes/public/cart.tsx"),
 
   layout("routes/auth/_layout.tsx", [
     route("auth/login", "routes/auth/login.tsx"),
