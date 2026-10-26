@@ -138,7 +138,6 @@ export class PosSaleService {
                 })),
                 ...(store.warehouseId ? { warehouseId: store.warehouseId } : {}),
                 ...(sellsAtStoreState(customer, buyer) && store.stateCode ? { placeOfSupplyCode: store.stateCode } : {}),
-                ...(address ? { billingAddress: address } : {}),
                 // `settle` writes the method to the order; a bill paid later has none yet.
                 paymentMethod: mainPaymentMethod(input.payments) ?? 'OTHER',
                 ...(input.note ? { note: input.note } : {}),
@@ -171,9 +170,16 @@ export class PosSaleService {
                     });
                     if (twin) throw new SaleAlreadySaved(twin.id);
                     if (buyer && customer) await fillBuyer(tx, orgId, buyer.id, customer, phone);
-                    // The invoice, made after this, prints the address the customer already had.
-                    if (overLimit && savedAddress) {
-                        await tx.order.update({ where: { id: order.id }, data: { billingAddress: savedAddress as Prisma.InputJsonValue } });
+                    // On the bill only, put there after the place of supply is settled: goods
+                    // handed over at the counter are supplied where the store is, wherever the
+                    // buyer lives. The invoice, made after this, prints it.
+                    const billTo = address ?? (overLimit ? savedAddress : null);
+                    if (billTo) await tx.order.update({ where: { id: order.id }, data: { billingAddress: billTo as Prisma.InputJsonValue } });
+                    if (address && order.customerId) {
+                        await tx.customer.updateMany({
+                            where: { id: order.customerId, defaultAddress: { equals: Prisma.DbNull } },
+                            data: { defaultAddress: address, addresses: [address] },
+                        });
                     }
                     if (input.payments.length) {
                         await tx.orderPayment.createMany({

@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { OrderFinancialStatus, PosStaffRole, ProductStatus } from '@prisma/client';
+import { OrderFinancialStatus, PosStaffRole, Prisma, ProductStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PosSaleService } from './pos-sale.service';
 import { PosStaffService } from './pos-staff.service';
@@ -84,6 +84,7 @@ async function build(opts: Opts = {}) {
             findUniqueOrThrow: jest.fn(async () => opts.buyer),
             findFirst: jest.fn(async () => opts.emailTaken ?? null),
             update: jest.fn(),
+            updateMany: jest.fn(),
         },
     };
     const orders = {
@@ -475,11 +476,14 @@ describe('PosSaleService.createSale — bills of the limit or more name the buye
         expect(off.orders.createOfflineOrder).toHaveBeenCalled();
     });
 
-    it('a name and a typed address let it through, the address on the bill', async () => {
-        const { service, call } = await build(big);
+    it('a name and a typed address let it through, the address on the bill and, if they had none, the customer', async () => {
+        const { service, call, tx } = await build(big);
         await service.createSale(ORG, USER, input({ customer: { phone: '9800000001', name: 'Asha', address }, payments: [] }));
-        expect(call()[2].billingAddress).toEqual({ address1: '12 MG Road', city: 'Kochi', zip: '682016', province: 'Kerala', stateCode: '32', country: 'India', country_code: 'IN' });
-        // A counter sale is still supplied where the store is.
+        const typed = { address1: '12 MG Road', city: 'Kochi', zip: '682016', province: 'Kerala', stateCode: '32', country: 'India', country_code: 'IN' };
+        expect(tx.order.update).toHaveBeenCalledWith({ where: { id: 'order_1' }, data: { billingAddress: typed } });
+        expect(tx.customer.updateMany).toHaveBeenCalledWith({ where: { id: 'cust_1', defaultAddress: { equals: Prisma.DbNull } }, data: { defaultAddress: typed, addresses: [typed] } });
+        // Not handed to the sale itself: a counter sale is supplied where the store is, wherever the buyer lives.
+        expect(call()[2]).not.toHaveProperty('billingAddress');
         expect(call()[2].placeOfSupplyCode).toBe('29');
     });
 
