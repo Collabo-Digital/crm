@@ -461,7 +461,7 @@ html.dark { color-scheme: dark; }
   .app-header { padding-top: env(safe-area-inset-top, 0px); }
   .app-main { padding-bottom: calc(var(--mobile-nav-height) + 24px); }
   .app-main-contained { margin-bottom: var(--mobile-nav-height); padding-bottom: 12px; }
-  .app-shell-thread .app-main { padding-bottom: 0; }
+  .app-shell-immersive .app-main { padding-bottom: 0; }
   .mobile-section-nav { scrollbar-width: none; }
   .mobile-section-nav::-webkit-scrollbar { display: none; }
   .mobile-section-nav nav { box-shadow: none; }

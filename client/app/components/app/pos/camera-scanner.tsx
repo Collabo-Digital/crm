@@ -1,14 +1,20 @@
-import { useEffect, useRef, useState } from "react";
-import { CameraOff, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { CameraOff, Loader2, X } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
+import { cn } from "~/lib/utils";
 
 // Retail barcodes, plus QR for codes printed by the label sheets.
 const FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"];
 // getUserMedia can wait forever for a permission prompt nobody answers, or on
 // a device with no camera at all.
 const CAMERA_TIMEOUT_MS = 10_000;
+// While scanning one item after another, the same code held in view is read
+// many times a second: it counts once per this long, and any code once per
+// SETTLE_MS so the next item can be brought in.
+const SAME_CODE_MS = 2_000;
+const SETTLE_MS = 800;
 
 interface Detector {
   detect(source: HTMLVideoElement): Promise<Array<{ rawValue: string }>>;
@@ -18,12 +24,70 @@ type DetectorClass = {
   getSupportedFormats(): Promise<string[]>;
 };
 
+export interface ScanFeedback {
+  ok: boolean;
+  text: string;
+  at: number;
+}
+
 /**
  * Reads a barcode with the device camera. Uses the browser's own
  * BarcodeDetector where there is one (Chrome on Android, macOS), otherwise
  * loads ZXing on first use. When no camera opens, the code can be typed.
+ *
+ * On a phone it is a panel over the top half of the till that keeps scanning,
+ * so the list and the bottom bar stay in view; elsewhere a dialog that closes
+ * after one code.
  */
-export function CameraScanner({ open, onOpenChange, onCode }: { open: boolean; onOpenChange: (open: boolean) => void; onCode: (code: string) => void }) {
+export function CameraScanner({
+  open,
+  onOpenChange,
+  onCode,
+  variant,
+  feedback,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCode: (code: string) => void;
+  variant: "dialog" | "panel";
+  /** The last scan's result, shown on the panel. */
+  feedback: ScanFeedback | null;
+}) {
+  if (variant === "panel") {
+    if (!open) return null;
+    return (
+      <div
+        role="region"
+        aria-label="Camera scanner"
+        className="fixed inset-x-0 top-0 z-40 flex h-[50dvh] flex-col bg-black pt-[env(safe-area-inset-top)] shadow-2xl animate-in slide-in-from-top-4 fade-in-0"
+      >
+        <CameraView continuous onCode={onCode} className="min-h-0 flex-1" overlay={
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Close the camera"
+              onClick={() => onOpenChange(false)}
+              className="absolute top-2 right-2 size-11 rounded-full bg-black/50 text-white hover:bg-black/70 hover:text-white"
+            >
+              <X />
+            </Button>
+            <p
+              key={feedback?.at ?? 0}
+              role="status"
+              className={cn(
+                "absolute inset-x-3 bottom-3 mx-auto w-fit max-w-full truncate rounded-full px-3 py-1.5 text-caption font-medium animate-in fade-in-0",
+                !feedback ? "bg-black/60 text-white" : feedback.ok ? "bg-success text-white" : "bg-danger text-white",
+              )}
+            >
+              {feedback?.text ?? "Point the camera at a barcode. Each one is added as it is read."}
+            </p>
+          </>
+        } />
+      </div>
+    );
+  }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -31,13 +95,23 @@ export function CameraScanner({ open, onOpenChange, onCode }: { open: boolean; o
           <DialogTitle>Scan with the camera</DialogTitle>
           <DialogDescription>Hold the barcode inside the frame. The item is added as soon as it is read.</DialogDescription>
         </DialogHeader>
-        {open && <CameraView onCode={onCode} />}
+        {open && <CameraView onCode={onCode} className="aspect-[4/3] rounded-xl" />}
       </DialogContent>
     </Dialog>
   );
 }
 
-function CameraView({ onCode }: { onCode: (code: string) => void }) {
+function CameraView({
+  onCode,
+  continuous = false,
+  className,
+  overlay,
+}: {
+  onCode: (code: string) => void;
+  continuous?: boolean;
+  className?: string;
+  overlay?: ReactNode;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [state, setState] = useState<"starting" | "scanning" | "failed">("starting");
   const [failure, setFailure] = useState("");
@@ -51,9 +125,16 @@ function CameraView({ onCode }: { onCode: (code: string) => void }) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopDecoder: (() => void) | undefined;
     let found = false;
+    let last = { code: "", at: 0 };
     const report = (code: string) => {
-      if (found || stopped || !code) return;
-      found = true;
+      if (stopped || !code || found) return;
+      const now = performance.now();
+      if (continuous) {
+        if (now - last.at < SETTLE_MS || (code === last.code && now - last.at < SAME_CODE_MS)) return;
+        last = { code, at: now };
+      } else {
+        found = true;
+      }
       onCodeRef.current(code);
     };
 
@@ -85,7 +166,7 @@ function CameraView({ onCode }: { onCode: (code: string) => void }) {
           if (stopped || found) return;
           const codes = await detector.detect(video).catch(() => []);
           if (codes[0]) report(codes[0].rawValue);
-          else setTimeout(loop, 150);
+          setTimeout(loop, 150);
         };
         void loop();
         return;
@@ -120,17 +201,18 @@ function CameraView({ onCode }: { onCode: (code: string) => void }) {
       stopDecoder?.();
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, []);
+  }, [continuous]);
 
   return (
-    <div className="space-y-3">
+    <div className={cn("flex flex-col", continuous ? "min-h-0 flex-1" : "gap-3")}>
       {state === "failed" ? (
-        <div className="flex flex-col items-center gap-2 rounded-xl bg-muted p-6 text-center">
+        <div className={cn("relative flex flex-col items-center justify-center gap-2 bg-muted p-6 text-center", className)}>
           <CameraOff className="size-6 text-muted-foreground" />
           <p className="text-caption text-muted-foreground">{failure}</p>
+          {overlay}
         </div>
       ) : (
-        <div className="relative aspect-[4/3] overflow-hidden rounded-xl bg-black">
+        <div className={cn("relative overflow-hidden bg-black", className)}>
           <video ref={videoRef} muted playsInline className="size-full object-cover" />
           <div className="pointer-events-none absolute inset-x-8 top-1/2 h-24 -translate-y-1/2 rounded-lg border-2 border-white/80" />
           {state === "starting" && (
@@ -138,13 +220,16 @@ function CameraView({ onCode }: { onCode: (code: string) => void }) {
               <Loader2 className="size-4 animate-spin" /> Opening the camera…
             </div>
           )}
+          {overlay}
         </div>
       )}
       <form
-        className="flex gap-2"
+        className={cn("flex gap-2", continuous && "bg-background p-2")}
         onSubmit={(e) => {
           e.preventDefault();
-          if (typed.trim()) onCode(typed.trim());
+          if (!typed.trim()) return;
+          onCode(typed.trim());
+          setTyped("");
         }}
       >
         <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Or type the barcode or SKU" aria-label="Barcode or SKU" autoComplete="off" className="h-11" />

@@ -1,5 +1,6 @@
 import { parsePhoneNumberFromString } from "libphonenumber-js/min";
 import type {
+  PosAddressInput,
   PosApprovalReason,
   PosCustomer,
   PosDiscount,
@@ -32,16 +33,20 @@ export interface PosCartLine {
   gstRate: number | null;
 }
 
-export type PosCartCustomer =
-  | { kind: "existing"; customer: PosCustomer; whatsappOptIn: boolean }
-  | {
-      kind: "new";
-      phone: string;
-      name: string;
-      gstin?: string;
-      billingStateCode?: string;
-      whatsappOptIn: boolean;
-    };
+/** Who is buying: a saved customer the mobile number matched, or someone new. */
+export interface PosCartCustomer {
+  existing: PosCustomer | null;
+  /** +91 and ten digits, or null when they gave no mobile. */
+  phone: string | null;
+  name: string;
+  email: string;
+  /** Set only when they asked for a GST invoice. */
+  gstin: string;
+  /** The place of supply: the GSTIN's state, or the address's. */
+  stateCode: string;
+  address: PosAddressInput | null;
+  offersOptIn: boolean;
+}
 
 export const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -194,18 +199,43 @@ export function saleLines(lines: PosCartLine[]): PosSaleLineInput[] {
   });
 }
 
+/** Unticked offers send nothing, so an existing customer's earlier yes is never taken back here. */
 export function saleCustomer(customer: PosCartCustomer | null): PosSaleCustomerInput | undefined {
   if (!customer) return undefined;
-  if (customer.kind === "existing") {
-    return { customerId: customer.customer.id, whatsappOptIn: customer.whatsappOptIn };
-  }
-  return {
-    phone: customer.phone,
-    name: customer.name.trim() || undefined,
-    gstin: customer.gstin?.trim() || undefined,
-    billingStateCode: customer.billingStateCode || undefined,
-    whatsappOptIn: customer.whatsappOptIn,
+  const details = {
+    email: customer.email.trim() || undefined,
+    gstin: customer.gstin || undefined,
+    billingStateCode: customer.stateCode || undefined,
+    address: customer.address ?? undefined,
+    offersOptIn: customer.offersOptIn || undefined,
   };
+  if (customer.existing) return { customerId: customer.existing.id, ...details };
+  return { phone: customer.phone ?? undefined, name: customer.name.trim() || undefined, ...details };
+}
+
+export function customerName(customer: PosCartCustomer): string {
+  return customer.existing?.name ?? customer.name.trim();
+}
+
+/**
+ * From `customerRequiredAbove` a bill needs the buyer's name and address
+ * (CGST Rule 46 for B2C bills of ₹50,000 or more). Null: never.
+ */
+export function needsNameAndAddress(payable: number, settings: Pick<PosSettings, "customerRequiredAbove">): boolean {
+  return settings.customerRequiredAbove != null && payable >= settings.customerRequiredAbove;
+}
+
+export function hasNameAndAddress(customer: PosCartCustomer | null): boolean {
+  return !!customer && customerName(customer).length > 0 && !!customer.address;
+}
+
+/** Ten digits for an Indian mobile, which starts with 6, 7, 8 or 9. */
+export const INDIAN_MOBILE = /^[6-9]\d{9}$/;
+
+/** The ten digits of "+919847012345", for a field with a fixed +91; empty for any other number. */
+export function nationalDigits(phone: string | null | undefined): string {
+  const digits = (phone ?? "").replace(/\D/g, "");
+  return digits.length === 12 && digits.startsWith("91") ? digits.slice(2) : digits.length === 10 ? digits : "";
 }
 
 /**
@@ -301,3 +331,5 @@ export function formatPhone(phone: string | null | undefined): string | null {
 }
 
 export const GSTIN_PATTERN = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
+export const PIN_CODE = /^[1-9]\d{5}$/;

@@ -1,48 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { isAxiosError } from "axios";
-import { toast } from "sonner";
-import { Eye, Lock, MoreVertical, Settings, ShoppingCart, Store } from "lucide-react";
-import { AppBarActions } from "~/components/app/app-bar-actions";
+import { ChevronUp, Eye, Lock, QrCode, Settings, Store, WifiOff } from "lucide-react";
 import { QueryErrorState } from "~/components/app/query-error-state";
-import { CameraScanner } from "~/components/app/pos/camera-scanner";
+import { CameraScanner, type ScanFeedback } from "~/components/app/pos/camera-scanner";
 import { CartPanel } from "~/components/app/pos/cart-panel";
 import { CustomItemDialog } from "~/components/app/pos/custom-item-dialog";
-import { CustomerDialog } from "~/components/app/pos/customer-dialog";
+import { CustomerStep } from "~/components/app/pos/customer-step";
 import { PaymentDialog } from "~/components/app/pos/payment-dialog";
 import { PinPad } from "~/components/app/pos/pin-pad";
+import { PosScreen } from "~/components/app/pos/pos-screen";
 import { ProductFinder, stockLabel, type ScanNotice } from "~/components/app/pos/product-finder";
 import { SaleComplete } from "~/components/app/pos/sale-complete";
+import { PosSnackbar, type Snack } from "~/components/app/pos/snackbar";
+import { TillPhoneHeader } from "~/components/app/pos/till-phone-header";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "~/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "~/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useKeyboardWedge } from "~/hooks/use-barcode-wedge";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { useMediaQuery } from "~/hooks/use-media-query";
-import {
-  useCollectPosPaymentMutation,
-  useCreatePosSaleMutation,
-  usePosApproveMutation,
-  usePosUnlockMutation,
-  useSendPosReceiptMutation,
-} from "~/hooks/use-pos-mutations";
+import { useCollectPosPaymentMutation, useCreatePosSaleMutation, usePosApproveMutation, usePosUnlockMutation } from "~/hooks/use-pos-mutations";
 import { usePosSetup } from "~/hooks/use-pos-queries";
+import { useSectionAccess } from "~/hooks/use-section-access";
 import { serverMessage } from "~/lib/handle-mutation-error";
 import {
   approvalNeeded,
   billRef,
   cartTotals,
+  hasNameAndAddress,
+  needsNameAndAddress,
   newClientSaleId,
   oversold,
   saleCustomer,
@@ -61,6 +49,7 @@ export function meta() {
 }
 
 const inr = (n: number) => formatCurrency(n, "INR");
+const productName = (p: Pick<PosProduct, "title" | "variantTitle">) => `${p.title}${p.variantTitle ? ` (${p.variantTitle})` : ""}`;
 
 type DialogName = "customer" | "custom" | "camera" | "approval" | "pay" | "collect" | "staff";
 
@@ -74,15 +63,19 @@ interface Approval {
 
 /**
  * Point of sale — the counter billing screen, after Shopify POS's cashier
- * flow: find items (search, scanner, camera, tiles, custom item), build the
- * cart, take payment in one or several methods, then print or send the
- * receipt. The cart lives in this page only; the server bills it once per
- * clientSaleId however many times it is sent.
+ * flow: find items (search, scanner, camera, quick items, custom item),
+ * build the cart, say who is buying, take payment in one or several methods,
+ * then send, share or print the bill. The cart lives in this page only; the
+ * server bills it once per clientSaleId however many times it is sent.
+ *
+ * On a phone the till is its own app: no app bar or tabs, a slim header, a
+ * bottom bar with the total and Charge, and full-screen steps.
  */
 export default function PosPage() {
   const orgId = useAuthStore((s) => s.currentOrgId);
   const user = useAuthStore((s) => s.user);
   const { role } = useCurrentRole();
+  const { canAccess, landingPath } = useSectionAccess();
   const canManage = role === "OWNER" || role === "ADMIN" || role === "MANAGER";
   const canSell = role !== "VIEWER";
 
@@ -130,25 +123,44 @@ export default function PosPage() {
   const [approval, setApproval] = useState<Approval | null>(null);
   const [flash, setFlash] = useState<{ key: string; at: number } | null>(null);
   const [notice, setNotice] = useState<ScanNotice | null>(null);
+  const [lastScan, setLastScan] = useState<ScanFeedback | null>(null);
   const [scanning, setScanning] = useState(0);
   const [result, setResult] = useState<PosSaleResult | null>(null);
   const [saleError, setSaleError] = useState<string | null>(null);
-  const [sent, setSent] = useState(false);
-  const [whatsappRefused, setWhatsappRefused] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogName | null>(null);
+  const [customerPurpose, setCustomerPurpose] = useState<"checkout" | "cart">("cart");
   const [cartOpen, setCartOpen] = useState(false);
   const [pinError, setPinError] = useState<{ text: string | null; key: number }>({ text: null, key: 0 });
+  const [snack, setSnack] = useState<Snack | null>(null);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
 
   const totals = useMemo(() => cartTotals(lines, cartDiscount, !!settings?.roundOff), [lines, cartDiscount, settings?.roundOff]);
   const approvalNeed = useMemo(() => (settings ? approvalNeeded(lines, cartDiscount, settings) : null), [lines, cartDiscount, settings]);
   const approvalValid =
     !!approval && !!approvalNeed && approval.signature === approvalNeed.signature && new Date(approval.expiresAt).getTime() > Date.now();
+  const inCart = useMemo(() => new Map(lines.filter((l) => l.product).map((l) => [l.key, l.quantity])), [lines]);
 
   const unlock = usePosUnlockMutation();
   const approve = usePosApproveMutation();
   const createSale = useCreatePosSaleMutation();
   const collect = useCollectPosPaymentMutation();
-  const sendReceipt = useSendPosReceiptMutation();
+
+  const phone = useMediaQuery("(max-width: 767px)");
+  const snackId = useRef(0);
+  const say = useCallback((next: Omit<Snack, "id">) => setSnack({ ...next, id: ++snackId.current }), []);
+  const dismissSnack = useCallback(() => setSnack(null), []);
+
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
 
   // ── Focus: the search box holds focus whenever nothing else does, so a
   // scanner always types somewhere. Only with a mouse: on a touch screen it
@@ -194,14 +206,14 @@ export default function PosPage() {
     setClientSaleId(newClientSaleId());
     setResult(null);
     setSaleError(null);
-    setSent(false);
-    setWhatsappRefused(null);
     setCartOpen(false);
+    setLastScan(null);
     setTimeout(focusSearch, 0);
   }, [focusSearch]);
 
+  /** Adds one, says so where the cart is out of sight, and warns inline (not over the till) when stock runs short. */
   const addProduct = useCallback(
-    (p: PosProduct) => {
+    (p: PosProduct, scanned = false) => {
       // Scanning on the success screen starts the next sale.
       if (resultRef.current) newSale();
       const current = resultRef.current ? [] : linesRef.current;
@@ -221,15 +233,24 @@ export default function PosPage() {
           };
       setLines((prev) => (prev.some((l) => l.key === p.variantId) ? prev.map((l) => (l.key === p.variantId ? { ...l, quantity: l.quantity + 1 } : l)) : [...prev, next]));
       setFlash({ key: p.variantId, at: Date.now() });
+      const undo = {
+        label: "Undo",
+        onClick: () => setLines((prev) => prev.flatMap((l) => (l.key !== p.variantId ? [l] : l.quantity > 1 ? [{ ...l, quantity: l.quantity - 1 }] : []))),
+      };
       if (oversold(next) && !(existing && oversold(existing))) {
-        toast.warning(
-          p.stockAtStore != null && p.stockAtStore > 0
-            ? `Only ${p.stockAtStore} of ${p.title} in stock at this store. You can still sell it.`
-            : `${p.title} is out of stock at this store. You can still sell it.`,
-        );
+        say({
+          tone: "warning",
+          text:
+            p.stockAtStore != null && p.stockAtStore > 0
+              ? `Only ${p.stockAtStore} of ${productName(p)} in stock at this store.`
+              : `${productName(p)} is out of stock at this store.`,
+          action: undo,
+        });
+      } else if (phone || scanned) {
+        say({ text: `Added ${productName(p)} · ${inr(p.price)}`, action: undo });
       }
     },
-    [newSale],
+    [newSale, phone, say],
   );
 
   const addFromFinder = (p: PosProduct) => {
@@ -244,15 +265,19 @@ export default function PosPage() {
         const p = await posService.scan(code, activeStore?.id);
         beep(true);
         if (canSell) {
-          addProduct(p);
-          setNotice({ ok: true, text: `Added ${p.title}${p.variantTitle ? ` (${p.variantTitle})` : ""} · ${inr(p.price)}`, at: Date.now() });
+          addProduct(p, true);
+          setLastScan({ ok: true, text: `Added ${productName(p)}`, at: Date.now() });
         } else {
           const stock = stockLabel(p);
-          setNotice({ ok: true, text: [p.title, p.variantTitle, inr(p.price), stock?.text].filter(Boolean).join(" · "), at: Date.now() });
+          const text = [p.title, p.variantTitle, inr(p.price), stock?.text].filter(Boolean).join(" · ");
+          setNotice({ ok: true, text, at: Date.now() });
+          setLastScan({ ok: true, text, at: Date.now() });
         }
       } catch (error) {
         beep(false);
-        setNotice({ ok: false, text: serverMessage(error, "No product has this barcode or SKU."), at: Date.now() });
+        const text = serverMessage(error, "No product has this barcode or SKU.");
+        setNotice({ ok: false, text, at: Date.now() });
+        setLastScan({ ok: false, text, at: Date.now() });
       } finally {
         setScanning((n) => n - 1);
       }
@@ -263,23 +288,73 @@ export default function PosPage() {
   useKeyboardWedge(scan, !!data && stores.length > 0 && !locked && !anyDialog);
 
   const updateLine = (key: string, patch: Partial<PosCartLine>) => setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
-  const removeLine = (key: string) => setLines((prev) => prev.filter((l) => l.key !== key));
+  const removeLine = (key: string) => {
+    const index = lines.findIndex((l) => l.key === key);
+    const line = lines[index];
+    if (!line) return;
+    setLines((prev) => prev.filter((l) => l.key !== key));
+    say({
+      text: `Removed ${line.title}.`,
+      action: { label: "Undo", onClick: () => setLines((prev) => (prev.some((l) => l.key === key) ? prev : [...prev.slice(0, index), line, ...prev.slice(index)])) },
+    });
+  };
+  const clearCart = () => {
+    const saved = { lines, cartDiscount, note, customer };
+    setLines([]);
+    setCartDiscount(null);
+    setNote("");
+    setCustomer(null);
+    setApproval(null);
+    say({
+      text: "Cart cleared.",
+      action: {
+        label: "Undo",
+        onClick: () => {
+          setLines(saved.lines);
+          setCartDiscount(saved.cartDiscount);
+          setNote(saved.note);
+          setCustomer(saved.customer);
+        },
+      },
+    });
+  };
+  const removeCustomer = () => {
+    const saved = customer;
+    setCustomer(null);
+    say({ text: "Customer removed.", action: { label: "Undo", onClick: () => setCustomer(saved) } });
+  };
+  const pickCustomer = () => {
+    setCustomerPurpose("cart");
+    setDialog("customer");
+  };
 
-  const startPay = useCallback(() => {
-    if (!settings || !canSell || lines.length === 0) return;
-    setCartOpen(false);
-    if (settings.askCustomer === "required" && !customer) {
-      setDialog("customer");
-      return;
-    }
-    setSaleError(null);
-    if (approvalNeed && !approvalValid) {
-      setPinError({ text: null, key: 0 });
-      setDialog("approval");
-      return;
-    }
-    setDialog("pay");
-  }, [settings, canSell, lines.length, customer, approvalNeed, approvalValid]);
+  // Charge asks who is buying first — unless the store said not to, or
+  // someone is already on the cart. From `customerRequiredAbove` the bill
+  // needs a name and address whatever the setting.
+  const customerStepNeeded =
+    !!settings &&
+    (needsNameAndAddress(totals.payable, settings) ? !hasNameAndAddress(customer) : settings.customerAtCheckout !== "off" && !customer);
+
+  const startPay = useCallback(
+    (skipCustomer = false) => {
+      if (!settings || !canSell || lines.length === 0) return;
+      setCartOpen(false);
+      setSnack(null);
+      if (!skipCustomer && customerStepNeeded) {
+        setCustomerPurpose("checkout");
+        setDialog("customer");
+        return;
+      }
+      setSaleError(null);
+      if (approvalNeed && !approvalValid) {
+        setPinError({ text: null, key: 0 });
+        setDialog("approval");
+        return;
+      }
+      setDialog("pay");
+    },
+    [settings, canSell, lines.length, customerStepNeeded, approvalNeed, approvalValid],
+  );
 
   // Keyboard shortcuts for a till with a keyboard.
   useEffect(() => {
@@ -321,7 +396,7 @@ export default function PosPage() {
         setStaff(session);
         setDialog(null);
         setPinError({ text: null, key: 0 });
-        toast.success(`${r.staff.name} is billing.`);
+        say({ text: `${r.staff.name} is billing.` });
       },
       onError,
     });
@@ -360,7 +435,6 @@ export default function PosPage() {
       {
         onSuccess: (r) => {
           setResult(r);
-          setSent(false);
           setDialog(null);
         },
         onError: (error) => {
@@ -379,7 +453,7 @@ export default function PosPage() {
         onSuccess: (r) => {
           setResult(r);
           setDialog(null);
-          toast.success(r.balanceDue > 0 ? `${inr(r.paid)} paid so far.` : "The bill is fully paid.");
+          say({ text: r.balanceDue > 0 ? `${inr(r.paid)} paid so far.` : "The bill is fully paid." });
         },
         onError: (error) => {
           if (!staffRefused(error)) setSaleError(serverMessage(error, "The payment was not saved. Check the connection and try again."));
@@ -394,6 +468,7 @@ export default function PosPage() {
   const upi = settings?.upiId ? { upiId: settings.upiId, payeeName: settings.upiPayeeName || data?.storeName || "" } : null;
   const staffName = staff?.staff.name ?? user?.firstName ?? "Staff";
   const ref = billRef(clientSaleId);
+  const storeTitle = activeStore?.name ?? data?.storeName ?? "Point of sale";
 
   // Hidden while locked: the lock screen is the PIN pad, and two pads would both take the digits.
   const staffBadge = canSell && !locked && stores.length > 0 && (
@@ -404,7 +479,7 @@ export default function PosPage() {
         setDialog("staff");
       }}
       aria-label={`${staffName} is billing. Switch staff`}
-      className="flex min-h-11 items-center gap-2 rounded-full md:min-h-9 md:bg-card md:py-1 md:pl-1 md:pr-3 md:shadow-sm md:ring-1 md:ring-border"
+      className="flex min-h-11 shrink-0 items-center gap-2 rounded-full px-1 md:min-h-9 md:bg-card md:py-1 md:pl-1 md:pr-3 md:shadow-sm md:ring-1 md:ring-border"
     >
       <span className="flex size-8 items-center justify-center rounded-full bg-brand text-label text-brand-foreground">
         {staffName.charAt(0).toUpperCase()}
@@ -424,7 +499,7 @@ export default function PosPage() {
       totals={totals}
       flashKey={flash}
       customer={customer}
-      customerRequired={settings?.askCustomer === "required"}
+      customerRequired={settings?.customerAtCheckout === "required"}
       cartDiscount={cartDiscount}
       note={note}
       gstEnabled={!!data?.gstEnabled}
@@ -433,20 +508,31 @@ export default function PosPage() {
       approvedBy={approvalValid ? approval!.approverName : null}
       onLine={updateLine}
       onRemove={removeLine}
-      onClear={() => window.confirm("Clear the cart? Every item, discount and the customer are removed.") && newSale()}
+      onClear={clearCart}
       onCartDiscount={setCartDiscount}
       onNote={setNote}
-      onPickCustomer={() => setDialog("customer")}
-      onCustomer={setCustomer}
-      onPay={startPay}
+      onPickCustomer={pickCustomer}
+      onRemoveCustomer={removeCustomer}
+      onPay={() => startPay()}
       onClose={onClose}
+      footerExtra={
+        onClose && (
+          <div className="relative h-0">
+            <PosSnackbar snack={snack} onDismiss={dismissSnack} className="absolute inset-x-0 bottom-2" />
+          </div>
+        )
+      }
     />
   );
+
+  // A card on a larger screen; edge to edge on a phone.
+  const panel = "flex min-h-0 flex-col overflow-hidden md:rounded-xl md:bg-card md:shadow-sm md:ring-1 md:ring-border";
+  const showBar = canSell && !locked && !result && !!data && stores.length > 0 && lines.length > 0 && !(searchFocused && !finePointer);
 
   let body;
   if (setup.isLoading) {
     body = (
-      <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid min-h-0 flex-1 gap-3 max-md:p-3 md:grid-cols-[minmax(0,1fr)_380px]">
         <Skeleton className="h-full min-h-64 rounded-xl" />
         <Skeleton className="hidden h-full rounded-xl md:block" />
       </div>
@@ -461,7 +547,7 @@ export default function PosPage() {
     // The till sells from Store locations only, and the server refuses a sale
     // without one.
     body = (
-      <section className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto rounded-xl bg-card px-4 py-8 shadow-sm ring-1 ring-border">
+      <section className={cn(panel, "flex-1 items-center justify-center overflow-y-auto px-4 py-8")}>
         <div className="max-w-sm space-y-3 text-center">
           <Store className="mx-auto size-8 text-muted-foreground" />
           <h2 className="font-heading text-subhead">Add a store location to start billing.</h2>
@@ -480,7 +566,7 @@ export default function PosPage() {
     );
   } else if (locked) {
     body = (
-      <section className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto rounded-xl bg-card px-4 py-8 shadow-sm ring-1 ring-border">
+      <section className={cn(panel, "flex-1 items-center justify-center overflow-y-auto px-4 py-8")}>
         {data.staff.length === 0 ? (
           <div className="max-w-sm space-y-3 text-center">
             <Lock className="mx-auto size-8 text-muted-foreground" />
@@ -510,19 +596,14 @@ export default function PosPage() {
     );
   } else if (result) {
     body = (
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-card shadow-sm ring-1 ring-border">
+      // Full screen on a phone, over the till's own header.
+      <section className={cn(panel, "flex-1 max-md:fixed max-md:inset-0 max-md:z-40 max-md:bg-background")}>
         <SaleComplete
           result={result}
-          sending={sendReceipt.isPending}
-          sent={sent}
+          storeName={storeTitle}
+          whatsapp={data.billDelivery.whatsapp}
+          canManage={canManage}
           onPrint={() => printReceipt(result.orderId)}
-          whatsappRefused={whatsappRefused}
-          onWhatsApp={() =>
-            sendReceipt.mutate(result.orderId, {
-              onSuccess: () => setSent(true),
-              onError: (error) => setWhatsappRefused(serverMessage(error, "The receipt was not sent on WhatsApp.")),
-            })
-          }
           onCollect={() => {
             setSaleError(null);
             setDialog("collect");
@@ -535,53 +616,67 @@ export default function PosPage() {
     body = (
       <>
         {!canSell && (
-          <p className="flex shrink-0 items-center gap-2 rounded-lg bg-info-subtle px-3 py-2 text-caption text-info">
+          <p className="flex shrink-0 items-center gap-2 bg-info-subtle px-3 py-2 text-caption text-info md:rounded-lg">
             <Eye className="size-4 shrink-0" />
             You have view-only access: you can look up prices and stock, but not bill.
           </p>
         )}
-        <div className={cn("grid min-h-0 flex-1 gap-3", canSell && "md:grid-cols-[minmax(0,1fr)_minmax(320px,360px)] lg:grid-cols-[minmax(0,1fr)_400px]")}>
-          <section className="flex min-h-0 flex-col overflow-hidden rounded-xl bg-card shadow-sm ring-1 ring-border">
+        <div className={cn("grid min-h-0 flex-1 md:gap-3", canSell && "md:grid-cols-[minmax(0,1fr)_minmax(320px,360px)] lg:grid-cols-[minmax(0,1fr)_400px]")}>
+          <section className={panel}>
             <ProductFinder
               storeId={activeStore?.id}
               tiles={data.tiles}
               canSell={canSell}
               searchRef={searchRef}
-              notice={notice}
+              notice={notice?.ok === false || !canSell ? notice : null}
               scanning={scanning > 0}
+              inCart={inCart}
               onAdd={addFromFinder}
               onScan={(code) => void scan(code)}
-              onCamera={() => setDialog("camera")}
+              onCamera={() => {
+                setLastScan(null);
+                setDialog("camera");
+              }}
               onCustom={() => setDialog("custom")}
+              onSearchFocus={setSearchFocused}
               emptyHint={
                 canManage ? (
                   <>
-                    Pin your best sellers here as quick tiles in{" "}
+                    Pin your best sellers here as quick items in{" "}
                     <Link to="/orders/pos/settings" className="font-medium text-foreground underline underline-offset-2">
                       POS settings
                     </Link>
                     .
                   </>
                 ) : (
-                  "A manager can pin best sellers here as quick tiles."
+                  "A manager can pin best sellers here as quick items."
                 )
               }
             />
           </section>
-          {canSell && <aside className="hidden min-h-0 flex-col overflow-hidden rounded-xl bg-card shadow-sm ring-1 ring-border md:flex">{cartPanel()}</aside>}
+          {canSell && <aside className={cn(panel, "hidden md:flex")}>{cartPanel()}</aside>}
         </div>
-        {canSell && (
-          <div className="flex shrink-0 gap-2 md:hidden">
-            <Button type="button" variant="outline" className="relative h-14 w-14 rounded-xl" aria-label={`Open the cart, ${totals.items} items`} onClick={() => setCartOpen(true)}>
-              <ShoppingCart className="size-5" />
-              {totals.items > 0 && (
-                <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-foreground px-1 text-micro font-semibold text-background">
-                  {totals.items}
+        {showBar && (
+          <div className="flex shrink-0 gap-2 border-t bg-background px-3 pt-2 pb-[max(8px,env(safe-area-inset-bottom))] md:hidden">
+            <button
+              type="button"
+              onClick={() => {
+                setSnack(null);
+                setCartOpen(true);
+              }}
+              aria-label={`Open the cart: ${totals.items} item${totals.items === 1 ? "" : "s"}, ${inr(totals.payable)}`}
+              className="flex h-12 min-w-0 flex-1 items-center gap-2 rounded-xl border px-3 text-left active:bg-muted"
+            >
+              <span className="min-w-0 flex-1 leading-tight">
+                <span className="block text-caption text-muted-foreground">
+                  {totals.items} item{totals.items === 1 ? "" : "s"}
                 </span>
-              )}
-            </Button>
-            <Button type="button" variant="accent" className="h-14 flex-1 rounded-xl text-section" disabled={lines.length === 0} onClick={startPay}>
-              Pay {inr(totals.payable)} · {totals.items} item{totals.items === 1 ? "" : "s"}
+                <span className="block truncate text-label tabular-nums">{inr(totals.payable)}</span>
+              </span>
+              <ChevronUp className="size-4 shrink-0 text-muted-foreground" />
+            </button>
+            <Button type="button" variant="accent" className="h-12 flex-[1.4] rounded-xl text-section" onClick={() => startPay()}>
+              Charge {inr(totals.payable)}
             </Button>
           </div>
         )}
@@ -589,52 +684,38 @@ export default function PosPage() {
     );
   }
 
+  const banners = data && stores.length > 0 && (
+    <>
+      {!online && (
+        <p role="status" className="flex shrink-0 items-center gap-2 bg-warning-subtle px-3 py-2 text-caption text-warning-strong md:rounded-lg">
+          <WifiOff className="size-4 shrink-0" />
+          You're offline. Sales can't be saved until the connection is back.
+        </p>
+      )}
+      {canManage && canSell && !settings?.upiId && !result && (
+        <p className="flex shrink-0 items-center gap-2 bg-muted px-3 py-2 text-caption text-muted-foreground md:rounded-lg">
+          <QrCode className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1">No UPI ID yet, so UPI payments show no QR code.</span>
+          <Link to="/orders/pos/settings" className="shrink-0 font-medium text-foreground underline underline-offset-2">
+            Add one
+          </Link>
+        </p>
+      )}
+    </>
+  );
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
-      <AppBarActions>
-        {staffBadge}
-        {data && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="rounded-full" aria-label="Till options">
-                <MoreVertical />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-60">
-              {stores.length > 1 && (
-                <>
-                  <DropdownMenuLabel className="text-caption text-muted-foreground">Store</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup value={activeStore?.id} onValueChange={chooseStore}>
-                    {stores.map((s) => (
-                      <DropdownMenuRadioItem key={s.id} value={s.id}>
-                        {s.name}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                  <DropdownMenuSeparator />
-                </>
-              )}
-              {settings?.requireStaffPin && staff && (
-                <DropdownMenuItem onSelect={lock}>
-                  <Lock /> Lock the till
-                </DropdownMenuItem>
-              )}
-              {canManage && (
-                <DropdownMenuItem asChild>
-                  <Link to="/orders/pos/settings">
-                    <Settings /> POS settings
-                  </Link>
-                </DropdownMenuItem>
-              )}
-              {!canManage && !(settings?.requireStaffPin && staff) && stores.length <= 1 && (
-                <DropdownMenuItem disabled>
-                  <Store /> {activeStore?.name ?? data.storeName}
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </AppBarActions>
+    <div className="flex h-full min-h-0 flex-col max-md:bg-background md:gap-3">
+      <TillPhoneHeader
+        title={storeTitle}
+        stores={stores}
+        storeId={activeStore?.id}
+        onStore={chooseStore}
+        staffBadge={staffBadge}
+        canManage={canManage}
+        onLock={settings?.requireStaffPin && staff ? lock : null}
+        exitTo={canAccess("/orders") ? "/orders" : landingPath}
+      />
 
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 max-md:hidden">
         <h1 className="font-heading text-page-title">Point of sale</h1>
@@ -673,25 +754,42 @@ export default function PosPage() {
         </div>
       </div>
 
+      {banners}
       {body}
 
-      {/* Phones: the cart is a bottom sheet over the products. */}
-      <Dialog open={cartOpen} onOpenChange={setCartOpen}>
-        <DialogContent showCloseButton={false} className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg md:hidden">
-          <DialogTitle className="sr-only">Cart</DialogTitle>
-          <DialogDescription className="sr-only">The items in this sale, the customer and the total.</DialogDescription>
-          <div className="flex min-h-0 flex-1 flex-col max-md:-mx-5 max-md:-mb-5">{cartPanel(() => setCartOpen(false))}</div>
-        </DialogContent>
-      </Dialog>
+      {!cartOpen && (
+        <PosSnackbar
+          snack={snack}
+          onDismiss={dismissSnack}
+          className={cn(
+            "fixed inset-x-0 z-40 md:bottom-6",
+            result ? "bottom-[calc(96px+env(safe-area-inset-bottom))] md:bottom-28" : showBar ? "bottom-[calc(72px+env(safe-area-inset-bottom))]" : "bottom-[calc(12px+env(safe-area-inset-bottom))]",
+          )}
+        />
+      )}
 
-      {data && (
+      {/* Phones: the cart is a full-height screen over the products. */}
+      <PosScreen open={cartOpen && phone} onOpenChange={setCartOpen} title="Cart" description="The items in this sale, the customer and the total.">
+        {cartPanel(() => setCartOpen(false))}
+      </PosScreen>
+
+      {data && settings && (
         <>
-          <CustomerDialog
+          <CustomerStep
             open={dialog === "customer"}
             onOpenChange={(open) => setDialog(open ? "customer" : null)}
-            canWalkIn={settings?.askCustomer !== "required"}
-            onPick={setCustomer}
-            onWalkIn={() => setCustomer(null)}
+            purpose={customerPurpose}
+            initial={customer}
+            mode={settings.customerAtCheckout}
+            payable={totals.payable}
+            requiredAbove={settings.customerRequiredAbove}
+            autoSendBill={settings.autoSendBill}
+            onDone={(next) => {
+              setCustomer(next);
+              if (customerPurpose === "checkout") startPay(true);
+              else setDialog(null);
+            }}
+            onSkip={() => startPay(true)}
           />
           <CustomItemDialog
             open={dialog === "custom"}
@@ -704,13 +802,16 @@ export default function PosPage() {
                 { key, product: null, title: item.title, variantTitle: null, quantity: 1, listPrice: item.price, unitPrice: item.price, discount: null, gstRate: item.gstRate },
               ]);
               setFlash({ key, at: Date.now() });
+              if (phone) say({ text: `Added ${item.title} · ${inr(item.price)}`, action: { label: "Undo", onClick: () => setLines((prev) => prev.filter((l) => l.key !== key)) } });
             }}
           />
           <CameraScanner
             open={dialog === "camera"}
             onOpenChange={(open) => setDialog(open ? "camera" : null)}
+            variant={phone ? "panel" : "dialog"}
+            feedback={lastScan}
             onCode={(code) => {
-              setDialog(null);
+              if (!phone) setDialog(null);
               void scan(code);
             }}
           />

@@ -1,5 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { isAxiosError } from "axios";
 import { posService } from "~/services/pos.service";
+import type { PosBillState } from "~/types/api";
 
 export const posKeys = {
   all: ["pos"] as const,
@@ -8,6 +10,8 @@ export const posKeys = {
   products: (search: string, storeId?: string) => [...posKeys.all, "products", search, storeId ?? null] as const,
   customers: (search: string) => [...posKeys.all, "customers", search] as const,
   receipt: (orderId: string) => [...posKeys.all, "receipt", orderId] as const,
+  delivery: (orderId: string, since: number) => [...posKeys.all, "delivery", orderId, since] as const,
+  publicBill: (token: string) => ["public-bill", token] as const,
 };
 
 /** Settings, stores, active staff and quick tiles for the till. */
@@ -56,5 +60,51 @@ export function usePosReceipt(orderId: string | undefined) {
     // A receipt is printed once; a refetch on focus would only reprint.
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+  });
+}
+
+const POLL_MS = 2_000;
+const POLL_FOR_MS = 60_000;
+
+/** True while a message is still on its way. */
+export function deliveryInFlight(state: PosBillState | undefined): boolean {
+  return !!state?.delivery.some((d) => d.status === "sending" || d.status === "sent");
+}
+
+/** Read, Not sent and Failed are final; Delivered can still turn into Read. */
+function deliveryFinal(state: PosBillState | undefined): boolean {
+  return !state?.delivery.some((d) => d.status === "sending" || d.status === "sent" || d.status === "delivered");
+}
+
+/**
+ * A sale's bill delivery, starting from `initial` (what the sale or the last
+ * send returned at `since`), polled every 2 s until it is final, for at most
+ * a minute.
+ */
+export function usePosDelivery(orderId: string, initial: PosBillState, since: number) {
+  return useQuery({
+    queryKey: posKeys.delivery(orderId, since),
+    queryFn: () => posService.delivery(orderId),
+    initialData: initial,
+    initialDataUpdatedAt: since,
+    staleTime: POLL_MS,
+    refetchInterval: (query) => (!deliveryFinal(query.state.data) && Date.now() - since < POLL_FOR_MS ? POLL_MS : false),
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** The customer's bill behind a public link. A 404 or 410 means the link is wrong or expired. */
+export function usePublicBill(token: string | undefined) {
+  return useQuery({
+    queryKey: posKeys.publicBill(token ?? ""),
+    queryFn: () => posService.publicBill(token!),
+    enabled: !!token,
+    // A wrong or expired link stays wrong; only a dropped connection is worth retrying.
+    retry: (count, error) => {
+      const status = isAxiosError(error) ? (error.response?.status ?? 0) : 0;
+      return count < 2 && !(status >= 400 && status < 500);
+    },
+    refetchOnWindowFocus: false,
   });
 }

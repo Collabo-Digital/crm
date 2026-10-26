@@ -77,6 +77,11 @@ export default function AppLayout() {
 
   const isMobileThread = location.pathname === "/inbox" && new URLSearchParams(location.search).has("c");
 
+  // Phone screens that bring their own header and drop the app bar, section
+  // tabs and bottom tab bar: an open chat, and the till (which has its own
+  // bottom bar with Charge).
+  const immersive = isMobileThread || matches.some((m) => m.id === "routes/app/orders/pos");
+
   const isFullWidth = matches.some((m) => FULL_WIDTH_ROUTE_IDS.includes(m.id));
 
   return (
@@ -84,12 +89,12 @@ export default function AppLayout() {
       <div
         className={cn(
           "app-shell bg-surface-sunken",
-          isMobileThread && "app-shell-thread",
+          immersive && "app-shell-immersive",
           isFullHeight ? "flex h-dvh flex-col overflow-hidden" : "min-h-screen",
         )}
       >
         <ImpersonationBanner />
-        <Navbar immersive={isMobileThread} />
+        <Navbar immersive={immersive} />
         {/* Same container on every route except a full-width one — otherwise
             only the vertical behaviour differs. */}
         <main
@@ -100,8 +105,8 @@ export default function AppLayout() {
             "app-main mx-auto w-full px-4 py-4 md:py-6 lg:px-6",
             !isFullWidth && "max-w-screen-xl",
             isFullHeight && "min-h-0 flex-1 overflow-hidden",
-            isFullHeight && !isMobileThread && "app-main-contained",
-            isMobileThread && "max-md:p-0",
+            isFullHeight && !immersive && "app-main-contained",
+            immersive && "max-md:p-0",
           )}
         >
           {redirectTo ? <Navigate to={redirectTo} replace /> : <Outlet />}

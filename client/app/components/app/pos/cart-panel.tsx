@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, Award, BadgePercent, Minus, PencilLine, Plus, ShieldCheck, StickyNote, UserRound, X } from "lucide-react";
+import { AlertTriangle, Award, BadgePercent, ChevronRight, Minus, PencilLine, Plus, ShieldCheck, StickyNote, Trash2, UserRound, X } from "lucide-react";
+import { PosScreenHeader } from "~/components/app/pos/pos-screen";
 import { Button } from "~/components/ui/button";
-import { Checkbox } from "~/components/ui/checkbox";
 import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
 import {
+  customerName,
   formatPhone,
   lineDiscount,
   lineGross,
@@ -21,8 +22,8 @@ import type { PosDiscount } from "~/types/api";
 const inr = (n: number) => formatCurrency(n, "INR");
 
 /**
- * The right side of the till (a bottom sheet on phones): who is buying, the
- * lines, discounts, a note, the totals and the Pay button.
+ * The right side of the till (a full-height screen on phones): who is buying,
+ * the lines, discounts, a note, the totals and the Charge button.
  */
 export function CartPanel({
   lines,
@@ -42,9 +43,10 @@ export function CartPanel({
   onCartDiscount,
   onNote,
   onPickCustomer,
-  onCustomer,
+  onRemoveCustomer,
   onPay,
   onClose,
+  footerExtra,
 }: {
   lines: PosCartLine[];
   totals: PosTotals;
@@ -63,79 +65,86 @@ export function CartPanel({
   onCartDiscount: (discount: PosDiscount | null) => void;
   onNote: (note: string) => void;
   onPickCustomer: () => void;
-  onCustomer: (customer: PosCartCustomer | null) => void;
+  onRemoveCustomer: () => void;
   onPay: () => void;
-  /** Shown as a close button in the header, for the phone's bottom sheet. */
+  /** Shown as a close button in the header, for the phone's cart screen. */
   onClose?: () => void;
+  /** The snackbar, on the phone's cart screen, so its Undo stays reachable. */
+  footerExtra?: ReactNode;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [showDiscount, setShowDiscount] = useState(false);
   const [showNote, setShowNote] = useState(false);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-3">
-        <h2 className="text-section">
-          Cart
-          {totals.items > 0 && <span className="ml-2 text-caption font-normal text-muted-foreground">{totals.items} item{totals.items === 1 ? "" : "s"}</span>}
-        </h2>
-        <div className="flex items-center gap-1">
-          {lines.length > 0 && (
-            <Button type="button" variant="ghost" size="sm" onClick={onClear} className="text-muted-foreground max-md:h-11">
-              Clear cart
-            </Button>
-          )}
-          {onClose && (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <PosScreenHeader
+        left={
+          onClose && (
             <Button type="button" variant="ghost" size="icon" className="size-11" aria-label="Close the cart" onClick={onClose}>
               <X />
             </Button>
-          )}
-        </div>
-      </div>
-
-      <CustomerBox customer={customer} required={customerRequired} onPick={onPickCustomer} onChange={onCustomer} />
+          )
+        }
+        title={
+          <>
+            Cart
+            {totals.items > 0 && <span className="ml-2 text-caption font-normal text-muted-foreground">{totals.items} item{totals.items === 1 ? "" : "s"}</span>}
+          </>
+        }
+        right={
+          lines.length > 0 && (
+            <Button type="button" variant="ghost" size="sm" onClick={onClear} className="text-muted-foreground max-md:h-11">
+              Clear cart
+            </Button>
+          )
+        }
+      />
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <CustomerRow customer={customer} required={customerRequired} onPick={onPickCustomer} onRemove={onRemoveCustomer} />
+
         {lines.length === 0 ? (
           <p className="px-4 py-10 text-center text-caption text-muted-foreground">The cart is empty. Tap a product, search, or scan to add one.</p>
         ) : (
-          <ul className="divide-y" aria-label="Items in the cart">
-            {lines.map((line) => (
-              <CartLineRow
-                key={line.key}
-                line={line}
-                flash={flashKey?.key === line.key ? flashKey.at : 0}
-                editing={editing === line.key}
-                priceChangeNeedsPin={priceChangeNeedsPin}
-                onEdit={() => setEditing(editing === line.key ? null : line.key)}
-                onLine={(patch) => onLine(line.key, patch)}
-                onRemove={() => onRemove(line.key)}
-              />
-            ))}
-          </ul>
+          <>
+            <ul className="divide-y border-b" aria-label="Items in the cart">
+              {lines.map((line) => (
+                <CartLineRow
+                  key={line.key}
+                  line={line}
+                  flash={flashKey?.key === line.key ? flashKey.at : 0}
+                  editing={editing === line.key}
+                  priceChangeNeedsPin={priceChangeNeedsPin}
+                  onEdit={() => setEditing(editing === line.key ? null : line.key)}
+                  onLine={(patch) => onLine(line.key, patch)}
+                  onRemove={() => onRemove(line.key)}
+                />
+              ))}
+            </ul>
+            <div className="space-y-3 px-4 py-3">
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant={cartDiscount ? "secondary" : "outline"} size="sm" className="max-md:h-11" onClick={() => setShowDiscount(!showDiscount)} aria-expanded={showDiscount}>
+                  <BadgePercent />
+                  {cartDiscount ? `Cart discount ${cartDiscount.type === "percent" ? `${cartDiscount.value}%` : inr(cartDiscount.value)}` : "Cart discount"}
+                </Button>
+                <Button type="button" variant={note ? "secondary" : "outline"} size="sm" className="max-md:h-11" onClick={() => setShowNote(!showNote)} aria-expanded={showNote}>
+                  <StickyNote />
+                  {note ? "Note added" : "Add note"}
+                </Button>
+              </div>
+              {showDiscount && <DiscountEditor label="Discount on the whole cart" value={cartDiscount} onChange={onCartDiscount} />}
+              {showNote && (
+                <Textarea value={note} maxLength={500} rows={2} onChange={(e) => onNote(e.target.value)} placeholder="Alteration on Saturday, gift wrap…" aria-label="Note on this sale" />
+              )}
+            </div>
+          </>
         )}
       </div>
 
-      <div className="shrink-0 space-y-3 border-t px-4 py-3">
-        {lines.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant={cartDiscount ? "secondary" : "outline"} size="sm" className="max-md:h-11" onClick={() => setShowDiscount(!showDiscount)} aria-expanded={showDiscount}>
-              <BadgePercent />
-              {cartDiscount ? `Cart discount ${cartDiscount.type === "percent" ? `${cartDiscount.value}%` : inr(cartDiscount.value)}` : "Cart discount"}
-            </Button>
-            <Button type="button" variant={note ? "secondary" : "outline"} size="sm" className="max-md:h-11" onClick={() => setShowNote(!showNote)} aria-expanded={showNote}>
-              <StickyNote />
-              {note ? "Note added" : "Add note"}
-            </Button>
-          </div>
-        )}
-        {showDiscount && lines.length > 0 && (
-          <DiscountEditor label="Discount on the whole cart" value={cartDiscount} onChange={onCartDiscount} />
-        )}
-        {showNote && lines.length > 0 && (
-          <Textarea value={note} maxLength={500} rows={2} onChange={(e) => onNote(e.target.value)} placeholder="Alteration on Saturday, gift wrap…" aria-label="Note on this sale" />
-        )}
+      {footerExtra}
 
+      <div className="shrink-0 space-y-3 border-t px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))]">
         <dl className="space-y-1 text-body">
           <Row label="Subtotal" value={inr(totals.subtotal)} />
           {totals.lineDiscounts + totals.cartDiscount > 0 && <Row label="Discounts" value={`−${inr(totals.lineDiscounts + totals.cartDiscount)}`} />}
@@ -157,7 +166,7 @@ export function CartPanel({
         {approvalNeed && !approvedBy && (
           <p className="flex items-start gap-2 rounded-lg bg-warning-subtle px-3 py-2 text-caption text-warning-strong">
             <ShieldCheck className="mt-0.5 size-4 shrink-0" />
-            <span>{approvalNeed.summary} A manager's PIN is asked for when you pay.</span>
+            <span>{approvalNeed.summary} A manager's PIN is asked for when you charge.</span>
           </p>
         )}
         {approvalNeed && approvedBy && (
@@ -167,8 +176,8 @@ export function CartPanel({
           </p>
         )}
 
-        <Button type="button" variant="accent" className="h-14 w-full rounded-xl text-section" disabled={lines.length === 0} onClick={onPay}>
-          Pay {inr(totals.payable)}
+        <Button type="button" variant="accent" className="h-13 w-full rounded-xl text-section md:h-14" disabled={lines.length === 0} onClick={onPay}>
+          Charge {inr(totals.payable)}
         </Button>
       </div>
     </div>
@@ -187,64 +196,63 @@ function Row({ label, value, hint, muted }: { label: string; value: ReactNode; h
   );
 }
 
-function CustomerBox({
+/** Who is buying, first in the cart; tap to add or change, × to bill a walk-in. */
+function CustomerRow({
   customer,
   required,
   onPick,
-  onChange,
+  onRemove,
 }: {
   customer: PosCartCustomer | null;
   required: boolean;
   onPick: () => void;
-  onChange: (customer: PosCartCustomer | null) => void;
+  onRemove: () => void;
 }) {
   if (!customer) {
     return (
-      <div className="flex shrink-0 items-center gap-3 border-b px-4 py-3">
+      <button type="button" onClick={onPick} className="flex min-h-16 w-full items-center gap-3 border-b px-4 py-3 text-left hover:bg-muted/60">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
           <UserRound className="size-4" />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-label">{required ? "No customer yet" : "Walk-in customer"}</span>
+          <span className="block text-label">Add customer</span>
           <span className={cn("block text-caption", required ? "text-warning-strong" : "text-muted-foreground")}>
-            {required ? "This store needs a customer on every bill." : "Add one to send the bill on WhatsApp."}
+            {required ? "This store needs the customer's mobile on every bill." : "Their mobile number, for the bill on WhatsApp."}
           </span>
         </span>
-        <Button type="button" variant="outline" size="sm" className="max-md:h-11" onClick={onPick}>
-          Add customer
-        </Button>
-      </div>
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+      </button>
     );
   }
 
-  const existing = customer.kind === "existing" ? customer.customer : null;
-  const name = existing ? existing.name : customer.kind === "new" ? customer.name : "";
-  const phone = formatPhone(existing ? existing.phone : customer.kind === "new" ? customer.phone : null);
+  const name = customerName(customer);
+  const phone = formatPhone(customer.phone);
+  const existing = customer.existing;
   return (
-    <div className="shrink-0 space-y-2 border-b px-4 py-3">
-      <div className="flex items-start gap-3">
+    <div className="flex items-center gap-1 border-b py-1.5 pr-2 pl-4">
+      <button type="button" onClick={onPick} className="flex min-h-13 min-w-0 flex-1 items-center gap-3 py-1.5 text-left" aria-label={`Customer ${name || phone}. Change`}>
         <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-brand text-label text-brand-foreground">
-          {name.trim().charAt(0).toUpperCase() || "?"}
+          {(name || "?").charAt(0).toUpperCase()}
         </span>
-        <button type="button" onClick={onPick} className="min-w-0 flex-1 text-left">
+        <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5 truncate text-label">
-            {name}
+            {name || phone || "Customer"}
             {existing && existing.vipLevel !== "NONE" && <Award className="size-3.5 shrink-0 text-warning" aria-label={`${existing.vipLevel} customer`} />}
           </span>
           <span className="block truncate text-caption text-muted-foreground">
-            {existing
-              ? [phone, `${existing.ordersCount} order${existing.ordersCount === 1 ? "" : "s"}`, `${inr(existing.totalSpent)} spent`].filter(Boolean).join(" · ")
-              : [phone, "New customer"].filter(Boolean).join(" · ")}
+            {[
+              name ? phone : null,
+              existing ? `Returning · ${existing.ordersCount} visit${existing.ordersCount === 1 ? "" : "s"} · ${inr(existing.totalSpent)}` : "New customer",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           </span>
-        </button>
-        <Button type="button" variant="ghost" size="icon-sm" className="max-md:size-11" aria-label="Remove the customer" onClick={() => onChange(null)}>
-          <X />
-        </Button>
-      </div>
-      <label className="flex min-h-9 items-center gap-2.5 pl-12 text-caption">
-        <Checkbox checked={customer.whatsappOptIn} onCheckedChange={(v) => onChange({ ...customer, whatsappOptIn: v === true })} />
-        WhatsApp updates: they agreed to get bills and order updates there.
-      </label>
+          {customer.gstin && <span className="block truncate font-mono text-micro text-muted-foreground">GSTIN {customer.gstin}</span>}
+        </span>
+      </button>
+      <Button type="button" variant="ghost" size="icon-sm" className="max-md:size-11" aria-label="Remove the customer" onClick={onRemove}>
+        <X />
+      </Button>
     </div>
   );
 }
@@ -292,9 +300,9 @@ function CartLineRow({
         </div>
       </div>
       {oversold(line) && (
-        <p className={cn("mt-1.5 flex items-center gap-1.5 text-caption", line.product?.allowOversell ? "text-warning-strong" : "text-danger")}>
+        <p className={cn("mt-1.5 flex items-center gap-1.5 text-caption", stock != null && stock > 0 ? "text-warning-strong" : "text-danger")}>
           <AlertTriangle className="size-3.5 shrink-0" />
-          {stock != null && stock > 0 ? `Only ${stock} in stock at this store.` : "None in stock at this store."} You can still sell it.
+          {stock != null && stock > 0 ? `Only ${stock} in stock at this store.` : "Out of stock at this store."} Selling {line.quantity}.
         </p>
       )}
       <div className="mt-2 flex items-center gap-1.5">
@@ -320,7 +328,7 @@ function CartLineRow({
           Price and discount
         </Button>
         <Button type="button" variant="ghost" size="icon" className="ml-auto text-muted-foreground max-md:size-11" aria-label={`Remove ${line.title}`} onClick={onRemove}>
-          <X />
+          <Trash2 />
         </Button>
       </div>
       {editing && (
