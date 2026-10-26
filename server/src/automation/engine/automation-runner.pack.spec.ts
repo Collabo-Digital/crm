@@ -118,8 +118,11 @@ function harness(opts: {
             findUnique: jest.fn(async () => opts.order ?? { paymentGateways: [], totalPrice: 2499, posSale: false, sourceName: 'web' }),
             findFirst: jest.fn(async () => (opts.laterOrder ? { id: 'ord2' } : null)),
         },
-        message: { findFirst: jest.fn(async () => (opts.inbound ? { id: 'in1' } : null)) },
-        automationEvent: { findUnique: jest.fn(async () => opts.event ?? null) },
+        message: { findFirst: jest.fn(async ({ where }: Row) => (opts.inbound && !where.id?.notIn?.includes('in1') ? { id: 'in1' } : null)) },
+        automationEvent: {
+            findUnique: jest.fn(async () => opts.event ?? null),
+            findMany: jest.fn(async ({ where }: Row) => where.id.in.map((id: string) => ({ messageId: id === 'evt_reply' ? 'in1' : null }))),
+        },
         checkout: { findUnique: jest.fn(async () => opts.checkout ?? null) },
         $transaction: jest.fn(async (ops: unknown) => (Array.isArray(ops) ? Promise.all(ops) : undefined)),
     };
@@ -139,11 +142,14 @@ function harness(opts: {
         actorFor: jest.fn(async () => 'u1'),
         tagOrder: jest.fn(async () => ({ tags: ['x'] })),
     };
+    const paymentLinks = {
+        forOrder: jest.fn(async () => ({ id: 'pl1', shortUrl: 'https://rzp.io/rzp/T1x', amount: 2499, currency: 'INR', expiresAt: new Date(Date.now() + 48 * 3600_000).toISOString() })),
+    };
     const none = {} as never;
     const config = { get: (key: string) => (key === 'frontendUrl' ? APP : undefined) };
-    const runner = new AutomationRunner(prisma as never, sender as never, jobs as never, none, { publish: jest.fn() } as never, none, none, store as never, none, none, none, none, config as never);
+    const runner = new AutomationRunner(prisma as never, sender as never, jobs as never, none, { publish: jest.fn() } as never, none, none, store as never, paymentLinks as never, none, none, none, config as never);
     jest.spyOn((runner as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => undefined);
-    return { runner, run, prisma, sent, steps, runUpdates, jobs, store };
+    return { runner, run, prisma, sent, steps, runUpdates, jobs, store, paymentLinks, sender };
 }
 
 const trigger = (event = 'order_created', extra: Row = {}) => ({ id: 't', type: 'trigger', config: { channel: 'whatsapp', event, ...extra } });
@@ -395,5 +401,103 @@ describe('AutomationRunner — stop conditions', () => {
         expect(h.sent).toHaveLength(0);
         expect(h.steps[0]).toMatchObject({ status: 'SKIPPED', output: { stopped: 'order_placed' } });
         expect(h.run.context.hold).toBeUndefined();
+    });
+});
+
+describe('AutomationRunner — pack slots on the invoice and payment-link steps', () => {
+    it('“Send the invoice” sends the invoice slot with the order’s PDF, and skips a slot without a document', async () => {
+        const invoice = harness({ steps: [trigger('invoice_issued'), { id: 's', type: 'send_invoice', config: { templateSlot: 'gst_invoice' } }], templates: [collaboTemplate('gst_invoice')], invoice: true });
+        await invoice.runner.run('run1');
+        expect(invoice.sent[0].payload).toMatchObject({ name: 'collabo_gst_invoice_v1', headerMedia: { kind: 'document', filename: 'INV-1.pdf' } });
+
+        const wrong = harness({ steps: [trigger('invoice_issued'), { id: 's', type: 'send_invoice', config: { templateSlot: 'order_shipped' } }], templates: [collaboTemplate('order_shipped')], invoice: true });
+        await wrong.runner.run('run1');
+        expect(wrong.sent).toHaveLength(0);
+        expect(wrong.steps[0]).toMatchObject({ status: 'SKIPPED', output: expect.objectContaining({ skipped: 'template_unavailable' }) });
+        expect(wrong.store.invoiceDocument).not.toHaveBeenCalled();
+    });
+
+    it('“Send a payment link” makes the link only once the slot has a template, and puts it in the button', async () => {
+        const step = { id: 's', type: 'send_payment_link', config: { kind: 'template', templateSlot: 'payment_link' } };
+        const h = harness({ steps: [trigger(), step], templates: [collaboTemplate('payment_link')] });
+        await h.runner.run('run1');
+        expect(h.paymentLinks.forOrder).toHaveBeenCalledTimes(1);
+        expect(h.sent[0].payload.name).toBe('collabo_payment_link_v1');
+        expect(h.sent[0].payload.components[1]).toEqual({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: 'rzp/T1x' }] });
+
+        const none = harness({ steps: [trigger(), step], templates: [collaboTemplate('payment_link', { status: 'PENDING' })] });
+        await none.runner.run('run1');
+        expect(none.paymentLinks.forOrder).not.toHaveBeenCalled();
+        expect(none.steps[0]).toMatchObject({ status: 'SKIPPED', output: expect.objectContaining({ skipped: 'template_unavailable' }) });
+    });
+});
+
+describe('AutomationRunner — people who stopped promotions', () => {
+    const cartRun = { context: { vars: { 'checkout.items': 'Linen shirt', 'checkout.total': '₹1,199.00', 'checkout.cart_path': 'chk1.sig' }, trigger: { eventType: 'crm.checkout.abandoned', commentId: null, postId: null }, depth: 0 } };
+
+    it('skips a marketing slot for them, at once rather than after the night, and the run carries on', async () => {
+        const h = harness({
+            steps: [trigger('checkout_abandoned'), slotStep('s', 'cart_reminder_1'), note],
+            templates: [collaboTemplate('cart_reminder_1', { category: 'MARKETING' })],
+            run: cartRun,
+            order: null,
+            timeZone: zoneAt(23),
+            contact: { optedOutAt: new Date(Date.now() - 86_400_000) },
+        });
+        (h.prisma as Row).conversationNote = { create: jest.fn(async () => ({ id: 'note1' })) };
+        await h.runner.run('run1');
+        expect(h.sent).toHaveLength(0);
+        expect(h.steps[0]).toMatchObject({ status: 'SKIPPED', output: expect.objectContaining({ skipped: 'opted_out' }) });
+        expect(h.run.status).toBe('COMPLETED');
+    });
+
+    it('turns the send gate’s refusal into a skip on a slot step, not a failed run', async () => {
+        const h = harness({ steps: [trigger(), slotStep('s', 'order_confirmed')], templates: [collaboTemplate('order_confirmed')] });
+        h.sender.send.mockResolvedValueOnce({ ok: false, code: 'opted_out', message: 'This customer opted out of marketing messages.' } as never);
+        await h.runner.run('run1');
+        expect(h.steps[0]).toMatchObject({ status: 'SKIPPED', output: { skipped: 'opted_out' } });
+        expect([h.run.status, h.prisma.automation.update.mock.calls.length]).toEqual(['COMPLETED', 0]);
+    });
+});
+
+describe('AutomationRunner — stop conditions, again', () => {
+    it('does not count, at a later wake-up, the reply a wait-for-reply step already took', async () => {
+        const steps = [
+            trigger('order_created', { stopWhen: { replied: true } }),
+            { id: 'r', type: 'wait_for_reply', config: { amount: 3, unit: 'hours' }, branches: { replied: [], timeout: [] } },
+            { id: 'w', type: 'wait', config: { amount: 1, unit: 'hours' } },
+            note,
+        ];
+        const h = harness({
+            steps,
+            inbound: true,
+            run: {
+                status: 'WAITING', currentStepKey: 'w', startedAt: new Date(Date.now() - 5 * 3600_000), resumeAt: new Date(Date.now() - 1000),
+                context: { vars: { last_reply: 'Confirm order' }, replyEventIds: ['evt_reply'], trigger: { eventType: 'crm.order.created', commentId: null, postId: null }, depth: 0 },
+            },
+        });
+        (h.prisma as Row).conversationNote = { create: jest.fn(async () => ({ id: 'note1' })) };
+        await h.runner.resume('run1', 'timer');
+        expect(h.prisma.message.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: { notIn: ['in1'] } }) }));
+        expect(h.run.skipReason).toBeUndefined();
+        expect(h.steps.find((s) => s.stepKey === 'n')).toMatchObject({ status: 'COMPLETED' });
+    });
+
+    it('checks them when a held send is picked up after its worker died', async () => {
+        const h = harness({
+            steps: [trigger('checkout_abandoned', { stopWhen: { orderPlaced: true } }), slotStep('s', 'cart_reminder_1')],
+            templates: [collaboTemplate('cart_reminder_1', { category: 'MARKETING' })],
+            run: {
+                status: 'RUNNING', currentStepKey: 's', startedAt: new Date(Date.now() - 3600_000),
+                context: { vars: {}, trigger: { eventType: 'crm.checkout.abandoned', commentId: null, postId: null }, depth: 0, hold: { stepId: 's', reason: 'quiet_hours' } },
+            },
+            order: null,
+            event: { payload: { raw: { checkoutId: 'chk1' } } },
+            checkout: { completedAt: new Date() },
+        });
+        h.steps.push({ stepKey: 's', status: 'WAITING' });
+        await h.runner.run('run1');
+        expect(h.sent).toHaveLength(0);
+        expect(h.run).toMatchObject({ status: 'COMPLETED', skipReason: 'order_placed' });
     });
 });

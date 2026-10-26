@@ -166,6 +166,8 @@ const SheetAddRowConfig = z.object({
 const SendInvoiceConfig = z.object({
     templateId: z.string().max(64).optional(),
     templateValues: z.record(z.string(), z.string().max(1024)).default({}),
+    /** Instead of a chosen template, a pack slot with a document header (see SendMessageConfig.templateSlot). */
+    templateSlot: z.string().max(40).optional(),
 });
 
 /**
@@ -180,6 +182,8 @@ const SendPaymentLinkConfig = z.object({
     message: z.string().max(4096).default(''),
     templateId: z.string().max(64).optional(),
     templateValues: z.record(z.string(), z.string().max(1024)).default({}),
+    /** Instead of a chosen template, a pack slot whose values carry the link (see SendMessageConfig.templateSlot). */
+    templateSlot: z.string().max(40).optional(),
     expiresInHours: z.coerce.number().int().min(1).max(720).default(48),
     /** Added to the order once it is paid, e.g. "cod-to-prepaid". */
     tagOnPaid: z.string().max(60).default(''),
@@ -443,6 +447,14 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 }
             }
         };
+        // A pack slot instead of a chosen template: the slot must still be offered, and the values its wording
+        // needs must exist where the step sits (the pack fills them, not the step).
+        const packSlotOf = (key: string) => {
+            const slot = PACK_SLOTS.get(key);
+            if (!slot) push(step.id, 'template_slot_unknown', 'Choose a template', 'This recommended template is no longer offered. Pick an approved WhatsApp template.');
+            slot?.variants.flatMap((v) => Object.values(v.values)).forEach(checkText);
+            return slot ?? null;
+        };
 
         switch (step.type) {
             case 'send_message': {
@@ -451,15 +463,8 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 if (m.kind === 'template') {
                     if (channel !== 'whatsapp') push(step.id, 'template_needs_whatsapp', 'Templates are WhatsApp only', 'Send a text or buttons on this channel instead.');
                     if (m.templateSlot && !m.templateId) {
-                        // The pack fills its own values; they still have to exist where the step sits.
-                        const slot = PACK_SLOTS.get(m.templateSlot);
-                        if (!slot) {
-                            push(step.id, 'template_slot_unknown', 'Choose a template', 'This recommended template is no longer offered. Pick an approved WhatsApp template.');
-                        } else {
-                            if (slot.invoiceDocument && !ORDER_CONTEXT.includes(t.event)) {
-                                push(step.id, 'invoice_needs_order', 'Needs an order', 'Sending the invoice works when the trigger is an order or invoice event.');
-                            }
-                            slot.variants.flatMap((v) => Object.values(v.values)).forEach(checkText);
+                        if (packSlotOf(m.templateSlot)?.invoiceDocument && !ORDER_CONTEXT.includes(t.event)) {
+                            push(step.id, 'invoice_needs_order', 'Needs an order', 'Sending the invoice works when the trigger is an order or invoice event.');
                         }
                         break;
                     }
@@ -525,6 +530,13 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 const v = c as z.infer<typeof SendInvoiceConfig>;
                 if (t.channel !== 'whatsapp') push(step.id, 'invoice_needs_whatsapp', 'Invoices go on WhatsApp', 'Use a WhatsApp automation to send invoices.');
                 if (!ORDER_CONTEXT.includes(t.event)) push(step.id, 'invoice_needs_order', 'Needs an order', 'Sending the invoice works when the trigger is an order or invoice event.');
+                if (v.templateSlot && !v.templateId) {
+                    const slot = packSlotOf(v.templateSlot);
+                    if (slot && !slot.invoiceDocument) {
+                        push(step.id, 'template_needs_document', 'Template needs a document header', `The recommended “${slot.title}” template has no document header for the invoice PDF. Pick one that has.`);
+                    }
+                    break;
+                }
                 if (!v.templateId) push(step.id, 'template_missing', 'Choose a template', 'Pick an approved WhatsApp template with a document header.');
                 const chosen = v.templateId ? ctx.templates?.get(v.templateId) : undefined;
                 if (v.templateId && ctx.templates && !chosen) push(step.id, 'template_not_found', 'Template not found', 'The chosen template was deleted. Pick another one.');
@@ -559,7 +571,14 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 }
                 if (ctx.paymentsConnected === false) push(step.id, 'payments_not_connected', 'Connect Razorpay', 'Connect your Razorpay account in Settings → Orders → Payments first, so customers pay you directly.');
                 const usesLink = (text: string) => /\{\{\s*payment\.link(_path)?\s*\}\}/.test(text);
-                if (v.kind === 'template') {
+                if (v.kind === 'template' && v.templateSlot && !v.templateId) {
+                    const slot = packSlotOf(v.templateSlot);
+                    if (slot?.invoiceDocument) {
+                        push(step.id, 'template_header_unsupported', 'Pick a template without a media header', `The recommended “${slot.title}” template needs a header file, which this step does not send.`);
+                    } else if (slot && !slot.variants.every((x) => Object.values(x.values).some(usesLink))) {
+                        push(step.id, 'payment_link_unused', 'The link is not in the message', `The recommended “${slot.title}” template has no place for the payment link. Pick one that has.`);
+                    }
+                } else if (v.kind === 'template') {
                     if (!v.templateId) push(step.id, 'template_missing', 'Choose a template', 'Pick an approved WhatsApp template.');
                     const chosen = v.templateId ? ctx.templates?.get(v.templateId) : undefined;
                     if (v.templateId && ctx.templates && !chosen) push(step.id, 'template_not_found', 'Template not found', 'The chosen template was deleted. Pick another one.');

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AutomationRunStatus, AutomationStatus, ChannelPlatform, ChannelStatus, ConversationStatus, MessageDirection, Prisma } from '@prisma/client';
+import { AutomationRunStatus, AutomationStatus, ChannelPlatform, ChannelStatus, ConversationStatus, MessageDirection, MessageTemplate, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AutomationEventService } from '../../messaging/automation-event.service';
 import { AutomationJobs } from '../../messaging/automation-jobs';
@@ -20,7 +20,7 @@ import { paymentVars } from '../../payments/payment-link.util';
 import { WhatsAppPayService } from '../../payments/whatsapp-pay.service';
 import { isCashOnDelivery, isPosOrder } from '../../commerce/order-vars';
 import { ParamValue, renderTemplate, sendComponents, templateParams } from '../../campaigns/templates/template-components';
-import { PACK_LANGUAGE, packSlot, packVariantOf } from '../../campaigns/templates/pack/template-pack';
+import { PACK_LANGUAGE, packSlot, packVariantOf, type PackSlot, type PackVariant } from '../../campaigns/templates/pack/template-pack';
 import { latestPackTemplate, pickPackTemplate } from '../../campaigns/templates/pack/pick-pack-template';
 import { resolveReportingTimeZone } from '../../common/utils/zoned-date.util';
 import { parseStoreProfileSettings } from '../../organization-settings/schemas/store-profile-settings.schema';
@@ -43,6 +43,13 @@ type Outcome =
 
 /** What stops a send short of the message: a step outcome instead of a payload. */
 type Halt = Extract<Outcome, { kind: 'fail' | 'hold' | 'skip' }>;
+
+/** A pack slot resolved to the account's template for it, and the pack's values for that template. */
+interface ResolvedSlot {
+    slot: PackSlot;
+    template: MessageTemplate;
+    variant: PackVariant;
+}
 
 /** A run stuck in RUNNING this long lost its worker; the sweeper hands it to another. */
 export const STALE_RUN_MS = 5 * 60_000;
@@ -80,7 +87,8 @@ interface StepState {
 }
 
 const fail = (error: string): Halt => ({ kind: 'fail', error });
-const halted = (built: OutboundPayload | Halt): built is Halt => 'kind' in built;
+/** Neither a payload nor a resolved slot has a `kind`; every step outcome has. */
+const halted = <T extends object>(built: T | Halt): built is Halt => 'kind' in built;
 
 /**
  * Executes runs, one block at a time, against the version they were started
@@ -152,7 +160,14 @@ export class AutomationRunner {
         const flow = await this.flowOf(run);
         if (!flow) return;
         const start = run.currentStepKey ? flow.step(run.currentStepKey) : flow.first();
-        await this.execute(run, flow, start, parseRunContext(run.context));
+        const ctx = parseRunContext(run.context);
+        // A held send whose wake-up was cut short (its worker died): it gets the checks its resume would have made.
+        if (start && ctx.hold?.stepId === start.id) {
+            const stopped = await this.stopReason(run, flow.trigger.config, ctx, 'timer');
+            if (stopped) return this.stop(run, start, ctx, stopped);
+            delete ctx.hold;
+        }
+        await this.execute(run, flow, start, ctx);
     }
 
     /**
@@ -177,7 +192,7 @@ export class AutomationRunner {
         const waiting = run.currentStepKey ? flow.step(run.currentStepKey) : null;
         if (!waiting) return this.finish(run.id, ctx);
 
-        const stopped = await this.stopReason(run, flow.trigger.config, reason);
+        const stopped = await this.stopReason(run, flow.trigger.config, ctx, reason);
         if (stopped) return this.stop(run, waiting, ctx, stopped);
 
         // A send held back (quiet hours, a paused template) runs again, not the step after it.
@@ -396,7 +411,8 @@ export class AutomationRunner {
                 break;
             case 'template': {
                 // A chosen template wins over the pack's slot: that is the merchant's own choice.
-                const built = m.templateSlot && !m.templateId ? await this.slotPayload(s, m.templateSlot) : await this.templatePayload(s, m);
+                if (m.templateSlot && !m.templateId) return this.sendSlot(s, step, m.templateSlot);
+                const built = await this.templatePayload(s, m);
                 if (halted(built)) return built;
                 payload = built;
                 break;
@@ -405,6 +421,25 @@ export class AutomationRunner {
                 payload = { type: 'text', text };
         }
         return this.deliver(s, step, payload);
+    }
+
+    /** A send step that names a pack slot: resolve it, fill it, send it. */
+    private async sendSlot(s: StepState, step: FlowStep, key: string, opts: { invoice?: boolean } = {}): Promise<Outcome> {
+        const resolved = await this.resolveSlot(s, key, opts);
+        if (halted(resolved)) return resolved;
+        const payload = await this.fillSlot(s, resolved);
+        if (halted(payload)) return payload;
+        return this.deliverSlot(s, step, payload);
+    }
+
+    /**
+     * The send gate refuses marketing to someone who stopped promotions, which
+     * a slot whose template Meta moved to marketing meets too: the step is
+     * skipped rather than failing Collabo's automation.
+     */
+    private async deliverSlot(s: StepState, step: FlowStep, payload: OutboundPayload): Promise<Outcome> {
+        const outcome = await this.deliver(s, step, payload);
+        return outcome.kind === 'fail' && outcome.output?.refusal === 'opted_out' ? { kind: 'skip', reason: 'opted_out', output: { skipped: 'opted_out' } } : outcome;
     }
 
     private async templatePayload(s: StepState, m: SendMessageConfigT): Promise<OutboundPayload | Halt> {
@@ -444,14 +479,16 @@ export class AutomationRunner {
 
     /**
      * A step that names a slot of the recommended pack: the account's approved
-     * template for it now, filled with the pack's own values. Nothing to send
-     * skips the step, never fails the run: these automations are Collabo's,
-     * and one template Meta has not approved must not stop the others.
+     * template for it now, or why nothing goes out. Nothing to send skips the
+     * step, never fails the run: these automations are Collabo's, and one
+     * template Meta has not approved must not stop the others. Checked before
+     * anything is made for the send (an invoice PDF, a payment link).
      */
-    private async slotPayload(s: StepState, key: string): Promise<OutboundPayload | Halt> {
+    private async resolveSlot(s: StepState, key: string, opts: { invoice?: boolean } = {}): Promise<ResolvedSlot | Halt> {
         const skip = (reason: string, extra: Record<string, unknown> = {}): Halt => ({ kind: 'skip', reason, output: { skipped: reason, slot: key, ...extra } });
         const slot = packSlot(this.frontendUrl, key);
-        if (!slot) return skip('template_unavailable');
+        // "Send the invoice" sends the PDF: a slot without a document header has nowhere to put it.
+        if (!slot || (opts.invoice && !slot.invoiceDocument)) return skip('template_unavailable');
         const wabaId = await this.currentWaba(s.run.organizationId);
         const rows = wabaId
             ? await this.prisma.messageTemplate.findMany({ where: { organizationId: s.run.organizationId, wabaId, packSlot: key } })
@@ -469,13 +506,19 @@ export class AutomationRunner {
         }
         const variant = packVariantOf(slot, template);
         if (!variant) return skip('template_unavailable', { template: template.name });
+        if (template.category === 'MARKETING' && s.facts.contact.optedOut) return skip('opted_out', { template: template.name });
         const quiet = this.quietHold(s, template.category);
         if (quiet) return quiet;
+        return { slot, template, variant };
+    }
 
+    /** The resolved template filled with the pack's values, and the order's invoice PDF where the slot has one. */
+    private async fillSlot(s: StepState, { slot, template, variant }: ResolvedSlot): Promise<OutboundPayload | Halt> {
+        const skip = (reason: string, extra: Record<string, unknown> = {}): Halt => ({ kind: 'skip', reason, output: { skipped: reason, slot: slot.key, template: template.name, ...extra } });
         let headerMedia: { storageKey: string; mime: string; kind: 'document'; filename?: string } | undefined;
         if (slot.invoiceDocument) {
             const doc = s.run.orderId ? await this.store.invoiceDocument(s.run.organizationId, s.run.orderId) : null;
-            if (!doc) return skip('invoice_missing', { template: template.name });
+            if (!doc) return skip('invoice_missing');
             // {{invoice.*}} for this message and the steps after it.
             Object.assign(s.ctx.vars, doc.vars);
             Object.assign(s.vars, doc.vars);
@@ -486,13 +529,13 @@ export class AutomationRunner {
         const values: Record<string, ParamValue> = {};
         for (const p of templateParams(components, format)) {
             if (p.component === 'header' && p.kind !== 'text') {
-                if (p.kind !== headerMedia?.kind) return skip('template_unavailable', { template: template.name });
+                if (p.kind !== headerMedia?.kind) return skip('template_unavailable');
                 // Replaced with the uploaded file's id at delivery.
                 values.header = { mediaId: 'pending-upload' };
                 continue;
             }
             const value = interpolate(variant.values[p.key] ?? '', s.vars).trim();
-            if (!value) return skip('value_missing', { template: template.name, value: p.name });
+            if (!value) return skip('value_missing', { value: p.name });
             values[p.key] = value;
         }
         return {
@@ -519,9 +562,10 @@ export class AutomationRunner {
 
     /** The order's GST invoice as a PDF, in the document header of an approved template. */
     private async sendInvoice(s: StepState, step: FlowStep): Promise<Outcome> {
+        const c = step.config as { templateId?: string; templateValues?: Record<string, string>; templateSlot?: string };
+        if (c.templateSlot && !c.templateId) return this.sendSlot(s, step, c.templateSlot, { invoice: true });
         const orderId = s.run.orderId;
         if (!orderId) return fail('This run is not about an order.');
-        const c = step.config as { templateId?: string; templateValues?: Record<string, string> };
         const template = c.templateId
             ? await this.prisma.messageTemplate.findFirst({ where: { id: c.templateId, organizationId: s.run.organizationId }, select: { components: true, category: true } })
             : null;
@@ -549,10 +593,15 @@ export class AutomationRunner {
      * made from a cart. A retried step finds the link it made the first time.
      */
     private async sendPaymentLink(s: StepState, step: FlowStep): Promise<Outcome> {
-        const c = step.config as { method?: string; kind?: string; message?: string; templateId?: string; templateValues?: Record<string, string>; expiresInHours?: number; tagOnPaid?: string };
+        const c = step.config as { method?: string; kind?: string; message?: string; templateId?: string; templateValues?: Record<string, string>; templateSlot?: string; expiresInHours?: number; tagOnPaid?: string };
         if (c.method === 'whatsapp_pay') return this.sendWhatsAppPay(s, step, c);
-        if (c.kind !== 'text' && c.templateId) {
-            // Before the link is made: its expiry would otherwise run through the night.
+        // Before the link is made: nothing is sent without a template, and a held link's expiry would run through the night.
+        let slot: ResolvedSlot | null = null;
+        if (c.kind !== 'text' && c.templateSlot && !c.templateId) {
+            const resolved = await this.resolveSlot(s, c.templateSlot);
+            if (halted(resolved)) return resolved;
+            slot = resolved;
+        } else if (c.kind !== 'text' && c.templateId) {
             const template = await this.prisma.messageTemplate.findFirst({ where: { id: c.templateId, organizationId: s.run.organizationId }, select: { category: true } });
             const quiet = this.quietHold(s, template?.category);
             if (quiet) return quiet;
@@ -577,6 +626,10 @@ export class AutomationRunner {
         Object.assign(s.ctx.vars, vars);
         Object.assign(s.vars, vars);
         if (c.kind === 'text') return this.deliver(s, step, { type: 'text', text: interpolate(c.message ?? '', s.vars) });
+        if (slot) {
+            const filled = await this.fillSlot(s, slot);
+            return halted(filled) ? filled : this.deliverSlot(s, step, filled);
+        }
         const payload = await this.templatePayload(s, { kind: 'template', templateId: c.templateId, templateValues: c.templateValues ?? {} } as SendMessageConfigT);
         if (halted(payload)) return payload;
         return this.deliver(s, step, payload);
@@ -818,15 +871,25 @@ export class AutomationRunner {
      * run started. A reply a wait-for-reply step was waiting for is no reason
      * to stop.
      */
-    private async stopReason(run: LoadedRun, trigger: Record<string, unknown>, reason: 'timer' | 'reply'): Promise<StopReason | null> {
+    private async stopReason(run: LoadedRun, trigger: Record<string, unknown>, ctx: RunContext, reason: 'timer' | 'reply'): Promise<StopReason | null> {
         const when = (trigger.stopWhen ?? {}) as { orderPlaced?: boolean; replied?: boolean; optedOut?: boolean };
         if (!run.contactId || (!when.orderPlaced && !when.replied && !when.optedOut)) return null;
         const since = run.startedAt ?? run.createdAt;
         const contact = await this.prisma.channelContact.findUnique({ where: { id: run.contactId }, select: { optedOutAt: true, customerId: true } });
         if (when.optedOut && contact?.optedOutAt && contact.optedOutAt > since) return 'opted_out';
         if (when.replied && reason === 'timer') {
+            // Not the replies this run's wait-for-reply steps took: those were what it waited for.
+            const taken = ctx.replyEventIds?.length
+                ? (await this.prisma.automationEvent.findMany({ where: { id: { in: ctx.replyEventIds } }, select: { messageId: true } })).flatMap((e) => (e.messageId ? [e.messageId] : []))
+                : [];
             const wrote = await this.prisma.message.findFirst({
-                where: { contactId: run.contactId, direction: MessageDirection.INBOUND, imported: false, createdAt: { gt: since } },
+                where: {
+                    contactId: run.contactId,
+                    direction: MessageDirection.INBOUND,
+                    imported: false,
+                    createdAt: { gt: since },
+                    ...(taken.length ? { id: { notIn: taken } } : {}),
+                },
                 select: { id: true },
             });
             if (wrote) return 'replied';

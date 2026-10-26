@@ -391,6 +391,19 @@ describe('the recommended pack', () => {
         expect(() => parseDefinition({ steps: wa({ event: 'invoice_issued', orderWithinDays: 0 }) })).toThrow(BadRequestException);
     });
 
+    it('takes a slot on “Send the invoice” and “Send a payment link” too, with no template to choose', () => {
+        expect(check(wa({ event: 'invoice_issued' }, { id: 'i', type: 'send_invoice', config: { templateSlot: 'gst_invoice' } }))).toEqual([]);
+        expect(check(wa({ event: 'invoice_issued' }, { id: 'i', type: 'send_invoice', config: { templateSlot: 'order_shipped' } }))).toEqual(['template_needs_document']);
+        expect(check(wa({ event: 'invoice_issued' }, { id: 'i', type: 'send_invoice', config: { templateSlot: 'gone' } }))).toEqual(['template_slot_unknown']);
+        const pay = (templateSlot: string) => collectIssues(parseDefinition({ steps: wa({ event: 'order_created' }, { id: 'p', type: 'send_payment_link', config: { kind: 'template', templateSlot } }) }), {
+            platform: 'WHATSAPP', knownMediaIds: null, templates: new Map(), paymentsConnected: true,
+        }).map((i) => i.code);
+        expect(pay('payment_link')).toEqual([]);
+        expect(pay('pay_online')).toEqual([]);
+        expect(pay('order_shipped')).toEqual(['payment_link_unused']);
+        expect(pay('gst_invoice')).toEqual(['template_header_unsupported']);
+    });
+
     it('matches on a tapped button’s payload', () => {
         const condition = { id: 'c', type: 'condition', config: { rules: [{ field: 'reply_payload', op: 'equals', value: 'collabo_cod_confirm' }] } };
         expect(check(wa({ event: 'order_created' }, condition))).toEqual([]);
