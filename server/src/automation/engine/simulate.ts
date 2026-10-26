@@ -2,6 +2,7 @@ import type { SendMessageConfigT, StepDef } from '../blocks/definition.schema';
 import { Flow, interpolate } from './flow';
 import { RunFacts, conditionMatches, variablesFor } from './run-context';
 import { parseRating } from '../../reviews/review-rating';
+import { packSlot } from '../../campaigns/templates/pack/template-pack';
 
 export interface TraceStep {
     stepId: string;
@@ -45,7 +46,9 @@ export function simulate(
         switch (step.type) {
             case 'send_message': {
                 const m = c as SendMessageConfigT;
-                if (m.kind === 'template') {
+                if (m.kind === 'template' && m.templateSlot && !m.templateId) {
+                    push('done', `Sends the recommended template "${packSlot('', m.templateSlot)?.title ?? m.templateSlot}".`);
+                } else if (m.kind === 'template') {
                     push('done', `Sends the template "${opts.templateNames?.[m.templateId ?? ''] ?? 'not chosen'}".`);
                 } else {
                     const options = m.options.filter((o) => o.trim());

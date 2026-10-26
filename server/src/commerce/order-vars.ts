@@ -3,11 +3,16 @@
  * Pure: the commerce events service gathers the rows.
  */
 
-export type StoreEventKind = 'created' | 'paid' | 'fulfilled' | 'delivered' | 'cancelled';
+export type StoreEventKind = 'created' | 'paid' | 'fulfilled' | 'out_for_delivery' | 'delivered' | 'cancelled';
 
 /** Shopify names cash on delivery in `payment_gateway_names`, e.g. "Cash on Delivery (COD)". */
 export function isCashOnDelivery(gateways: string[]): boolean {
     return gateways.some((g) => /cash on delivery|\bcod\b/i.test(g));
+}
+
+/** A sale at the till: Collabo's point of sale, or Shopify POS (`source_name` "pos"). */
+export function isPosOrder(order: { posSale: boolean; sourceName: string | null }): boolean {
+    return order.posSale || order.sourceName === 'pos';
 }
 
 export function formatMoney(amount: number | string | null | undefined, currency: string | null | undefined): string {
@@ -60,6 +65,11 @@ function pathOf(url: string | null): string {
     } catch {
         return '';
     }
+}
+
+/** {{refund.*}}: one refund on an order. */
+export function refundVars(refund: { amount: number | string; currency: string }): Record<string, string> {
+    return { 'refund.amount': formatMoney(refund.amount, refund.currency) };
 }
 
 /** {{invoice.*}}: the GST invoice issued for an order. */

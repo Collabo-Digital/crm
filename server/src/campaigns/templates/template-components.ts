@@ -290,11 +290,14 @@ export function templateParams(components: MetaComponent[], format: ParameterFor
 /**
  * The `components` of a template send, from the values for each parameter.
  * Missing values are an error: Meta rejects a send with too few parameters.
+ * `quickReplyPayloads` (by button index) give quick replies a payload of
+ * their own, which a tap then carries whatever the button reads.
  */
 export function sendComponents(
     components: MetaComponent[],
     format: ParameterFormat,
     values: Record<string, ParamValue | undefined>,
+    quickReplyPayloads: Record<number, string> = {},
 ): MetaComponent[] {
     const out: MetaComponent[] = [];
     const params = templateParams(components, format);
@@ -326,13 +329,23 @@ export function sendComponents(
             })),
         });
     }
-    for (const p of params.filter((x) => x.component === 'button')) {
-        out.push(
-            p.kind === 'coupon_code'
-                ? { type: 'button', sub_type: 'copy_code', index: p.buttonIndex, parameters: [{ type: 'coupon_code', coupon_code: String(values[p.key]) }] }
-                : { type: 'button', sub_type: 'url', index: String(p.buttonIndex), parameters: [{ type: 'text', text: String(values[p.key]) }] },
-        );
-    }
+    const buttons: Array<{ index: number; component: MetaComponent }> = params
+        .filter((x) => x.component === 'button')
+        .map((p) => ({
+            index: p.buttonIndex!,
+            component:
+                p.kind === 'coupon_code'
+                    ? { type: 'button', sub_type: 'copy_code', index: p.buttonIndex, parameters: [{ type: 'coupon_code', coupon_code: String(values[p.key]) }] }
+                    : { type: 'button', sub_type: 'url', index: String(p.buttonIndex), parameters: [{ type: 'text', text: String(values[p.key]) }] },
+        }));
+    const defined = components.find((c) => String(c.type).toUpperCase() === 'BUTTONS')?.buttons ?? [];
+    defined.forEach((b: MetaComponent, index: number) => {
+        const payload = quickReplyPayloads[index];
+        if (String(b.type).toUpperCase() === 'QUICK_REPLY' && payload) {
+            buttons.push({ index, component: { type: 'button', sub_type: 'quick_reply', index: String(index), parameters: [{ type: 'payload', payload }] } });
+        }
+    });
+    out.push(...buttons.sort((a, b) => a.index - b.index).map((b) => b.component));
     return out;
 }
 

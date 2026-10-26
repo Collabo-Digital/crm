@@ -20,6 +20,22 @@ export const FIRST_SIGHTING_EVENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const DELIVERED_EVENT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
+ * A refund raises its store event (one message per refund) only while it is
+ * this recent, so a catch-up or an edit to an old order never announces old
+ * refunds.
+ */
+export const REFUND_EVENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether a Shopify refund is news: money moved, recently. Cancelling an
+ * unpaid order records a restock-only refund with no transaction, whose
+ * amount is zero.
+ */
+export function isRefundNews(refund: { processed_at?: unknown; created_at?: unknown }, amount: { toString(): string }, now: number = Date.now()): boolean {
+  return Number(amount.toString()) > 0 && isWithinWindow(refund.processed_at ?? refund.created_at, REFUND_EVENT_WINDOW_MS, now);
+}
+
+/**
  * True when a Shopify payload's `updated_at` is strictly older than what the
  * stored row was last written from. Shopify does not order webhooks, so a
  * retried or late delivery must not overwrite newer data. Equal is not older:

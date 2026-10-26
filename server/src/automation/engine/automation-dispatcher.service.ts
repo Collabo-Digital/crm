@@ -5,6 +5,7 @@ import { RedisService } from '../../redis/redis.service';
 import { AutomationJobs } from '../../messaging/automation-jobs';
 import { InboxRulesService } from '../../inbox/inbox-rules.service';
 import { adReferral } from '../../ads/ads.util';
+import { isPosOrder } from '../../commerce/order-vars';
 import { Flow, keywordMatches } from './flow';
 import { RunContext, parseRunContext } from './run-context';
 import { parseDefinition } from '../blocks/definition.schema';
@@ -50,7 +51,17 @@ interface EventPayload {
         order?: { product_items?: Array<{ product_retailer_id?: string; quantity?: number; item_price?: number; currency?: string }> };
         /** A message from a click-to-chat ad. */
         referral?: unknown;
+        /** A WhatsApp template quick-reply tap. */
+        button?: { payload?: string };
+        /** A WhatsApp reply-button tap. */
+        interactive?: { button_reply?: { id?: string } };
     };
+}
+
+/** What a store trigger leaves out, from AutomationTrigger.config (see triggerConfigFor). */
+interface OrderLimits {
+    skipPos?: boolean;
+    orderWithinDays?: number;
 }
 
 type SkipReason = 'once_per_contact' | 'once_per_day';
@@ -188,6 +199,10 @@ export class AutomationDispatcher {
         const reply = event.text ?? payload.raw?.postbackPayload ?? '';
         const ctx: RunContext = parseRunContext(run.context);
         ctx.vars.last_reply = reply;
+        // The tapped button's payload, which stays the same whatever language its label is in.
+        const tapped = payload.raw?.button?.payload ?? payload.raw?.interactive?.button_reply?.id;
+        if (tapped) ctx.vars.last_reply_payload = tapped;
+        else delete ctx.vars.last_reply_payload;
         ctx.replied = true;
         ctx.replyEventIds = [...(ctx.replyEventIds ?? []), event.id];
         let saveAs = '';
@@ -233,7 +248,7 @@ export class AutomationDispatcher {
     /** Start the automations this event triggers. Returns the runs to execute. */
     private async start(event: AutomationEvent, payload: EventPayload): Promise<string[]> {
         if (!event.contactId) return [];
-        let matched = (await this.candidates(event)).filter((t) => this.matches(t, event, payload));
+        let matched = await this.orderAllows((await this.candidates(event)).filter((t) => this.matches(t, event, payload)), event);
         const skips = new Map<string, SkipReason | null>();
         for (const t of matched) skips.set(t.id, await this.onceSkip(t, event));
         if (ONE_WINNER.has(event.eventType) && matched.length > 1) matched = [pickWinner(matched, (t) => !skips.get(t.id))];
@@ -244,6 +259,27 @@ export class AutomationDispatcher {
             if (id) runIds.push(id);
         }
         return runIds;
+    }
+
+    /**
+     * The triggers whose order limits let this event's order through. Left
+     * out, a trigger starts no run at all (not a skipped one): a sale at the
+     * till, or an order older than the trigger looks at, is not what it is for.
+     */
+    private async orderAllows(matched: CandidateTrigger[], event: AutomationEvent): Promise<CandidateTrigger[]> {
+        const limits = (t: CandidateTrigger) => (t.config ?? {}) as OrderLimits;
+        if (!event.orderId || !matched.some((t) => limits(t).skipPos || limits(t).orderWithinDays)) return matched;
+        const order = await this.prisma.order.findUnique({
+            where: { id: event.orderId },
+            select: { posSale: true, sourceName: true, externalCreatedAt: true, createdAt: true },
+        });
+        if (!order) return matched;
+        const placed = (order.externalCreatedAt ?? order.createdAt).getTime();
+        return matched.filter((t) => {
+            const { skipPos, orderWithinDays } = limits(t);
+            if (skipPos && isPosOrder(order)) return false;
+            return !orderWithinDays || event.occurredAt.getTime() - placed <= orderWithinDays * DAY;
+        });
     }
 
     private candidates(event: AutomationEvent): Promise<CandidateTrigger[]> {

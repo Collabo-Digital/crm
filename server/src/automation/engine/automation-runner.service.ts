@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AutomationRunStatus, AutomationStatus, ChannelPlatform, ConversationStatus, Prisma } from '@prisma/client';
+import { AutomationRunStatus, AutomationStatus, ChannelPlatform, ChannelStatus, ConversationStatus, MessageDirection, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AutomationEventService } from '../../messaging/automation-event.service';
 import { AutomationJobs } from '../../messaging/automation-jobs';
@@ -18,22 +18,47 @@ import { GoogleService } from '../../integrations/google/google.service';
 import type { ReviewerNameFormat } from '../../reviews/judgeme.client';
 import { paymentVars } from '../../payments/payment-link.util';
 import { WhatsAppPayService } from '../../payments/whatsapp-pay.service';
-import { isCashOnDelivery } from '../../commerce/order-vars';
+import { isCashOnDelivery, isPosOrder } from '../../commerce/order-vars';
 import { ParamValue, renderTemplate, sendComponents, templateParams } from '../../campaigns/templates/template-components';
-import { SendMessageConfigT, StepDef, parseDefinition } from '../blocks/definition.schema';
+import { PACK_LANGUAGE, packSlot, packVariantOf } from '../../campaigns/templates/pack/template-pack';
+import { latestPackTemplate, pickPackTemplate } from '../../campaigns/templates/pack/pick-pack-template';
+import { resolveReportingTimeZone } from '../../common/utils/zoned-date.util';
+import { parseStoreProfileSettings } from '../../organization-settings/schemas/store-profile-settings.schema';
+import { CART_TRIGGERS, SendMessageConfigT, StepDef, parseDefinition } from '../blocks/definition.schema';
+import { readCartDiscount } from '../pack/cart-discount';
 import { Flow, FlowStep, FlowVariables, interpolate, toMinutes } from './flow';
 import { HttpRequestError, guardedRequest } from './http-request';
-import { RunContext, RunFacts, conditionMatches, flattenResponse, parseRunContext, variablesFor } from './run-context';
+import { quietHoursEnd } from './quiet-hours';
+import { HoldReason, RunContext, RunFacts, conditionMatches, flattenResponse, parseRunContext, variablesFor } from './run-context';
 
 type Outcome =
     | { kind: 'next'; output?: Record<string, unknown>; messageId?: string }
     | { kind: 'branch'; branch: string; output?: Record<string, unknown> }
     | { kind: 'wait'; resumeAt: Date; forReply: boolean; output?: Record<string, unknown> }
+    /** Not sent yet: park the run and run this step again at `resumeAt`. */
+    | { kind: 'hold'; resumeAt: Date; reason: HoldReason; output?: Record<string, unknown> }
+    /** Not sent, and not to be: the run carries on with the next step. */
+    | { kind: 'skip'; reason: string; output?: Record<string, unknown> }
     | { kind: 'fail'; error: string; output?: Record<string, unknown> };
+
+/** What stops a send short of the message: a step outcome instead of a payload. */
+type Halt = Extract<Outcome, { kind: 'fail' | 'hold' | 'skip' }>;
 
 /** A run stuck in RUNNING this long lost its worker; the sweeper hands it to another. */
 export const STALE_RUN_MS = 5 * 60_000;
 const MAX_HOPS = 60;
+/** A pack template Meta paused is tried again this often, until this long after the run started; then the step is skipped. */
+const PAUSED_RETRY_MS = 30 * 60_000;
+const PAUSED_HOLD_MS = 12 * 3600_000;
+
+/** Why a run's stop conditions ended it. */
+type StopReason = 'order_placed' | 'replied' | 'opted_out';
+
+/** What every step of one execution reads: the store's name and time zone, and on cart runs the pack's discount. */
+interface RunEnv {
+    vars: Record<string, string>;
+    timeZone: string;
+}
 
 const runInclude = {
     version: { select: { definition: true } },
@@ -47,13 +72,15 @@ type RunContact = Prisma.ChannelContactGetPayload<{ include: typeof contactInclu
 interface StepState {
     run: LoadedRun;
     ctx: RunContext;
+    env: RunEnv;
     contact: RunContact;
     conversation: { id: string; assignedUserId: string | null; platform: string; lastInboundAt: Date | null } | null;
     facts: RunFacts;
     vars: FlowVariables;
 }
 
-const fail = (error: string): Outcome => ({ kind: 'fail', error });
+const fail = (error: string): Halt => ({ kind: 'fail', error });
+const halted = (built: OutboundPayload | Halt): built is Halt => 'kind' in built;
 
 /**
  * Executes runs, one block at a time, against the version they were started
@@ -85,6 +112,7 @@ const STEP_NAME: Record<string, string> = {
 export class AutomationRunner {
     private readonly logger = new Logger(AutomationRunner.name);
     private readonly allowPrivate: boolean;
+    private readonly frontendUrl: string;
 
     constructor(
         private readonly prisma: PrismaService,
@@ -102,6 +130,7 @@ export class AutomationRunner {
         config: ConfigService,
     ) {
         this.allowPrivate = config.get<string>('AUTOMATION_HTTP_ALLOW_PRIVATE') === 'true';
+        this.frontendUrl = config.get<string>('frontendUrl') ?? '';
     }
 
     /** Start (or pick up) a run from its current step. */
@@ -148,6 +177,14 @@ export class AutomationRunner {
         const waiting = run.currentStepKey ? flow.step(run.currentStepKey) : null;
         if (!waiting) return this.finish(run.id, ctx);
 
+        const stopped = await this.stopReason(run, flow.trigger.config, reason);
+        if (stopped) return this.stop(run, waiting, ctx, stopped);
+
+        // A send held back (quiet hours, a paused template) runs again, not the step after it.
+        const held = ctx.hold?.stepId === waiting.id;
+        delete ctx.hold;
+        if (held) return this.execute(run, flow, waiting, ctx);
+
         let next: FlowStep | null;
         let output: Record<string, unknown>;
         if (waiting.type === 'wait_for_reply') {
@@ -169,6 +206,7 @@ export class AutomationRunner {
     // ─── Execution ────────────────────────────────────────────────────
 
     private async execute(run: LoadedRun, flow: Flow, start: FlowStep | null, ctx: RunContext): Promise<void> {
+        const env = await this.env(run, flow);
         let step = start;
         let hops = 0;
         while (step) {
@@ -180,7 +218,7 @@ export class AutomationRunner {
             const startedAt = new Date();
             let outcome: Outcome;
             try {
-                outcome = await this.block(run, step, ctx);
+                outcome = await this.block(run, step, ctx, env);
             } catch (err) {
                 this.logger.warn(`Run ${run.id} step ${step.id} (${step.type}) threw: ${err instanceof Error ? err.stack : err}`);
                 outcome = fail(err instanceof Error ? err.message : 'Something went wrong.');
@@ -189,18 +227,21 @@ export class AutomationRunner {
 
             switch (outcome.kind) {
                 case 'next':
+                case 'skip':
                     step = flow.next(step.id);
                     break;
                 case 'branch':
                     step = flow.enter(step.id, outcome.branch);
                     break;
                 case 'wait':
+                case 'hold':
+                    if (outcome.kind === 'hold') ctx.hold = { stepId: step.id, reason: outcome.reason };
                     await this.prisma.automationRun.update({
                         where: { id: run.id },
                         data: {
                             status: AutomationRunStatus.WAITING,
                             resumeAt: outcome.resumeAt,
-                            waitingForReply: outcome.forReply,
+                            waitingForReply: outcome.kind === 'wait' && outcome.forReply,
                             context: ctx as unknown as Prisma.InputJsonValue,
                         },
                     });
@@ -213,8 +254,51 @@ export class AutomationRunner {
         await this.finish(run.id, ctx);
     }
 
-    private async block(run: LoadedRun, step: FlowStep, ctx: RunContext): Promise<Outcome> {
-        const s = await this.state(run, ctx);
+    /** Read once per execution, not per step: store events can have several sends. */
+    private async env(run: LoadedRun, flow: Flow): Promise<RunEnv> {
+        const org = await this.prisma.organization.findUnique({
+            where: { id: run.organizationId },
+            select: { name: true, timezone: true, settings: { select: { storeProfileSettings: true } } },
+        });
+        const timeZone = resolveReportingTimeZone(org ?? {});
+        const vars: Record<string, string> = {
+            'store.name': parseStoreProfileSettings(org?.settings?.storeProfileSettings).storeName.trim() || org?.name || '',
+        };
+        if (CART_TRIGGERS.includes(String(flow.trigger.config.event))) {
+            const discount = await this.cartDiscount(run.organizationId);
+            if (discount) {
+                Object.assign(vars, {
+                    'cart.discount_code': discount.code,
+                    'cart.discount_text': discount.text,
+                    'cart.discount_expiry': new Date(Date.now() + discount.validDays * 86_400_000).toLocaleDateString('en-IN', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric',
+                        timeZone,
+                    }),
+                });
+            }
+        }
+        return { vars, timeZone };
+    }
+
+    /** The organization's WhatsApp account now: its pack templates and settings are on it. */
+    private async currentWaba(orgId: string): Promise<string | null> {
+        const channel = await this.prisma.channel.findFirst({
+            where: { organizationId: orgId, platform: ChannelPlatform.WHATSAPP, status: { not: ChannelStatus.DISCONNECTED } },
+            select: { externalStoreId: true },
+        });
+        return channel?.externalStoreId ?? null;
+    }
+
+    private async cartDiscount(orgId: string) {
+        const wabaId = await this.currentWaba(orgId);
+        const pack = wabaId ? await this.prisma.templatePack.findUnique({ where: { wabaId }, select: { organizationId: true, settings: true } }) : null;
+        return pack?.organizationId === orgId ? readCartDiscount(pack.settings) : null;
+    }
+
+    private async block(run: LoadedRun, step: FlowStep, ctx: RunContext, env: RunEnv): Promise<Outcome> {
+        const s = await this.state(run, ctx, env);
         if (!s) return fail('The contact for this run no longer exists.');
         const c = step.config;
         switch (step.type) {
@@ -311,8 +395,9 @@ export class AutomationRunner {
                 payload = { type: 'quick_replies', text, replies: options.map((title, i) => ({ title, payload: optionId(i) })) };
                 break;
             case 'template': {
-                const built = await this.templatePayload(s, m);
-                if (typeof built === 'string') return fail(built);
+                // A chosen template wins over the pack's slot: that is the merchant's own choice.
+                const built = m.templateSlot && !m.templateId ? await this.slotPayload(s, m.templateSlot) : await this.templatePayload(s, m);
+                if (halted(built)) return built;
                 payload = built;
                 break;
             }
@@ -322,26 +407,28 @@ export class AutomationRunner {
         return this.deliver(s, step, payload);
     }
 
-    private async templatePayload(s: StepState, m: SendMessageConfigT): Promise<OutboundPayload | string> {
+    private async templatePayload(s: StepState, m: SendMessageConfigT): Promise<OutboundPayload | Halt> {
         const template = m.templateId
             ? await this.prisma.messageTemplate.findFirst({ where: { id: m.templateId, organizationId: s.run.organizationId } })
             : null;
-        if (!template) return 'The template for this step was deleted.';
-        if (template.status !== 'APPROVED') return `The template "${template.name}" is not approved (${template.status.toLowerCase()}).`;
+        if (!template) return fail('The template for this step was deleted.');
+        if (template.status !== 'APPROVED') return fail(`The template "${template.name}" is not approved (${template.status.toLowerCase()}).`);
+        const quiet = this.quietHold(s, template.category);
+        if (quiet) return quiet;
         const format = template.parameterFormat === 'NAMED' ? 'NAMED' : 'POSITIONAL';
         const components = template.components as Record<string, unknown>[];
         const values: Record<string, ParamValue> = {};
         let headerMedia: { storageKey: string; mime: string; kind: 'image' | 'video' | 'document'; filename?: string } | undefined;
         for (const p of templateParams(components, format)) {
             if (p.component === 'header' && p.kind !== 'text') {
-                if (p.kind === 'location' || !m.media || m.media.kind === 'audio') return 'Add the header image, video or document to this step.';
+                if (p.kind === 'location' || !m.media || m.media.kind === 'audio') return fail('Add the header image, video or document to this step.');
                 headerMedia = { storageKey: m.media.storageKey, mime: m.media.mime, kind: m.media.kind, filename: m.media.filename };
                 // Replaced with the uploaded file's id at delivery.
                 values.header = { mediaId: 'pending-upload' };
                 continue;
             }
             const value = interpolate(m.templateValues[p.key] ?? '', s.vars).trim();
-            if (!value) return `The template value "${p.name}" is empty for this person.`;
+            if (!value) return fail(`The template value "${p.name}" is empty for this person.`);
             values[p.key] = value;
         }
         return {
@@ -355,16 +442,93 @@ export class AutomationRunner {
         };
     }
 
+    /**
+     * A step that names a slot of the recommended pack: the account's approved
+     * template for it now, filled with the pack's own values. Nothing to send
+     * skips the step, never fails the run: these automations are Collabo's,
+     * and one template Meta has not approved must not stop the others.
+     */
+    private async slotPayload(s: StepState, key: string): Promise<OutboundPayload | Halt> {
+        const skip = (reason: string, extra: Record<string, unknown> = {}): Halt => ({ kind: 'skip', reason, output: { skipped: reason, slot: key, ...extra } });
+        const slot = packSlot(this.frontendUrl, key);
+        if (!slot) return skip('template_unavailable');
+        const wabaId = await this.currentWaba(s.run.organizationId);
+        const rows = wabaId
+            ? await this.prisma.messageTemplate.findMany({ where: { organizationId: s.run.organizationId, wabaId, packSlot: key } })
+            : [];
+        const template = pickPackTemplate(rows, key, slot.category, PACK_LANGUAGE);
+        if (!template) {
+            const latest = latestPackTemplate(rows, key, PACK_LANGUAGE);
+            // Meta pauses a template for hours, then lifts it: wait for it while the message is still timely.
+            const deadline = s.run.createdAt.getTime() + PAUSED_HOLD_MS;
+            if (latest?.status === 'PAUSED' && Date.now() < deadline) {
+                const resumeAt = new Date(Math.min(Date.now() + PAUSED_RETRY_MS, deadline));
+                return { kind: 'hold', resumeAt, reason: 'template_paused', output: { heldUntil: resumeAt.toISOString(), reason: 'template_paused', template: latest.name } };
+            }
+            return skip('template_unavailable', latest ? { template: latest.name, status: latest.status } : {});
+        }
+        const variant = packVariantOf(slot, template);
+        if (!variant) return skip('template_unavailable', { template: template.name });
+        const quiet = this.quietHold(s, template.category);
+        if (quiet) return quiet;
+
+        let headerMedia: { storageKey: string; mime: string; kind: 'document'; filename?: string } | undefined;
+        if (slot.invoiceDocument) {
+            const doc = s.run.orderId ? await this.store.invoiceDocument(s.run.organizationId, s.run.orderId) : null;
+            if (!doc) return skip('invoice_missing', { template: template.name });
+            // {{invoice.*}} for this message and the steps after it.
+            Object.assign(s.ctx.vars, doc.vars);
+            Object.assign(s.vars, doc.vars);
+            headerMedia = { storageKey: doc.storageKey, mime: 'application/pdf', kind: 'document', filename: doc.filename };
+        }
+        const format = template.parameterFormat === 'NAMED' ? 'NAMED' : 'POSITIONAL';
+        const components = template.components as Record<string, unknown>[];
+        const values: Record<string, ParamValue> = {};
+        for (const p of templateParams(components, format)) {
+            if (p.component === 'header' && p.kind !== 'text') {
+                if (p.kind !== headerMedia?.kind) return skip('template_unavailable', { template: template.name });
+                // Replaced with the uploaded file's id at delivery.
+                values.header = { mediaId: 'pending-upload' };
+                continue;
+            }
+            const value = interpolate(variant.values[p.key] ?? '', s.vars).trim();
+            if (!value) return skip('value_missing', { template: template.name, value: p.name });
+            values[p.key] = value;
+        }
+        return {
+            type: 'template',
+            name: template.name,
+            language: template.language,
+            category: template.category,
+            components: sendComponents(components, format, values, variant.source === 'collabo' ? variant.quickReplyPayloads : undefined),
+            previewText: renderTemplate(components, values).body,
+            ...(headerMedia ? { headerMedia } : {}),
+        };
+    }
+
+    /**
+     * Marketing waits out the night in the store's time zone (21:00 to 09:00):
+     * the run parks and sends at 09:00. Never as a QUEUED message, which the
+     * outbound sweeper would fail after six hours.
+     */
+    private quietHold(s: StepState, category: string | null | undefined): Halt | null {
+        if (category !== 'MARKETING') return null;
+        const until = quietHoursEnd(new Date(), s.env.timeZone);
+        return until ? { kind: 'hold', resumeAt: until, reason: 'quiet_hours', output: { heldUntil: until.toISOString(), reason: 'quiet_hours' } } : null;
+    }
+
     /** The order's GST invoice as a PDF, in the document header of an approved template. */
     private async sendInvoice(s: StepState, step: FlowStep): Promise<Outcome> {
         const orderId = s.run.orderId;
         if (!orderId) return fail('This run is not about an order.');
         const c = step.config as { templateId?: string; templateValues?: Record<string, string> };
         const template = c.templateId
-            ? await this.prisma.messageTemplate.findFirst({ where: { id: c.templateId, organizationId: s.run.organizationId }, select: { components: true } })
+            ? await this.prisma.messageTemplate.findFirst({ where: { id: c.templateId, organizationId: s.run.organizationId }, select: { components: true, category: true } })
             : null;
         const header = ((template?.components ?? []) as Array<{ type?: string; format?: string }>).find((x) => String(x.type).toUpperCase() === 'HEADER');
         if (template && String(header?.format).toUpperCase() !== 'DOCUMENT') return fail('The template has no document header for the invoice PDF.');
+        const quiet = this.quietHold(s, template?.category);
+        if (quiet) return quiet;
         const doc = await this.store.invoiceDocument(s.run.organizationId, orderId);
         if (!doc) return fail('This order has no invoice yet.');
         // {{invoice.*}} for this message and the steps after it.
@@ -376,7 +540,7 @@ export class AutomationRunner {
             templateValues: c.templateValues ?? {},
             media: { storageKey: doc.storageKey, mime: 'application/pdf', kind: 'document', filename: doc.filename },
         } as SendMessageConfigT);
-        if (typeof payload === 'string') return fail(payload);
+        if (halted(payload)) return payload;
         return this.deliver(s, step, payload);
     }
 
@@ -387,6 +551,12 @@ export class AutomationRunner {
     private async sendPaymentLink(s: StepState, step: FlowStep): Promise<Outcome> {
         const c = step.config as { method?: string; kind?: string; message?: string; templateId?: string; templateValues?: Record<string, string>; expiresInHours?: number; tagOnPaid?: string };
         if (c.method === 'whatsapp_pay') return this.sendWhatsAppPay(s, step, c);
+        if (c.kind !== 'text' && c.templateId) {
+            // Before the link is made: its expiry would otherwise run through the night.
+            const template = await this.prisma.messageTemplate.findFirst({ where: { id: c.templateId, organizationId: s.run.organizationId }, select: { category: true } });
+            const quiet = this.quietHold(s, template?.category);
+            if (quiet) return quiet;
+        }
         const opts = {
             contactId: s.contact.id,
             conversationId: await this.conversationId(s),
@@ -408,7 +578,7 @@ export class AutomationRunner {
         Object.assign(s.vars, vars);
         if (c.kind === 'text') return this.deliver(s, step, { type: 'text', text: interpolate(c.message ?? '', s.vars) });
         const payload = await this.templatePayload(s, { kind: 'template', templateId: c.templateId, templateValues: c.templateValues ?? {} } as SendMessageConfigT);
-        if (typeof payload === 'string') return fail(payload);
+        if (halted(payload)) return payload;
         return this.deliver(s, step, payload);
     }
 
@@ -641,6 +811,58 @@ export class AutomationRunner {
         }
     }
 
+    /**
+     * The trigger's stop conditions, checked whenever the run wakes from a
+     * wait: the shopper placed an order (its checkout completed, or an order
+     * of theirs came in), wrote to the business, or opted out, all since the
+     * run started. A reply a wait-for-reply step was waiting for is no reason
+     * to stop.
+     */
+    private async stopReason(run: LoadedRun, trigger: Record<string, unknown>, reason: 'timer' | 'reply'): Promise<StopReason | null> {
+        const when = (trigger.stopWhen ?? {}) as { orderPlaced?: boolean; replied?: boolean; optedOut?: boolean };
+        if (!run.contactId || (!when.orderPlaced && !when.replied && !when.optedOut)) return null;
+        const since = run.startedAt ?? run.createdAt;
+        const contact = await this.prisma.channelContact.findUnique({ where: { id: run.contactId }, select: { optedOutAt: true, customerId: true } });
+        if (when.optedOut && contact?.optedOutAt && contact.optedOutAt > since) return 'opted_out';
+        if (when.replied && reason === 'timer') {
+            const wrote = await this.prisma.message.findFirst({
+                where: { contactId: run.contactId, direction: MessageDirection.INBOUND, imported: false, createdAt: { gt: since } },
+                select: { id: true },
+            });
+            if (wrote) return 'replied';
+        }
+        if (when.orderPlaced) {
+            const event = run.eventId ? await this.prisma.automationEvent.findUnique({ where: { id: run.eventId }, select: { payload: true } }) : null;
+            const checkoutId = (event?.payload as { raw?: { checkoutId?: unknown } } | null)?.raw?.checkoutId;
+            const checkout = typeof checkoutId === 'string'
+                ? await this.prisma.checkout.findUnique({ where: { id: checkoutId }, select: { completedAt: true } })
+                : null;
+            if (checkout?.completedAt) return 'order_placed';
+            const customers = [...new Set([run.customerId, contact?.customerId].filter((c): c is string => !!c))];
+            const ordered = customers.length
+                ? await this.prisma.order.findFirst({ where: { organizationId: run.organizationId, customerId: { in: customers }, createdAt: { gt: since } }, select: { id: true } })
+                : null;
+            if (ordered) return 'order_placed';
+        }
+        return null;
+    }
+
+    /** A stopped run ends as completed, with why: nothing went wrong. */
+    private async stop(run: LoadedRun, waiting: FlowStep, ctx: RunContext, reason: StopReason) {
+        const now = new Date();
+        // A held send never went out; a plain wait did finish.
+        const held = ctx.hold?.stepId === waiting.id;
+        delete ctx.hold;
+        await this.prisma.automationRunStep.updateMany({
+            where: { runId: run.id, stepKey: waiting.id, attempt: 1 },
+            data: { status: held ? AutomationRunStatus.SKIPPED : AutomationRunStatus.COMPLETED, output: { stopped: reason }, finishedAt: now },
+        });
+        await this.prisma.automationRun.update({
+            where: { id: run.id },
+            data: { status: AutomationRunStatus.COMPLETED, completedAt: now, currentStepKey: null, skipReason: reason, context: ctx as unknown as Prisma.InputJsonValue },
+        });
+    }
+
     /** Runs of a paused or archived automation stop where they are. */
     private async stillLive(run: LoadedRun): Promise<boolean> {
         if (run.automation.status === AutomationStatus.ACTIVE) return true;
@@ -651,7 +873,7 @@ export class AutomationRunner {
         return false;
     }
 
-    private async state(run: LoadedRun, ctx: RunContext): Promise<StepState | null> {
+    private async state(run: LoadedRun, ctx: RunContext, env: RunEnv): Promise<StepState | null> {
         if (!run.contactId) return null;
         const contact = await this.prisma.channelContact.findUnique({ where: { id: run.contactId }, include: contactInclude });
         if (!contact) return null;
@@ -660,10 +882,10 @@ export class AutomationRunner {
             select: { id: true, assignedUserId: true, platform: true, lastInboundAt: true },
         });
         const order = run.orderId
-            ? await this.prisma.order.findUnique({ where: { id: run.orderId }, select: { paymentGateways: true, totalPrice: true } })
+            ? await this.prisma.order.findUnique({ where: { id: run.orderId }, select: { paymentGateways: true, totalPrice: true, posSale: true, sourceName: true } })
             : null;
         const facts: RunFacts = {
-            order: order ? { isCod: isCashOnDelivery(order.paymentGateways), total: Number(order.totalPrice) } : null,
+            order: order ? { isCod: isCashOnDelivery(order.paymentGateways), total: Number(order.totalPrice), isPos: isPosOrder(order) } : null,
             contact: {
                 name: contactName(contact),
                 username: contact.username,
@@ -679,7 +901,8 @@ export class AutomationRunner {
                 : null,
             context: ctx,
         };
-        return { run, ctx, contact, conversation, facts, vars: variablesFor(facts) };
+        // The run's own variables win: an event's or a step's value is about this run.
+        return { run, ctx, env, contact, conversation, facts, vars: { ...env.vars, ...variablesFor(facts) } };
     }
 
     private async conversationId(s: StepState): Promise<string> {
@@ -691,8 +914,15 @@ export class AutomationRunner {
     }
 
     private async recordStep(run: LoadedRun, step: FlowStep, outcome: Outcome, startedAt: Date) {
+        const parked = outcome.kind === 'wait' || outcome.kind === 'hold';
         const status =
-            outcome.kind === 'fail' ? AutomationRunStatus.FAILED : outcome.kind === 'wait' ? AutomationRunStatus.WAITING : AutomationRunStatus.COMPLETED;
+            outcome.kind === 'fail'
+                ? AutomationRunStatus.FAILED
+                : parked
+                    ? AutomationRunStatus.WAITING
+                    : outcome.kind === 'skip'
+                        ? AutomationRunStatus.SKIPPED
+                        : AutomationRunStatus.COMPLETED;
         const output = { ...(outcome.output ?? {}), ...(outcome.kind === 'branch' ? { branch: outcome.branch } : {}) };
         const data = {
             status,
@@ -700,7 +930,7 @@ export class AutomationRunner {
             messageId: outcome.kind === 'next' ? (outcome.messageId ?? null) : null,
             error: outcome.kind === 'fail' ? outcome.error.slice(0, 1000) : null,
             startedAt,
-            finishedAt: outcome.kind === 'wait' ? null : new Date(),
+            finishedAt: parked ? null : new Date(),
         };
         await this.prisma.automationRunStep.upsert({
             where: { runId_stepKey_attempt: { runId: run.id, stepKey: step.id, attempt: 1 } },

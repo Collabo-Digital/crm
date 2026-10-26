@@ -80,7 +80,8 @@ export class Flow {
 /** Run context values, by name. */
 export type FlowVariables = Record<string, string | number | boolean | null | undefined>;
 
-const VARIABLE = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
+/** {{name}}, or {{name|fallback}}: the text after the bar stands in when the value is empty. */
+const VARIABLE = /\{\{\s*([a-zA-Z0-9_.]+)\s*(?:\|([^{}]*?))?\s*\}\}/g;
 
 /** Variable names a text uses. */
 export function variablesUsed(text: string): string[] {
@@ -90,14 +91,15 @@ export function variablesUsed(text: string): string[] {
 /**
  * Fill {{name}} placeholders from the run's variables. A missing value
  * becomes empty text rather than a visible {{placeholder}} in a customer's
- * message; `{{first_name|there}}`-style defaults are written as fallbacks in
- * the step instead.
+ * message, or its fallback: {{first_name|there}} reads "there" for someone
+ * whose name is not known.
  */
 export function interpolate(text: string, vars: FlowVariables): string {
     return text
-        .replace(VARIABLE, (_m, name: string) => {
+        .replace(VARIABLE, (_m, name: string, fallback: string | undefined) => {
             const value = vars[name];
-            return value === null || value === undefined ? '' : String(value);
+            const filled = value === null || value === undefined ? '' : String(value);
+            return fallback !== undefined && !filled.trim() ? fallback.trim() : filled;
         })
         .replace(/[ \t]{2,}/g, ' ')
         .replace(/ ([,.!?])/g, '$1');
