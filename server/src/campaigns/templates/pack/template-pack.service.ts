@@ -165,11 +165,10 @@ export class TemplatePackService {
             const variants = slot.variants.filter((v) => !slotRows.some((t) => REFUSED.has(t.status) && sameVariant(t, v)));
             if (!variants.length) continue;
             // A slot whose template Meta turned down gets one replacement per pack version.
-            if (slotRows.some((t) => (t.packVersion ?? 0) >= TEMPLATE_PACK_VERSION)) {
-                if (settings.replaced?.[slot.key] === TEMPLATE_PACK_VERSION) continue;
-                await this.recordReplacement(pack.id, settings, slot.key);
-            }
+            const replacing = slotRows.some((t) => (t.packVersion ?? 0) >= TEMPLATE_PACK_VERSION);
+            if (replacing && settings.replaced?.[slot.key] === TEMPLATE_PACK_VERSION) continue;
             const outcome = await this.createSlot(orgId, channel, slot, variants, rows, priority, pace);
+            if (replacing) await this.recordReplacement(pack.id, settings, slot.key, outcome);
             if (outcome.kind === 'created') rows = [...rows.filter((t) => t.id !== outcome.row.id), outcome.row];
             else if (outcome.kind === 'rate_limited') return this.finish(pack.id, 'running', 'rate_limited');
             else if (outcome.kind === 'template_limit') return this.halt(pack.id, PACK_STOPPED.templateLimit);
@@ -299,8 +298,8 @@ export class TemplatePackService {
             if (settings.replaced?.[slot.key] === TEMPLATE_PACK_VERSION) continue;
             const library = slot.variants.find((v) => v.source === 'library' && !rows.some((t) => t.packSlot === slot.key && sameVariant(t, v)));
             if (!library) continue;
-            await this.recordReplacement(pack.id, settings, slot.key);
             const outcome = await this.createSlot(orgId, channel, slot, [library], rows, Priority.NORMAL, pace);
+            await this.recordReplacement(pack.id, settings, slot.key, outcome);
             if (outcome.kind === 'created') rows = [...rows, outcome.row];
             else if (outcome.kind === 'rate_limited') return this.jobs.reconcileIn(orgId, channel.wabaId, HOUR, 'retry');
             else if (outcome.kind === 'template_limit') return void (await this.halt(pack.id, PACK_STOPPED.templateLimit));
@@ -403,8 +402,14 @@ export class TemplatePackService {
         return templatePack(this.frontendUrl).filter((s) => sets.includes(s.set));
     }
 
-    /** Merged in Postgres: the cart discount in the same settings is written by the automations' routes. */
-    private async recordReplacement(packId: string, settings: PackSettings, slot: string) {
+    /**
+     * Spends the slot's replacement once Meta has answered for it (made it, or
+     * refused it); a rate limit or Meta's template limit leaves it for the
+     * next run. Merged in Postgres: the cart discount in the same settings is
+     * written by the automations' routes.
+     */
+    private async recordReplacement(packId: string, settings: PackSettings, slot: string, outcome: SlotOutcome) {
+        if (outcome.kind !== 'created' && outcome.kind !== 'refused') return;
         settings.replaced = { ...settings.replaced, [slot]: TEMPLATE_PACK_VERSION };
         await this.prisma.$executeRaw`
             UPDATE "template_packs"

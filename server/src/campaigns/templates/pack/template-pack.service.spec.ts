@@ -287,6 +287,21 @@ describe('never the same wording twice', () => {
         await w.service.reconcile(ORG, WABA);
         expect(w.created.filter((c) => c.fields.packSlot === 'order_shipped')).toHaveLength(0);
     });
+
+    it('keeps the slot’s one replacement for the next run when Meta’s rate limit stops it', async () => {
+        const w = world();
+        w.rows.push(w.row({ name: 'collabo_order_shipped_v1', packSlot: 'order_shipped', status: 'REJECTED' }));
+        w.templates.createFromLibrary
+            .mockImplementationOnce(async (_o: string, _c: Row, t: Row, fields: Row) => (w.rows.push(w.row({ name: t.name, ...fields, status: 'APPROVED' })), w.rows[w.rows.length - 1]))
+            .mockImplementationOnce(async () => { throw new RateLimitedError({ platform: 'meta', kind: 'buc', id: WABA }, Date.now() + 60_000, 'BREAKER', 80007); });
+        await w.service.ensure(ORG, WABA, 'manual');
+        expect(w.jobs.ensure).toHaveBeenCalledWith(ORG, WABA, 'manual', 3600_000);
+        expect(w.pack()!.settings?.replaced?.order_shipped).toBeUndefined();
+        w.created.length = 0;
+        await w.service.ensure(ORG, WABA, 'manual');
+        expect(w.created.filter((c) => c.fields.packSlot === 'order_shipped').map((c) => [c.via, c.name])).toEqual([['library', 'collabo_order_shipped_v2']]);
+        expect(w.pack()!.settings).toEqual({ replaced: { order_shipped: TEMPLATE_PACK_VERSION } });
+    });
 });
 
 describe('the reconcile job', () => {
