@@ -88,7 +88,7 @@ describe('the start-up backfill', () => {
         const config = { get: jest.fn(() => opts.enabled ?? true) };
         return { backfill: new TemplatePackBackfill(prisma as any, config as any, queue as any), prisma, queue, config };
     }
-    const account = (patch: Record<string, unknown> = {}) => ({ channelId: 'ch_1', organizationId: 'org_1', wabaId: '1029', packOrg: null, version: null, ...patch });
+    const account = (patch: Record<string, unknown> = {}) => ({ channelId: 'ch_1', organizationId: 'org_1', wabaId: '1029', status: 'CONNECTED', packOrg: null, version: null, ...patch });
 
     it('does nothing at start-up when TEMPLATE_PACK_AUTO_ENABLE is false', async () => {
         const { backfill, prisma, queue, config } = build({ enabled: false, accounts: [account()] });
@@ -117,6 +117,15 @@ describe('the start-up backfill', () => {
         );
     });
 
+    it('gives an account in error a row too, so it never goes live by itself when it reconnects, and ensures only connected ones', async () => {
+        const { backfill, prisma, queue } = build({ accounts: [account(), account({ channelId: 'ch_2', organizationId: 'org_2', wabaId: '2029', status: 'ERROR' })] });
+        expect(await backfill.enqueueAll()).toBe(1);
+        expect(prisma.templatePack.create).toHaveBeenCalledWith({ data: { organizationId: 'org_2', channelId: 'ch_2', wabaId: '2029', autoActivate: false, origin: 'backfill' } });
+        expect(prisma.templatePack.create).toHaveBeenCalledTimes(2);
+        expect(queue.add).toHaveBeenCalledTimes(1);
+        expect(queue.add).toHaveBeenCalledWith('ensure', expect.objectContaining({ organizationId: 'org_1' }), expect.anything());
+    });
+
     it('ensures a pack of an older version again, leaving its row as it is', async () => {
         const { backfill, prisma, queue } = build({ accounts: [account({ packOrg: 'org_1', version: 0 })] });
         expect(await backfill.enqueueAll()).toBe(1);
@@ -125,14 +134,14 @@ describe('the start-up backfill', () => {
         expect(queue.add).toHaveBeenCalledTimes(1);
     });
 
-    it('selects only connected WhatsApp accounts of live organizations without the current pack', async () => {
+    it('selects WhatsApp accounts not disconnected, of live organizations, without a row or (connected) without the current pack', async () => {
         const { backfill, prisma } = build();
         await backfill.enqueueAll();
         const call = prisma.$queryRaw.mock.calls[0] as unknown as [TemplateStringsArray, ...unknown[]];
         const sql = call[0].join('?');
-        expect(sql).toMatch(/c."platform" = 'WHATSAPP' AND c."status" = 'CONNECTED'/);
+        expect(sql).toMatch(/c."platform" = 'WHATSAPP' AND c."status" <> 'DISCONNECTED'/);
         expect(sql).toMatch(/o."deleted_at" IS NULL/);
-        expect(sql).toMatch(/p."id" IS NULL OR p."organization_id" <> c."organization_id" OR p."version" < \?/);
+        expect(sql).toMatch(/p."id" IS NULL OR p."organization_id" <> c."organization_id" OR \(c."status" = 'CONNECTED' AND p."version" < \?\)/);
         expect(call[1]).toBe(1);
     });
 

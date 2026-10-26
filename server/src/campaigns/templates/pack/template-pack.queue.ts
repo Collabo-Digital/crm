@@ -128,11 +128,17 @@ export async function claimPackRow(
 }
 
 /**
- * WhatsApp connect: a new account's pack is created with its automations set
- * to go live by themselves once Meta approves their templates.
+ * WhatsApp connect. A pack made for a brand-new channel row goes live by
+ * itself once Meta approves its templates; one made when an existing row is
+ * reconnected (an account that existed before) waits for the merchant.
  */
-export async function startPackOnConnect(prisma: PackDb, queue: JobQueue, account: { organizationId: string; channelId: string; wabaId: string }): Promise<void> {
-    await claimPackRow(prisma, { ...account, autoActivate: true, origin: 'connect' });
+export async function startPackOnConnect(
+    prisma: PackDb,
+    queue: JobQueue,
+    account: { organizationId: string; channelId: string; wabaId: string; newChannel: boolean },
+): Promise<void> {
+    const { newChannel, ...row } = account;
+    await claimPackRow(prisma, { ...row, autoActivate: newChannel, origin: 'connect' });
     await queuePackEnsure(queue, { organizationId: account.organizationId, wabaId: account.wabaId, reason: 'connect' });
 }
 

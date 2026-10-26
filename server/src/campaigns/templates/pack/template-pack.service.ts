@@ -8,6 +8,7 @@ import type { TemplateDraft } from '../template-components';
 import { TemplatesService } from '../templates.service';
 import { PackFields } from './pack-fields';
 import { PACK_STOPPED, classifyPackFailure } from './pack-refusal';
+import { PackSettings, dropPackSettingsSql, packSettingsOf, setPackEntrySql, setPackSettingSql } from './pack-settings';
 import { latestPackTemplate, pickPackTemplate } from './pick-pack-template';
 import { SAMPLE_INVOICE_FILENAME, SAMPLE_INVOICE_PDF } from './sample-invoice-pdf';
 import { PACK_LANGUAGE, PackSet, PackSlot, PackVariant, TEMPLATE_PACK_VERSION, packTemplateName, templatePack } from './template-pack';
@@ -21,6 +22,11 @@ const CREATE_SPACING_MS = 2_000;
 const LOCK_WAIT_MS = 5_000;
 /** How often one slot moves to the next version for a name Meta already holds, in one run. */
 const NAME_ATTEMPTS = 3;
+/** Hourly retries after Meta's limits before the pack stops for Repair: a day of them. */
+const MAX_REQUEUES = 24;
+/** Why a slot has no template although the pack ran, as the templates page says it. */
+const NO_FREE_NAME = 'Every name Collabo tried for it is already used on this WhatsApp account.';
+const REMOVED_NOTE = 'You deleted this template. Choose Repair to create it again.';
 
 /** A template of the slot at the pack's version that is not one of these is the slot's template; nothing is made for it. */
 const GONE = new Set(['REJECTED', 'DISABLED', 'DELETED']);
@@ -28,12 +34,6 @@ const GONE = new Set(['REJECTED', 'DISABLED', 'DELETED']);
 const REFUSED = new Set(['REJECTED', 'DISABLED']);
 /** Still with Meta: re-read by the reconcile. */
 const IN_REVIEW = new Set(['PENDING', 'IN_APPEAL', 'PAUSED']);
-
-export interface PackSettings {
-    cartDiscount?: { code: string; text: string; validDays: number };
-    /** The pack version at which a slot last had its one automatic replacement. */
-    replaced?: Record<string, number>;
-}
 
 export type PackSlotState = 'approved' | 'pending' | 'paused' | 'attention' | 'not_created';
 
@@ -55,6 +55,8 @@ export interface TemplatePackView {
         description: string;
         category: 'UTILITY' | 'MARKETING';
         state: PackSlotState;
+        /** Why a slot has no template: Meta refused every variant, or the merchant deleted it. */
+        reason: string | null;
         template: null | {
             id: string;
             name: string;
@@ -74,12 +76,14 @@ export interface TemplatePackView {
 type LiveChannel = { id: string; wabaId: string; metadata: Prisma.JsonValue };
 type SlotOutcome =
     | { kind: 'created'; row: MessageTemplate }
-    | { kind: 'refused' }
+    | { kind: 'refused'; reason: string }
     | { kind: 'rate_limited' }
     | { kind: 'template_limit' }
     | { kind: 'auth' };
 
-const settingsOf = (v: Prisma.JsonValue | null): PackSettings => (v && typeof v === 'object' && !Array.isArray(v) ? (v as PackSettings) : {});
+/** A slot the pack leaves alone until Repair: the merchant deleted it, or Meta refused all of it at this version. */
+const settled = (settings: PackSettings, slot: string) =>
+    !!settings.removed?.[slot] || settings.refused?.[slot]?.version === TEMPLATE_PACK_VERSION;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -154,12 +158,19 @@ export class TemplatePackService {
         const orgId = pack.organizationId;
         await this.prisma.templatePack.update({ where: { id: pack.id }, data: { status: 'running', stoppedReason: null } });
         // Sync first: adopts what an earlier run, or a request Meta took without answering, made.
-        await this.templates.pull(orgId, channel, { adopt: true });
-        const settings = settingsOf(pack.settings);
+        try {
+            await this.templates.pull(orgId, channel, { adopt: true });
+        } catch (err) {
+            // A token Meta no longer accepts fails every retry alike.
+            if (classifyPackFailure(err).kind === 'auth') return this.halt(pack.id, PACK_STOPPED.auth);
+            throw err;
+        }
+        const settings = packSettingsOf(pack.settings);
         const slots = await this.slotsFor(orgId);
         let rows = await this.packRows(orgId, channel.wabaId);
         const pace = this.pacer();
         for (const slot of slots) {
+            if (settled(settings, slot.key)) continue;
             if (rows.some((t) => t.packSlot === slot.key && (t.packVersion ?? 0) >= TEMPLATE_PACK_VERSION && !GONE.has(t.status))) continue;
             const slotRows = rows.filter((t) => t.packSlot === slot.key);
             const variants = slot.variants.filter((v) => !slotRows.some((t) => REFUSED.has(t.status) && sameVariant(t, v)));
@@ -167,18 +178,24 @@ export class TemplatePackService {
             // A slot whose template Meta turned down gets one replacement per pack version.
             const replacing = slotRows.some((t) => (t.packVersion ?? 0) >= TEMPLATE_PACK_VERSION);
             if (replacing && settings.replaced?.[slot.key] === TEMPLATE_PACK_VERSION) continue;
-            const outcome = await this.createSlot(orgId, channel, slot, variants, rows, priority, pace);
+            const outcome = await this.createSlot(pack, channel, slot, variants, rows, priority, pace, settings);
             if (replacing) await this.recordReplacement(pack.id, settings, slot.key, outcome);
             if (outcome.kind === 'created') rows = [...rows.filter((t) => t.id !== outcome.row.id), outcome.row];
-            else if (outcome.kind === 'rate_limited') return this.finish(pack.id, 'running', 'rate_limited');
+            else if (outcome.kind === 'refused') await this.recordRefusal(pack.id, settings, slot.key, outcome.reason);
+            else if (outcome.kind === 'rate_limited') return (await this.countRequeue(pack.id, settings)) ? this.finish(pack.id, 'running', 'rate_limited') : 'stopped';
             else if (outcome.kind === 'template_limit') return this.halt(pack.id, PACK_STOPPED.templateLimit);
             else if (outcome.kind === 'auth') return this.halt(pack.id, PACK_STOPPED.auth);
         }
-        const complete = slots.every((s) => rows.some((t) => t.packSlot === s.key && (t.packVersion ?? 0) >= TEMPLATE_PACK_VERSION));
+        // A run Meta's limits did not cut short starts the count of hourly retries again.
+        if (settings.requeues) await this.prisma.$executeRaw(dropPackSettingsSql({ id: pack.id }, ['requeues']));
+        const complete = slots.every((s) => settled(settings, s.key) || rows.some((t) => t.packSlot === s.key && (t.packVersion ?? 0) >= TEMPLATE_PACK_VERSION));
         return this.finish(pack.id, complete ? 'ready' : 'running', 'done');
     }
 
-    /** Ready once every slot of the sets has a template at this version, whatever Meta made of it. */
+    /**
+     * Ready once every slot of the sets has a template at this version,
+     * whatever Meta made of it, or is left alone until Repair.
+     */
     private async finish<T extends 'done' | 'rate_limited'>(packId: string, status: 'ready' | 'running', outcome: T): Promise<T> {
         await this.prisma.templatePack.update({
             where: { id: packId },
@@ -190,23 +207,28 @@ export class TemplatePackService {
     /**
      * Creates the slot's template from the first variant Meta takes: the
      * library one is approved the moment it is made, Collabo's wording goes
-     * to review. A name Meta already holds is adopted when it is the pack's
-     * own template, and otherwise the next version is tried.
+     * to review. A name already used is adopted when it is the pack's own
+     * template (a create Meta took without answering), so no duplicate is
+     * made; one that is not (another app's, the merchant's) moves to the
+     * next version.
      */
     private async createSlot(
-        orgId: string,
+        pack: TemplatePack,
         channel: LiveChannel,
         slot: PackSlot,
         variants: PackVariant[],
         rows: MessageTemplate[],
         priority: Priority,
         pace: () => Promise<void>,
+        settings: PackSettings,
     ): Promise<SlotOutcome> {
+        const orgId = pack.organizationId;
         let version = TEMPLATE_PACK_VERSION;
         const taken = (v: number) => rows.some((t) => t.packSlot === slot.key && t.packVersion === v);
         while (taken(version)) version++;
+        let refusal: string | null = null;
         for (const variant of variants) {
-            const draft = variant.source === 'collabo' ? await this.draftOf(orgId, slot, variant) : null;
+            const draft = variant.source === 'collabo' ? await this.draftOf(pack, slot, variant, settings) : null;
             for (let attempt = 0; attempt < NAME_ATTEMPTS; attempt++, version++) {
                 const name = packTemplateName(slot.key, version);
                 const fields: PackFields = {
@@ -215,13 +237,17 @@ export class TemplatePackService {
                     packSource: variant.source,
                     libraryTemplateName: variant.source === 'library' ? variant.libraryTemplateName : null,
                 };
-                const held = await this.prisma.messageTemplate.findUnique({
-                    where: { wabaId_name_language: { wabaId: channel.wabaId, name, language: PACK_LANGUAGE } },
-                    select: { id: true },
-                });
-                if (held) continue;
-                await pace();
                 try {
+                    const held = await this.prisma.messageTemplate.findUnique({
+                        where: { wabaId_name_language: { wabaId: channel.wabaId, name, language: PACK_LANGUAGE } },
+                        select: { packSlot: true },
+                    });
+                    if (held) {
+                        const adopted = held.packSlot === null ? await this.adopt(orgId, channel, slot.key, name, priority) : null;
+                        if (adopted) return { kind: 'created', row: adopted };
+                        continue;
+                    }
+                    await pace();
                     const row = variant.source === 'library'
                         ? await this.templates.createFromLibrary(orgId, channel, { name, libraryTemplateName: variant.libraryTemplateName, buttonInputs: variant.buttonInputs }, fields, priority)
                         : await this.templates.submit(orgId, channel, { ...draft!, name }, { createdById: null, starterKey: null, priority, pack: fields });
@@ -236,24 +262,40 @@ export class TemplatePackService {
                     }
                     if (failure.kind === 'refused') {
                         this.logger.warn(`Meta refused pack template ${name} on ${channel.wabaId} (${variant.source}): ${failure.message}`);
+                        refusal = failure.message;
                         break;
                     }
-                    const adopted = (await this.templates.pullName(orgId, channel, name, priority)).find((t) => t.language === PACK_LANGUAGE);
-                    if (adopted?.packSlot === slot.key && !GONE.has(adopted.status)) return { kind: 'created', row: adopted };
+                    const adopted = await this.adopt(orgId, channel, slot.key, name, priority);
+                    if (adopted && !GONE.has(adopted.status)) return { kind: 'created', row: adopted };
                 }
             }
         }
-        return { kind: 'refused' };
+        return { kind: 'refused', reason: refusal ?? NO_FREE_NAME };
+    }
+
+    /** The template Meta holds under this name, adopted when it is this pack's own (its links open this app). */
+    private async adopt(orgId: string, channel: LiveChannel, slot: string, name: string, priority: Priority): Promise<MessageTemplate | null> {
+        const row = (await this.templates.pullName(orgId, channel, name, priority)).find((t) => t.language === PACK_LANGUAGE);
+        return row?.packSlot === slot ? row : null;
     }
 
     /** Collabo's wording as a draft; the GST invoice's document header gets the bundled sample. */
-    private async draftOf(orgId: string, slot: PackSlot, variant: Extract<PackVariant, { source: 'collabo' }>): Promise<TemplateDraft> {
+    private async draftOf(pack: TemplatePack, slot: PackSlot, variant: Extract<PackVariant, { source: 'collabo' }>, settings: PackSettings): Promise<TemplateDraft> {
         const draft: TemplateDraft = { ...variant.draft, name: '', language: PACK_LANGUAGE, category: slot.category };
         if (slot.invoiceDocument) {
-            const { storageKey } = await this.storage.save(orgId, SAMPLE_INVOICE_PDF, 'application/pdf');
-            draft.header = { format: 'DOCUMENT', storageKey, mime: 'application/pdf', filename: SAMPLE_INVOICE_FILENAME };
+            draft.header = { format: 'DOCUMENT', storageKey: await this.sampleInvoice(pack, settings), mime: 'application/pdf', filename: SAMPLE_INVOICE_FILENAME };
         }
         return draft;
+    }
+
+    /** The sample invoice PDF in the organization's storage: saved once, then reused while the file is there. */
+    private async sampleInvoice(pack: TemplatePack, settings: PackSettings): Promise<string> {
+        const known = settings.sampleInvoice;
+        if (known?.startsWith(`${pack.organizationId}/`) && (await this.storage.read(known).then(() => true, () => false))) return known;
+        const { storageKey } = await this.storage.save(pack.organizationId, SAMPLE_INVOICE_PDF, 'application/pdf');
+        settings.sampleInvoice = storageKey;
+        await this.prisma.$executeRaw(setPackSettingSql({ id: pack.id }, 'sampleInvoice', storageKey));
+        return storageKey;
     }
 
     /**
@@ -280,16 +322,19 @@ export class TemplatePackService {
                 await this.templates.refreshStatus(channel, t, Priority.NORMAL);
             } catch (err) {
                 const failure = classifyPackFailure(err);
-                if (failure.kind === 'rate_limited' || failure.kind === 'auth') break;
+                if (failure.kind === 'auth') return void (await this.halt(pack.id, PACK_STOPPED.auth));
+                if (failure.kind === 'rate_limited') break;
                 this.logger.warn(`Pack template ${t.name} not re-read: ${err instanceof Error ? err.message : err}`);
             }
         }
         let rows = await this.packRows(orgId, channel.wabaId);
         if (rows.some((t) => t.status === 'LIMIT_EXCEEDED')) return void (await this.halt(pack.id, PACK_STOPPED.templateLimit));
         if (utilityRestricted(channel.metadata)) return void (await this.halt(pack.id, PACK_STOPPED.restricted));
-        const settings = settingsOf(pack.settings);
+        const settings = packSettingsOf(pack.settings);
         const pace = this.pacer();
         for (const slot of await this.slotsFor(orgId)) {
+            // The merchant deleted it: no replacement either.
+            if (settings.removed?.[slot.key]) continue;
             const latest = latestPackTemplate(rows, slot.key);
             if (!latest) continue;
             if (pickPackTemplate(rows, slot.key, slot.category)?.category === slot.category) continue;
@@ -298,10 +343,13 @@ export class TemplatePackService {
             if (settings.replaced?.[slot.key] === TEMPLATE_PACK_VERSION) continue;
             const library = slot.variants.find((v) => v.source === 'library' && !rows.some((t) => t.packSlot === slot.key && sameVariant(t, v)));
             if (!library) continue;
-            const outcome = await this.createSlot(orgId, channel, slot, [library], rows, Priority.NORMAL, pace);
+            const outcome = await this.createSlot(pack, channel, slot, [library], rows, Priority.NORMAL, pace, settings);
             await this.recordReplacement(pack.id, settings, slot.key, outcome);
             if (outcome.kind === 'created') rows = [...rows, outcome.row];
-            else if (outcome.kind === 'rate_limited') return this.jobs.reconcileIn(orgId, channel.wabaId, HOUR, 'retry');
+            else if (outcome.kind === 'rate_limited') {
+                if (await this.countRequeue(pack.id, settings)) await this.jobs.reconcileIn(orgId, channel.wabaId, HOUR, 'retry');
+                return;
+            }
             else if (outcome.kind === 'template_limit') return void (await this.halt(pack.id, PACK_STOPPED.templateLimit));
             else if (outcome.kind === 'auth') return void (await this.halt(pack.id, PACK_STOPPED.auth));
         }
@@ -320,10 +368,16 @@ export class TemplatePackService {
             wabaId ? this.packRows(orgId, wabaId) : Promise.resolve([] as MessageTemplate[]),
         ]);
         const ownPack = pack?.organizationId === orgId ? pack : null;
+        const settings = packSettingsOf(ownPack?.settings ?? null);
         const slots = templatePack(this.frontendUrl)
             .filter((s) => sets.includes(s.set))
             .map((slot) => {
-                const { state, template } = slotState(rows, slot);
+                const { state, template } = slotState(rows, slot, settings);
+                const refused = settings.refused?.[slot.key];
+                const reason =
+                    state === 'not_created' && settings.removed?.[slot.key] ? REMOVED_NOTE
+                        : state === 'attention' && refused?.version === TEMPLATE_PACK_VERSION ? `Meta did not accept this template: ${refused.reason}`
+                            : null;
                 return {
                     slot: slot.key,
                     set: slot.set,
@@ -331,6 +385,7 @@ export class TemplatePackService {
                     description: slot.description,
                     category: slot.category as 'UTILITY' | 'MARKETING',
                     state,
+                    reason,
                     template: template && {
                         id: template.id,
                         name: template.name,
@@ -346,7 +401,6 @@ export class TemplatePackService {
                 };
             });
         const count = (s: PackSlotState) => slots.filter((x) => x.state === s).length;
-        const settings = settingsOf(ownPack?.settings ?? null);
         return {
             pack: ownPack && {
                 status: ownPack.status as 'pending' | 'running' | 'ready' | 'stopped',
@@ -371,6 +425,8 @@ export class TemplatePackService {
     async start(orgId: string): Promise<TemplatePackView> {
         const channel = await this.templates.channelFor(orgId);
         await claimPackRow(this.prisma, { organizationId: orgId, channelId: channel.id, wabaId: channel.wabaId, autoActivate: false, origin: 'manual' });
+        // Repair tries again what Meta refused and what the merchant deleted, with a fresh count of retries.
+        await this.prisma.$executeRaw(dropPackSettingsSql({ wabaId: channel.wabaId, organizationId: orgId }, ['refused', 'removed', 'requeues']));
         await this.jobs.ensure(orgId, channel.wabaId, 'manual');
         return this.view(orgId);
     }
@@ -411,16 +467,26 @@ export class TemplatePackService {
     private async recordReplacement(packId: string, settings: PackSettings, slot: string, outcome: SlotOutcome) {
         if (outcome.kind !== 'created' && outcome.kind !== 'refused') return;
         settings.replaced = { ...settings.replaced, [slot]: TEMPLATE_PACK_VERSION };
-        await this.prisma.$executeRaw`
-            UPDATE "template_packs"
-            SET "settings" = jsonb_set(
-                    coalesce("settings", '{}'::jsonb),
-                    '{replaced}',
-                    coalesce("settings" -> 'replaced', '{}'::jsonb) || jsonb_build_object(${slot}::text, ${TEMPLATE_PACK_VERSION}::int)
-                ),
-                "updated_at" = now()
-            WHERE "id" = ${packId}
-        `;
+        await this.prisma.$executeRaw(setPackEntrySql({ id: packId }, 'replaced', slot, TEMPLATE_PACK_VERSION));
+    }
+
+    /** Meta refused every variant of the slot: it is shown with Meta's reason, and not tried again until Repair. */
+    private async recordRefusal(packId: string, settings: PackSettings, slot: string, reason: string) {
+        const entry = { version: TEMPLATE_PACK_VERSION, reason, at: new Date().toISOString() };
+        settings.refused = { ...settings.refused, [slot]: entry };
+        await this.prisma.$executeRaw(setPackEntrySql({ id: packId }, 'refused', slot, entry));
+    }
+
+    /** One more hourly retry after Meta's limits; past a day of them the pack stops for Repair. False when it stopped. */
+    private async countRequeue(packId: string, settings: PackSettings): Promise<boolean> {
+        const requeues = (settings.requeues ?? 0) + 1;
+        if (requeues > MAX_REQUEUES) {
+            await this.halt(packId, PACK_STOPPED.rateLimited);
+            return false;
+        }
+        settings.requeues = requeues;
+        await this.prisma.$executeRaw(setPackSettingSql({ id: packId }, 'requeues', requeues));
+        return true;
     }
 
     private async halt(packId: string, reason: string): Promise<'stopped'> {
@@ -442,13 +508,18 @@ export class TemplatePackService {
 
 /**
  * A slot's state and the template shown for it: the one it sends with when
- * one is approved, otherwise its newest.
+ * one is approved, otherwise its newest. A slot Meta refused at this version
+ * needs attention even with no template.
  */
-export function slotState(rows: MessageTemplate[], slot: Pick<PackSlot, 'key' | 'category'>): { state: PackSlotState; template: MessageTemplate | null } {
+export function slotState(
+    rows: MessageTemplate[],
+    slot: Pick<PackSlot, 'key' | 'category'>,
+    settings: PackSettings = {},
+): { state: PackSlotState; template: MessageTemplate | null } {
     const best = pickPackTemplate(rows, slot.key, slot.category);
     if (best) return { state: best.category === slot.category ? 'approved' : 'attention', template: best };
     const latest = latestPackTemplate(rows, slot.key);
-    if (!latest) return { state: 'not_created', template: null };
+    if (!latest) return { state: settings.refused?.[slot.key]?.version === TEMPLATE_PACK_VERSION ? 'attention' : 'not_created', template: null };
     if (latest.status === 'PENDING' || latest.status === 'IN_APPEAL') return { state: 'pending', template: latest };
     if (latest.status === 'PAUSED') return { state: 'paused', template: latest };
     return { state: 'attention', template: latest };
