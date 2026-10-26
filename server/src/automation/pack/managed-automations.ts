@@ -151,7 +151,7 @@ export const MANAGED_AUTOMATIONS: ManagedAutomation[] = [
         description: 'Tells the customer their order has shipped, with a button to track it.',
         set: 'core',
         defaultOn: true,
-        steps: () => [trigger('order_fulfilled'), send('pk_send', 'order_shipped')],
+        steps: () => [trigger('order_fulfilled', { skipWhatsAppPay: true }), send('pk_send', 'order_shipped')],
     },
     {
         packKey: 'out_for_delivery',
@@ -159,7 +159,7 @@ export const MANAGED_AUTOMATIONS: ManagedAutomation[] = [
         description: 'Tells the customer when the courier is out to deliver their order.',
         set: 'core',
         defaultOn: true,
-        steps: () => [trigger('order_out_for_delivery'), send('pk_send', 'out_for_delivery')],
+        steps: () => [trigger('order_out_for_delivery', { skipWhatsAppPay: true }), send('pk_send', 'out_for_delivery')],
     },
     {
         packKey: 'order_delivered',
@@ -167,7 +167,7 @@ export const MANAGED_AUTOMATIONS: ManagedAutomation[] = [
         description: 'Tells the customer their order was delivered.',
         set: 'core',
         defaultOn: true,
-        steps: () => [trigger('order_delivered'), send('pk_send', 'order_delivered')],
+        steps: () => [trigger('order_delivered', { skipWhatsAppPay: true }), send('pk_send', 'order_delivered')],
     },
     {
         packKey: 'order_cancelled',
@@ -175,7 +175,7 @@ export const MANAGED_AUTOMATIONS: ManagedAutomation[] = [
         description: 'Tells the customer when an order is cancelled.',
         set: 'core',
         defaultOn: true,
-        steps: () => [trigger('order_cancelled'), send('pk_send', 'order_cancelled')],
+        steps: () => [trigger('order_cancelled', { skipWhatsAppPay: true }), send('pk_send', 'order_cancelled')],
     },
     {
         packKey: 'refund_processed',
@@ -217,7 +217,8 @@ export const MANAGED_AUTOMATIONS: ManagedAutomation[] = [
         set: 'online_store',
         defaultOn: true,
         steps: ({ cartDiscount }) => [
-            trigger('checkout_abandoned', { stopWhen: { orderPlaced: true, replied: true, optedOut: true } }),
+            // One reminder sequence per shopper at a time: a second checkout left meanwhile is skipped.
+            trigger('checkout_abandoned', { stopWhen: { orderPlaced: true, replied: true, optedOut: true }, oneRunAtATime: true }),
             send('pk_reminder_1', 'cart_reminder_1'),
             wait('pk_wait_1', 4, 'hours'),
             send('pk_reminder_2', 'cart_reminder_2'),

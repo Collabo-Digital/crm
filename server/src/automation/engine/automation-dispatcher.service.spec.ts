@@ -231,6 +231,29 @@ describe('AutomationDispatcher — the recommended pack', () => {
         expect(old.processed).toEqual(['e1']);
     });
 
+    it('starts one cart sequence per shopper at a time where the trigger asks: a second checkout meanwhile is skipped, with why', async () => {
+        const checkout = (id: string, s: number) => event({ id, eventType: 'crm.checkout.abandoned', externalId: `chk_${id}`, text: null, occurredAt: at(s), createdAt: at(s + 1), payload: { raw: { vars: {} } } });
+        const pack = storeTrigger('pack', 'crm.checkout.abandoned', { match: 'contains', oneRunAtATime: true });
+        const h = harness({ events: [checkout('e1', 0), checkout('e2', 2)], triggers: [pack] });
+        await h.dispatcher.handle('e2');
+        expect(h.created.map((r) => [r.eventId, r.status, r.skipReason])).toEqual([['e1', 'PENDING', null], ['e2', 'SKIPPED', 'already_running']]);
+        // A merchant's own cart automation keeps one run per checkout.
+        const mine = harness({ events: [checkout('e1', 0), checkout('e2', 2)], triggers: [storeTrigger('mine', 'crm.checkout.abandoned', { match: 'contains' })] });
+        await mine.dispatcher.handle('e2');
+        expect(mine.created.map((r) => r.status)).toEqual(['PENDING', 'PENDING']);
+    });
+
+    it('leaves to WhatsApp Pay an order update it already gave, where the trigger asks', async () => {
+        const fulfilled = (raw: Row) => event({ eventType: 'crm.order.fulfilled', externalId: 'ord1:fulfilled', orderId: 'ord1', text: null, payload: { raw } });
+        const triggers = [storeTrigger('pack', 'crm.order.fulfilled', { match: 'contains', skipWhatsAppPay: true }), storeTrigger('mine', 'crm.order.fulfilled', { match: 'contains' })];
+        const h = harness({ events: [fulfilled({ vars: {}, whatsAppPayNotice: true })], triggers });
+        await h.dispatcher.handle('e1');
+        expect(h.created.map((r) => r.automationId)).toEqual(['a-mine']);
+        const plain = harness({ events: [fulfilled({ vars: {} })], triggers });
+        await plain.dispatcher.handle('e1');
+        expect(plain.created.map((r) => r.automationId)).toEqual(['a-pack', 'a-mine']);
+    });
+
     it('reads no order when no trigger asks', async () => {
         const h = harness({ events: [orderEvent('crm.order.created')], triggers: [storeTrigger('mine', 'crm.order.created', { match: 'contains' })] });
         await h.dispatcher.handle('e1');

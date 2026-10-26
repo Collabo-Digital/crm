@@ -54,8 +54,14 @@ describe('the recommended automations', () => {
         expect(MANAGED_BY_KEY.get('gst_invoice')!.steps({ cartDiscount: null })[0].config).toMatchObject({ event: 'invoice_issued', orderWithinDays: 3 });
         const cart = MANAGED_BY_KEY.get('cart_recovery')!;
         expect(cart.steps({ cartDiscount: null })[0].config.stopWhen).toEqual({ orderPlaced: true, replied: true, optedOut: true });
+        expect(cart.steps({ cartDiscount: null })[0].config).toMatchObject({ oneRunAtATime: true });
         expect(templateSlotsIn(cart.steps({ cartDiscount: null }))).toEqual(['cart_reminder_1', 'cart_reminder_2']);
         expect(templateSlotsIn(cart.steps({ cartDiscount: discount }))).toEqual(['cart_reminder_1', 'cart_reminder_2', 'cart_reminder_3']);
+    });
+
+    it('leave order updates WhatsApp Pay already sends to WhatsApp Pay, and nothing else', () => {
+        const skipping = MANAGED_AUTOMATIONS.filter((m) => m.steps({ cartDiscount: null })[0].config.skipWhatsAppPay === true).map((m) => m.packKey);
+        expect(skipping).toEqual(['order_shipped', 'out_for_delivery', 'order_delivered', 'order_cancelled']);
     });
 
     it('are on by default except the review request, and cart recovery needs an online store', () => {

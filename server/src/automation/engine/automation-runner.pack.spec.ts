@@ -506,3 +506,41 @@ describe('AutomationRunner — stop conditions, again', () => {
         expect(h.run).toMatchObject({ status: 'COMPLETED', skipReason: 'order_placed' });
     });
 });
+
+describe('AutomationRunner — stop conditions before the first send', () => {
+    const cart = (stopWhen: Row) => [trigger('checkout_abandoned', { stopWhen }), slotStep('s', 'cart_reminder_1')];
+    const fresh = { context: { vars: { 'checkout.items': 'Linen shirt', 'checkout.total': '₹1,199.00', 'checkout.cart_path': 'chk1.sig' }, trigger: { eventType: 'crm.checkout.abandoned', commentId: null, postId: null }, depth: 0 } };
+    const reminder = [collaboTemplate('cart_reminder_1', { category: 'MARKETING' })];
+
+    it('never sends reminder 1 for a checkout completed before the run began', async () => {
+        const h = harness({ steps: cart({ orderPlaced: true }), templates: reminder, run: fresh, order: null, event: { payload: { raw: { checkoutId: 'chk1' } } }, checkout: { completedAt: new Date() } });
+        await h.runner.run('run1');
+        expect(h.sent).toHaveLength(0);
+        expect(h.run).toMatchObject({ status: 'COMPLETED', skipReason: 'order_placed' });
+    });
+
+    it('counts orders from when the checkout went quiet, not from when the run began', async () => {
+        const quietSince = new Date(Date.now() - 45 * 60_000);
+        const h = harness({
+            steps: cart({ orderPlaced: true }),
+            templates: reminder,
+            run: { ...fresh, customerId: 'cust1' },
+            order: null,
+            event: { payload: { raw: { checkoutId: 'chk1', quietSince: quietSince.toISOString() } } },
+            checkout: { completedAt: null },
+            laterOrder: true,
+        });
+        await h.runner.run('run1');
+        expect(h.sent).toHaveLength(0);
+        expect(h.run.skipReason).toBe('order_placed');
+        expect(h.prisma.order.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+            where: expect.objectContaining({ customerId: { in: ['cust1'] }, OR: [{ externalCreatedAt: { gt: quietSince } }, { externalCreatedAt: null, createdAt: { gt: quietSince } }] }),
+        }));
+    });
+
+    it('sends as usual when nothing has happened', async () => {
+        const h = harness({ steps: cart({ orderPlaced: true, replied: true, optedOut: true }), templates: reminder, run: fresh, order: null, event: { payload: { raw: { checkoutId: 'chk1' } } }, checkout: { completedAt: null } });
+        await h.runner.run('run1');
+        expect(h.sent.map((x) => x.payload.name)).toEqual(['collabo_cart_reminder_1_v1']);
+    });
+});

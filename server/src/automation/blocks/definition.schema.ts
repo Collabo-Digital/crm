@@ -90,6 +90,10 @@ const TriggerConfig = z.object({
     skipPos: z.boolean().optional(),
     /** Order and invoice events: only while the order is at most this many days old, so invoicing old orders in bulk messages nobody. */
     orderWithinDays: z.number().int().min(1).max(365).nullish(),
+    /** Start no run for a person while an earlier run of theirs is still live: a second abandoned checkout is skipped. */
+    oneRunAtATime: z.boolean().optional(),
+    /** Order events: start nothing when WhatsApp Pay already tells the customer itself (its order page updates). */
+    skipWhatsAppPay: z.boolean().optional(),
 });
 
 const MediaRef = z.object({
@@ -729,7 +733,15 @@ export function triggerPostFor(trigger: StepDef): string | null {
 }
 
 /** What the matcher needs beyond keywords, stored as AutomationTrigger.config. */
-export function triggerConfigFor(trigger: StepDef): { match: string; newConversationOnly: boolean; phoneField: string; skipPos?: true; orderWithinDays?: number } {
+export function triggerConfigFor(trigger: StepDef): {
+    match: string;
+    newConversationOnly: boolean;
+    phoneField: string;
+    skipPos?: true;
+    orderWithinDays?: number;
+    oneRunAtATime?: true;
+    skipWhatsAppPay?: true;
+} {
     const c = trigger.config as TriggerConfigT;
     return {
         match: c.match,
@@ -737,6 +749,8 @@ export function triggerConfigFor(trigger: StepDef): { match: string; newConversa
         phoneField: c.phoneField,
         ...(c.skipPos ? { skipPos: true as const } : {}),
         ...(c.orderWithinDays ? { orderWithinDays: c.orderWithinDays } : {}),
+        ...(c.oneRunAtATime ? { oneRunAtATime: true as const } : {}),
+        ...(c.skipWhatsAppPay ? { skipWhatsAppPay: true as const } : {}),
     };
 }
 

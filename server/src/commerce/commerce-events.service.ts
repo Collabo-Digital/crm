@@ -28,7 +28,7 @@ const phoneOf = (address: unknown): string | null => {
 @Injectable()
 export class CommerceEventsService {
     private readonly logger = new Logger(CommerceEventsService.name);
-    private readonly orderListeners: Array<(orderId: string, kinds: StoreEventKind[]) => Promise<void>> = [];
+    private readonly orderListeners: Array<(orderId: string, kinds: StoreEventKind[]) => Promise<StoreEventKind[] | void>> = [];
     private readonly paymentListeners: Array<(linkId: string) => Promise<void>> = [];
     /** Signs {{order.track_path}} and {{checkout.cart_path}}, as the bill links are signed. */
     private readonly linkKey: Buffer;
@@ -45,8 +45,10 @@ export class CommerceEventsService {
      * Also told of every order event, whether or not an automation listens:
      * WhatsApp Pay keeps the customer's order page up to date this way. Lets
      * a module that depends on this one react without this one depending on it.
+     * A listener returns the events it told the customer of itself, so the
+     * automations set to skip those (skipWhatsAppPay) do not say them twice.
      */
-    onOrder(listener: (orderId: string, kinds: StoreEventKind[]) => Promise<void>): void {
+    onOrder(listener: (orderId: string, kinds: StoreEventKind[]) => Promise<StoreEventKind[] | void>): void {
         this.orderListeners.push(listener);
     }
 
@@ -57,9 +59,15 @@ export class CommerceEventsService {
 
     async order(orderId: string, kinds: StoreEventKind[]): Promise<void> {
         const unique = [...new Set(kinds)];
+        // What WhatsApp Pay put on the customer's order page itself, as it went out: not what it might have sent.
+        const told = new Set<StoreEventKind>();
         for (const listener of this.orderListeners) {
             if (!unique.length) break;
-            await listener(orderId, unique).catch((err) => this.logger.warn(`Order listener for ${orderId} failed: ${err instanceof Error ? err.message : err}`));
+            const said = await listener(orderId, unique).catch((err) => {
+                this.logger.warn(`Order listener for ${orderId} failed: ${err instanceof Error ? err.message : err}`);
+                return undefined;
+            });
+            for (const kind of said ?? []) told.add(kind);
         }
         try {
             if (!unique.length) return;
@@ -75,7 +83,7 @@ export class CommerceEventsService {
                     customerId: order.customerId,
                     orderId: order.id,
                     vars,
-                    extra: { isCod: isCashOnDelivery(order.paymentGateways) },
+                    extra: { isCod: isCashOnDelivery(order.paymentGateways), ...(told.has(kind) ? { whatsAppPayNotice: true } : {}) },
                 });
             }
         } catch (err) {
@@ -207,6 +215,7 @@ export class CommerceEventsService {
         firstName: string | null;
         customerExternalId: string | null;
         channelId: string;
+        updatedAt: Date;
     }): Promise<number> {
         try {
             const customer = checkout.customerExternalId
@@ -225,8 +234,8 @@ export class CommerceEventsService {
                     // `<app>/c/` sends the shopper on to the checkout, wherever the store's domain is now.
                     'checkout.cart_path': storeLinkToken(this.linkKey, 'cart', checkout.id),
                 },
-                // A run stops when this checkout is completed (stopWhen.orderPlaced).
-                extra: { checkoutId: checkout.id },
+                // A run stops when this checkout is completed, or the shopper ordered since it went quiet (stopWhen.orderPlaced).
+                extra: { checkoutId: checkout.id, quietSince: checkout.updatedAt.toISOString() },
             });
         } catch (err) {
             this.logger.warn(`Abandoned checkout ${checkout.id} not raised: ${err instanceof Error ? err.message : err}`);

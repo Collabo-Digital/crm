@@ -23,9 +23,9 @@ export class AutomationProcessor extends WorkerHost {
 
     async process(job: Job<AutomationJobData | ManagedSyncJobData>): Promise<void> {
         if (job.name === MANAGED_SYNC_JOB) {
-            const { organizationId } = job.data as ManagedSyncJobData;
+            const { organizationId, rebuildCart } = job.data as ManagedSyncJobData;
             try {
-                return await this.managed.sync(organizationId);
+                return await this.managed.sync(organizationId, { rebuildCart: rebuildCart === true });
             } catch (err) {
                 this.logger.warn(`Managed automations of ${organizationId} not synced: ${err instanceof Error ? err.message : err}`);
                 throw err;

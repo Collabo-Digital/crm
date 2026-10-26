@@ -377,17 +377,24 @@ describe('the recommended pack', () => {
         expect(check(wa({ event: 'order_created' }, note('{{order.track_path}}')))).toEqual([]);
     });
 
-    it('reads stop conditions, till sales and order age from the trigger, and older versions unchanged', () => {
+    it('reads stop conditions, till sales, order age, one run at a time and WhatsApp Pay orders from the trigger, and older versions unchanged', () => {
         const [plain] = parseDefinition({ steps: wa({ event: 'order_created' }) });
         expect(plain.config).not.toHaveProperty('stopWhen');
         expect(plain.config).not.toHaveProperty('skipPos');
         expect(plain.config).not.toHaveProperty('orderWithinDays');
+        expect(plain.config).not.toHaveProperty('oneRunAtATime');
+        expect(plain.config).not.toHaveProperty('skipWhatsAppPay');
         expect(triggerConfigFor(plain)).toEqual({ match: 'contains', newConversationOnly: false, phoneField: 'phone' });
         const [full] = parseDefinition({
             steps: wa({ event: 'invoice_issued', skipPos: true, orderWithinDays: 3, stopWhen: { orderPlaced: true, replied: false, unknown: 1 } }),
         });
         expect(full.config.stopWhen).toEqual({ orderPlaced: true, replied: false });
         expect(triggerConfigFor(full)).toEqual({ match: 'contains', newConversationOnly: false, phoneField: 'phone', skipPos: true, orderWithinDays: 3 });
+        const [cart] = parseDefinition({ steps: wa({ event: 'checkout_abandoned', oneRunAtATime: true }) });
+        expect(triggerConfigFor(cart)).toEqual({ match: 'contains', newConversationOnly: false, phoneField: 'phone', oneRunAtATime: true });
+        const [shipped] = parseDefinition({ steps: wa({ event: 'order_fulfilled', skipWhatsAppPay: true }) });
+        expect(triggerConfigFor(shipped)).toEqual({ match: 'contains', newConversationOnly: false, phoneField: 'phone', skipWhatsAppPay: true });
+        expect(() => parseDefinition({ steps: wa({ event: 'order_fulfilled', skipWhatsAppPay: 'yes' }) })).toThrow(BadRequestException);
         expect(() => parseDefinition({ steps: wa({ event: 'invoice_issued', orderWithinDays: 0 }) })).toThrow(BadRequestException);
     });
 
