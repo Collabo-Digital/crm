@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { MetaGraphError } from '../../../channel/meta-graph.types';
 import { Priority, RateLimitedError } from '../../../rate-limit/rate-limit.types';
 import { SAMPLE_INVOICE_PDF } from './sample-invoice-pdf';
@@ -50,9 +51,15 @@ function world(opts: {
             }),
         },
         paymentAccount: { findFirst: jest.fn(async () => (opts.razorpay ? { id: 'pa_1' } : null)) },
-        // The replacement record, merged into settings.replaced in one statement.
-        $executeRaw: jest.fn(async (_sql: TemplateStringsArray, slot: string, version: number, id: string) => {
-            if (pack?.id === id) pack = { ...pack, settings: { ...pack.settings, replaced: { ...pack.settings?.replaced, [slot]: version } } };
+        // The pack-settings statements (pack-settings.ts), applied to the in-memory row.
+        $executeRaw: jest.fn(async (q: Prisma.Sql) => {
+            if (!pack) return 0;
+            const settings: Row = { ...(pack.settings ?? {}) };
+            const v = q.values as any[];
+            if (/jsonb_build_object/.test(q.sql)) settings[v[0]] = { ...(settings[v[0]] ?? {}), [v[3]]: JSON.parse(v[4]) };
+            else if (/ - \?::text\[\]/.test(q.sql)) for (const key of v[0]) delete settings[key];
+            else settings[v[0]] = JSON.parse(v[1]);
+            pack = { ...pack, settings };
             return 1;
         }),
         messageTemplate: {
@@ -79,10 +86,13 @@ function world(opts: {
             created.push({ via: 'collabo', name: draft.name, fields: o.pack, draft, priority: o.priority });
             return save(draft.name, o.pack, 'PENDING', draft.category);
         }),
-        pullName: jest.fn(async (): Promise<Row[]> => []),
+        pullName: jest.fn(async (_org: string, _ch: Row, _name: string, _priority?: Priority): Promise<Row[]> => []),
         refreshStatus: jest.fn(async (_ch: Row, t: Row) => t),
     };
-    const storage = { save: jest.fn(async () => ({ storageKey: `${ORG}/sample.pdf`, size: SAMPLE_INVOICE_PDF.length })) };
+    const storage = {
+        save: jest.fn(async () => ({ storageKey: `${ORG}/sample.pdf`, size: SAMPLE_INVOICE_PDF.length })),
+        read: jest.fn(async () => SAMPLE_INVOICE_PDF),
+    };
     const jobs = { ensure: jest.fn(), reconcile: jest.fn(), reconcileIn: jest.fn(), reconcileLater: jest.fn(), managedSync: jest.fn() };
     const service = new TemplatePackService(prisma as any, templates as any, storage as any, jobs as any, { get: () => APP } as any);
     service.spacingMs = 0;
@@ -276,9 +286,11 @@ describe('never the same wording twice', () => {
         await w.service.ensure(ORG, WABA, 'manual');
         const shipped = w.created.filter((c) => c.fields.packSlot === 'order_shipped');
         expect(shipped.map((c) => [c.via, c.name])).toEqual([['library', 'collabo_order_shipped_v2']]);
-        expect(w.pack()!.settings).toEqual({ replaced: { order_shipped: TEMPLATE_PACK_VERSION } });
-        const sql = (w.prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray).join('?');
-        expect(sql).toMatch(/jsonb_set\(\s*coalesce\("settings", '\{\}'::jsonb\),\s*'\{replaced\}'/);
+        expect(w.pack()!.settings.replaced).toEqual({ order_shipped: TEMPLATE_PACK_VERSION });
+        // Merged into its own key in Postgres, never a read-modify-write of the settings.
+        const sql = w.prisma.$executeRaw.mock.calls.map((c) => c[0] as Prisma.Sql).find((q) => q.values[0] === 'replaced')!;
+        expect(sql.sql.replace(/\s+/g, ' ')).toMatch(/UPDATE "template_packs" SET "settings" = jsonb_set\(/);
+        expect(sql.values.slice(0, 5)).toEqual(['replaced', 'replaced', 'replaced', 'order_shipped', String(TEMPLATE_PACK_VERSION)]);
 
         // The replacement is rejected too: nothing more, from either job.
         w.rows.find((r) => r.name === 'collabo_order_shipped_v2')!.status = 'REJECTED';
@@ -300,7 +312,7 @@ describe('never the same wording twice', () => {
         w.created.length = 0;
         await w.service.ensure(ORG, WABA, 'manual');
         expect(w.created.filter((c) => c.fields.packSlot === 'order_shipped').map((c) => [c.via, c.name])).toEqual([['library', 'collabo_order_shipped_v2']]);
-        expect(w.pack()!.settings).toEqual({ replaced: { order_shipped: TEMPLATE_PACK_VERSION } });
+        expect(w.pack()!.settings.replaced).toEqual({ order_shipped: TEMPLATE_PACK_VERSION });
     });
 });
 
@@ -347,6 +359,134 @@ describe('the reconcile job', () => {
         await w.service.reconcile(ORG, WABA);
         expect(w.pack()).toMatchObject({ status: 'stopped', stoppedReason: expect.stringMatching(/limit on message templates/) });
         expect(w.jobs.managedSync).toHaveBeenCalledWith(ORG);
+    });
+});
+
+describe('a slot left alone until Repair', () => {
+    const refusedByMeta = () => {
+        const err = new MetaGraphError('(#100) Invalid parameter', 'API_ERROR', 100, 2388072, 400, {
+            message: '(#100) Invalid parameter',
+            error_user_msg: 'The body text reads as promotional for a utility template.',
+        });
+        return err;
+    };
+
+    it('records the slot Meta refused every variant of with Meta’s words, and counts it as handled', async () => {
+        const w = world();
+        w.templates.submit.mockImplementation(async (_o: string, _c: Row, draft: Row, o: Row) => {
+            if (o.pack.packSlot === 'cod_confirm') throw refusedByMeta();
+            w.created.push({ via: 'collabo', name: draft.name, fields: o.pack, draft, priority: o.priority });
+            return (w.rows.push(w.row({ name: draft.name, ...o.pack })), w.rows[w.rows.length - 1]);
+        });
+        await w.service.ensure(ORG, WABA, 'connect');
+        expect(w.pack()!.settings.refused).toEqual({
+            cod_confirm: { version: TEMPLATE_PACK_VERSION, reason: 'The body text reads as promotional for a utility template.', at: expect.any(String) },
+        });
+        expect(w.pack()).toMatchObject({ status: 'ready', version: TEMPLATE_PACK_VERSION });
+
+        const before = w.templates.submit.mock.calls.length;
+        await w.service.ensure(ORG, WABA, 'backfill');
+        expect(w.templates.submit.mock.calls.length).toBe(before);
+
+        const slot = (await w.service.view(ORG)).slots.find((x) => x.slot === 'cod_confirm')!;
+        expect(slot).toMatchObject({ state: 'attention', template: null, reason: 'Meta did not accept this template: The body text reads as promotional for a utility template.' });
+    });
+
+    it('Repair tries a refused or deleted slot again', async () => {
+        const w = world({ pack: {
+            id: 'pack_1', organizationId: ORG, channelId: 'ch_wa', wabaId: WABA, autoActivate: false, origin: 'backfill', version: 1, status: 'ready',
+            stoppedReason: null, lastRunAt: null,
+            settings: { refused: { cod_confirm: { version: TEMPLATE_PACK_VERSION, reason: 'No', at: 'x' } }, removed: { order_shipped: true }, requeues: 5, replaced: { review_request: 1 }, cartDiscount: { code: 'SAVE', text: '10%', validDays: 3 } },
+        } });
+        await w.service.start(ORG);
+        expect(w.pack()!.settings).toEqual({ replaced: { review_request: 1 }, cartDiscount: { code: 'SAVE', text: '10%', validDays: 3 } });
+        expect(w.jobs.ensure).toHaveBeenCalledWith(ORG, WABA, 'manual');
+        await w.service.ensure(ORG, WABA, 'manual');
+        expect(w.created.map((c) => c.fields.packSlot)).toEqual(expect.arrayContaining(['cod_confirm', 'order_shipped']));
+    });
+
+    it('a slot the merchant deleted is made by neither ensure nor reconcile, and the pack is ready without it', async () => {
+        const w = world();
+        w.pack()!.settings = { removed: { order_shipped: true } };
+        await w.service.ensure(ORG, WABA, 'shopify');
+        expect(w.created.some((c) => c.fields.packSlot === 'order_shipped')).toBe(false);
+        expect(w.pack()).toMatchObject({ status: 'ready' });
+        const slot = (await w.service.view(ORG)).slots.find((x) => x.slot === 'order_shipped')!;
+        expect(slot).toMatchObject({ state: 'not_created', reason: 'You deleted this template. Choose Repair to create it again.' });
+
+        // An older version Meta rejected is not replaced either.
+        w.rows.push(w.row({ name: 'collabo_order_shipped_v1', packSlot: 'order_shipped', status: 'REJECTED' }));
+        w.created.length = 0;
+        await w.service.reconcile(ORG, WABA);
+        expect(w.created).toHaveLength(0);
+    });
+
+    it('stops with Meta’s auth refusal at the sync, instead of failing five times', async () => {
+        const w = world();
+        w.templates.pull.mockRejectedValueOnce(new MetaGraphError('Error validating access token', 'AUTH_FAILED', 190, undefined, 401));
+        await expect(w.service.ensure(ORG, WABA, 'connect')).resolves.toBeUndefined();
+        expect(w.pack()).toMatchObject({ status: 'stopped', stoppedReason: expect.stringMatching(/no longer accepts Collabo's access/) });
+        expect(w.created).toHaveLength(0);
+    });
+
+    it('saves the sample invoice PDF once, and again only when the file is gone', async () => {
+        const w = world();
+        const pack = w.pack() as any;
+        const settings: Row = {};
+        expect(await w.service['sampleInvoice'](pack, settings)).toBe(`${ORG}/sample.pdf`);
+        expect(await w.service['sampleInvoice'](pack, settings)).toBe(`${ORG}/sample.pdf`);
+        expect(w.storage.save).toHaveBeenCalledTimes(1);
+        expect(w.pack()!.settings.sampleInvoice).toBe(`${ORG}/sample.pdf`);
+        w.storage.read.mockRejectedValueOnce(new Error('File not found'));
+        await w.service['sampleInvoice'](pack, settings);
+        expect(w.storage.save).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe('names already used', () => {
+    it('adopts a row of ours a plain sync saved without pack fields, instead of making a duplicate', async () => {
+        const w = world();
+        w.rows.push(w.row({ name: 'collabo_cod_confirm_v1', packSlot: null, status: 'APPROVED' }));
+        w.templates.pullName.mockImplementation(async (_o: string, _c: Row, name: string): Promise<Row[]> => {
+            const held = w.rows.find((r) => r.name === name)!;
+            Object.assign(held, { packSlot: 'cod_confirm', packVersion: 1, packSource: 'collabo' });
+            return [held];
+        });
+        await w.service.ensure(ORG, WABA, 'connect');
+        expect(w.templates.pullName).toHaveBeenCalledWith(ORG, expect.anything(), 'collabo_cod_confirm_v1', Priority.NORMAL);
+        expect(w.created.filter((c) => c.fields.packSlot === 'cod_confirm')).toHaveLength(0);
+    });
+
+    it('moves past a name another app’s template holds (one it does not adopt)', async () => {
+        const w = world();
+        w.rows.push(w.row({ name: 'collabo_order_shipped_v1', packSlot: null, status: 'APPROVED' }));
+        w.templates.pullName.mockImplementation(async (_o: string, _c: Row, name: string): Promise<Row[]> => [w.rows.find((r) => r.name === name)!]);
+        await w.service.ensure(ORG, WABA, 'connect');
+        expect(w.created.filter((c) => c.fields.packSlot === 'order_shipped').map((c) => c.name)).toEqual(['collabo_order_shipped_v2']);
+    });
+});
+
+describe('a day of Meta’s limits', () => {
+    const limited = () => new RateLimitedError({ platform: 'meta', kind: 'buc', id: WABA }, Date.now() + 60_000, 'BREAKER', 80007);
+
+    it('counts each hourly retry, and a run that finishes starts the count again', async () => {
+        const w = world();
+        w.pack()!.settings = { requeues: 3 };
+        w.templates.createFromLibrary.mockImplementationOnce(async () => { throw limited(); });
+        await w.service.ensure(ORG, WABA, 'connect');
+        expect(w.pack()!.settings.requeues).toBe(4);
+        expect(w.jobs.ensure).toHaveBeenCalledWith(ORG, WABA, 'connect', 3600_000);
+        await w.service.ensure(ORG, WABA, 'connect');
+        expect(w.pack()!.settings.requeues).toBeUndefined();
+    });
+
+    it('stops with a plain reason after a day of them', async () => {
+        const w = world();
+        w.pack()!.settings = { requeues: 24 };
+        w.templates.createFromLibrary.mockImplementationOnce(async () => { throw limited(); });
+        await w.service.ensure(ORG, WABA, 'connect');
+        expect(w.pack()).toMatchObject({ status: 'stopped', stoppedReason: expect.stringMatching(/limiting new templates .* for a day/) });
+        expect(w.jobs.ensure).not.toHaveBeenCalled();
     });
 });
 

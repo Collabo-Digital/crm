@@ -380,8 +380,11 @@ export class WhatsAppOAuthService {
         }
 
         // Collabo's recommended templates, created in the background on this
-        // account. Not awaited, and never failing the connect.
-        void startPackOnConnect(this.prisma, this.packQueue, { organizationId: stateData.orgId, channelId: channel.id, wabaId }).catch((err) =>
+        // account. Not awaited, and never failing the connect. A reconnected
+        // row is an account that existed before: its automations wait for the
+        // merchant.
+        const newChannel = decision.kind !== 'reconnect';
+        void startPackOnConnect(this.prisma, this.packQueue, { organizationId: stateData.orgId, channelId: channel.id, wabaId, newChannel }).catch((err) =>
             this.logger.error(`Could not start the recommended templates on WABA ${wabaId}: ${err instanceof Error ? err.message : err}`),
         );
 

@@ -11,7 +11,7 @@ import { WhatsAppAccountService } from './whatsapp-account.service';
 describe('WhatsAppOAuthService.handleSignupCallback', () => {
     const state = 'state-1';
 
-    function build(opts: { isOnBizApp?: boolean; subscribeFails?: boolean; pack?: Record<string, unknown> } = {}) {
+    function build(opts: { isOnBizApp?: boolean; subscribeFails?: boolean; pack?: Record<string, unknown>; rows?: Array<Record<string, unknown>> } = {}) {
         const created: Array<Record<string, unknown>> = [];
         const prisma = {
             templatePack: {
@@ -20,7 +20,7 @@ describe('WhatsAppOAuthService.handleSignupCallback', () => {
                 update: jest.fn().mockResolvedValue({ id: 'pack_1' }),
             },
             channel: {
-                findMany: jest.fn().mockResolvedValue([]),
+                findMany: jest.fn().mockResolvedValue(opts.rows ?? []),
                 findUnique: jest.fn().mockResolvedValue(null),
                 create: jest.fn().mockImplementation(({ data }) => {
                     created.push(data);
@@ -166,6 +166,19 @@ describe('WhatsAppOAuthService.handleSignupCallback', () => {
             { organizationId: 'org1', wabaId: '1029', reason: 'connect' },
             expect.objectContaining({ jobId: 'pack-ensure-org1' }),
         );
+    });
+
+    it('starts a reconnected channel row’s templates with its automations waiting for the merchant', async () => {
+        const { service, prisma, packQueue } = build({ rows: [{ id: 'ch_new', platform: ChannelPlatform.WHATSAPP, status: ChannelStatus.CONNECTED, externalStoreId: '1029', metadata: {} }] });
+        await service.handleSignupCallback('code', state, 'org1', 'u1', { wabaId: '1029', phoneNumberId: 'pn1' });
+        await settle();
+
+        expect(prisma.channel.update).toHaveBeenCalled();
+        expect(prisma.channel.create).not.toHaveBeenCalled();
+        expect(prisma.templatePack.create).toHaveBeenCalledWith({
+            data: { organizationId: 'org1', channelId: 'ch_new', wabaId: '1029', autoActivate: false, origin: 'connect' },
+        });
+        expect(packQueue.add).toHaveBeenCalledWith('ensure', expect.objectContaining({ reason: 'connect' }), expect.anything());
     });
 
     it('keeps the pack of an account connected before, so its automations stay as they were', async () => {

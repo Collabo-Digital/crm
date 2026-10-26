@@ -36,7 +36,8 @@ function setup() {
         }),
     };
     const packJobs = { sync: jest.fn(), reconcile: jest.fn(), managedSync: jest.fn() };
-    const service = new TemplatesService(prisma as any, metaGraph as any, accounts as any, {} as any, { get: () => 'app_1' } as any, redis as any, packJobs as any);
+    const config = { get: (key: string) => (key === 'frontendUrl' ? 'https://app.example.com' : 'app_1') };
+    const service = new TemplatesService(prisma as any, metaGraph as any, accounts as any, {} as any, config as any, redis as any, packJobs as any);
     return { service, prisma, metaGraph, updates, locks, packJobs };
 }
 
@@ -77,6 +78,16 @@ describe('templates', () => {
         expect(prisma.messageTemplate.findMany.mock.calls[0][0].where).toEqual({ organizationId: 'org_b', wabaId: 'waba_1', status: 'APPROVED' });
         prisma.channel.findFirst.mockResolvedValueOnce(null as any);
         await expect(service.list('org_b')).resolves.toEqual([]);
+    });
+
+    it('a pack template the merchant deletes stays deleted: its slot is recorded as removed, and its automations follow', async () => {
+        const { service, prisma, packJobs } = setup();
+        prisma.messageTemplate.findFirst.mockResolvedValueOnce({ id: 'tpl_1', organizationId: 'org_b', wabaId: 'waba_1', externalId: 'm1', name: 'collabo_order_shipped_v1', packSlot: 'order_shipped' });
+        await service.remove('org_b', 'tpl_1');
+        expect(prisma.messageTemplate.delete).toHaveBeenCalledWith({ where: { id: 'tpl_1' } });
+        const sql = (prisma.$executeRaw.mock.calls as any[]).map((c) => c[0]).find((q: any) => q?.values?.[0] === 'removed');
+        expect(sql.values).toEqual(['removed', 'removed', 'removed', 'order_shipped', 'true', 'waba_1', 'org_b']);
+        expect(packJobs.managedSync).toHaveBeenCalledWith('org_b');
     });
 
     it('cannot be deleted while a broadcast is sending it', async () => {
@@ -156,6 +167,36 @@ describe('sync and the recommended pack', () => {
         expect(metaGraph.request.mock.calls[0][0].query.fields).toBe('id,name,language,status,category,components,quality_score,rejected_reason,parameter_format');
         expect(prisma.messageTemplate.upsert.mock.calls[0][0].create.packSlot).toBeUndefined();
         expect(updates).toEqual([]);
+    });
+
+    it('adopts only templates whose links open this app: another app sharing the account keeps its own', async () => {
+        const { service, prisma, metaGraph } = setup();
+        const button = (url: string) => [{ type: 'BODY', text: 'Hi' }, { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Track order', url }] }];
+        metaGraph.request.mockResolvedValueOnce({ data: { data: [
+            { id: 'm1', name: 'collabo_order_shipped_v1', language: 'en', status: 'APPROVED', category: 'UTILITY', components: button('https://other-app.example.com/t/{{1}}') },
+            { id: 'm2', name: 'collabo_out_for_delivery_v1', language: 'en', status: 'APPROVED', category: 'UTILITY', components: button('https://app.example.com/t/{{1}}') },
+            { id: 'm3', name: 'collabo_payment_link_v1', language: 'en', status: 'APPROVED', category: 'UTILITY', components: button('https://rzp.io/{{1}}') },
+        ] } });
+        prisma.messageTemplate.upsert.mockImplementation(async (args: any) => ({ id: args.where.wabaId_name_language.name, ...args.create }));
+        await service.pull('org_b', ref, { adopt: true });
+        const created = Object.fromEntries(prisma.messageTemplate.upsert.mock.calls.map((c: any) => [c[0].create.name, c[0].create.packSlot]));
+        expect(created).toEqual({ collabo_order_shipped_v1: undefined, collabo_out_for_delivery_v1: 'out_for_delivery', collabo_payment_link_v1: 'payment_link' });
+    });
+
+    it('keeps the category asked for when a sync finds Meta moved a template to marketing', async () => {
+        const { service, prisma, metaGraph } = setup();
+        metaGraph.request.mockResolvedValueOnce({ data: { data: [
+            { id: 'm1', name: 'order_update', language: 'en', status: 'APPROVED', category: 'MARKETING' },
+            { id: 'm2', name: 'same_as_before', language: 'en', status: 'APPROVED', category: 'UTILITY' },
+        ] } });
+        prisma.messageTemplate.findMany.mockResolvedValueOnce([
+            { name: 'order_update', language: 'en', externalId: 'm1', status: 'APPROVED', category: 'UTILITY', requestedCategory: null, packSlot: null, createdAt: new Date(0) },
+            { name: 'same_as_before', language: 'en', externalId: 'm2', status: 'APPROVED', category: 'UTILITY', requestedCategory: null, packSlot: null, createdAt: new Date(0) },
+        ]);
+        await service.sync('org_b');
+        const updates = prisma.messageTemplate.upsert.mock.calls.map((c: any) => c[0].update);
+        expect(updates[0]).toMatchObject({ category: 'MARKETING', requestedCategory: 'UTILITY' });
+        expect(updates[1]).not.toHaveProperty('requestedCategory');
     });
 
     it('queues nothing for the pack when no pack template changed', async () => {

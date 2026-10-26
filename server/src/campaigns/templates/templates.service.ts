@@ -21,6 +21,7 @@ import {
 import { templateStarters } from './template-starters';
 import { PACK_STOPPED, isButtonInputsRefusal } from './pack/pack-refusal';
 import { PackFields, packFieldsFromName } from './pack/pack-fields';
+import { setPackEntrySql } from './pack/pack-settings';
 import { LibraryButtonInput, PACK_LANGUAGE } from './pack/template-pack';
 import { TemplatePackJobs } from './pack/template-pack-jobs';
 
@@ -222,13 +223,13 @@ export class TemplatesService {
         const before = new Map(
             (await this.prisma.messageTemplate.findMany({
                 where: { organizationId: orgId, wabaId: channel.wabaId },
-                select: { name: true, language: true, externalId: true, status: true, category: true, packSlot: true, createdAt: true },
+                select: { name: true, language: true, externalId: true, status: true, category: true, requestedCategory: true, packSlot: true, createdAt: true },
             })).map((r) => [`${r.name}|${r.language}`, r]),
         );
         let packChanged = false;
         for (const t of found) {
-            const row = await this.upsertSynced(orgId, channel, t, now, opts.adopt === true);
             const was = before.get(`${t.name}|${t.language}`);
+            const row = await this.upsertSynced(orgId, channel, t, now, opts.adopt === true, was);
             if (row.packSlot && (!was?.packSlot || was.status !== row.status || was.category !== row.category)) packChanged = true;
         }
         const listed = new Set(found.map((t) => t.id));
@@ -256,26 +257,44 @@ export class TemplatesService {
         const now = new Date();
         const rows: MessageTemplate[] = [];
         // Meta's name filter also matches longer names.
-        for (const t of (res.data.data ?? []).filter((x) => x.name === name)) rows.push(await this.upsertSynced(orgId, channel, t, now, true));
+        for (const t of (res.data.data ?? []).filter((x) => x.name === name)) {
+            const was = await this.prisma.messageTemplate.findUnique({
+                where: { wabaId_name_language: { wabaId: channel.wabaId, name: t.name, language: t.language } },
+                select: { category: true, requestedCategory: true },
+            });
+            rows.push(await this.upsertSynced(orgId, channel, t, now, true, was ?? undefined));
+        }
         return rows;
     }
 
-    private async upsertSynced(orgId: string, channel: ChannelRef, t: MetaTemplate, now: Date, adopting: boolean): Promise<MessageTemplate> {
+    /**
+     * One template as Meta lists it. A category Meta changed keeps the one
+     * asked for in requestedCategory, as the webhooks do.
+     */
+    private async upsertSynced(
+        orgId: string,
+        channel: ChannelRef,
+        t: MetaTemplate,
+        now: Date,
+        adopting: boolean,
+        was?: { category: TemplateCategory; requestedCategory: TemplateCategory | null },
+    ): Promise<MessageTemplate> {
+        const category = asCategory(t.category);
         const data = {
             externalId: t.id,
             status: t.status,
-            category: asCategory(t.category),
+            category,
             qualityScore: qualityOf(t.quality_score),
             statusReason: reasonOf(t.rejected_reason),
             parameterFormat: (t.parameter_format ?? 'POSITIONAL').toUpperCase(),
             components: (t.components ?? []) as Prisma.InputJsonValue,
             syncedAt: now,
         };
-        const adopt = adopting ? packFieldsFromName(t) : null;
+        const adopt = adopting ? packFieldsFromName(t, this.appUrl) : null;
         const row = await this.prisma.messageTemplate.upsert({
             where: { wabaId_name_language: { wabaId: channel.wabaId, name: t.name, language: t.language } },
             create: { organizationId: orgId, channelId: channel.id, wabaId: channel.wabaId, name: t.name, language: t.language, ...data, ...(adopt ?? {}) },
-            update: { channelId: channel.id, ...data },
+            update: { channelId: channel.id, ...data, ...(was ? categoryChange(was, category) : {}) },
         });
         return adopt && !row.packSlot ? this.prisma.messageTemplate.update({ where: { id: row.id }, data: adopt }) : row;
     }
@@ -537,6 +556,11 @@ export class TemplatesService {
             }
         }
         await this.prisma.messageTemplate.delete({ where: { id: template.id } });
+        if (template.packSlot) {
+            // The merchant's choice: the pack does not make this slot again until they press Repair.
+            await this.prisma.$executeRaw(setPackEntrySql({ wabaId: template.wabaId, organizationId: orgId }, 'removed', template.packSlot, true));
+            await this.packJobs.managedSync(orgId);
+        }
         return { deleted: true };
     }
 
