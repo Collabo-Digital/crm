@@ -23,6 +23,8 @@ export function SaleComplete({
   storeName,
   whatsapp,
   canManage,
+  staffToken,
+  onStaffRefused,
   onPrint,
   onCollect,
   onNewSale,
@@ -31,6 +33,10 @@ export function SaleComplete({
   storeName: string;
   whatsapp: PosSetup["billDelivery"]["whatsapp"];
   canManage: boolean;
+  /** Sent with Retry and Change number, as with the sale. */
+  staffToken: string | undefined;
+  /** True when it handled a refused staff token (the till asks for a PIN again). */
+  onStaffRefused: (error: unknown) => boolean;
   onPrint: () => void;
   onCollect: () => void;
   onNewSale: () => void;
@@ -71,6 +77,8 @@ export function SaleComplete({
             storeName={storeName}
             whatsapp={whatsapp}
             canManage={canManage}
+            staffToken={staffToken}
+            onStaffRefused={onStaffRefused}
             onPrint={onPrint}
           />
 
@@ -111,6 +119,8 @@ function BillCard({
   storeName,
   whatsapp,
   canManage,
+  staffToken,
+  onStaffRefused,
   onPrint,
 }: {
   orderId: string;
@@ -119,6 +129,8 @@ function BillCard({
   storeName: string;
   whatsapp: PosSetup["billDelivery"]["whatsapp"];
   canManage: boolean;
+  staffToken: string | undefined;
+  onStaffRefused: (error: unknown) => boolean;
   onPrint: () => void;
 }) {
   const [attempt, setAttempt] = useState(() => ({ initial, since: Date.now() }));
@@ -139,13 +151,15 @@ function BillCard({
   const resend = (phone?: string) => {
     setSendError(null);
     send.mutate(
-      { orderId, phone },
+      { orderId, phone, staffToken },
       {
         onSuccess: (next) => {
           setAttempt({ initial: next, since: Date.now() });
           setNumberOpen(false);
         },
-        onError: (error) => setSendError(serverMessage(error, "The bill was not sent. Check the connection and try again.")),
+        onError: (error) => {
+          if (!onStaffRefused(error)) setSendError(serverMessage(error, "The bill was not sent. Check the connection and try again."));
+        },
       },
     );
   };

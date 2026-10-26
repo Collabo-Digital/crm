@@ -5336,7 +5336,6 @@ export interface PosCustomer {
   ordersCount: number;
   totalSpent: number;
   vipLevel: VipLevel;
-  whatsappOptIn: boolean;
 }
 
 export type PosPaymentMethod = "CASH" | "UPI" | "CARD" | "OTHER";

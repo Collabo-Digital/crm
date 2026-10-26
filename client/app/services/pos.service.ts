@@ -59,8 +59,8 @@ export const posService = {
 
   delivery: (orderId: string) => apiClient.get<PosBillState>(`/pos/sales/${orderId}/delivery`).then((r) => r.data),
   /** Sends the bill again, to `phone` when given (+91…), else to the number already on the sale. */
-  sendBill: (orderId: string, phone?: string) =>
-    apiClient.post<PosBillState>(`/pos/sales/${orderId}/send-bill`, { channel: "whatsapp", phone }).then((r) => r.data),
+  sendBill: (orderId: string, data: { phone?: string; staffToken?: string }) =>
+    apiClient.post<PosBillState>(`/pos/sales/${orderId}/send-bill`, { channel: "whatsapp", ...data }).then((r) => r.data),
 
   receipt: (orderId: string) => apiClient.get<PosReceipt>(`/pos/receipts/${orderId}`).then((r) => r.data),
   /**

@@ -600,9 +600,11 @@ export default function PosPage() {
       <section className={cn(panel, "flex-1 max-md:fixed max-md:inset-0 max-md:z-40 max-md:bg-background")}>
         <SaleComplete
           result={result}
-          storeName={storeTitle}
+          storeName={data.storeName}
           whatsapp={data.billDelivery.whatsapp}
           canManage={canManage}
+          staffToken={staff?.staffToken}
+          onStaffRefused={staffRefused}
           onPrint={() => printReceipt(result.orderId)}
           onCollect={() => {
             setSaleError(null);

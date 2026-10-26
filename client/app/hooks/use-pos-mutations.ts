@@ -84,6 +84,6 @@ export function useCollectPosPaymentMutation() {
 /** The answer and any refusal are shown on the bill's delivery row, not as a toast. */
 export function useSendPosBillMutation() {
   return useMutation({
-    mutationFn: ({ orderId, phone }: { orderId: string; phone?: string }) => posService.sendBill(orderId, phone),
+    mutationFn: ({ orderId, ...data }: { orderId: string; phone?: string; staffToken?: string }) => posService.sendBill(orderId, data),
   });
 }
