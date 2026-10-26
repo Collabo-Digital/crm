@@ -7,9 +7,11 @@ import { AllowInfluencer } from '../auth/decorators/allow-influencer.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { OrgId } from '../auth/decorators/org-id.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
-import { CHANNEL_MANAGERS, Roles } from '../auth/decorators/roles.decorator';
+import { CHANNEL_MANAGERS, ORG_MANAGERS, Roles } from '../auth/decorators/roles.decorator';
 import { hasPermission } from '../auth/permissions';
 import { AutomationService, type AutomationViewer } from './automation.service';
+import { ManagedAutomationsService } from './pack/managed-automations.service';
+import { SetCartDiscountDto, TurnOnPackDto } from './dto/pack.dto';
 import { InstagramMediaService } from './platforms/instagram/instagram-media.service';
 import { CreateAutomationDto } from './dto/create-automation.dto';
 import { DuplicateAutomationDto } from './dto/duplicate-automation.dto';
@@ -45,15 +47,35 @@ export class AutomationController {
         private readonly media: InstagramMediaService,
         private readonly insights: AutomationInsightsService,
         private readonly starters: ConversationStartersService,
+        private readonly managed: ManagedAutomationsService,
     ) { }
 
-    // GET /automations — list page
+    // GET /automations — list page. Collabo's recommended ones carry packKey, packState and packNote.
     @Get()
     @Roles(...READERS)
     @AllowInfluencer()
     @RequirePermissions('campaigns.view')
-    list(@OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Query() query: QueryAutomationsDto) {
-        return this.automations.list(orgId, viewerOf(user), query);
+    async list(@OrgId() orgId: string, @CurrentUser() user: SessionPayload, @Query() query: QueryAutomationsDto) {
+        const page = await this.automations.list(orgId, viewerOf(user), query);
+        return { ...page, data: await this.managed.withPackState(orgId, page.data) };
+    }
+
+    // POST /automations/pack/turn-on — the recommended automations go live once their templates are approved.
+    // Organization-wide, so not for influencers, who see only their own automations.
+    @Post('pack/turn-on')
+    @HttpCode(200)
+    @Roles(...ORG_MANAGERS)
+    @RequirePermissions('campaigns.manage')
+    turnOnPack(@OrgId() orgId: string, @Body() dto: TurnOnPackDto) {
+        return this.managed.turnOn(orgId, dto.keys);
+    }
+
+    // PUT /automations/pack/cart-discount — the code the third cart reminder offers; { cartDiscount: null } removes it.
+    @Put('pack/cart-discount')
+    @Roles(...ORG_MANAGERS)
+    @RequirePermissions('campaigns.manage')
+    setCartDiscount(@OrgId() orgId: string, @Body() dto: SetCartDiscountDto) {
+        return this.managed.setCartDiscount(orgId, dto.cartDiscount);
     }
 
     // POST /automations — Create dialog

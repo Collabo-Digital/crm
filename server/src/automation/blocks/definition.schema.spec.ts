@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { collectIssues, keywordsFor, parseDefinition, reidSteps, triggerPostFor, triggerTypeFor } from './definition.schema';
+import { collectIssues, keywordsFor, parseDefinition, reidSteps, triggerConfigFor, triggerPostFor, triggerTypeFor } from './definition.schema';
 
 const ctx = { platform: 'INSTAGRAM', knownMediaIds: null };
 const trigger = (config: Record<string, unknown>) => ({ id: 't', type: 'trigger', config: { channel: 'instagram', event: 'comment', ...config } });
@@ -339,5 +339,73 @@ describe('Google sheets', () => {
         expect(check([rowTrigger(), addRow({ sheetId: 'sh1', values: ['x'] })])).toContain('sheet_loop');
         expect(check([rowTrigger(), addRow({ sheetId: 'sh2', values: ['', ' '] })])).toContain('row_empty');
         expect(check([rowTrigger(), addRow({ sheetId: '', values: ['x'] })])).toContain('sheet_missing');
+    });
+});
+
+describe('the recommended pack', () => {
+    const wa = (trigger: Record<string, unknown>, ...steps: unknown[]) => [{ id: 't', type: 'trigger', config: { channel: 'whatsapp', ...trigger } }, ...steps];
+    const slot = (templateSlot: string, extra: Record<string, unknown> = {}) => ({ id: 'm', type: 'send_message', config: { kind: 'template', templateSlot, ...extra } });
+    const check = (steps: unknown[]) => collectIssues(parseDefinition({ steps }), { platform: 'WHATSAPP', knownMediaIds: null, templates: new Map() }).map((i) => i.code);
+
+    it('starts on out for delivery and on each refund, as order events', () => {
+        const [ofd] = parseDefinition({ steps: wa({ event: 'order_out_for_delivery' }) });
+        const [refund] = parseDefinition({ steps: wa({ event: 'order_refunded' }) });
+        expect([triggerTypeFor(ofd), triggerTypeFor(refund)]).toEqual(['crm.order.out_for_delivery', 'crm.order.refunded']);
+        expect(check(wa({ event: 'order_refunded' }, { id: 'n', type: 'add_note', config: { text: 'Refunded {{refund.amount}} on {{order.name}}' } }))).toEqual([]);
+        expect(check(wa({ event: 'order_created' }, { id: 'n', type: 'add_note', config: { text: 'Refunded {{refund.amount}}' } }))).toEqual(['unknown_variable']);
+        expect(codes([{ id: 't', type: 'trigger', config: { channel: 'instagram', event: 'order_refunded' } }, { id: 'n', type: 'add_note', config: { text: 'x' } }])).toContain('event_unavailable');
+    });
+
+    it('sends a slot without a chosen template, with the values its own wording needs', () => {
+        expect(check(wa({ event: 'order_fulfilled' }, slot('order_shipped')))).toEqual([]);
+        expect(check(wa({ event: 'checkout_abandoned' }, slot('cart_reminder_3')))).toEqual([]);
+        expect(check(wa({ event: 'website_signup' }, slot('optin_confirmed')))).toEqual([]);
+        expect(check(wa({ event: 'order_refunded' }, slot('refund_processed')))).toEqual([]);
+        // Out of place: the order a shipping update reads is not there.
+        expect(check(wa({ event: 'website_signup' }, slot('order_shipped')))).toContain('unknown_variable');
+        expect(check(wa({ event: 'order_created' }, slot('no_such_slot')))).toEqual(['template_slot_unknown']);
+        expect(check(wa({ event: 'website_signup' }, slot('gst_invoice')))).toContain('invoice_needs_order');
+        // A chosen template wins over the slot, and is checked as before.
+        expect(check(wa({ event: 'order_created' }, slot('order_confirmed', { templateId: 'tpl_gone' })))).toEqual(['template_not_found']);
+    });
+
+    it('knows the store’s name, the tapped payload and, on carts, the discount', () => {
+        const note = (text: string) => ({ id: 'n', type: 'add_note', config: { text } });
+        expect(check(wa({ event: 'message', match: 'any' }, note('{{store.name}} {{last_reply_payload}} {{first_name|there}}')))).toEqual([]);
+        expect(check(wa({ event: 'checkout_abandoned' }, note('{{cart.discount_code}} {{cart.discount_text}} {{cart.discount_expiry}} {{checkout.cart_path}}')))).toEqual([]);
+        expect(check(wa({ event: 'order_created' }, note('{{cart.discount_code}}')))).toEqual(['unknown_variable']);
+        expect(check(wa({ event: 'order_created' }, note('{{order.track_path}}')))).toEqual([]);
+    });
+
+    it('reads stop conditions, till sales and order age from the trigger, and older versions unchanged', () => {
+        const [plain] = parseDefinition({ steps: wa({ event: 'order_created' }) });
+        expect(plain.config).not.toHaveProperty('stopWhen');
+        expect(plain.config).not.toHaveProperty('skipPos');
+        expect(plain.config).not.toHaveProperty('orderWithinDays');
+        expect(triggerConfigFor(plain)).toEqual({ match: 'contains', newConversationOnly: false, phoneField: 'phone' });
+        const [full] = parseDefinition({
+            steps: wa({ event: 'invoice_issued', skipPos: true, orderWithinDays: 3, stopWhen: { orderPlaced: true, replied: false, unknown: 1 } }),
+        });
+        expect(full.config.stopWhen).toEqual({ orderPlaced: true, replied: false });
+        expect(triggerConfigFor(full)).toEqual({ match: 'contains', newConversationOnly: false, phoneField: 'phone', skipPos: true, orderWithinDays: 3 });
+        expect(() => parseDefinition({ steps: wa({ event: 'invoice_issued', orderWithinDays: 0 }) })).toThrow(BadRequestException);
+    });
+
+    it('takes a slot on “Send the invoice” and “Send a payment link” too, with no template to choose', () => {
+        expect(check(wa({ event: 'invoice_issued' }, { id: 'i', type: 'send_invoice', config: { templateSlot: 'gst_invoice' } }))).toEqual([]);
+        expect(check(wa({ event: 'invoice_issued' }, { id: 'i', type: 'send_invoice', config: { templateSlot: 'order_shipped' } }))).toEqual(['template_needs_document']);
+        expect(check(wa({ event: 'invoice_issued' }, { id: 'i', type: 'send_invoice', config: { templateSlot: 'gone' } }))).toEqual(['template_slot_unknown']);
+        const pay = (templateSlot: string) => collectIssues(parseDefinition({ steps: wa({ event: 'order_created' }, { id: 'p', type: 'send_payment_link', config: { kind: 'template', templateSlot } }) }), {
+            platform: 'WHATSAPP', knownMediaIds: null, templates: new Map(), paymentsConnected: true,
+        }).map((i) => i.code);
+        expect(pay('payment_link')).toEqual([]);
+        expect(pay('pay_online')).toEqual([]);
+        expect(pay('order_shipped')).toEqual(['payment_link_unused']);
+        expect(pay('gst_invoice')).toEqual(['template_header_unsupported']);
+    });
+
+    it('matches on a tapped button’s payload', () => {
+        const condition = { id: 'c', type: 'condition', config: { rules: [{ field: 'reply_payload', op: 'equals', value: 'collabo_cod_confirm' }] } };
+        expect(check(wa({ event: 'order_created' }, condition))).toEqual([]);
     });
 });

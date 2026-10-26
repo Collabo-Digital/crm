@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { z } from 'zod';
+import { templatePack } from '../../campaigns/templates/pack/template-pack';
 import { Flow, toMinutes, variablesUsed } from '../engine/flow';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -52,7 +53,8 @@ const TriggerConfig = z.object({
      * with a keyword · mention — an Instagram story mention · postback — an ice
      * breaker, menu item or button tap · tag_added — a contact got a tag ·
      * webhook — another system called this automation's URL · order_* — a
-     * store order was placed, paid, shipped, delivered or cancelled ·
+     * store order was placed, paid, shipped, out for delivery, delivered,
+     * cancelled or refunded (once per refund) ·
      * checkout_abandoned — a store checkout was left unfinished · cart — a
      * WhatsApp cart sent from the catalog · invoice_issued — a GST invoice was
      * issued for an order · payment_received — a payment link was paid ·
@@ -62,7 +64,8 @@ const TriggerConfig = z.object({
      */
     event: z.enum([
         'comment', 'message', 'mention', 'postback', 'tag_added', 'webhook',
-        'order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled', 'checkout_abandoned', 'cart',
+        'order_created', 'order_paid', 'order_fulfilled', 'order_out_for_delivery', 'order_delivered', 'order_cancelled', 'order_refunded',
+        'checkout_abandoned', 'cart',
         'invoice_issued', 'payment_received', 'website_signup', 'ad_message', 'sheet_row',
     ]),
     /** Comment: the post or reel id; empty for every post. */
@@ -80,6 +83,13 @@ const TriggerConfig = z.object({
     phoneField: z.string().max(60).default('phone'),
     /** Sheet row: the Google sheet (Campaigns → Automations → Google Sheets) to watch. */
     sheetId: z.string().max(64).default(''),
+    // Optional with no default: versions published before these existed must parse to the same steps.
+    /** End the run, as completed, at its next wake-up once the shopper ordered, wrote in or opted out after it started. */
+    stopWhen: z.object({ orderPlaced: z.boolean().optional(), replied: z.boolean().optional(), optedOut: z.boolean().optional() }).optional(),
+    /** Order and invoice events: start nothing for a sale at the till (point of sale). */
+    skipPos: z.boolean().optional(),
+    /** Order and invoice events: only while the order is at most this many days old, so invoicing old orders in bulk messages nobody. */
+    orderWithinDays: z.number().int().min(1).max(365).nullish(),
 });
 
 const MediaRef = z.object({
@@ -101,6 +111,12 @@ const SendMessageConfig = z.object({
     /** Template: an approved template and a value for each of its parameters. */
     templateId: z.string().max(40).optional(),
     templateValues: z.record(z.string(), z.string().max(1024)).default({}),
+    /**
+     * Template: instead of a chosen template, a slot of Collabo's recommended
+     * pack (campaigns/templates/pack), resolved to the account's approved
+     * template when the step runs and filled in by the pack. A templateId wins.
+     */
+    templateSlot: z.string().max(40).optional(),
     // Kept from the first builder; the product card arrives with commerce.
     product: z.string().max(64).optional().default(''),
     link: z.string().max(500).optional().default(''),
@@ -150,6 +166,8 @@ const SheetAddRowConfig = z.object({
 const SendInvoiceConfig = z.object({
     templateId: z.string().max(64).optional(),
     templateValues: z.record(z.string(), z.string().max(1024)).default({}),
+    /** Instead of a chosen template, a pack slot with a document header (see SendMessageConfig.templateSlot). */
+    templateSlot: z.string().max(40).optional(),
 });
 
 /**
@@ -164,6 +182,8 @@ const SendPaymentLinkConfig = z.object({
     message: z.string().max(4096).default(''),
     templateId: z.string().max(64).optional(),
     templateValues: z.record(z.string(), z.string().max(1024)).default({}),
+    /** Instead of a chosen template, a pack slot whose values carry the link (see SendMessageConfig.templateSlot). */
+    templateSlot: z.string().max(40).optional(),
     expiresInHours: z.coerce.number().int().min(1).max(720).default(48),
     /** Added to the order once it is paid, e.g. "cod-to-prepaid". */
     tagOnPaid: z.string().max(60).default(''),
@@ -183,7 +203,8 @@ const WaitForReplyConfig = z.object({
 });
 
 const ConditionRule = z.object({
-    field: z.enum(['last_reply', 'trigger_text', 'tag', 'attribute', 'consent', 'customer', 'orders_count', 'window', 'assigned', 'order_payment', 'order_total']),
+    /** reply_payload: the payload of the button the last reply tapped (a template quick reply or a reply button). */
+    field: z.enum(['last_reply', 'reply_payload', 'trigger_text', 'tag', 'attribute', 'consent', 'customer', 'orders_count', 'window', 'assigned', 'order_payment', 'order_total']),
     op: z.enum(['contains', 'equals', 'is_any_of', 'has', 'not_has', 'exists', 'not_exists', 'gte', 'lte', 'is', 'is_not']),
     /** The attribute name, for `attribute`. */
     key: z.string().max(60).default(''),
@@ -260,7 +281,14 @@ const MAX_STEPS = 40;
 const MAX_DEPTH = 4;
 const IG_MESSAGE_MAX_BYTES = 1000;
 /** Variables every run has. `attr.<key>` and saved values are allowed on top. */
-export const BASE_VARIABLES = new Set(['first_name', 'name', 'phone', 'username', 'trigger_text', 'last_reply', 'product_name', 'order_number', 'link', 'discount']);
+export const BASE_VARIABLES = new Set([
+    'first_name', 'name', 'phone', 'username', 'trigger_text', 'last_reply', 'last_reply_payload', 'store.name',
+    'product_name', 'order_number', 'link', 'discount',
+]);
+/** The recommended pack's slots, for template steps that name one; their wording does not depend on the app's address. */
+const PACK_SLOTS = new Map(templatePack('').map((s) => [s.key as string, s]));
+/** Triggers about a cart, whose runs read the pack's cart discount as {{cart.discount_*}}. */
+export const CART_TRIGGERS = ['checkout_abandoned', 'cart'];
 
 // ─── Defaults ──────────────────────────────────────────────────────────────
 
@@ -342,7 +370,7 @@ export function parseDefinition(input: unknown): StepDef[] {
 // ─── Issues (publish, and GET /issues) ─────────────────────────────────────
 
 /** What a trigger can listen to on each channel. */
-const ORDER_EVENTS = ['order_created', 'order_paid', 'order_fulfilled', 'order_delivered', 'order_cancelled'];
+const ORDER_EVENTS = ['order_created', 'order_paid', 'order_fulfilled', 'order_out_for_delivery', 'order_delivered', 'order_cancelled', 'order_refunded'];
 /** Events about one order: its actions and its invoice are available. A paid link is about its order, when it had one. */
 export const ORDER_CONTEXT = [...ORDER_EVENTS, 'invoice_issued', 'payment_received'];
 /** Store events, website sign-ups and sheet rows reach people who may not have written in 24 hours: WhatsApp templates only. */
@@ -400,6 +428,8 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
     // {{invoice.*}} comes with the invoice event, and "Send the invoice" fills it on order events.
     if (ORDER_CONTEXT.includes(t.event)) saved.add('invoice');
     if (t.event === 'checkout_abandoned') saved.add('checkout');
+    if (CART_TRIGGERS.includes(t.event)) saved.add('cart');
+    if (t.event === 'order_refunded') saved.add('refund');
     if (t.event === 'payment_received') saved.add('payment');
     if (t.event === 'website_signup') saved.add('signup');
     if (t.event === 'ad_message') saved.add('ad');
@@ -417,6 +447,14 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 }
             }
         };
+        // A pack slot instead of a chosen template: the slot must still be offered, and the values its wording
+        // needs must exist where the step sits (the pack fills them, not the step).
+        const packSlotOf = (key: string) => {
+            const slot = PACK_SLOTS.get(key);
+            if (!slot) push(step.id, 'template_slot_unknown', 'Choose a template', 'This recommended template is no longer offered. Pick an approved WhatsApp template.');
+            slot?.variants.flatMap((v) => Object.values(v.values)).forEach(checkText);
+            return slot ?? null;
+        };
 
         switch (step.type) {
             case 'send_message': {
@@ -424,6 +462,12 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 const channel = m.channel ?? t.channel;
                 if (m.kind === 'template') {
                     if (channel !== 'whatsapp') push(step.id, 'template_needs_whatsapp', 'Templates are WhatsApp only', 'Send a text or buttons on this channel instead.');
+                    if (m.templateSlot && !m.templateId) {
+                        if (packSlotOf(m.templateSlot)?.invoiceDocument && !ORDER_CONTEXT.includes(t.event)) {
+                            push(step.id, 'invoice_needs_order', 'Needs an order', 'Sending the invoice works when the trigger is an order or invoice event.');
+                        }
+                        break;
+                    }
                     if (!m.templateId) push(step.id, 'template_missing', 'Choose a template', 'Pick an approved WhatsApp template.');
                     // Every value the chosen template needs, or each run would stop at this step.
                     const chosen = m.templateId ? ctx.templates?.get(m.templateId) : undefined;
@@ -486,6 +530,13 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 const v = c as z.infer<typeof SendInvoiceConfig>;
                 if (t.channel !== 'whatsapp') push(step.id, 'invoice_needs_whatsapp', 'Invoices go on WhatsApp', 'Use a WhatsApp automation to send invoices.');
                 if (!ORDER_CONTEXT.includes(t.event)) push(step.id, 'invoice_needs_order', 'Needs an order', 'Sending the invoice works when the trigger is an order or invoice event.');
+                if (v.templateSlot && !v.templateId) {
+                    const slot = packSlotOf(v.templateSlot);
+                    if (slot && !slot.invoiceDocument) {
+                        push(step.id, 'template_needs_document', 'Template needs a document header', `The recommended “${slot.title}” template has no document header for the invoice PDF. Pick one that has.`);
+                    }
+                    break;
+                }
                 if (!v.templateId) push(step.id, 'template_missing', 'Choose a template', 'Pick an approved WhatsApp template with a document header.');
                 const chosen = v.templateId ? ctx.templates?.get(v.templateId) : undefined;
                 if (v.templateId && ctx.templates && !chosen) push(step.id, 'template_not_found', 'Template not found', 'The chosen template was deleted. Pick another one.');
@@ -520,7 +571,14 @@ export function collectIssues(steps: StepDef[], ctx: IssueContext): Issue[] {
                 }
                 if (ctx.paymentsConnected === false) push(step.id, 'payments_not_connected', 'Connect Razorpay', 'Connect your Razorpay account in Settings → Orders → Payments first, so customers pay you directly.');
                 const usesLink = (text: string) => /\{\{\s*payment\.link(_path)?\s*\}\}/.test(text);
-                if (v.kind === 'template') {
+                if (v.kind === 'template' && v.templateSlot && !v.templateId) {
+                    const slot = packSlotOf(v.templateSlot);
+                    if (slot?.invoiceDocument) {
+                        push(step.id, 'template_header_unsupported', 'Pick a template without a media header', `The recommended “${slot.title}” template needs a header file, which this step does not send.`);
+                    } else if (slot && !slot.variants.every((x) => Object.values(x.values).some(usesLink))) {
+                        push(step.id, 'payment_link_unused', 'The link is not in the message', `The recommended “${slot.title}” template has no place for the payment link. Pick one that has.`);
+                    }
+                } else if (v.kind === 'template') {
                     if (!v.templateId) push(step.id, 'template_missing', 'Choose a template', 'Pick an approved WhatsApp template.');
                     const chosen = v.templateId ? ctx.templates?.get(v.templateId) : undefined;
                     if (v.templateId && ctx.templates && !chosen) push(step.id, 'template_not_found', 'Template not found', 'The chosen template was deleted. Pick another one.');
@@ -671,9 +729,15 @@ export function triggerPostFor(trigger: StepDef): string | null {
 }
 
 /** What the matcher needs beyond keywords, stored as AutomationTrigger.config. */
-export function triggerConfigFor(trigger: StepDef): { match: string; newConversationOnly: boolean; phoneField: string } {
+export function triggerConfigFor(trigger: StepDef): { match: string; newConversationOnly: boolean; phoneField: string; skipPos?: true; orderWithinDays?: number } {
     const c = trigger.config as TriggerConfigT;
-    return { match: c.match, newConversationOnly: c.newConversationOnly, phoneField: c.phoneField };
+    return {
+        match: c.match,
+        newConversationOnly: c.newConversationOnly,
+        phoneField: c.phoneField,
+        ...(c.skipPos ? { skipPos: true as const } : {}),
+        ...(c.orderWithinDays ? { orderWithinDays: c.orderWithinDays } : {}),
+    };
 }
 
 /** Fresh ids for Duplicate so two automations never share a step key. Recurses into branches. */

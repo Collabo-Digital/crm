@@ -41,3 +41,27 @@ describe('simulate', () => {
         expect(facts.contact.tags).toEqual([]);
     });
 });
+
+describe('simulate — recommended templates', () => {
+    it('names the pack’s template on every step that sends one', () => {
+        const facts = {
+            contact: { name: 'Asha', username: null, phone: '+919800000000', tags: [], attributes: {}, optedIn: true, optedOut: false },
+            customer: null,
+            conversation: { assignedUserId: null, windowOpen: true },
+            order: { isCod: false, total: 10 },
+            context: { vars: {}, trigger: { eventType: 'test', commentId: null, postId: null }, depth: 0 },
+        };
+        const steps = [
+            { id: 't', type: 'trigger', config: { channel: 'whatsapp', event: 'order_created' } },
+            { id: 'm', type: 'send_message', config: { kind: 'template', templateSlot: 'order_confirmed', templateValues: {}, options: [], message: '' } },
+            { id: 'i', type: 'send_invoice', config: { templateSlot: 'gst_invoice', templateValues: {} } },
+            { id: 'p', type: 'send_payment_link', config: { kind: 'template', templateSlot: 'payment_link', templateValues: {} } },
+        ];
+        const trace = simulate(steps as never, facts as never, { reply: null, templateNames: {} });
+        expect(trace.map((t) => t.detail)).toEqual([
+            'Sends the recommended template "Order confirmed".',
+            'Sends the order\'s GST invoice as a PDF with the recommended template "GST invoice".',
+            'Sends a Razorpay payment link with the recommended template "Payment link".',
+        ]);
+    });
+});

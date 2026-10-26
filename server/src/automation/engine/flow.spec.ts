@@ -56,6 +56,14 @@ describe('interpolate', () => {
         expect(interpolate('Hi {{first_name}}, welcome!', {})).toBe('Hi, welcome!');
         expect(variablesUsed('{{a}} {{b.c}} {{a}}')).toEqual(['a', 'b.c']);
     });
+
+    it('uses the text after a bar when the value is empty', () => {
+        expect(interpolate('{{first_name|there}}', { first_name: 'Riya' })).toBe('Riya');
+        expect(interpolate('Hi {{first_name|there}}', {})).toBe('Hi there');
+        expect(interpolate('with {{ order.carrier | our delivery partner }}.', { 'order.carrier': '  ' })).toBe('with our delivery partner.');
+        expect(interpolate('{{order.carrier|}}', { 'order.carrier': null })).toBe('');
+        expect(variablesUsed('{{first_name|there}} {{order.carrier|our partner}} {{first_name}}')).toEqual(['first_name', 'order.carrier']);
+    });
 });
 
 describe('keywordMatches', () => {

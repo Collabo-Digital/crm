@@ -49,6 +49,7 @@ import {
     DELIVERED_EVENT_WINDOW_MS,
     FIRST_SIGHTING_EVENT_WINDOW_MS,
     isOlderShopifyPayload,
+    isRefundNews,
     isWithinWindow,
 } from './shopify-payload-age.util';
 import { CRM_SOURCE_NAME, carriesCrmMarker, isLocallyPushedPayload, localOrderIdOf } from './order-rebadge.util';
@@ -197,6 +198,14 @@ function channelTax(li: { tax_lines?: unknown }): {
 
 /** Short enough that a GSTIN edit mid-sync is picked up. */
 const GST_CONTEXT_TTL_MS = 60_000;
+
+/** What writing an order's fulfilments and refunds found to be news, for its store events. */
+interface OrderChildrenNews {
+    newlyDelivered: boolean;
+    newlyOutForDelivery: boolean;
+    /** Refunds to announce: money moved, recently. Already-announced ones are deduplicated by their event. */
+    refunds: Array<{ id: string; amount: string; currency: string }>;
+}
 
 /** Customer fields an empty Shopify value must not erase. */
 const IDENTITY_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'note', 'addresses', 'defaultAddress'];
@@ -2253,7 +2262,7 @@ export class ShopifySyncService {
         /// First sighting of an order Shopify created long ago: imported
         /// silently, as the backfill would — see FIRST_SIGHTING_EVENT_WINDOW_MS.
         let quietFirstSighting = false;
-        let newlyDelivered = false;
+        let news: OrderChildrenNews = { newlyDelivered: false, newlyOutForDelivery: false, refunds: [] };
         await this.prisma.$transaction(async (tx) => {
             let orderId: string;
 
@@ -2417,10 +2426,10 @@ export class ShopifySyncService {
             }
 
             eventOrderId = orderId;
-            ({ newlyDelivered } = await this.writeOrderChildren(tx, orderId, so, payloadLines, {
+            news = await this.writeOrderChildren(tx, orderId, so, payloadLines, {
                 variantByExternalId,
                 productByExternalId,
-            }));
+            });
 
             // Stamp where the goods left from, when the payload says so
             // unambiguously. Done HERE rather than inside writeOrderChildren
@@ -2455,13 +2464,16 @@ export class ShopifySyncService {
         // reports a fulfilment it has just recorded as delivered — never
         // because a later edit to the order still shows it delivered.
         if (opts.live && eventOrderId && !quietFirstSighting) {
-            if (newlyDelivered) storeEvents.push('delivered');
+            if (news.newlyDelivered) storeEvents.push('delivered');
+            else if (news.newlyOutForDelivery) storeEvents.push('out_for_delivery');
             if (storeEvents.includes('fulfilled')) {
                 // As on payment: the invoice snapshots the dispatch point, so resolve it first.
                 await this.ensureDispatchWarehouseFromShopify(orgId, eventOrderId);
                 await this.invoiceService.autoInvoiceForShippedCodOrder(orgId, eventOrderId);
             }
             await this.commerceEvents.order(eventOrderId, storeEvents);
+            // refunds/create raises the same refunds; each refund's event is raised once.
+            for (const refund of news.refunds) await this.commerceEvents.refunded(eventOrderId, refund);
         }
 
         // Learn the shop's currency from the order that just landed. Product
@@ -2684,8 +2696,9 @@ export class ShopifySyncService {
             variantByExternalId: Map<string, { id: string; product: { vendor: string | null; vendorKey: string | null } | null }>;
             productByExternalId: Map<string, { vendor: string | null; vendorKey: string | null }>;
         },
-    ): Promise<{ newlyDelivered: boolean }> {
+    ): Promise<OrderChildrenNews> {
         let newlyDelivered = false;
+        let outForDelivery = false;
         // Current per-line statuses, read once, so `statusForShippedUnits` can
         // be given a real `previous` and never demote a line the CRM already
         // marked delivered back to merely fulfilled.
@@ -2918,8 +2931,23 @@ export class ShopifySyncService {
                     newlyDelivered = true;
                 }
             }
+            // The same once-only guard. A carrier status that lags behind a
+            // delivery (or one the CRM marked) never reads as news.
+            if (ff.shipment_status === 'out_for_delivery') {
+                const recorded = await tx.orderFulfillment.updateMany({
+                    where: { orderId, externalId, outForDeliveryAt: null, deliveredAt: null },
+                    data: { outForDeliveryAt: new Date() },
+                });
+                if (recorded.count > 0 && isWithinWindow(ff.created_at, DELIVERED_EVENT_WINDOW_MS)) {
+                    outForDelivery = true;
+                }
+            }
         }
+        // Not once any part of the order has been delivered: "out for delivery" after "delivered" reads as a step back.
+        const newlyOutForDelivery =
+            outForDelivery && !newlyDelivered && (await tx.orderFulfillment.count({ where: { orderId, deliveredAt: { not: null } } })) === 0;
 
+        const refunds: OrderChildrenNews['refunds'] = [];
         for (const rf of so.refunds || []) {
             // Every transaction, not just the first: a split-tender refund
             // (part card, part store credit) was silently understated by the
@@ -2932,13 +2960,15 @@ export class ShopifySyncService {
                 taxLines: (refund.taxLines ?? undefined) as Prisma.InputJsonValue | undefined,
                 adjustments: (refund.adjustments ?? undefined) as Prisma.InputJsonValue | undefined,
             };
-            await tx.orderRefund.upsert({
+            const row = await tx.orderRefund.upsert({
                 where: { orderId_externalId: { orderId, externalId: String(rf.id) } },
                 create: { orderId, externalId: String(rf.id), amount: refund.amount, currency: so.currency || 'USD', reason: rf.note, note: rf.note, lineItems: rf.refund_line_items || null, processedAt: rf.processed_at ? new Date(rf.processed_at) : null, ...refundTaxPatch },
                 update: { amount: refund.amount, note: rf.note, lineItems: rf.refund_line_items || null, ...refundTaxPatch },
+                select: { id: true, currency: true },
             });
+            if (isRefundNews(rf, refund.amount)) refunds.push({ id: row.id, amount: refund.amount.toString(), currency: row.currency });
         }
-        return { newlyDelivered };
+        return { newlyDelivered, newlyOutForDelivery, refunds };
     }
 
     /**
@@ -2993,8 +3023,8 @@ export class ShopifySyncService {
             select: { id: true },
         });
 
-        await this.prisma.$transaction(async (tx) => {
-            await tx.orderRefund.upsert({
+        const row = await this.prisma.$transaction(async (tx) => {
+            const written = await tx.orderRefund.upsert({
                 where: { orderId_externalId: { orderId: order.id, externalId: String(refund.id) } },
                 create: {
                     orderId: order.id, externalId: String(refund.id), amount,
@@ -3004,6 +3034,7 @@ export class ShopifySyncService {
                     ...refundTaxPatch,
                 },
                 update: { amount, note: refund.note, lineItems: refund.refund_line_items ?? null, ...refundTaxPatch },
+                select: { id: true, currency: true },
             });
 
             if (!alreadyRecorded) {
@@ -3028,8 +3059,13 @@ export class ShopifySyncService {
                     },
                 });
             }
+            return written;
         });
         this.logger.log(`Recorded refund ${refund.id} on order ${orderExternalId}.`);
+        // orders/updated can carry the same refund first; each refund's event is raised once.
+        if (isRefundNews(refund, amount)) {
+            await this.commerceEvents.refunded(order.id, { id: row.id, amount: amount.toString(), currency: row.currency });
+        }
     }
 
     /**

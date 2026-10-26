@@ -60,7 +60,7 @@ const trigger = (id: string, over: Row = {}, once: string = 'ever'): Row => ({
     ...over,
 });
 
-function harness(opts: { events: Row[]; triggers?: Row[]; ranBefore?: string[]; waiting?: Row | null }) {
+function harness(opts: { events: Row[]; triggers?: Row[]; ranBefore?: string[]; waiting?: Row | null; order?: Row | null }) {
     const events = new Map(opts.events.map((e) => [e.id, e]));
     const ranBefore = new Set(opts.ranBefore ?? []);
     const created: Row[] = [];
@@ -99,6 +99,7 @@ function harness(opts: { events: Row[]; triggers?: Row[]; ranBefore?: string[]; 
         channelContact: { findUnique: jest.fn(async () => ({ customerId: null, attributes: {} })), update: jest.fn() },
         automation: { update: jest.fn(async () => ({})) },
         message: { findUnique: jest.fn(async () => null) },
+        order: { findUnique: jest.fn(async () => opts.order ?? null) },
     };
     const jobs = { run: jest.fn(), resume: jest.fn() };
     const rules = { onEvent: jest.fn(), onTagAdded: jest.fn() };
@@ -180,5 +181,60 @@ describe('AutomationDispatcher', () => {
         expect(h.jobs.resume).toHaveBeenCalledWith('r1', 'reply');
         expect(h.created).toEqual([]);
         expect(h.processed).toEqual(['e1']);
+    });
+});
+
+describe('AutomationDispatcher — the recommended pack', () => {
+    const tap = (raw: Row, text = 'Confirm order') => event({ text, payload: { raw } });
+    const waitingRun = { id: 'r1', context: { vars: { last_reply_payload: 'stale' } }, currentStepKey: 'w', version: { definition: { steps: [{ id: 't', type: 'trigger', config: { channel: 'whatsapp', event: 'message' } }, { id: 'w', type: 'wait_for_reply', config: {} }] } } };
+    const handedVars = (h: ReturnType<typeof harness>) => (h.prisma.automationRun.updateMany.mock.calls[0] as Row[])[0].data.context.vars;
+
+    it('gives a waiting run the payload of the button tapped, as {{last_reply_payload}}', async () => {
+        const template = harness({ events: [tap({ type: 'button', button: { text: 'Confirm order', payload: 'collabo_cod_confirm' } })], waiting: waitingRun });
+        await template.dispatcher.handle('e1');
+        expect(handedVars(template)).toMatchObject({ last_reply: 'Confirm order', last_reply_payload: 'collabo_cod_confirm' });
+
+        const button = harness({ events: [tap({ type: 'interactive', interactive: { type: 'button_reply', button_reply: { id: 'r1.s_0', title: 'Yes' } } }, 'Yes')], waiting: waitingRun });
+        await button.dispatcher.handle('e1');
+        expect(handedVars(button).last_reply_payload).toBe('r1.s_0');
+
+        // A typed reply carries none: an earlier tap's payload must not linger.
+        const typed = harness({ events: [tap({ type: 'text', text: { body: 'yes' } }, 'yes')], waiting: waitingRun });
+        await typed.dispatcher.handle('e1');
+        expect(handedVars(typed)).not.toHaveProperty('last_reply_payload');
+    });
+
+    const orderEvent = (eventType: string, occurredAt = at(0)) => event({ eventType, externalId: 'ord1:created', orderId: 'ord1', text: null, occurredAt, payload: { raw: { vars: {} } } });
+    const storeTrigger = (id: string, eventType: string, config: Row) => trigger(id, { triggerType: eventType, channelId: null, config }, 'ever');
+
+    it('starts no run for a sale at the till where the trigger leaves those out', async () => {
+        const triggers = [storeTrigger('pack', 'crm.order.created', { match: 'contains', skipPos: true }), storeTrigger('mine', 'crm.order.created', { match: 'contains' })];
+        for (const order of [{ posSale: true, sourceName: 'collabo-crm' }, { posSale: false, sourceName: 'pos' }]) {
+            const h = harness({ events: [orderEvent('crm.order.created')], triggers, order: { ...order, externalCreatedAt: null, createdAt: at(0) } });
+            await h.dispatcher.handle('e1');
+            expect(h.created.map((r) => [r.automationId, r.status])).toEqual([['a-mine', 'PENDING']]);
+        }
+        const online = harness({ events: [orderEvent('crm.order.created')], triggers, order: { posSale: false, sourceName: 'web', externalCreatedAt: null, createdAt: at(0) } });
+        await online.dispatcher.handle('e1');
+        expect(online.created.map((r) => r.automationId)).toEqual(['a-pack', 'a-mine']);
+    });
+
+    it('starts no run for an invoice of an order older than the trigger looks at', async () => {
+        const triggers = [storeTrigger('pack', 'crm.invoice.issued', { match: 'contains', orderWithinDays: 3 })];
+        const placed = (daysAgo: number) => ({ posSale: false, sourceName: 'web', externalCreatedAt: new Date(at(0).getTime() - daysAgo * 24 * 3600_000), createdAt: at(0) });
+        const recent = harness({ events: [orderEvent('crm.invoice.issued')], triggers, order: placed(2) });
+        await recent.dispatcher.handle('e1');
+        expect(recent.created).toHaveLength(1);
+        const old = harness({ events: [orderEvent('crm.invoice.issued')], triggers, order: placed(40) });
+        await old.dispatcher.handle('e1');
+        expect(old.created).toHaveLength(0);
+        expect(old.processed).toEqual(['e1']);
+    });
+
+    it('reads no order when no trigger asks', async () => {
+        const h = harness({ events: [orderEvent('crm.order.created')], triggers: [storeTrigger('mine', 'crm.order.created', { match: 'contains' })] });
+        await h.dispatcher.handle('e1');
+        expect(h.prisma.order.findUnique).not.toHaveBeenCalled();
+        expect(h.created).toHaveLength(1);
     });
 });

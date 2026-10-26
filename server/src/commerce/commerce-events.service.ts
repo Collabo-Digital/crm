@@ -1,9 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { AutomationStatus, ChannelPlatform, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AutomationJobs } from '../messaging/automation-jobs';
 import { countryCodeOf, normalizePhone } from '../common/phone.util';
-import { StoreEventKind, checkoutVars, invoiceVars, isCashOnDelivery, orderVars } from './order-vars';
+import { StoreEventKind, checkoutVars, invoiceVars, isCashOnDelivery, orderVars, refundVars } from './order-vars';
+import { storeLinkKey, storeLinkToken } from './store-links';
 
 const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 const phoneOf = (address: unknown): string | null => {
@@ -12,9 +14,9 @@ const phoneOf = (address: unknown): string | null => {
 };
 
 /**
- * Store events for automations: an order was placed, paid, shipped,
- * delivered or cancelled, a checkout was abandoned, an invoice was issued or
- * a payment link was paid. Raised only when an
+ * Store events for automations: an order was placed, paid, shipped, out for
+ * delivery, delivered, cancelled or refunded, a checkout was abandoned, an
+ * invoice was issued or a payment link was paid. Raised only when an
  * active automation listens, once per order and kind, for the buyer's
  * contact on each listening channel — on WhatsApp the contact is created
  * from the order's phone number if new. Never throws: a store write must
@@ -28,11 +30,16 @@ export class CommerceEventsService {
     private readonly logger = new Logger(CommerceEventsService.name);
     private readonly orderListeners: Array<(orderId: string, kinds: StoreEventKind[]) => Promise<void>> = [];
     private readonly paymentListeners: Array<(linkId: string) => Promise<void>> = [];
+    /** Signs {{order.track_path}} and {{checkout.cart_path}}, as the bill links are signed. */
+    private readonly linkKey: Buffer;
 
     constructor(
         private readonly prisma: PrismaService,
         private readonly jobs: AutomationJobs,
-    ) { }
+        config: ConfigService,
+    ) {
+        this.linkKey = storeLinkKey(config.get<string>('encryptionKey') || config.get<string>('jwt.accessSecret')!);
+    }
 
     /**
      * Also told of every order event, whether or not an automation listens:
@@ -106,6 +113,29 @@ export class CommerceEventsService {
     }
 
     /**
+     * Money was refunded on an order. One event per refund (an order can be
+     * refunded in parts), carrying the order's variables and {{refund.amount}}.
+     */
+    async refunded(orderId: string, refund: { id: string; amount: number | string; currency: string }): Promise<void> {
+        try {
+            const buyer = await this.buyerOf(orderId);
+            if (!buyer) return;
+            await this.raise({
+                organizationId: buyer.order.organizationId,
+                eventType: 'crm.order.refunded',
+                externalId: `${refund.id}:refunded`,
+                e164: buyer.e164,
+                customerId: buyer.order.customerId,
+                orderId: buyer.order.id,
+                vars: { ...buyer.vars, ...refundVars(refund) },
+                extra: { refundId: refund.id },
+            });
+        } catch (err) {
+            this.logger.warn(`Refund event for ${refund.id} not raised: ${err instanceof Error ? err.message : err}`);
+        }
+    }
+
+    /**
      * A payment link was paid. Reaches the contact the link was sent to when
      * there is one, else the order's buyer. Carries {{payment.*}}, and
      * {{order.*}} when the link was for an order.
@@ -158,7 +188,12 @@ export class CommerceEventsService {
         if (!order) return null;
         const country = countryCodeOf(order.shippingAddress) ?? countryCodeOf(order.billingAddress);
         const e164 = normalizePhone(phoneOf(order.shippingAddress) ?? phoneOf(order.billingAddress) ?? order.customer?.phone, country);
-        return { order, e164, vars: orderVars({ ...order, totalPrice: order.totalPrice.toString() }) };
+        const vars = {
+            ...orderVars({ ...order, totalPrice: order.totalPrice.toString() }),
+            // The order's page at `<app>/t/`: its courier's tracking, or its status until there is some.
+            'order.track_path': storeLinkToken(this.linkKey, 'order', order.id),
+        };
+        return { order, e164, vars };
     }
 
     async checkoutAbandoned(checkout: {
@@ -185,7 +220,13 @@ export class CommerceEventsService {
                 e164: normalizePhone(checkout.phone),
                 customerId: customer?.id ?? null,
                 orderId: null,
-                vars: checkoutVars({ recoveryUrl: checkout.recoveryUrl, total: checkout.total?.toString() ?? null, currency: checkout.currency, items, firstName: checkout.firstName }),
+                vars: {
+                    ...checkoutVars({ recoveryUrl: checkout.recoveryUrl, total: checkout.total?.toString() ?? null, currency: checkout.currency, items, firstName: checkout.firstName }),
+                    // `<app>/c/` sends the shopper on to the checkout, wherever the store's domain is now.
+                    'checkout.cart_path': storeLinkToken(this.linkKey, 'cart', checkout.id),
+                },
+                // A run stops when this checkout is completed (stopWhen.orderPlaced).
+                extra: { checkoutId: checkout.id },
             });
         } catch (err) {
             this.logger.warn(`Abandoned checkout ${checkout.id} not raised: ${err instanceof Error ? err.message : err}`);

@@ -76,6 +76,31 @@ describe('parseRunContext', () => {
         const ctx = parseRunContext({ vars: { a: '1' }, replied: true, replyEventIds: ['evt_1', 'evt_2'], stray: 'x' });
         expect(ctx).toEqual({ vars: { a: '1' }, trigger: { eventType: '', commentId: null, postId: null }, depth: 0, replied: true, replyEventIds: ['evt_1', 'evt_2'] });
     });
+
+    it('keeps the send a run is holding back', () => {
+        expect(parseRunContext({ hold: { stepId: 's1', reason: 'quiet_hours' } }).hold).toEqual({ stepId: 's1', reason: 'quiet_hours' });
+        expect(parseRunContext({ hold: {} }).hold).toBeUndefined();
+    });
+});
+
+describe('the tapped button’s payload', () => {
+    const tapped = (payload: string | undefined, reply = 'Confirmar pedido') =>
+        facts({ context: parseRunContext({ vars: { last_reply: reply, ...(payload ? { last_reply_payload: payload } : {}) } }) });
+    const confirm = rule('reply_payload', 'equals', 'collabo_cod_confirm');
+
+    it('matches whatever the button says, and nothing without a payload', () => {
+        expect(conditionMatches(confirm, tapped('collabo_cod_confirm'))).toBe(true);
+        expect(conditionMatches(confirm, tapped('collabo_cod_cancel'))).toBe(false);
+        expect(conditionMatches(confirm, tapped(undefined, 'collabo_cod_confirm'))).toBe(false);
+        expect(conditionMatches(rule('reply_payload', 'exists'), tapped(undefined))).toBe(false);
+    });
+
+    it('sits beside the words, for replies typed or tapped on an older template', () => {
+        const either = { match: 'any' as const, rules: [...confirm.rules, ...rule('last_reply', 'equals', 'confirm order, confirm, yes').rules] };
+        expect(conditionMatches(either, tapped('collabo_cod_confirm'))).toBe(true);
+        expect(conditionMatches(either, tapped(undefined, 'Confirm order'))).toBe(true);
+        expect(conditionMatches(either, tapped(undefined, 'When will it arrive?'))).toBe(false);
+    });
 });
 
 describe('the COD playbook’s reply rules', () => {

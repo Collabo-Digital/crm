@@ -110,6 +110,27 @@ describe('sending', () => {
         ]);
     });
 
+    it('gives quick replies payloads of their own when asked, in button order', () => {
+        const cod = toMetaComponents({
+            name: 'cod_check',
+            language: 'en',
+            category: 'UTILITY',
+            parameterFormat: 'NAMED',
+            body: { text: 'Hi {{first_name}}, please confirm your order.', examples: { first_name: 'A' } },
+            buttons: [{ type: 'QUICK_REPLY', text: 'Confirm order' }, { type: 'QUICK_REPLY', text: 'Cancel order' }],
+        });
+        expect(sendComponents(cod, 'NAMED', { 'body.first_name': 'Riya' }, { 0: 'cod_yes', 1: 'cod_no' })).toEqual([
+            { type: 'body', parameters: [{ type: 'text', parameter_name: 'first_name', text: 'Riya' }] },
+            { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'cod_yes' }] },
+            { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'cod_no' }] },
+        ]);
+        // Without payloads, quick replies send nothing, as before; one for a link or code button is ignored.
+        expect(sendComponents(cod, 'NAMED', { 'body.first_name': 'Riya' })).toHaveLength(1);
+        const values = { header: 'x', 'body.1': 'R', 'body.2': '5%', 'coupon.0': 'C', 'button.1': 'p' };
+        const mixed = sendComponents(components, 'POSITIONAL', values, { 1: 'ignored', 2: 'stop_payload' });
+        expect(mixed.slice(2).map((c) => [c.sub_type, c.index])).toEqual([['copy_code', 0], ['url', '1'], ['quick_reply', '2']]);
+    });
+
     it('refuses a send with a value missing', () => {
         expect(() => sendComponents(components, 'POSITIONAL', { header: 'x' })).toThrow('Missing template values: body.1');
     });

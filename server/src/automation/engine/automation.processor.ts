@@ -4,7 +4,8 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { Job } from 'bullmq';
 import { AutomationRunStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { AUTOMATION_QUEUE, AutomationJobData, AutomationJobs } from '../../messaging/automation-jobs';
+import { AUTOMATION_QUEUE, AutomationJobData, AutomationJobs, MANAGED_SYNC_JOB, ManagedSyncJobData } from '../../messaging/automation-jobs';
+import { ManagedAutomationsService } from '../pack/managed-automations.service';
 import { AutomationDispatcher } from './automation-dispatcher.service';
 import { AutomationRunner, STALE_RUN_MS } from './automation-runner.service';
 
@@ -15,12 +16,22 @@ export class AutomationProcessor extends WorkerHost {
     constructor(
         private readonly dispatcher: AutomationDispatcher,
         private readonly runner: AutomationRunner,
+        private readonly managed: ManagedAutomationsService,
     ) {
         super();
     }
 
-    async process(job: Job<AutomationJobData>): Promise<void> {
-        const data = job.data;
+    async process(job: Job<AutomationJobData | ManagedSyncJobData>): Promise<void> {
+        if (job.name === MANAGED_SYNC_JOB) {
+            const { organizationId } = job.data as ManagedSyncJobData;
+            try {
+                return await this.managed.sync(organizationId);
+            } catch (err) {
+                this.logger.warn(`Managed automations of ${organizationId} not synced: ${err instanceof Error ? err.message : err}`);
+                throw err;
+            }
+        }
+        const data = job.data as AutomationJobData;
         try {
             switch (data.kind) {
                 case 'event':

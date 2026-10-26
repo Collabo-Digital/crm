@@ -12,6 +12,18 @@ export type AutomationJobData =
     /** Wake a waiting run: its timer ran out, or the reply it waited for came. */
     | { kind: 'resume'; runId: string; reason: 'timer' | 'reply' };
 
+/**
+ * Bring an organization's recommended-pack automations up to date with its
+ * pack templates: create them, put them live once their templates are
+ * approved. Queued by the template pack (jobId `managed-sync-<orgId>`) after
+ * it runs and when a pack template's status or category changes; routed by
+ * job name, not `kind`.
+ */
+export const MANAGED_SYNC_JOB = 'managed-sync';
+export interface ManagedSyncJobData {
+    organizationId: string;
+}
+
 const OPTS = { attempts: 5, backoff: { type: 'exponential' as const, delay: 5_000 }, removeOnComplete: 1000, removeOnFail: { count: 1000 } };
 
 /**

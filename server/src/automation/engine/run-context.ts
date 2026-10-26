@@ -25,7 +25,11 @@ export interface RunContext {
     cart?: Array<{ retailerId: string; quantity: number; price: number | null; currency: string | null }>;
     /** The draft order a "Create draft order" step made, for a later payment link. */
     draftId?: string;
+    /** A send held back (quiet hours, a paused template): this step runs again when the run wakes. */
+    hold?: { stepId: string; reason: HoldReason };
 }
+
+export type HoldReason = 'quiet_hours' | 'template_paused';
 
 export function parseRunContext(raw: unknown): RunContext {
     const c = (raw ?? {}) as Partial<RunContext>;
@@ -37,6 +41,7 @@ export function parseRunContext(raw: unknown): RunContext {
         ...(Array.isArray(c.replyEventIds) && c.replyEventIds.length ? { replyEventIds: c.replyEventIds } : {}),
         ...(c.cart ? { cart: c.cart } : {}),
         ...(typeof c.draftId === 'string' ? { draftId: c.draftId } : {}),
+        ...(typeof c.hold?.stepId === 'string' ? { hold: { stepId: c.hold.stepId, reason: c.hold.reason } } : {}),
     };
 }
 
@@ -53,8 +58,8 @@ export interface RunFacts {
     };
     customer: { firstName: string | null; lastName: string | null; ordersCount: number; tags: string[] } | null;
     conversation: { assignedUserId: string | null; windowOpen: boolean } | null;
-    /** The order a store event is about. */
-    order?: { isCod: boolean; total: number } | null;
+    /** The order a store event is about. `isPos`: a sale at the till (Collabo's point of sale or Shopify POS). */
+    order?: { isCod: boolean; total: number; isPos?: boolean } | null;
     context: RunContext;
 }
 
@@ -113,6 +118,8 @@ export function ruleMatches(rule: ConditionRuleT, facts: RunFacts): boolean {
     switch (rule.field) {
         case 'last_reply':
             return compareText(vars.last_reply ?? null, rule.op, rule.value);
+        case 'reply_payload':
+            return compareText(vars.last_reply_payload ?? null, rule.op, rule.value);
         case 'trigger_text':
             return compareText(vars.trigger_text ?? null, rule.op, rule.value);
         case 'tag': {

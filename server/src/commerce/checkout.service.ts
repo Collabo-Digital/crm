@@ -5,8 +5,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CommerceEventsService } from './commerce-events.service';
 import { parseCheckout } from './checkout.util';
 
-/** A checkout quiet this long without an order is abandoned. */
-export const ABANDONED_AFTER_MS = 60 * 60_000;
+/** A checkout quiet this long without an order is abandoned: the first cart reminder goes out then. */
+export const ABANDONED_AFTER_MS = 30 * 60_000;
 /** Older checkouts are history, not something to recover now. */
 const RECOVER_WITHIN_MS = 3 * 24 * 3600_000;
 
