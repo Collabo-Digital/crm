@@ -1248,6 +1248,12 @@ export interface ProductImportJob {
 }
 
 /** Variant block on a create-product / update-product request. */
+/** A new variant's starting quantity at one location. */
+export interface OpeningStockLine {
+  warehouseId: string;
+  quantity: number;
+}
+
 export interface ProductVariantInput {
   /** Existing variant id when editing — `undefined` for a freshly-added row. */
   id?: string;
@@ -1257,6 +1263,11 @@ export interface ProductVariantInput {
   compareAtPrice?: number;
   cost?: number;
   inventoryQuantity?: number;
+  /**
+   * Opening stock per location, for workspaces with stock locations (create
+   * only). The server ignores `inventoryQuantity` when this is sent.
+   */
+  stock?: OpeningStockLine[];
   trackQuantity?: boolean;
   continueSellingWhenOutOfStock?: boolean;
   weight?: number;

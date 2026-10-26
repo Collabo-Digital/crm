@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { GripVertical, MoreVertical, Trash2, X } from "lucide-react";
-import type { GstSupplyType, ProductOption, ProductVariantInput } from "~/types/api";
+import type { GstSupplyType, ProductOption, ProductVariantInput, Warehouse } from "~/types/api";
 import { COMMON_UQC, GST_RATE_OPTIONS, GST_SUPPLY_TYPES } from "~/lib/gst-uqc";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { formatMargin } from "~/lib/utils";
 import { CODE_TERMS } from "~/lib/inventory-vocabulary";
+import { stockLinesFor } from "./stock-locations";
 
 /**
  * Repeating-row editor for product variants. Each row exposes the most-used
@@ -24,6 +25,7 @@ export function VariantEditor({
   variants,
   onChange,
   stockReadOnly = false,
+  stockLocations,
 }: {
   options: ProductOption[];
   variants: ProductVariantInput[];
@@ -33,6 +35,11 @@ export function VariantEditor({
    * the ledger recomputes, so typing into it here would be silently undone.
    */
   stockReadOnly?: boolean;
+  /**
+   * A new product's stock locations: one quantity column each, in place of
+   * the single Stock column. Each variant's `stock` lines up with them.
+   */
+  stockLocations?: Warehouse[];
 }) {
   const optionNames = useMemo(
     () => options.map((o) => o.name).filter(Boolean),
@@ -43,6 +50,9 @@ export function VariantEditor({
   function patchVariant(idx: number, patch: Partial<ProductVariantInput>) {
     onChange(variants.map((v, i) => (i === idx ? { ...v, ...patch } : v)));
   }
+
+  const stockColumns = stockLocations && stockLocations.length > 0 ? stockLocations : null;
+  const stockColumnIds = stockColumns?.map((location) => location.id) ?? [];
 
   function removeVariant(idx: number) {
     if (variants.length <= 1) return;
@@ -86,7 +96,19 @@ export function VariantEditor({
               <th className="px-2 py-2 text-left font-medium">SKU</th>
               <th className="px-2 py-2 text-right font-medium">Price</th>
               <th className="px-2 py-2 text-right font-medium">Compare-at</th>
-              <th className="px-2 py-2 text-right font-medium">Stock</th>
+              {stockColumns ? (
+                stockColumns.map((location) => (
+                  <th
+                    key={location.id}
+                    className="px-2 py-2 text-right font-medium"
+                    title={`Stock at ${location.name}`}
+                  >
+                    <span className="block max-w-[7rem] truncate">{location.name}</span>
+                  </th>
+                ))
+              ) : (
+                <th className="px-2 py-2 text-right font-medium">Stock</th>
+              )}
               <th className="w-12 px-2 py-2"></th>
             </tr>
           </thead>
@@ -174,29 +196,58 @@ export function VariantEditor({
                       className="h-7 w-20 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
                     />
                   </td>
-                  <td className="px-2 py-2 text-right">
-                    {stockHidden ? (
-                      <span
-                        className="text-[10px] italic text-muted-foreground"
-                        title="Inventory tracking is off for this variant"
-                      >
-                        Untracked
-                      </span>
+                  {stockColumns ? (
+                    stockHidden ? (
+                      <td colSpan={stockColumns.length} className="px-2 py-2 text-right">
+                        <span
+                          className="text-[10px] italic text-muted-foreground"
+                          title="Inventory tracking is off for this variant"
+                        >
+                          Untracked
+                        </span>
+                      </td>
                     ) : (
-                      <input
-                        type="number"
-                        value={v.inventoryQuantity ?? 0}
-                        onChange={(e) =>
-                          patchVariant(idx, {
-                            inventoryQuantity: e.target.value === "" ? 0 : parseInt(e.target.value, 10),
-                          })
-                        }
-                        disabled={stockReadOnly}
-                        title={stockReadOnly ? "Set per warehouse in Inventory" : undefined}
-                        className="h-7 w-16 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B] disabled:opacity-50"
-                      />
-                    )}
-                  </td>
+                      stockLinesFor(v, stockColumnIds).map((line, col, lines) => (
+                        <td key={line.warehouseId} className="px-2 py-2 text-right">
+                          <StockCell
+                            label={`${title} stock at ${stockColumns[col].name}`}
+                            value={line.quantity}
+                            onChange={(quantity) =>
+                              patchVariant(idx, {
+                                stock: lines.map((current, i) =>
+                                  i === col ? { ...current, quantity } : current,
+                                ),
+                              })
+                            }
+                          />
+                        </td>
+                      ))
+                    )
+                  ) : (
+                    <td className="px-2 py-2 text-right">
+                      {stockHidden ? (
+                        <span
+                          className="text-[10px] italic text-muted-foreground"
+                          title="Inventory tracking is off for this variant"
+                        >
+                          Untracked
+                        </span>
+                      ) : (
+                        <input
+                          type="number"
+                          value={v.inventoryQuantity ?? 0}
+                          onChange={(e) =>
+                            patchVariant(idx, {
+                              inventoryQuantity: e.target.value === "" ? 0 : parseInt(e.target.value, 10),
+                            })
+                          }
+                          disabled={stockReadOnly}
+                          title={stockReadOnly ? "Set per warehouse in Inventory" : undefined}
+                          className="h-7 w-16 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B] disabled:opacity-50"
+                        />
+                      )}
+                    </td>
+                  )}
                   <td className="px-2 py-2">
                     <div className="flex items-center gap-0.5">
                       <button
@@ -241,9 +292,36 @@ export function VariantEditor({
           onChange={(patch) => patchVariant(expandedIdx, patch)}
           onClose={() => setExpandedIdx(null)}
           stockReadOnly={stockReadOnly}
+          stockLocations={stockColumns ?? undefined}
         />
       )}
     </>
+  );
+}
+
+/** One variant's opening stock at one location, in the variant table. */
+function StockCell({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (quantity: number) => void;
+}) {
+  return (
+    <input
+      type="number"
+      inputMode="numeric"
+      min={0}
+      step={1}
+      value={value}
+      // Number, not parseInt: "1.5" must reach validation rather than be
+      // quietly truncated to 1.
+      onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
+      aria-label={label}
+      className="h-7 w-16 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+    />
   );
 }
 
@@ -264,11 +342,13 @@ function VariantDetailPanel({
   onChange,
   onClose,
   stockReadOnly = false,
+  stockLocations,
 }: {
   variant: ProductVariantInput;
   onChange: (patch: Partial<ProductVariantInput>) => void;
   onClose: () => void;
   stockReadOnly?: boolean;
+  stockLocations?: Warehouse[];
 }) {
   const { data: org } = useCurrentOrg();
   // Vendors cannot change the per-variant tax flag — render it read-only.
@@ -350,7 +430,25 @@ function VariantDetailPanel({
             />
             {variant.trackQuantity !== false && (
               <>
-                {stockReadOnly ? (
+                {stockLocations ? (
+                  stockLinesFor(variant, stockLocations.map((location) => location.id)).map(
+                    (line, col, lines) => (
+                      <PanelField
+                        key={line.warehouseId}
+                        label={`Stock at ${stockLocations[col].name}`}
+                        type="number"
+                        value={line.quantity}
+                        onChange={(v) =>
+                          onChange({
+                            stock: lines.map((current, i) =>
+                              i === col ? { ...current, quantity: v === "" ? 0 : Number(v) } : current,
+                            ),
+                          })
+                        }
+                      />
+                    ),
+                  )
+                ) : stockReadOnly ? (
                   <div className="flex flex-col">
                     <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
                       Stock on hand
