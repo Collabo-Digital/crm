@@ -45,10 +45,14 @@ const payment = (id: string, value: 'cod' | 'prepaid', yes: StepDef[]): StepDef 
     branches: { yes, no: [] },
 });
 
+const CONFIRM_WORDS = 'confirm order, confirm, yes';
+const CANCEL_WORDS = 'cancel order, cancel, cancel my order';
+
 /**
  * A reply to the COD question, matched on the tapped button's payload and,
  * for a typed answer or a template sent before payloads, on its words.
- * Confirm and cancel are checked one after the other, not nested: with the
+ * Anything else ("when will it arrive?") tags the order cod-check for the
+ * team. The three are checked one after the other, not nested: with the
  * resend this keeps the flow within four levels of branching.
  */
 const codReplies = (n: number): StepDef[] => [
@@ -59,7 +63,7 @@ const codReplies = (n: number): StepDef[] => [
             match: 'any',
             rules: [
                 { field: 'reply_payload', op: 'equals', value: COD_CONFIRM_PAYLOAD },
-                { field: 'last_reply', op: 'equals', value: 'confirm order, confirm, yes' },
+                { field: 'last_reply', op: 'equals', value: CONFIRM_WORDS },
             ],
         },
         branches: {
@@ -74,11 +78,26 @@ const codReplies = (n: number): StepDef[] => [
             match: 'any',
             rules: [
                 { field: 'reply_payload', op: 'equals', value: COD_CANCEL_PAYLOAD },
-                { field: 'last_reply', op: 'equals', value: 'cancel order, cancel, cancel my order' },
+                { field: 'last_reply', op: 'equals', value: CANCEL_WORDS },
             ],
         },
         branches: {
             yes: [{ id: `pk_cancel_${n}`, type: 'store_action', config: { action: 'cancel_order', value: 'The customer cancelled it on WhatsApp.' } }],
+            no: [],
+        },
+    },
+    {
+        id: `pk_unclear_${n}`,
+        type: 'condition',
+        config: {
+            match: 'all',
+            rules: [
+                { field: 'reply_payload', op: 'is_not', value: `${COD_CONFIRM_PAYLOAD}, ${COD_CANCEL_PAYLOAD}` },
+                { field: 'last_reply', op: 'is_not', value: `${CONFIRM_WORDS}, ${CANCEL_WORDS}` },
+            ],
+        },
+        branches: {
+            yes: [{ id: `pk_tag_check_${n}`, type: 'store_action', config: { action: 'tag_order', value: 'cod-check' } }],
             no: [],
         },
     },
@@ -96,7 +115,7 @@ export const MANAGED_AUTOMATIONS: ManagedAutomation[] = [
     {
         packKey: 'cod_confirmation',
         name: 'Confirm cash-on-delivery orders',
-        description: 'Asks the customer to confirm a cash-on-delivery order, asks again after 3 hours, and cancels the order if they tap Cancel.',
+        description: 'Asks the customer to confirm a cash-on-delivery order, asks again after 3 hours, cancels the order if they tap Cancel, and tags it cod-check for your team when they answer anything else.',
         set: 'core',
         defaultOn: true,
         steps: () => [

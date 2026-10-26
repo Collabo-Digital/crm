@@ -69,7 +69,7 @@ interface RunEnv {
 
 const runInclude = {
     version: { select: { definition: true } },
-    automation: { select: { id: true, status: true, ownerUserId: true } },
+    automation: { select: { id: true, status: true, ownerUserId: true, packKey: true } },
 } satisfies Prisma.AutomationRunInclude;
 type LoadedRun = Prisma.AutomationRunGetPayload<{ include: typeof runInclude }>;
 
@@ -550,12 +550,13 @@ export class AutomationRunner {
     }
 
     /**
-     * Marketing waits out the night in the store's time zone (21:00 to 09:00):
-     * the run parks and sends at 09:00. Never as a QUEUED message, which the
-     * outbound sweeper would fail after six hours.
+     * Marketing from Collabo's recommended automations waits out the night in
+     * the store's time zone (21:00 to 09:00): the run parks and sends at
+     * 09:00. Never as a QUEUED message, which the outbound sweeper would fail
+     * after six hours. The merchant's own automations send when they always did.
      */
     private quietHold(s: StepState, category: string | null | undefined): Halt | null {
-        if (category !== 'MARKETING') return null;
+        if (category !== 'MARKETING' || !s.run.automation.packKey) return null;
         const until = quietHoursEnd(new Date(), s.env.timeZone);
         return until ? { kind: 'hold', resumeAt: until, reason: 'quiet_hours', output: { heldUntil: until.toISOString(), reason: 'quiet_hours' } } : null;
     }

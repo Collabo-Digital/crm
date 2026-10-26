@@ -71,7 +71,7 @@ function harness(opts: {
         currentStepKey: null,
         context: { vars: { 'order.name': '#1042', 'order.total': '₹2,499.00', 'order.track_path': 'ord1.sig' }, trigger: { eventType: 'crm.order.created', commentId: null, postId: null }, depth: 0 },
         version: { definition: { steps: opts.steps } },
-        automation: { id: 'a1', status: 'ACTIVE', ownerUserId: null },
+        automation: { id: 'a1', status: 'ACTIVE', ownerUserId: null, packKey: 'order_confirmed' },
         ...opts.run,
     };
     const steps: Row[] = [];
@@ -302,12 +302,17 @@ describe('AutomationRunner — holding a send back', () => {
         expect(h.steps[0]).toMatchObject({ status: 'COMPLETED', messageId: 'msg1' });
     });
 
-    it('holds a merchant’s own marketing template the same way, but never utility', async () => {
+    it('holds marketing only in Collabo’s own automations: the merchant’s keep today’s timing, and utility never waits', async () => {
         const mine = (category: string) => ({ ...collaboTemplate('order_confirmed', { id: 'tpl_mine', name: 'my_offer', category, packSlot: null }) });
         const step = { id: 's', type: 'send_message', config: { kind: 'template', templateId: 'tpl_mine', templateValues: { 'body.first_name': '{{first_name|there}}', 'body.order_number': 'x', 'body.order_total': 'y' } } };
-        const marketing = harness({ steps: [trigger(), step], templates: [mine('MARKETING')], timeZone: zoneAt(2) });
-        await marketing.runner.run('run1');
-        expect([marketing.sent.length, marketing.run.status, marketing.run.context.hold?.reason]).toEqual([0, 'WAITING', 'quiet_hours']);
+        const merchant = { automation: { id: 'a1', status: 'ACTIVE', ownerUserId: 'u1', packKey: null } };
+        const theirs = harness({ steps: [trigger(), step], templates: [mine('MARKETING')], timeZone: zoneAt(2), run: merchant });
+        await theirs.runner.run('run1');
+        expect([theirs.sent.length, theirs.run.status, theirs.run.context.hold]).toEqual([1, 'COMPLETED', undefined]);
+        // A pack automation the merchant pointed at a template of their own is still Collabo's: it waits.
+        const ours = harness({ steps: [trigger(), step], templates: [mine('MARKETING')], timeZone: zoneAt(2) });
+        await ours.runner.run('run1');
+        expect([ours.sent.length, ours.run.status, ours.run.context.hold?.reason]).toEqual([0, 'WAITING', 'quiet_hours']);
         const utility = harness({ steps: [trigger(), step], templates: [mine('UTILITY')], timeZone: zoneAt(2) });
         await utility.runner.run('run1');
         expect([utility.sent.length, utility.run.status]).toEqual([1, 'COMPLETED']);

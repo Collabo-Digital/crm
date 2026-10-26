@@ -1,4 +1,5 @@
 import { collectIssues, parseDefinition, triggerTypeFor } from '../blocks/definition.schema';
+import { simulate } from '../engine/simulate';
 import { templatePack } from '../../campaigns/templates/pack/template-pack';
 import { readCartDiscount } from './cart-discount';
 import { MANAGED_AUTOMATIONS, MANAGED_BY_KEY, registryMatch, templateSlotsIn } from './managed-automations';
@@ -24,7 +25,29 @@ describe('the recommended automations', () => {
         expect(triggerTypeFor(steps[0])).toBe('crm.order.created');
         expect(templateSlotsIn(steps)).toEqual(['cod_confirm', 'order_confirmed']);
         const json = JSON.stringify(steps);
-        for (const s of ['collabo_cod_confirm', 'collabo_cod_cancel', 'cod-confirmed', 'cod-unconfirmed', 'cancel_order', '"amount":3', '"amount":21']) expect([s, json.includes(s)]).toEqual([s, true]);
+        for (const s of ['collabo_cod_confirm', 'collabo_cod_cancel', 'cod-confirmed', 'cod-unconfirmed', 'cod-check', 'cancel_order', '"amount":3', '"amount":21']) expect([s, json.includes(s)]).toEqual([s, true]);
+    });
+
+    it('confirm, cancel, or tag cod-check for the team on any other answer, after the first ask or the second', () => {
+        const steps = parseDefinition({ steps: MANAGED_BY_KEY.get('cod_confirmation')!.steps({ cartDiscount: null }) });
+        const facts = (payload?: string) => ({
+            contact: { name: null, username: null, phone: '+919800000000', tags: [], attributes: {}, optedIn: false, optedOut: false },
+            customer: null,
+            conversation: { assignedUserId: null, windowOpen: true },
+            order: { isCod: true, total: 2499 },
+            context: { vars: payload ? { last_reply_payload: payload } : {}, trigger: { eventType: 'crm.order.created', commentId: null, postId: null }, depth: 0 },
+        });
+        const done = (reply: string | null, payload?: string) =>
+            simulate(steps, facts(payload) as never, { reply })
+                .filter((t) => t.type === 'store_action' || (t.type === 'send_message' && t.stepId !== 'pk_ask'))
+                .map((t) => t.detail);
+        expect(done('Confirm order')).toEqual(['Tags the order “cod-confirmed”.', 'Sends the recommended template "Order confirmed".']);
+        expect(done('ऑर्डर कन्फ़र्म करें', 'collabo_cod_confirm')).toEqual(['Tags the order “cod-confirmed”.', 'Sends the recommended template "Order confirmed".']);
+        expect(done('Cancel order')).toEqual(['Cancels the order in the store.']);
+        expect(done('When will it arrive?')).toEqual(['Tags the order “cod-check”.']);
+        expect(done('')).toEqual(['Tags the order “cod-check”.']);
+        // No answer to either ask: asked again, then tagged unconfirmed.
+        expect(done(null)).toEqual(['Sends the recommended template "Confirm a cash-on-delivery order".', 'Tags the order “cod-unconfirmed”.']);
     });
 
     it('leave out till sales, old orders’ invoices, and send cart reminder 3 only with a discount', () => {
