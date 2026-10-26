@@ -55,6 +55,7 @@ describe('ChannelController.triggerSync', () => {
       {} as never,
       queue as never,
       {} as never,
+      {} as never,
     );
     // Silence the expected warn/error lines.
     jest.spyOn(controller['logger'], 'warn').mockImplementation(() => undefined);

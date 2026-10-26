@@ -11,9 +11,14 @@ import { WhatsAppAccountService } from './whatsapp-account.service';
 describe('WhatsAppOAuthService.handleSignupCallback', () => {
     const state = 'state-1';
 
-    function build(opts: { isOnBizApp?: boolean; subscribeFails?: boolean } = {}) {
+    function build(opts: { isOnBizApp?: boolean; subscribeFails?: boolean; pack?: Record<string, unknown> } = {}) {
         const created: Array<Record<string, unknown>> = [];
         const prisma = {
+            templatePack: {
+                findUnique: jest.fn().mockResolvedValue(opts.pack ?? null),
+                create: jest.fn().mockResolvedValue({ id: 'pack_1' }),
+                update: jest.fn().mockResolvedValue({ id: 'pack_1' }),
+            },
             channel: {
                 findMany: jest.fn().mockResolvedValue([]),
                 findUnique: jest.fn().mockResolvedValue(null),
@@ -64,6 +69,7 @@ describe('WhatsAppOAuthService.handleSignupCallback', () => {
             registerNumber: jest.fn().mockResolvedValue(undefined),
         };
         const queue = { add: jest.fn().mockResolvedValue({ id: 'job' }) };
+        const packQueue = { getJob: jest.fn().mockResolvedValue(undefined), add: jest.fn().mockResolvedValue({ id: 'pack' }) };
         const service = new WhatsAppOAuthService(
             prisma as never,
             config as never,
@@ -72,9 +78,11 @@ describe('WhatsAppOAuthService.handleSignupCallback', () => {
             metaGraph as never,
             account as never,
             queue as never,
+            packQueue as never,
         );
-        return { service, prisma, account, queue, metaGraph, created };
+        return { service, prisma, account, queue, packQueue, metaGraph, created };
     }
+    const settle = () => new Promise((r) => setImmediate(r));
 
     it('uses the business token directly, with no long-lived exchange', async () => {
         const { service, metaGraph } = build();
@@ -143,6 +151,45 @@ describe('WhatsAppOAuthService.handleSignupCallback', () => {
         expect(prisma.channel.create).toHaveBeenCalled();
         const lastErrorWrite = prisma.channel.update.mock.calls.map((c) => c[0].data.lastError).find(Boolean);
         expect(lastErrorWrite).toMatch(/could not subscribe.*Retry setup/);
+    });
+
+    it("starts Collabo's recommended templates on a new account, going live by themselves once approved", async () => {
+        const { service, prisma, packQueue } = build();
+        await service.handleSignupCallback('code', state, 'org1', 'u1', { wabaId: '1029', phoneNumberId: 'pn1' });
+        await settle();
+
+        expect(prisma.templatePack.create).toHaveBeenCalledWith({
+            data: { organizationId: 'org1', channelId: 'ch_new', wabaId: '1029', autoActivate: true, origin: 'connect' },
+        });
+        expect(packQueue.add).toHaveBeenCalledWith(
+            'ensure',
+            { organizationId: 'org1', wabaId: '1029', reason: 'connect' },
+            expect.objectContaining({ jobId: 'pack-ensure-org1' }),
+        );
+    });
+
+    it('keeps the pack of an account connected before, so its automations stay as they were', async () => {
+        const { service, prisma, packQueue } = build({
+            pack: { id: 'pack_1', organizationId: 'org1', channelId: 'ch_new', wabaId: '1029', autoActivate: false, origin: 'backfill' },
+        });
+        await service.handleSignupCallback('code', state, 'org1', 'u1', { wabaId: '1029', phoneNumberId: 'pn1' });
+        await settle();
+
+        expect(prisma.templatePack.create).not.toHaveBeenCalled();
+        expect(prisma.templatePack.update).not.toHaveBeenCalled();
+        expect(packQueue.add).toHaveBeenCalledWith('ensure', expect.objectContaining({ reason: 'connect' }), expect.anything());
+    });
+
+    it('connects even when the templates cannot be started', async () => {
+        const { service, prisma, packQueue } = build();
+        prisma.templatePack.findUnique.mockRejectedValue(new Error('database busy'));
+        jest.spyOn(service['logger'], 'error').mockImplementation(() => undefined);
+
+        const result = await service.handleSignupCallback('code', state, 'org1', 'u1', { wabaId: '1029', phoneNumberId: 'pn1' });
+        await settle();
+
+        expect(result).toMatchObject({ channelId: 'ch_new', setup: { webhooks: 'ok' } });
+        expect(packQueue.add).not.toHaveBeenCalled();
     });
 
     it('refuses a state issued to someone else', async () => {

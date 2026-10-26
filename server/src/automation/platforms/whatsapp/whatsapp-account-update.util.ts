@@ -70,6 +70,17 @@ function untilText(expiration: unknown): string {
 }
 
 /**
+ * The restrictions an ACCOUNT_RESTRICTION event says are on the account, as
+ * Meta sent them (`restriction_info`: restriction_type, expiration), for
+ * `metadata.accountRestrictions`; empty when Meta lifts them. Null for any
+ * other event, which leaves the stored list alone. The recommended template
+ * pack stops while one restricts utility templates.
+ */
+export function accountRestrictionsOf(event: string | null, value: Obj = {}): unknown[] | null {
+    return event === 'ACCOUNT_RESTRICTION' ? list(value.restriction_info) : null;
+}
+
+/**
  * What one `account_update` event does to the channel. Pure, so the copy and
  * the state machine can be specced without a database. `value` is the
  * webhook's value object, for ban_info, violation_info and restriction_info.

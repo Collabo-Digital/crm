@@ -32,6 +32,7 @@ import {
     WHATSAPP_ONBOARDING_QUEUE,
     coexistenceSyncJobId,
 } from './whatsapp-onboarding.queue';
+import { TEMPLATE_PACK_QUEUE, TemplatePackJobData, startPackOnConnect } from '../campaigns/templates/pack/template-pack.queue';
 
 interface MetaTokenResponse {
     access_token: string;
@@ -85,6 +86,7 @@ export class WhatsAppOAuthService {
         private readonly metaGraph: MetaGraphClient,
         private readonly account: WhatsAppAccountService,
         @InjectQueue(WHATSAPP_ONBOARDING_QUEUE) private readonly onboardingQueue: Queue<CoexistenceSyncJobData>,
+        @InjectQueue(TEMPLATE_PACK_QUEUE) private readonly packQueue: Queue<TemplatePackJobData>,
     ) {
         this.appId = this.config.get<string>('whatsapp.appId')!;
         this.appSecret = this.config.get<string>('whatsapp.appSecret')!;
@@ -376,6 +378,12 @@ export class WhatsAppOAuthService {
             }
             throw error;
         }
+
+        // Collabo's recommended templates, created in the background on this
+        // account. Not awaited, and never failing the connect.
+        void startPackOnConnect(this.prisma, this.packQueue, { organizationId: stateData.orgId, channelId: channel.id, wabaId }).catch((err) =>
+            this.logger.error(`Could not start the recommended templates on WABA ${wabaId}: ${err instanceof Error ? err.message : err}`),
+        );
 
         // 7. Subscribe, register, start the coexistence sync. Each outcome is
         // recorded on the row; a failure leaves a connected channel with a

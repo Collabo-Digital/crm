@@ -2,6 +2,7 @@ import { ConsentType } from '@prisma/client';
 import { BILL_NOT_SENT, PosWhatsAppService, refusalReason } from './pos-whatsapp.service';
 import { templateStarters } from '../campaigns/templates/template-starters';
 import { toMetaComponents } from '../campaigns/templates/template-components';
+import { CollaboVariant, packSlot } from '../campaigns/templates/pack/template-pack';
 
 /**
  * The till on WhatsApp: the bill goes out in the org's approved bill template
@@ -20,6 +21,11 @@ const BILL_TEMPLATE = {
     parameterFormat: 'NAMED', components: toMetaComponents({ ...starter.draft, language: 'en' }),
 };
 const VALUES = { firstName: 'Asha', storeName: 'Acme', billNumber: 'INV-1', billTotal: '₹1,050.00', billDate: '26 Oct 2026' };
+/** Collabo's recommended bill template (template-pack.ts), as the pack saves it. */
+const PACK_BILL = {
+    id: 'tpl_pack', name: 'collabo_store_bill_v1', packSlot: 'store_bill', packVersion: 1, packSource: 'collabo', updatedAt: new Date('2026-10-20T10:00:00Z'),
+    components: toMetaComponents({ ...(packSlot(`${APP}/`, 'store_bill')!.variants[0] as CollaboVariant).draft, name: 'collabo_store_bill_v1', language: 'en', category: 'UTILITY' }),
+};
 const LIVE = { id: 'ch_wa', status: 'CONNECTED', isEnabled: true, externalStoreId: 'waba_1' };
 
 function build(over: { channel?: unknown; contact?: Record<string, unknown> | null; templates?: unknown[] } = {}) {
@@ -97,6 +103,24 @@ describe('PosWhatsAppService.plan — why a bill is not sent', () => {
     it('prefers the approved template over one still in review', async () => {
         const { service } = build({ templates: [{ ...BILL_TEMPLATE, id: 'tpl_new', status: 'PENDING' }, BILL_TEMPLATE] });
         expect(await service.plan(ORG, E164)).toMatchObject({ ok: true, template: { id: 'tpl_bill' } });
+    });
+
+    it("prefers Collabo's approved recommended bill template over a merchant's copy", async () => {
+        const pack = { ...BILL_TEMPLATE, ...PACK_BILL };
+        const { service } = build({ templates: [{ ...BILL_TEMPLATE, id: 'tpl_copy', updatedAt: new Date('2026-10-26T12:00:00Z') }, pack] });
+        expect(await service.plan(ORG, E164)).toMatchObject({ ok: true, template: { id: 'tpl_pack', name: 'collabo_store_bill_v1' } });
+    });
+
+    it("sends with the merchant's approved copy while the recommended one is in review, and reports a recommended one in review", async () => {
+        const pending = { ...BILL_TEMPLATE, ...PACK_BILL, status: 'PENDING' };
+        expect(await build({ templates: [pending, BILL_TEMPLATE] }).service.plan(ORG, E164)).toMatchObject({ ok: true, template: { id: 'tpl_bill' } });
+        expect(await build({ templates: [pending] }).service.setup(ORG)).toEqual({ connected: true, template: 'pending', templateName: 'collabo_store_bill_v1' });
+    });
+
+    it('takes the newest approved version of the recommended bill template', async () => {
+        const v1 = { ...BILL_TEMPLATE, ...PACK_BILL };
+        const v2 = { ...BILL_TEMPLATE, ...PACK_BILL, id: 'tpl_pack_2', name: 'collabo_store_bill_v2', packVersion: 2 };
+        expect(await build({ templates: [v1, v2] }).service.setup(ORG)).toEqual({ connected: true, template: 'approved', templateName: 'collabo_store_bill_v2' });
     });
 
     it('maps the send service’s refusals to the same reasons', () => {

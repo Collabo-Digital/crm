@@ -183,6 +183,8 @@ export type WaEvent =
         language: string | null;
         event: string | null;
         value: Record<string, unknown>;
+        /** The entry's time: a template's events can be delivered out of order, and an older one must not undo a newer one. */
+        at: Date | null;
     })
     | (Base & { kind: 'number_update'; field: string; event: string | null; value: Record<string, unknown> })
     | (Base & { kind: 'value_errors'; errors: WaError[] })
@@ -450,6 +452,7 @@ export function parseWhatsAppDelivery(body: unknown): WaEvent[] {
     for (const entry of arr(root.entry)) {
         const wabaId = str(entry.id);
         if (!wabaId) continue;
+        const at = seconds(entry.time);
         for (const change of arr(entry.changes)) {
             const field = str(change.field);
             const value = obj(change.value);
@@ -460,13 +463,13 @@ export function parseWhatsAppDelivery(body: unknown): WaEvent[] {
                 phoneNumberId: str(metadata?.phone_number_id),
                 displayPhoneNumber: str(metadata?.display_phone_number),
             };
-            events.push(...parseChange(field, value, base));
+            events.push(...parseChange(field, value, base, at));
         }
     }
     return events;
 }
 
-function parseChange(field: string, value: Obj, base: Base): WaEvent[] {
+function parseChange(field: string, value: Obj, base: Base, entryTime: Date | null): WaEvent[] {
     const index = contactIndex(value);
     const out: WaEvent[] = [];
 
@@ -607,6 +610,7 @@ function parseChange(field: string, value: Obj, base: Base): WaEvent[] {
                 language: str(value.message_template_language),
                 event: str(value.event) ?? str(value.new_quality_score) ?? str(value.new_category),
                 value,
+                at: entryTime,
             });
             return out;
 

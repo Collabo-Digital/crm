@@ -1,12 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChannelPlatform, MessageSource, MessageStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { patchChannelMetadataSql, recordHistoryChunkSql } from '../../../channel/channel-metadata.util';
+import { patchChannelMetadataSql, recordHistoryChunkSql, setChannelMetadataSql } from '../../../channel/channel-metadata.util';
 import { IngestChannel, MessageIngestService, StatusBeforeMessage } from '../../../messaging/message-ingest.service';
 import { TemplatesService } from '../../../campaigns/templates/templates.service';
 import { ContactRef } from '../../../messaging/contact-identity.service';
 import { whatsAppContent } from '../../../messaging/message-content';
-import { accountUpdateEffect, channelChange } from './whatsapp-account-update.util';
+import { accountRestrictionsOf, accountUpdateEffect, channelChange } from './whatsapp-account-update.util';
 import type { WaContactRef, WaEvent, WaMessage } from './whatsapp-webhook.parser';
 import { WhatsAppPayService } from '../../../payments/whatsapp-pay.service';
 import { GrowthService } from '../../../growth/growth.service';
@@ -280,6 +280,8 @@ export class WhatsAppWebhookHandler {
                         [e.event ?? 'UNKNOWN']: { at: now, reason: e.reason, initiatedBy: e.initiatedBy },
                     }),
                 );
+                const restrictions = accountRestrictionsOf(e.event, e.value);
+                if (restrictions) await this.prisma.$executeRaw(setChannelMetadataSql(channel.id, 'accountRestrictions', restrictions));
                 if (!effect) return;
                 const current = await this.prisma.channel.findUnique({ where: { id: channel.id }, select: { status: true, lastError: true } });
                 const data = current ? channelChange(current, effect) : {};

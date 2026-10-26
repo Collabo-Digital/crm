@@ -6,7 +6,9 @@ import { TemplatesService } from './templates.service';
 
 /**
  * Templates follow Meta by webhook; this catches anything a webhook missed
- * (and templates made in WhatsApp Manager) every six hours.
+ * (and templates made in WhatsApp Manager) every six hours. Each sync holds
+ * the account's template lock, so it never runs alongside the recommended
+ * pack's creates on that account (or another server's sync).
  */
 @Injectable()
 export class TemplateSyncScheduler {

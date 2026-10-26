@@ -7,6 +7,7 @@ import { MessagingSendService, SendOutcome } from '../messaging/send/messaging-s
 import { SendRefusal } from '../messaging/outbound';
 import { renderTemplate, sendComponents } from '../campaigns/templates/template-components';
 import { billLinkPrefix } from '../campaigns/templates/template-starters';
+import { pickPackTemplate } from '../campaigns/templates/pack/pick-pack-template';
 import { BillValues, billTemplateValues, isBillTemplate } from './pos-bill-template';
 
 export type BillTemplateState = 'approved' | 'pending' | 'missing';
@@ -147,7 +148,11 @@ export class PosWhatsAppService {
         });
     }
 
-    /** The bill template on the number's account: an approved one, else one still in review. */
+    /**
+     * The bill template on the number's account: Collabo's recommended one
+     * when it is approved (several copies can look like a bill template),
+     * else any approved one, else one still in review.
+     */
     private async billTemplate(orgId: string, wabaId: string | null): Promise<{ state: BillTemplateState; template: MessageTemplate | null }> {
         const rows = wabaId
             ? await this.prisma.messageTemplate.findMany({
@@ -157,7 +162,7 @@ export class PosWhatsAppService {
             })
             : [];
         const bills = rows.filter((t) => isBillTemplate(t, this.linkPrefix));
-        const approved = bills.find((t) => t.status === 'APPROVED');
+        const approved = pickPackTemplate(bills, 'store_bill', 'UTILITY') ?? bills.find((t) => t.status === 'APPROVED');
         if (approved) return { state: 'approved', template: approved };
         return bills.length ? { state: 'pending', template: bills[0] } : { state: 'missing', template: null };
     }

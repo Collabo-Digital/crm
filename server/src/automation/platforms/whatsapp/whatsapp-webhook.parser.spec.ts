@@ -154,7 +154,7 @@ describe('parseWhatsAppDelivery', () => {
         expect(reconnected.event).toBe('ACCOUNT_RECONNECTED');
     });
 
-    it('reads template status and quality updates', () => {
+    it('reads template status and quality updates, with when Meta sent each', () => {
         const [status] = ofKind(parseWhatsAppDelivery(fixture('wa-template-status.json')), 'template_update');
         expect(status).toMatchObject({
             field: 'message_template_status_update',
@@ -162,9 +162,30 @@ describe('parseWhatsAppDelivery', () => {
             name: 'order_confirmation',
             language: 'en-US',
             event: 'APPROVED',
+            at: new Date(1751247548 * 1000),
         });
         const [quality] = ofKind(parseWhatsAppDelivery(fixture('wa-template-quality.json')), 'template_update');
         expect(quality.event).toBe('YELLOW');
+        expect(quality.at).toEqual(new Date(1751247600 * 1000));
+    });
+
+    it('gives a template update without an entry time no time', () => {
+        const [update] = ofKind(parseWhatsAppDelivery({
+            object: 'whatsapp_business_account',
+            entry: [{ id: '102290129340398', changes: [{ field: 'message_template_status_update', value: { event: 'PAUSED', message_template_id: 1 } }] }],
+        }), 'template_update');
+        expect(update).toMatchObject({ event: 'PAUSED', at: null });
+    });
+
+    it('keeps an account restriction’s details as Meta sent them', () => {
+        const [restriction] = ofKind(parseWhatsAppDelivery({
+            object: 'whatsapp_business_account',
+            entry: [{ id: '102290129340398', time: 1751247700, changes: [{ field: 'account_update', value: {
+                event: 'ACCOUNT_RESTRICTION',
+                restriction_info: [{ restriction_type: 'RESTRICTED_UTILITY_TEMPLATES', expiration: 1751852500 }],
+            } }] }],
+        }), 'account_update');
+        expect(restriction).toMatchObject({ event: 'ACCOUNT_RESTRICTION', value: { restriction_info: [{ restriction_type: 'RESTRICTED_UTILITY_TEMPLATES', expiration: 1751852500 }] } });
     });
 
     it('reads phone number quality updates', () => {

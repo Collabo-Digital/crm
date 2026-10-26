@@ -1,16 +1,18 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator';
 import { RequireSection } from '../../auth/decorators/require-section.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import type { SessionPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { LockTimeoutError } from '../../automation/engine/redis-lock';
 import { MessagingMediaStorage } from '../../messaging/media/messaging-media.storage';
 import { CAMPAIGN_EDITORS, CAMPAIGN_READERS } from '../campaign-roles';
 import { QueryTemplatesDto, SaveTemplateDto, WriteTemplateDto } from '../dto/campaign.dto';
 import { parseDraft } from './template-draft.schema';
 import { TemplateWriterService } from './template-writer.service';
 import { TemplatesService } from './templates.service';
+import { TemplatePackService } from './pack/template-pack.service';
 
 /// Files a template header or a broadcast may carry, with WhatsApp's size ceilings.
 const HEADER_FILES: Record<string, { kind: 'image' | 'video' | 'document'; max: number }> = {
@@ -28,6 +30,7 @@ export class TemplatesController {
         private readonly templates: TemplatesService,
         private readonly writer: TemplateWriterService,
         private readonly storage: MessagingMediaStorage,
+        private readonly pack: TemplatePackService,
     ) { }
 
     @Get('templates')
@@ -63,8 +66,30 @@ export class TemplatesController {
     @Post('templates/sync')
     @Roles(...CAMPAIGN_EDITORS)
     @RequirePermissions('campaigns.manage')
-    sync(@CurrentUser() user: SessionPayload) {
-        return this.templates.sync(user.orgId!);
+    async sync(@CurrentUser() user: SessionPayload) {
+        try {
+            return await this.templates.sync(user.orgId!);
+        } catch (err) {
+            if (err instanceof LockTimeoutError) throw new ConflictException('Collabo is updating the templates on this WhatsApp account. Try again in a minute.');
+            throw err;
+        }
+    }
+
+    /** Collabo's recommended templates on the account: what was made, and what Meta made of each. */
+    @Get('templates/pack')
+    @Roles(...CAMPAIGN_READERS)
+    @RequirePermissions('campaigns.view')
+    packView(@CurrentUser() user: SessionPayload) {
+        return this.pack.view(user.orgId!);
+    }
+
+    /** Sets up the recommended templates, or repairs them; the work runs in the background. */
+    @Post('templates/pack')
+    @HttpCode(202)
+    @Roles(...CAMPAIGN_EDITORS)
+    @RequirePermissions('templates.manage')
+    startPack(@CurrentUser() user: SessionPayload) {
+        return this.pack.start(user.orgId!);
     }
 
     @Get('templates/:id')
