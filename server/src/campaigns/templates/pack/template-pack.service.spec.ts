@@ -50,6 +50,11 @@ function world(opts: {
             }),
         },
         paymentAccount: { findFirst: jest.fn(async () => (opts.razorpay ? { id: 'pa_1' } : null)) },
+        // The replacement record, merged into settings.replaced in one statement.
+        $executeRaw: jest.fn(async (_sql: TemplateStringsArray, slot: string, version: number, id: string) => {
+            if (pack?.id === id) pack = { ...pack, settings: { ...pack.settings, replaced: { ...pack.settings?.replaced, [slot]: version } } };
+            return 1;
+        }),
         messageTemplate: {
             findMany: jest.fn(async () => rows.filter((r) => r.packSlot)),
             findUnique: jest.fn(async ({ where }: any) => rows.find((r) => r.name === where.wabaId_name_language.name && r.language === where.wabaId_name_language.language) ?? null),
@@ -272,6 +277,8 @@ describe('never the same wording twice', () => {
         const shipped = w.created.filter((c) => c.fields.packSlot === 'order_shipped');
         expect(shipped.map((c) => [c.via, c.name])).toEqual([['library', 'collabo_order_shipped_v2']]);
         expect(w.pack()!.settings).toEqual({ replaced: { order_shipped: TEMPLATE_PACK_VERSION } });
+        const sql = (w.prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray).join('?');
+        expect(sql).toMatch(/jsonb_set\(\s*coalesce\("settings", '\{\}'::jsonb\),\s*'\{replaced\}'/);
 
         // The replacement is rejected too: nothing more, from either job.
         w.rows.find((r) => r.name === 'collabo_order_shipped_v2')!.status = 'REJECTED';

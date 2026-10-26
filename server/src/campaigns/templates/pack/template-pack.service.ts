@@ -403,9 +403,19 @@ export class TemplatePackService {
         return templatePack(this.frontendUrl).filter((s) => sets.includes(s.set));
     }
 
+    /** Merged in Postgres: the cart discount in the same settings is written by the automations' routes. */
     private async recordReplacement(packId: string, settings: PackSettings, slot: string) {
         settings.replaced = { ...settings.replaced, [slot]: TEMPLATE_PACK_VERSION };
-        await this.prisma.templatePack.update({ where: { id: packId }, data: { settings: settings as Prisma.InputJsonValue } });
+        await this.prisma.$executeRaw`
+            UPDATE "template_packs"
+            SET "settings" = jsonb_set(
+                    coalesce("settings", '{}'::jsonb),
+                    '{replaced}',
+                    coalesce("settings" -> 'replaced', '{}'::jsonb) || jsonb_build_object(${slot}::text, ${TEMPLATE_PACK_VERSION}::int)
+                ),
+                "updated_at" = now()
+            WHERE "id" = ${packId}
+        `;
     }
 
     private async halt(packId: string, reason: string): Promise<'stopped'> {
