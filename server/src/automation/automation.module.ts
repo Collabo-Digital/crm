@@ -31,6 +31,7 @@ import { ConversationStartersService } from './conversation-starters.service';
 import { ReviewsModule } from '../reviews/reviews.module';
 import { GoogleModule } from '../integrations/google/google.module';
 import { SheetRowsWatcher } from './sheet-rows.watcher';
+import { ManagedAutomationsService } from './pack/managed-automations.service';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { SheetRowsWatcher } from './sheet-rows.watcher';
     WhatsAppWebhookHandler, MessengerWebhookHandler,
     AutomationDispatcher, AutomationRunner, AutomationProcessor, AutomationSweeper,
     AutomationInsightsService, AutomationHooksService, ConversationStartersService, SheetRowsWatcher,
+    ManagedAutomationsService,
   ],
   exports: [AutomationService, InstagramMediaService],
 })

@@ -51,11 +51,13 @@ const LIST_SELECT = {
     triggeredCount: true,
     lastTriggeredAt: true,
     lastError: true,
+    packKey: true,
     createdAt: true,
     updatedAt: true,
     channel: { select: { id: true, name: true, platform: true } },
     ownerUser: { select: { id: true, firstName: true, lastName: true, email: true } },
 } satisfies Prisma.AutomationSelect;
+export type AutomationListRow = Prisma.AutomationGetPayload<{ select: typeof LIST_SELECT }>;
 
 const DETAIL_INCLUDE = {
     channel: { select: { id: true, name: true, platform: true, externalStoreId: true } },
@@ -69,6 +71,9 @@ const DETAIL_INCLUDE = {
         },
     },
 } satisfies Prisma.AutomationInclude;
+type DetailRow = Prisma.AutomationGetPayload<{ include: typeof DETAIL_INCLUDE }>;
+
+const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 
 @Injectable()
 export class AutomationService {
@@ -189,6 +194,14 @@ export class AutomationService {
         return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
     }
 
+    /** The organization's recommended-pack automations, as list rows; archived ones are gone for good. */
+    packList(orgId: string): Promise<AutomationListRow[]> {
+        return this.prisma.automation.findMany({
+            where: { organizationId: orgId, packKey: { not: null }, status: { not: AutomationStatus.ARCHIVED } },
+            select: LIST_SELECT,
+        });
+    }
+
     async findOne(id: string, orgId: string, viewer: AutomationViewer) {
         const row = await this.withIssues(await this.getVisible(id, orgId, viewer));
         return viewer.canManage ? row : withoutWebhookToken(row);
@@ -279,6 +292,57 @@ export class AutomationService {
         return this.withIssues(updated);
     }
 
+    // ─── System paths: Collabo's recommended pack ───────────────────────────
+
+    /**
+     * An automation Collabo makes for the organization: no creator, a draft
+     * until it is published, its definition checked like a saved draft's.
+     * Null when it exists already (another sync made it first).
+     */
+    async createSystem(
+        orgId: string,
+        input: { packKey: string; name: string; description: string; channelId: string; steps: StepDef[]; activateWhenReady: boolean },
+    ): Promise<{ id: string } | null> {
+        const steps = parseDefinition({ steps: input.steps });
+        try {
+            return await this.prisma.automation.create({
+                data: {
+                    organizationId: orgId,
+                    platform: ChannelPlatform.WHATSAPP,
+                    channelId: input.channelId,
+                    ownerUserId: null,
+                    name: input.name,
+                    description: input.description,
+                    status: AutomationStatus.DRAFT,
+                    definition: { steps } as unknown as Prisma.InputJsonValue,
+                    settings: DEFAULT_SETTINGS as Prisma.InputJsonValue,
+                    packKey: input.packKey,
+                    activateWhenReady: input.activateWhenReady,
+                },
+                select: { id: true },
+            });
+        } catch (err) {
+            if (isUniqueViolation(err)) return null;
+            throw err;
+        }
+    }
+
+    /** Replace a system automation's draft; a live one keeps running its published version until it is published again. */
+    async saveSystemDefinition(id: string, orgId: string, input: StepDef[]): Promise<void> {
+        const steps = parseDefinition({ steps: input });
+        await this.prisma.automation.updateMany({
+            where: { id, organizationId: orgId, status: { not: AutomationStatus.ARCHIVED } },
+            data: { definition: { steps } as unknown as Prisma.InputJsonValue },
+        });
+    }
+
+    /** Publish with nobody behind it. Returns the issues that kept it from going live (none when it did). */
+    async publishSystem(id: string, orgId: string): Promise<Issue[]> {
+        const row = await this.prisma.automation.findFirst({ where: { id, organizationId: orgId }, include: DETAIL_INCLUDE });
+        if (!row) throw new NotFoundException('Automation not found');
+        return this.publishRow(row, null);
+    }
+
     // ─── Lifecycle ──────────────────────────────────────────────────────────
 
     /**
@@ -287,16 +351,24 @@ export class AutomationService {
      */
     async publish(id: string, orgId: string, viewer: AutomationViewer) {
         const row = await this.getVisible(id, orgId, viewer);
-        this.assertNotArchived(row.status);
-
-        const steps = parseDefinition(row.definition);
-        const issues = collectIssues(steps, await this.issueContext(row, steps));
+        const issues = await this.publishRow(row, viewer.userId);
         if (issues.length > 0) {
             throw new UnprocessableEntityException({
                 message: `Automation has ${issues.length} issue${issues.length === 1 ? '' : 's'}`,
                 issues,
             });
         }
+        return this.findOne(row.id, orgId, viewer);
+    }
+
+    /** Publish unless the draft has issues; then nothing is written and they are returned. */
+    private async publishRow(row: DetailRow, publishedByUserId: string | null): Promise<Issue[]> {
+        const orgId = row.organizationId;
+        this.assertNotArchived(row.status);
+
+        const steps = parseDefinition(row.definition);
+        const issues = collectIssues(steps, await this.issueContext(row, steps));
+        if (issues.length > 0) return issues;
 
         const trigger = steps[0];
         // A webhook trigger gets its secret URL on first publish and keeps it: a draft that lost its
@@ -325,7 +397,7 @@ export class AutomationService {
                     version: nextVersion,
                     definition: { steps } as unknown as Prisma.InputJsonValue,
                     settings: (row.settings ?? DEFAULT_SETTINGS) as Prisma.InputJsonValue,
-                    publishedByUserId: viewer.userId,
+                    publishedByUserId,
                 },
             });
 
@@ -345,6 +417,8 @@ export class AutomationService {
                     status: AutomationStatus.ACTIVE,
                     lastError: null,
                     lastErrorAt: null,
+                    // Live now, by whoever published it: nothing left to wait for.
+                    activateWhenReady: false,
                 },
             });
 
@@ -378,8 +452,7 @@ export class AutomationService {
                 },
             });
         });
-
-        return this.findOne(row.id, orgId, viewer);
+        return [];
     }
 
     async pause(id: string, orgId: string, viewer: AutomationViewer) {
