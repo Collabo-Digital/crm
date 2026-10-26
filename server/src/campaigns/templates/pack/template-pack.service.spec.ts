@@ -101,6 +101,7 @@ describe('the ensure job', () => {
         const w = world();
         await w.service.ensure(ORG, WABA, 'connect');
         expect(w.templates.withAccountLock).toHaveBeenCalledWith(WABA, expect.any(Function), expect.any(Number));
+        expect(w.templates.pull).toHaveBeenCalledWith(ORG, expect.objectContaining({ wabaId: WABA }), { adopt: true });
         expect(w.templates.pull.mock.invocationCallOrder[0]).toBeLessThan(w.templates.createFromLibrary.mock.invocationCallOrder[0]);
         expect(w.created.map((c) => c.name)).toEqual(CORE.map((s) => `collabo_${s.key}_v1`));
         expect(w.created.every((c) => c.priority === Priority.NORMAL)).toBe(true);

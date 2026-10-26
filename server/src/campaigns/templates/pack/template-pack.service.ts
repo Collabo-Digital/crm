@@ -154,7 +154,7 @@ export class TemplatePackService {
         const orgId = pack.organizationId;
         await this.prisma.templatePack.update({ where: { id: pack.id }, data: { status: 'running', stoppedReason: null } });
         // Sync first: adopts what an earlier run, or a request Meta took without answering, made.
-        await this.templates.pull(orgId, channel);
+        await this.templates.pull(orgId, channel, { adopt: true });
         const settings = settingsOf(pack.settings);
         const slots = await this.slotsFor(orgId);
         let rows = await this.packRows(orgId, channel.wabaId);

@@ -24,7 +24,9 @@ import { PackFields, packFieldsFromName } from './pack/pack-fields';
 import { LibraryButtonInput, PACK_LANGUAGE } from './pack/template-pack';
 import { TemplatePackJobs } from './pack/template-pack-jobs';
 
-const TEMPLATE_FIELDS = 'id,name,language,status,category,components,quality_score,rejected_reason,parameter_format,library_template_name';
+const TEMPLATE_FIELDS = 'id,name,language,status,category,components,quality_score,rejected_reason,parameter_format';
+/// The pack's own reads also ask which library template each was made from, to adopt it with the right source.
+const PACK_TEMPLATE_FIELDS = `${TEMPLATE_FIELDS},library_template_name`;
 const DAY = 24 * 3600_000;
 
 /// Meta: approved templates can be edited once in 24 hours and 10 times in 30 days.
@@ -192,10 +194,10 @@ export class TemplatesService {
 
     /**
      * The sync itself; the caller holds the account lock. A row made after the
-     * list was read is never deleted, and pack fields are only ever added:
-     * a `collabo_<slot>_v<n>` template is adopted into the pack.
+     * list was read is never deleted, and pack fields are never cleared. The
+     * pack's own sync (`adopt`) adopts each `collabo_<slot>_v<n>` template.
      */
-    async pull(orgId: string, channel: ChannelRef) {
+    async pull(orgId: string, channel: ChannelRef, opts: { adopt?: boolean } = {}) {
         const { token, creds } = await this.accounts.load(channel.id);
         const scopes = this.accounts.scopes(channel.wabaId);
         const startedAt = new Date();
@@ -205,7 +207,7 @@ export class TemplatesService {
             const res: { data: { data?: MetaTemplate[]; paging?: { next?: string } } } = await this.metaGraph.request({
                 method: 'GET',
                 ...next,
-                ...(next.path ? { query: { fields: TEMPLATE_FIELDS, limit: 100 } } : {}),
+                ...(next.path ? { query: { fields: opts.adopt ? PACK_TEMPLATE_FIELDS : TEMPLATE_FIELDS, limit: 100 } } : {}),
                 accessToken: token,
                 scopes,
                 priority: Priority.NORMAL,
@@ -225,7 +227,7 @@ export class TemplatesService {
         );
         let packChanged = false;
         for (const t of found) {
-            const row = await this.upsertSynced(orgId, channel, t, now);
+            const row = await this.upsertSynced(orgId, channel, t, now, opts.adopt === true);
             const was = before.get(`${t.name}|${t.language}`);
             if (row.packSlot && (!was?.packSlot || was.status !== row.status || was.category !== row.category)) packChanged = true;
         }
@@ -246,7 +248,7 @@ export class TemplatesService {
         const res = await this.metaGraph.request<{ data?: MetaTemplate[] }>({
             method: 'GET',
             path: `/${channel.wabaId}/message_templates`,
-            query: { fields: TEMPLATE_FIELDS, name, limit: 100 },
+            query: { fields: PACK_TEMPLATE_FIELDS, name, limit: 100 },
             accessToken: token,
             scopes: this.accounts.scopes(channel.wabaId),
             priority,
@@ -254,11 +256,11 @@ export class TemplatesService {
         const now = new Date();
         const rows: MessageTemplate[] = [];
         // Meta's name filter also matches longer names.
-        for (const t of (res.data.data ?? []).filter((x) => x.name === name)) rows.push(await this.upsertSynced(orgId, channel, t, now));
+        for (const t of (res.data.data ?? []).filter((x) => x.name === name)) rows.push(await this.upsertSynced(orgId, channel, t, now, true));
         return rows;
     }
 
-    private async upsertSynced(orgId: string, channel: ChannelRef, t: MetaTemplate, now: Date): Promise<MessageTemplate> {
+    private async upsertSynced(orgId: string, channel: ChannelRef, t: MetaTemplate, now: Date, adopting: boolean): Promise<MessageTemplate> {
         const data = {
             externalId: t.id,
             status: t.status,
@@ -269,7 +271,7 @@ export class TemplatesService {
             components: (t.components ?? []) as Prisma.InputJsonValue,
             syncedAt: now,
         };
-        const adopt = packFieldsFromName(t);
+        const adopt = adopting ? packFieldsFromName(t) : null;
         const row = await this.prisma.messageTemplate.upsert({
             where: { wabaId_name_language: { wabaId: channel.wabaId, name: t.name, language: t.language } },
             create: { organizationId: orgId, channelId: channel.id, wabaId: channel.wabaId, name: t.name, language: t.language, ...data, ...(adopt ?? {}) },

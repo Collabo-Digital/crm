@@ -111,7 +111,7 @@ describe('sync and the recommended pack', () => {
         expect(where.createdAt.lt.getTime()).toBeLessThanOrEqual(Date.now());
     });
 
-    it('adopts a collabo_<slot>_v<n> template into the pack, from Meta’s library name when it has one, and never clears pack fields', async () => {
+    it('the pack’s sync adopts a collabo_<slot>_v<n> template, from Meta’s library name when it has one, and never clears pack fields', async () => {
         const { service, prisma, metaGraph, packJobs } = setup();
         metaGraph.request.mockResolvedValueOnce({
             data: { data: [
@@ -122,7 +122,8 @@ describe('sync and the recommended pack', () => {
             ] },
         });
         prisma.messageTemplate.upsert.mockImplementation(async (args: any) => ({ id: args.where.wabaId_name_language.name, ...args.create }));
-        await service.sync('org_b');
+        await service.pull('org_b', ref, { adopt: true });
+        expect(metaGraph.request.mock.calls[0][0].query.fields).toMatch(/,library_template_name$/);
         const creates = prisma.messageTemplate.upsert.mock.calls.map((c: any) => c[0]);
         expect(creates[0].create).toMatchObject({ packSlot: 'order_confirmed', packVersion: 1, packSource: 'library', libraryTemplateName: 'order_confirmed' });
         expect(creates[1].create).toMatchObject({ packSlot: 'cod_confirm', packVersion: 2, packSource: 'collabo', libraryTemplateName: null });
@@ -143,8 +144,18 @@ describe('sync and the recommended pack', () => {
         prisma.messageTemplate.upsert
             .mockResolvedValueOnce({ id: 'row_1', packSlot: null, status: 'APPROVED', category: 'UTILITY' })
             .mockResolvedValueOnce({ id: 'row_2', packSlot: 'order_shipped', packSource: 'library', status: 'APPROVED', category: 'UTILITY' });
-        await service.sync('org_b');
+        await service.pull('org_b', ref, { adopt: true });
         expect(updates).toEqual([{ where: { id: 'row_1' }, data: { packSlot: 'store_bill', packVersion: 1, packSource: 'collabo', libraryTemplateName: null } }]);
+    });
+
+    it('a merchant’s or the cron’s sync asks Meta for nothing new and adopts nothing', async () => {
+        const { service, prisma, metaGraph, updates } = setup();
+        metaGraph.request.mockResolvedValueOnce({ data: { data: [{ id: 'm1', name: 'collabo_store_bill_v1', language: 'en', status: 'APPROVED', category: 'UTILITY' }] } });
+        prisma.messageTemplate.upsert.mockImplementation(async (args: any) => ({ id: 'row_1', ...args.create }));
+        await service.sync('org_b');
+        expect(metaGraph.request.mock.calls[0][0].query.fields).toBe('id,name,language,status,category,components,quality_score,rejected_reason,parameter_format');
+        expect(prisma.messageTemplate.upsert.mock.calls[0][0].create.packSlot).toBeUndefined();
+        expect(updates).toEqual([]);
     });
 
     it('queues nothing for the pack when no pack template changed', async () => {
