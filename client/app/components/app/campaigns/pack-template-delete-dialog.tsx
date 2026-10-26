@@ -20,7 +20,10 @@ export function PackTemplateDeleteDialog({ template, onOpenChange }: { template:
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Delete a template Collabo manages?</DialogTitle>
-          <DialogDescription>Collabo manages this template. Deleting it stops the automations that send it.</DialogDescription>
+          <DialogDescription>
+            Collabo manages this template. Deleting it stops the automations that send it, and Collabo won't create it again unless you press Repair on the Recommended
+            templates card.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-2 text-caption text-muted-foreground">
           <p>

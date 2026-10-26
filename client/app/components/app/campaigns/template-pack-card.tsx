@@ -26,7 +26,7 @@ function slotProblem(slot: TemplatePackSlot): { reason: string; recommendation?:
   if (slot.state === "paused") return { reason: "Meta paused it because many people blocked or reported its messages. Automations wait to send it until the pause ends." };
   if (slot.state !== "attention" || !t) return null;
   if (approvedAsMarketing(t)) {
-    return { reason: "Meta approved it as marketing, not utility. Marketing messages cost more, and automations hold them between 9 PM and 9 AM (store time)." };
+    return { reason: "Meta approved it as marketing, not utility. Marketing messages cost more, and Collabo’s recommended automations hold them between 9 PM and 9 AM (store time)." };
   }
   const reason = t.rejectionInfo?.reason ?? (t.statusReason ? rejectionHelp(t.statusReason) : null);
   const status = t.status === "DISABLED" ? "Meta disabled it" : t.status === "REJECTED" ? "Meta rejected it" : `Meta marked it ${t.status.toLowerCase().replace(/_/g, " ")}`;

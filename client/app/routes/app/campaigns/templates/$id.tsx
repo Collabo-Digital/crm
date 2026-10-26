@@ -87,7 +87,7 @@ export default function TemplatePage() {
             <AlertTitle>Approved as marketing</AlertTitle>
             <AlertDescription>
               It was submitted as a utility message, but Meta filed it under marketing. Meta charges more for marketing messages and may not deliver them to people who get many,
-              and automations hold them between 9 PM and 9 AM (store time).
+              and Collabo’s recommended automations hold them between 9 PM and 9 AM (store time).
               {template.packSlot && " When Collabo has another wording for it, Collabo submits that one by itself; until then it keeps sending this one."}
             </AlertDescription>
           </div>

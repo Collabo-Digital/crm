@@ -46,6 +46,8 @@ export interface EditorContext {
   sheets: Array<{ id: string; title: string }>;
   /** The trigger sheet's columns, for {{sheet.*}}. */
   sheetColumns: SheetColumn[];
+  /** Set when this is one of Collabo's recommended automations: only those hold marketing sends overnight. */
+  packKey: string | null;
 }
 
 const selectClass = "h-8 w-full rounded-lg border bg-background px-2 text-body disabled:opacity-60";
@@ -633,10 +635,10 @@ function FileField({ media, onChange, readOnly, label }: { media: Config["media"
   );
 }
 
-/** On a step whose template is marketing: automations hold those overnight (store time). */
+/** On a marketing step of one of Collabo's recommended automations, which hold those overnight (store time). */
 function QuietHoursNote() {
   return (
-    <p className="flex items-center gap-1.5 text-micro text-muted-foreground" title="Automations send marketing messages from 9 AM, in your store’s time zone.">
+    <p className="flex items-center gap-1.5 text-micro text-muted-foreground" title="Collabo’s recommended automations send marketing messages from 9 AM, in your store’s time zone.">
       <Moon className="size-3.5 shrink-0" />
       Held between 9 PM and 9 AM (store time)
     </p>
@@ -705,7 +707,7 @@ function ManagedTemplateFields({ slot, templates, set, ctx }: { slot: PackSlotKe
           </p>
         )}
         {current && <p className="whitespace-pre-wrap rounded-lg bg-muted p-2 text-caption">{current.preview.body}</p>}
-        {marketing && <QuietHoursNote />}
+        {marketing && ctx.packKey && <QuietHoursNote />}
         {!ctx.readOnly &&
           (confirming ? (
             <div className="space-y-2 rounded-lg bg-warning-subtle p-3">
@@ -771,7 +773,7 @@ function TemplateFields({ config, set, ctx, invoice = false, payment = false }: 
       {template && (
         <>
           <p className="whitespace-pre-wrap rounded-lg bg-muted p-2 text-caption">{template.preview.body}</p>
-          {template.category === "MARKETING" && <QuietHoursNote />}
+          {template.category === "MARKETING" && ctx.packKey && <QuietHoursNote />}
           {template.params.map((p) =>
             p.component === "header" && p.kind !== "text" && invoice ? (
               <p key={p.key} className="rounded-lg border border-dashed p-2 text-caption text-muted-foreground">
@@ -849,8 +851,8 @@ function SendMessageForm({ config, set, ctx }: { config: Config; set: (p: Config
 // ─── Condition ──────────────────────────────────────────────────────────────
 
 const RULE_FIELDS: Array<{ field: string; label: string; ops: Array<[string, string]>; values?: Array<[string, string]> }> = [
-  { field: "last_reply", label: "Their last reply", ops: [["contains", "has the words"], ["equals", "is"], ["exists", "was given"], ["not_exists", "was not given"]] },
-  { field: "reply_payload", label: "The button they tapped", ops: [["equals", "is"]] },
+  { field: "last_reply", label: "Their last reply", ops: [["contains", "has the words"], ["equals", "is"], ["is_not", "is not"], ["exists", "was given"], ["not_exists", "was not given"]] },
+  { field: "reply_payload", label: "The button they tapped", ops: [["equals", "is"], ["is_not", "is not"]] },
   { field: "trigger_text", label: "The message that started it", ops: [["contains", "has the words"], ["equals", "is"]] },
   { field: "tag", label: "Tag", ops: [["has", "they have"], ["not_has", "they don’t have"]] },
   { field: "attribute", label: "Contact field", ops: [["equals", "is"], ["contains", "has the words"], ["exists", "is set"], ["not_exists", "is not set"], ["gte", "is at least"], ["lte", "is at most"]] },
@@ -939,7 +941,7 @@ function ConditionForm({ config, set, ctx }: { config: Config; set: (p: Config) 
             </div>
             {rule.field === "reply_payload" && (
               <p className="text-micro text-muted-foreground">
-                The payload of the template button they tapped, exactly. Collabo’s cash-on-delivery buttons send collabo_cod_confirm and collabo_cod_cancel.
+                The payload of the template button they tapped; separate several with commas. Collabo’s cash-on-delivery buttons send collabo_cod_confirm and collabo_cod_cancel.
               </p>
             )}
           </div>
