@@ -205,3 +205,5 @@ export class PosReceiptService {
         };
     }
 }
+
+export type PosReceipt = Awaited<ReturnType<PosReceiptService['receipt']>>;

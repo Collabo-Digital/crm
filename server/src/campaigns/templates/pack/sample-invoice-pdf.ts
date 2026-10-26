@@ -1,8 +1,9 @@
 /**
- * The sample PDF submitted with the GST invoice template: Meta reviews a media
- * header with a sample of it, and each message then carries the order's own
- * invoice. Embedded because the server image ships only the compiled code.
- * A one-page A4 tax invoice in Helvetica, made with pdfkit.
+ * The sample PDF submitted with the GST invoice and till bill templates: Meta
+ * reviews a media header with a sample of it, and each message then carries
+ * the order's own invoice or bill. Embedded because the server image ships
+ * only the compiled code. A one-page A4 tax invoice in Helvetica, made with
+ * pdfkit.
  */
 export const SAMPLE_INVOICE_PDF = Buffer.from(
     [

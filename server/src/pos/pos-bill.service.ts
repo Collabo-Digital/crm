@@ -5,15 +5,18 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
+import { InvoiceService } from '../invoice/invoice.service';
+import { MessagingMediaStorage } from '../messaging/media/messaging-media.storage';
 import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { countryCodeOf, normalizePhone, phoneLookupVariants } from '../common/phone.util';
 import { formatMoney } from '../commerce/order-vars';
 import { billLinkPrefix } from '../campaigns/templates/template-starters';
 import { PosReceiptService } from './pos-receipt.service';
 import { PosStaffService } from './pos-staff.service';
-import { BillSendPlan, PosWhatsAppService, WhatsAppBillSetup, refusalReason } from './pos-whatsapp.service';
-import { BillValues } from './pos-bill-template';
+import { BillDocument, BillSendPlan, PosWhatsAppService, WhatsAppBillSetup, refusalReason } from './pos-whatsapp.service';
+import { BillValues, hasBillDocument } from './pos-bill-template';
 import { billLinkKey, billToken, maskPhone, readBillToken } from './pos-bill-link';
+import { billPdfFilename, renderBillPdf } from './pos-bill-pdf';
 import { SendBillInput } from './pos-requests.schema';
 import { readPosMeta } from './pos-order-meta';
 
@@ -55,6 +58,7 @@ export type BillPhone = { e164: string | null; raw: string };
 export const BILL_FAILED = "Couldn't send the bill on WhatsApp. Try again.";
 export const NOT_ON_WHATSAPP = "This number isn't on WhatsApp.";
 export const AUTO_SEND_OFF = "Bills aren't sent automatically. Bill not sent.";
+export const BILL_PDF_FAILED = "Couldn't make the bill PDF. Bill not sent.";
 /** Meta: the number is not on WhatsApp, or cannot receive this message. */
 const UNDELIVERABLE = '131026';
 /** A send still not a message after this long never will be: the work behind it was lost. */
@@ -91,10 +95,11 @@ const billDate = (d: Date) => d.toLocaleDateString('en-IN', { day: 'numeric', mo
 
 /**
  * The bill after a sale: sent on WhatsApp by itself when the customer gave a
- * number, sent again from the till, its delivery followed from the message it
- * became, and shown to the customer behind its public link. Nothing here may
- * fail or hold up a sale: the send runs after the response, and every try is
- * kept on the order with who made it.
+ * number (as a PDF when the bill template has a document header), sent again
+ * from the till, its delivery followed from the message it became, and shown
+ * to the customer behind its public link. Nothing here may fail or hold up a
+ * sale: the send runs after the response, and every try is kept on the order
+ * with who made it.
  */
 @Injectable()
 export class PosBillService {
@@ -109,6 +114,8 @@ export class PosBillService {
         private readonly staff: PosStaffService,
         private readonly orgSettings: OrganizationSettingsService,
         private readonly loyalty: LoyaltyService,
+        private readonly invoices: InvoiceService,
+        private readonly media: MessagingMediaStorage,
         config: ConfigService,
     ) {
         this.linkKey = billLinkKey(config.get<string>('encryptionKey') || config.get<string>('jwt.accessSecret')!);
@@ -237,13 +244,20 @@ export class PosBillService {
         name: string | null,
     ): Promise<void> {
         try {
-            const outcome = await this.whatsapp.sendBill(orgId, userId, plan, {
+            const ready = await this.withDocument(orgId, orderId, plan);
+            if (!ready) {
+                await this.settle(orderId, attempt.id, { status: 'not_sent', reason: BILL_PDF_FAILED });
+                return;
+            }
+            const outcome = await this.whatsapp.sendBill(orgId, userId, ready.plan, {
+                orderId,
                 e164: attempt.to!,
                 customerId,
                 name,
                 values: await this.values(orgId, orderId),
                 token: billToken(this.linkKey, orderId),
                 idempotencyKey: attempt.key!,
+                document: ready.document,
             });
             await this.settle(
                 orderId,
@@ -259,6 +273,45 @@ export class PosBillService {
                 this.logger.warn(`Bill attempt ${attempt.id} on order ${orderId} not updated: ${e instanceof Error ? e.message : e}`),
             );
         }
+    }
+
+    /**
+     * What the bill goes with: a template with a document header takes the
+     * bill's PDF, made now. When the PDF can't be made, the approved bill
+     * template without one goes instead; with none, nothing goes (null).
+     */
+    private async withDocument(
+        orgId: string,
+        orderId: string,
+        plan: Extract<BillSendPlan, { ok: true }>,
+    ): Promise<{ plan: Extract<BillSendPlan, { ok: true }>; document: BillDocument | null } | null> {
+        if (!hasBillDocument(plan.template)) return { plan, document: null };
+        try {
+            return { plan, document: await this.document(orgId, orderId) };
+        } catch (err) {
+            this.logger.warn(`Bill PDF for order ${orderId} not made: ${err instanceof Error ? err.message : err}`);
+            return plan.linkOnly ? { plan: { ...plan, template: plan.linkOnly, linkOnly: null }, document: null } : null;
+        }
+    }
+
+    /**
+     * The bill's PDF in the organization's chat media: the sale's GST invoice
+     * when it has one, as the statutory document, else the bill itself.
+     */
+    private async document(orgId: string, orderId: string): Promise<BillDocument> {
+        const invoice = await this.prisma.invoice.findFirst({
+            where: { orderId, organizationId: orgId, status: { notIn: [InvoiceStatus.CANCELLED, InvoiceStatus.CREDIT_NOTE] } },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true },
+        });
+        let pdf: { buffer: Buffer; filename: string };
+        if (invoice) pdf = await this.invoices.pdf(invoice.id, orgId);
+        else {
+            const receipt = await this.receipts.receipt(orgId, orderId);
+            pdf = { buffer: await renderBillPdf(receipt), filename: billPdfFilename(receipt.order.name) };
+        }
+        const { storageKey } = await this.media.save(orgId, pdf.buffer, 'application/pdf');
+        return { storageKey, filename: pdf.filename };
     }
 
     private attempt(userId: string, staffId: string | null, phone: BillPhone, key: string | null, outcome: Pick<BillAttempt, 'status' | 'reason'> = {}): BillAttempt {

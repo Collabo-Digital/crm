@@ -31,7 +31,7 @@ import { cn } from "~/lib/utils";
 import { CartActions } from "./cart-actions";
 import { ConversationAvatar } from "./conversation-avatar";
 import { VoiceNotePlayer } from "./voice-note-player";
-import type { InboxMessage, InboxMessageStatus } from "~/types/api";
+import type { InboxMessage, InboxMessageKind, InboxMessageStatus } from "~/types/api";
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "🙏", "✅"];
 
@@ -97,6 +97,12 @@ function BubbleTail({ isOutbound }: { isOutbound: boolean }) {
   );
 }
 
+const HEADER_FILE: Record<"image" | "video" | "document", InboxMessageKind> = { image: "IMAGE", video: "VIDEO", document: "DOCUMENT" };
+
+/** What a file is drawn as: its message's kind, or for a template the header it was sent in. */
+const fileKind = (message: InboxMessage): InboxMessageKind =>
+  message.kind === "TEMPLATE" ? HEADER_FILE[message.media?.kind ?? "document"] : message.kind;
+
 /** Media: the file itself when stored, a placeholder while it downloads. */
 function MessageMedia({
   message,
@@ -135,7 +141,7 @@ function MessageMedia({
     );
   }
   const url = apiUrl(media.url);
-  switch (message.kind) {
+  switch (fileKind(message)) {
     case "IMAGE":
     case "STICKER":
       return (
@@ -234,7 +240,8 @@ function MessageBody({
     );
   }
   const location = locationOf(message);
-  const media = !!message.media && MEDIA_KINDS.includes(message.kind);
+  // A template's header file (a bill's PDF, an invoice) sits above its text, whatever Meta did with the message.
+  const media = !!message.media && (MEDIA_KINDS.includes(message.kind) || message.kind === "TEMPLATE");
   const isVoice = media && message.kind === "AUDIO" && message.media!.voice && (!!message.media!.url || !!localAudio);
   const overlay = media && !message.text && !!message.media!.url && ["IMAGE", "VIDEO", "STICKER"].includes(message.kind);
   const showText = !!message.text && !location;

@@ -220,6 +220,20 @@ describe('AutomationRunner — a template step that names a pack slot', () => {
         expect(cases[3].steps[0].output).toMatchObject({ skipped: 'invoice_missing' });
     });
 
+    it('never sends the till’s bill, its template approved or not: only the till has a sale to bill', async () => {
+        const bill = collaboTemplate('store_bill', { name: 'collabo_store_bill_v2', packVersion: 2 });
+        const send = harness({ steps: [trigger(), slotStep('s', 'store_bill'), note], templates: [bill] });
+        const invoice = harness({ steps: [trigger('invoice_issued'), { id: 's', type: 'send_invoice', config: { templateSlot: 'store_bill' } }, note], templates: [bill], invoice: true });
+        for (const h of [send, invoice]) {
+            (h.prisma as Row).conversationNote = { create: jest.fn(async () => ({ id: 'note1' })) };
+            await h.runner.run('run1');
+            expect(h.sent).toHaveLength(0);
+            expect(h.steps.find((s) => s.stepKey === 's')).toMatchObject({ status: 'SKIPPED', output: expect.objectContaining({ skipped: 'template_unavailable', slot: 'store_bill' }) });
+            expect(h.run.status).toBe('COMPLETED');
+        }
+        expect(invoice.store.invoiceDocument).not.toHaveBeenCalled();
+    });
+
     it('skips a send whose value is empty, rather than sending it half filled', async () => {
         const h = harness({
             steps: [trigger('checkout_abandoned'), slotStep('s', 'cart_reminder_3')],

@@ -87,6 +87,45 @@ describe('MessagingSendService.send', () => {
         expect(outcome).toMatchObject({ ok: false, code: 'opted_out' });
     });
 
+    it('keeps a template’s header file on its row, with what it was sent as, and the order the message is about', async () => {
+        const { service, prisma } = build();
+        prisma.conversation.findFirst.mockResolvedValueOnce({ ...conversation, contact: { ...conversation.contact, optedOutAt: null } });
+        prisma.messageTemplate.findUnique.mockResolvedValueOnce({ category: 'UTILITY' });
+        const headerMedia = { storageKey: 'org1/bill.pdf', mime: 'application/pdf', kind: 'document' as const, filename: 'Bill-M1042.pdf' };
+        const outcome = await service.send({
+            organizationId: 'org1',
+            conversationId: 'c1',
+            origin: 'system',
+            orderId: 'order_1',
+            payload: { type: 'template', name: 'collabo_store_bill_v2', language: 'en', headerMedia, previewText: 'Hi Asha, your bill is ready.' },
+        });
+        expect(outcome).toEqual({ ok: true, messageId: 'm-new' });
+        const data = prisma.message.create.mock.calls[0][0].data;
+        expect(data.media).toEqual({ storageKey: 'org1/bill.pdf', mime: 'application/pdf', filename: 'Bill-M1042.pdf', kind: 'document' });
+        expect(data).toMatchObject({ kind: 'TEMPLATE', orderId: 'order_1', text: 'Hi Asha, your bill is ready.', templateName: 'collabo_store_bill_v2' });
+    });
+
+    it('keeps no file for a template without a header file, and no order unless given', async () => {
+        const { service, prisma } = build();
+        prisma.conversation.findFirst.mockResolvedValueOnce({ ...conversation, contact: { ...conversation.contact, optedOutAt: null } });
+        await service.send({ organizationId: 'org1', conversationId: 'c1', origin: 'agent', payload: { type: 'template', name: 'order_update', language: 'en' } });
+        const data = prisma.message.create.mock.calls[0][0].data;
+        expect(data.media).toBeUndefined();
+        expect(data.orderId).toBeNull();
+    });
+
+    it('refuses a header file kept for another organization', async () => {
+        const { service, prisma } = build();
+        prisma.conversation.findFirst.mockResolvedValueOnce({ ...conversation, contact: { ...conversation.contact, optedOutAt: null } });
+        await expect(service.send({
+            organizationId: 'org1',
+            conversationId: 'c1',
+            origin: 'system',
+            payload: { type: 'template', name: 'collabo_store_bill_v2', language: 'en', headerMedia: { storageKey: 'org2/bill.pdf', mime: 'application/pdf', kind: 'document' } },
+        })).rejects.toThrow('Upload the file again before sending it.');
+        expect(prisma.message.create).not.toHaveBeenCalled();
+    });
+
     it('queues with the priority the caller gives', async () => {
         const { service, prisma, queue } = build();
         prisma.conversation.findFirst.mockResolvedValueOnce({ ...conversation, contact: { ...conversation.contact, optedOutAt: null } });

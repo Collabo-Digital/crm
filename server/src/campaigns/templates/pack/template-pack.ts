@@ -20,11 +20,14 @@ import { storeLinkPrefix } from '../../../commerce/store-links';
  * body.first_name, button.0, coupon.0) to the automation variables that fill
  * it; `{{name|fallback}}` stands for the fallback when the variable is empty.
  *
- * Bump TEMPLATE_PACK_VERSION when a slot's wording or shape changes: the pack
- * then creates the next version of that slot on every account.
+ * When a slot's wording or shape changes, raise that slot's `version` and
+ * bump TEMPLATE_PACK_VERSION: every account on an older pack is ensured again
+ * at start-up, and only the slots without a template at their version are
+ * created (`collabo_<slot>_v<version>`). Until Meta approves the new one, the
+ * approved older one keeps sending.
  */
 
-export const TEMPLATE_PACK_VERSION = 1;
+export const TEMPLATE_PACK_VERSION = 2;
 
 export type PackSet = 'core' | 'payment' | 'online_store';
 
@@ -78,10 +81,20 @@ export interface PackSlot {
     category: TemplateCategoryName;
     title: string;
     description: string;
+    /** The slot's wording and shape: a template made at an older version is replaced by one at this. 1 when not given. */
+    version?: number;
     /** A document header that is the order's GST invoice PDF at send time; created with a sample PDF. */
     invoiceDocument?: boolean;
+    /**
+     * A document header the till fills with the sale's bill PDF at send time
+     * (pos-bill.service.ts); created with a sample PDF. Automations never
+     * send it: they have no sale to bill.
+     */
+    tillDocument?: boolean;
     variants: PackVariant[];
 }
+
+export const slotVersion = (slot: Pick<PackSlot, 'version'>): number => slot.version ?? 1;
 
 /** Every pack template is English for now. */
 export const PACK_LANGUAGE = 'en';
@@ -323,13 +336,17 @@ export function templatePack(frontendUrl: string): PackSlot[] {
             set: 'core',
             category: 'UTILITY',
             title: 'Bill from the till',
-            description: 'The bill the point of sale sends a walk-in customer, with a link to view or download it.',
+            description: 'The bill the point of sale sends a walk-in customer, as a PDF with a link to view or download it.',
+            // 2: the bill's PDF in a document header.
+            version: 2,
+            tillDocument: true,
             variants: [
                 {
                     // The till fills these five by name (pos-bill-template.ts): keep the names.
                     source: 'collabo',
                     draft: {
                         parameterFormat: 'NAMED',
+                        header: { format: 'DOCUMENT' },
                         body: {
                             text: 'Hi {{first_name}}, thank you for shopping at {{store_name}}. Your bill {{bill_number}} for {{bill_total}}, dated {{bill_date}}, is ready. Tap View bill below to see or download it.',
                             examples: { first_name: 'Ananya', store_name: 'Acme Store', bill_number: 'INV-26-27/000123', bill_total: '₹2,340.00', bill_date: '26 Oct 2026' },

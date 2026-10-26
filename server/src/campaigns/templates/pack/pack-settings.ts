@@ -8,15 +8,15 @@ import { Prisma } from '@prisma/client';
  */
 export interface PackSettings {
     cartDiscount?: { code: string; text: string; validDays: number };
-    /** The pack version at which a slot last had its one automatic replacement. */
+    /** The slot version (template-pack.ts) at which a slot last had its one automatic replacement. */
     replaced?: Record<string, number>;
-    /** Slots Meta refused every variant of, at that pack version: not tried again until Repair. */
+    /** Slots Meta refused every variant of, at that slot version: not tried again until Repair or the slot's next version. */
     refused?: Record<string, { version: number; reason: string; at: string }>;
     /** Slots whose template the merchant deleted in Collabo: not made again until Repair. */
     removed?: Record<string, true>;
     /** Hourly retries after Meta's limits since the last run that finished; capped. */
     requeues?: number;
-    /** The sample invoice PDF saved for the GST invoice template's header, reused. */
+    /** The sample invoice PDF saved for the document headers (the GST invoice, the till's bill), reused. */
     sampleInvoice?: string;
 }
 

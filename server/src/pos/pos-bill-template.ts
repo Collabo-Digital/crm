@@ -4,8 +4,9 @@ import { ParamValue, ParameterFormat, TemplateParam, templateParams } from '../c
  * The WhatsApp template a bill goes out in. The till knows it by its link
  * button opening `<app>/b/{{1}}`, not by its name, so a renamed copy still
  * counts; and it fills only what a bill knows — the starter's five values,
- * by name or in the starter's order — so a template asking for anything else
- * is not the bill template. Pure.
+ * by name or in the starter's order, and the bill's PDF in a document
+ * header — so a template asking for anything else is not the bill
+ * template. Pure.
  */
 
 export interface BillValues {
@@ -48,16 +49,24 @@ export function isBillTemplate(t: TemplateLike, linkPrefix: string): boolean {
     const button = billButton(t, linkPrefix);
     if (button < 0) return false;
     const format = formatOf(t);
-    return templateParams(componentsOf(t), format).every((p) => (p.component === 'button' ? p.kind === 'text' && p.buttonIndex === button : !!valueKey(p, format)));
+    return templateParams(componentsOf(t), format).every((p) =>
+        p.component === 'header' ? p.kind === 'document' : p.component === 'button' ? p.kind === 'text' && p.buttonIndex === button : !!valueKey(p, format),
+    );
 }
 
-/** The values to send a bill template with: the bill's details, and its link's token on the button. */
+/** Whether a bill template carries the bill as a PDF, in its document header. */
+export function hasBillDocument(t: TemplateLike): boolean {
+    return templateParams(componentsOf(t), formatOf(t)).some((p) => p.component === 'header' && p.kind === 'document');
+}
+
+/** The values to send a bill template with: the bill's details, its link's token on the button, and a stand-in for its PDF. */
 export function billTemplateValues(t: TemplateLike, values: BillValues, token: string): Record<string, ParamValue> {
     const format = formatOf(t);
     const out: Record<string, ParamValue> = {};
     for (const p of templateParams(componentsOf(t), format)) {
         const key = valueKey(p, format);
-        out[p.key] = p.component === 'button' ? token : key ? values[key] : '';
+        // The header's PDF goes with the send as its headerMedia; the upload at delivery puts its media id here.
+        out[p.key] = p.component === 'header' ? { mediaId: 'pending-upload' } : p.component === 'button' ? token : key ? values[key] : '';
     }
     return out;
 }

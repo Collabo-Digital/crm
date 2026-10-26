@@ -8,7 +8,7 @@ import { SendRefusal } from '../messaging/outbound';
 import { renderTemplate, sendComponents } from '../campaigns/templates/template-components';
 import { billLinkPrefix } from '../campaigns/templates/template-starters';
 import { pickPackTemplate } from '../campaigns/templates/pack/pick-pack-template';
-import { BillValues, billTemplateValues, isBillTemplate } from './pos-bill-template';
+import { BillValues, billTemplateValues, hasBillDocument, isBillTemplate } from './pos-bill-template';
 
 export type BillTemplateState = 'approved' | 'pending' | 'missing';
 
@@ -28,8 +28,18 @@ export const BILL_NOT_SENT = {
     blocked: 'This customer is blocked on WhatsApp. Bill not sent.',
 } as const;
 
-/** Ready to send: the number's channel and the approved bill template. */
-export type BillSendPlan = { ok: true; channelId: string; template: MessageTemplate } | { ok: false; reason: string };
+/**
+ * Ready to send: the number's channel and the approved bill template; when
+ * that one carries the bill's PDF, an approved one without it (`linkOnly`),
+ * for a bill whose PDF can't be made.
+ */
+export type BillSendPlan = { ok: true; channelId: string; template: MessageTemplate; linkOnly: MessageTemplate | null } | { ok: false; reason: string };
+
+/** The bill's PDF, saved in the organization's chat media. */
+export interface BillDocument {
+    storageKey: string;
+    filename: string;
+}
 
 /** Meta's statuses for a template submitted and not yet decided. */
 const IN_REVIEW = ['PENDING', 'IN_APPEAL'];
@@ -83,19 +93,29 @@ export class PosWhatsAppService {
         if (!e164) return { ok: false, reason: BILL_NOT_SENT.invalidNumber };
         const refusal = contactRefusal(await this.findContact(this.prisma, channel.id, e164.replace(/^\+/, '')));
         if (refusal) return { ok: false, reason: refusal };
-        return { ok: true, channelId: channel.id, template: found.template };
+        return { ok: true, channelId: channel.id, template: found.template, linkOnly: found.linkOnly };
     }
 
     /**
      * Sends the bill to the number: its contact on the org's number found or
      * made as starting a chat does, and linked to the customer when given —
-     * with no consent recorded, the bill being no marketing.
+     * with no consent recorded, the bill being no marketing. A template with
+     * a document header goes with the bill's PDF.
      */
     async sendBill(
         orgId: string,
         userId: string,
         plan: Extract<BillSendPlan, { ok: true }>,
-        bill: { e164: string; customerId: string | null; name: string | null; values: BillValues; token: string; idempotencyKey: string },
+        bill: {
+            orderId: string;
+            e164: string;
+            customerId: string | null;
+            name: string | null;
+            values: BillValues;
+            token: string;
+            idempotencyKey: string;
+            document: BillDocument | null;
+        },
     ): Promise<SendOutcome> {
         const contact = await this.contactFor(orgId, plan.channelId, bill.e164, bill.customerId, bill.name);
         // Checked again on the contact itself: it may have opted out since.
@@ -116,10 +136,14 @@ export class PosWhatsAppService {
                 category: t.category,
                 components: sendComponents(components, format, values),
                 previewText: renderTemplate(components, values).body,
+                ...(bill.document
+                    ? { headerMedia: { storageKey: bill.document.storageKey, mime: 'application/pdf', kind: 'document' as const, filename: bill.document.filename } }
+                    : {}),
             },
             origin: 'system',
             actorUserId: userId,
             idempotencyKey: bill.idempotencyKey,
+            orderId: bill.orderId,
         });
     }
 
@@ -150,10 +174,15 @@ export class PosWhatsAppService {
 
     /**
      * The bill template on the number's account: Collabo's recommended one
-     * when it is approved (several copies can look like a bill template),
-     * else any approved one, else one still in review.
+     * when it is approved (several copies can look like a bill template; its
+     * newest approved version wins, so the one with the PDF once Meta has
+     * approved it), else any approved one, else one still in review. With
+     * the PDF comes the approved one without it, chosen the same way.
      */
-    private async billTemplate(orgId: string, wabaId: string | null): Promise<{ state: BillTemplateState; template: MessageTemplate | null }> {
+    private async billTemplate(
+        orgId: string,
+        wabaId: string | null,
+    ): Promise<{ state: BillTemplateState; template: MessageTemplate | null; linkOnly: MessageTemplate | null }> {
         const rows = wabaId
             ? await this.prisma.messageTemplate.findMany({
                 where: { organizationId: orgId, wabaId, category: 'UTILITY', status: { in: ['APPROVED', ...IN_REVIEW] } },
@@ -162,9 +191,11 @@ export class PosWhatsAppService {
             })
             : [];
         const bills = rows.filter((t) => isBillTemplate(t, this.linkPrefix));
-        const approved = pickPackTemplate(bills, 'store_bill', 'UTILITY') ?? bills.find((t) => t.status === 'APPROVED');
-        if (approved) return { state: 'approved', template: approved };
-        return bills.length ? { state: 'pending', template: bills[0] } : { state: 'missing', template: null };
+        const approved = approvedBill(bills);
+        if (approved) {
+            return { state: 'approved', template: approved, linkOnly: hasBillDocument(approved) ? approvedBill(bills.filter((t) => !hasBillDocument(t))) : null };
+        }
+        return bills.length ? { state: 'pending', template: bills[0], linkOnly: null } : { state: 'missing', template: null, linkOnly: null };
     }
 
     private findContact(db: Prisma.TransactionClient, channelId: string, digits: string) {
@@ -205,6 +236,8 @@ export class PosWhatsAppService {
 }
 
 const isLive = (c: { status: ChannelStatus; isEnabled: boolean }) => c.status === ChannelStatus.CONNECTED && c.isEnabled;
+
+const approvedBill = (bills: MessageTemplate[]) => pickPackTemplate(bills, 'store_bill', 'UTILITY') ?? bills.find((t) => t.status === 'APPROVED') ?? null;
 
 function contactRefusal(contact: Pick<ChannelContact, 'optedOutAt' | 'blockedAt'> | null): string | null {
     if (contact?.optedOutAt) return BILL_NOT_SENT.optedOut;

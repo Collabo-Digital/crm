@@ -711,7 +711,7 @@ export class InboxService {
     }
 
     private mediaView(messageId: string, media: Prisma.JsonValue) {
-        const m = media as { storageKey?: string; mime?: string; filename?: string; size?: number; voice?: boolean; durationMs?: number; url?: string; doNotStore?: boolean; error?: string } | null;
+        const m = media as { storageKey?: string; mime?: string; filename?: string; size?: number; voice?: boolean; durationMs?: number; url?: string; doNotStore?: boolean; error?: string; kind?: string } | null;
         if (!m) return null;
         return {
             mime: m.mime ?? null,
@@ -719,6 +719,8 @@ export class InboxService {
             size: m.size ?? null,
             voice: m.voice ?? false,
             durationMs: m.durationMs ?? null,
+            // A template's header file: image, video or document. A media message's kind is the message's own.
+            kind: m.kind ?? null,
             // Story mentions may not be stored; Meta's own link is shown until it expires.
             url: m.storageKey ? signMediaPath(this.linkSecret, messageId) : m.doNotStore ? (m.url ?? null) : null,
             pending: !m.storageKey && !m.doNotStore && !m.error,
