@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { TemplatePackBackfill } from './template-pack.backfill';
+import { TEMPLATE_PACK_VERSION } from './template-pack';
 import { claimPackRow, queuePackEnsure } from './template-pack.queue';
 
 /** Fake BullMQ queue: jobs by id with a state; finished ones are kept, as BullMQ keeps them. */
@@ -142,7 +143,9 @@ describe('the start-up backfill', () => {
         expect(sql).toMatch(/c."platform" = 'WHATSAPP' AND c."status" <> 'DISCONNECTED'/);
         expect(sql).toMatch(/o."deleted_at" IS NULL/);
         expect(sql).toMatch(/p."id" IS NULL OR p."organization_id" <> c."organization_id" OR \(c."status" = 'CONNECTED' AND p."version" < \?\)/);
-        expect(call[1]).toBe(1);
+        // Accounts on an older pack (version 1, before the till's bill carried its PDF) are ensured again.
+        expect(call[1]).toBe(TEMPLATE_PACK_VERSION);
+        expect(TEMPLATE_PACK_VERSION).toBe(2);
     });
 
     it('leaves an account whose ensure is queued or running alone, so several servers starting queue it once', async () => {

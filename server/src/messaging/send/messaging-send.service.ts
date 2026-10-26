@@ -25,6 +25,8 @@ export interface SendInput {
     /** Our message row being quoted. */
     replyToMessageId?: string | null;
     automation?: { automationId: string; runId: string; stepKey: string } | null;
+    /** The order the message is about, such as the bill of a sale. */
+    orderId?: string | null;
     /** Same key twice sends once. */
     idempotencyKey?: string | null;
     /** Queue priority instead of the origin's (see ORIGIN_PRIORITY). */
@@ -172,6 +174,7 @@ export class MessagingSendService {
                         conversationId: conversation.id,
                         contactId: conversation.contactId,
                         customerId: conversation.customerId,
+                        orderId: input.orderId ?? null,
                         toAddress: conversation.contact.externalId,
                         fromAddress: channel.address,
                         text,
@@ -190,7 +193,15 @@ export class MessagingSendService {
                                     filename: input.payload.filename,
                                     ...(input.payload.voice ? { voice: true, durationMs: input.payload.durationMs } : {}),
                                 } as Prisma.InputJsonValue)
-                                : undefined,
+                                : input.payload.type === 'template' && input.payload.headerMedia
+                                    // The header's file, kept with what it was sent as: the thread shows it whatever Meta does with the message.
+                                    ? ({
+                                        storageKey: input.payload.headerMedia.storageKey,
+                                        mime: input.payload.headerMedia.mime,
+                                        filename: input.payload.headerMedia.filename,
+                                        kind: input.payload.headerMedia.kind,
+                                    } as Prisma.InputJsonValue)
+                                    : undefined,
                         status: MessageStatus.QUEUED,
                         automationId: input.automation?.automationId ?? null,
                         automationRunId: input.automation?.runId ?? null,

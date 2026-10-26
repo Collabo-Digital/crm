@@ -4100,6 +4100,8 @@ export interface InboxMedia {
   voice: boolean;
   /** A voice note we sent: its length, as the server measured it. */
   durationMs?: number | null;
+  /** A template's header file: what it was sent as. Null for a media message, whose kind is the message's own. */
+  kind?: "image" | "video" | "document" | null;
   /** Signed, expiring link; null while the file is still downloading. */
   url: string | null;
   pending: boolean;

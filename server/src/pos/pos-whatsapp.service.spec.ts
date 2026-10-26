@@ -21,10 +21,15 @@ const BILL_TEMPLATE = {
     parameterFormat: 'NAMED', components: toMetaComponents({ ...starter.draft, language: 'en' }),
 };
 const VALUES = { firstName: 'Asha', storeName: 'Acme', billNumber: 'INV-1', billTotal: '₹1,050.00', billDate: '26 Oct 2026' };
-/** Collabo's recommended bill template (template-pack.ts), as the pack saves it. */
+/** Collabo's recommended bill template (template-pack.ts), as the pack saves it: version 2 carries the PDF, version 1 had the link only. */
+const PACK_DRAFT = (packSlot(`${APP}/`, 'store_bill')!.variants[0] as CollaboVariant).draft;
 const PACK_BILL = {
     id: 'tpl_pack', name: 'collabo_store_bill_v1', packSlot: 'store_bill', packVersion: 1, packSource: 'collabo', updatedAt: new Date('2026-10-20T10:00:00Z'),
-    components: toMetaComponents({ ...(packSlot(`${APP}/`, 'store_bill')!.variants[0] as CollaboVariant).draft, name: 'collabo_store_bill_v1', language: 'en', category: 'UTILITY' }),
+    components: toMetaComponents({ ...PACK_DRAFT, header: undefined, name: 'collabo_store_bill_v1', language: 'en', category: 'UTILITY' }),
+};
+const PACK_BILL_PDF = {
+    ...PACK_BILL, id: 'tpl_pack_2', name: 'collabo_store_bill_v2', packVersion: 2, updatedAt: new Date('2026-10-27T10:00:00Z'),
+    components: toMetaComponents({ ...PACK_DRAFT, name: 'collabo_store_bill_v2', language: 'en', category: 'UTILITY' }, '4::handle'),
 };
 const LIVE = { id: 'ch_wa', status: 'CONNECTED', isEnabled: true, externalStoreId: 'waba_1' };
 
@@ -96,7 +101,7 @@ describe('PosWhatsAppService.plan — why a bill is not sent', () => {
 
     it('a customer with no marketing opt-in can be sent the bill', async () => {
         const { service, prisma } = build({ contact: { id: 'cc_1', optInAt: null, optedOutAt: null, blockedAt: null } });
-        expect(await service.plan(ORG, E164)).toEqual({ ok: true, channelId: 'ch_wa', template: BILL_TEMPLATE });
+        expect(await service.plan(ORG, E164)).toEqual({ ok: true, channelId: 'ch_wa', template: BILL_TEMPLATE, linkOnly: null });
         expect(prisma.channelContact.findFirst.mock.calls[0][0].where.OR[0]).toEqual({ waId: '919800000001' });
     });
 
@@ -117,10 +122,28 @@ describe('PosWhatsAppService.plan — why a bill is not sent', () => {
         expect(await build({ templates: [pending] }).service.setup(ORG)).toEqual({ connected: true, template: 'pending', templateName: 'collabo_store_bill_v1' });
     });
 
-    it('takes the newest approved version of the recommended bill template', async () => {
+    it('takes the newest approved version of the recommended bill template: the one with the PDF, and the one without should the PDF fail', async () => {
         const v1 = { ...BILL_TEMPLATE, ...PACK_BILL };
-        const v2 = { ...BILL_TEMPLATE, ...PACK_BILL, id: 'tpl_pack_2', name: 'collabo_store_bill_v2', packVersion: 2 };
+        const v2 = { ...BILL_TEMPLATE, ...PACK_BILL_PDF };
         expect(await build({ templates: [v1, v2] }).service.setup(ORG)).toEqual({ connected: true, template: 'approved', templateName: 'collabo_store_bill_v2' });
+        expect(await build({ templates: [v2, v1] }).service.plan(ORG, E164)).toMatchObject({ ok: true, template: { id: 'tpl_pack_2' }, linkOnly: { id: 'tpl_pack' } });
+        // With no approved one without the PDF, there is nothing to fall back to.
+        expect(await build({ templates: [v2] }).service.plan(ORG, E164)).toMatchObject({ ok: true, template: { id: 'tpl_pack_2' }, linkOnly: null });
+    });
+
+    it('keeps sending the approved version without the PDF while Meta reviews the one with it', async () => {
+        const v1 = { ...BILL_TEMPLATE, ...PACK_BILL };
+        const v2 = { ...BILL_TEMPLATE, ...PACK_BILL_PDF, status: 'PENDING' };
+        expect(await build({ templates: [v2, v1] }).service.plan(ORG, E164)).toEqual({ ok: true, channelId: 'ch_wa', template: v1, linkOnly: null });
+        expect(await build({ templates: [v2, v1] }).service.setup(ORG)).toEqual({ connected: true, template: 'approved', templateName: 'collabo_store_bill_v1' });
+    });
+
+    it("prefers Collabo's link-only bill template as the fallback over a merchant's copy", async () => {
+        const v1 = { ...BILL_TEMPLATE, ...PACK_BILL };
+        const v2 = { ...BILL_TEMPLATE, ...PACK_BILL_PDF };
+        const copy = { ...BILL_TEMPLATE, id: 'tpl_copy', updatedAt: new Date('2026-10-28T12:00:00Z') };
+        expect(await build({ templates: [copy, v2, v1] }).service.plan(ORG, E164)).toMatchObject({ template: { id: 'tpl_pack_2' }, linkOnly: { id: 'tpl_pack' } });
+        expect(await build({ templates: [copy, v2] }).service.plan(ORG, E164)).toMatchObject({ template: { id: 'tpl_pack_2' }, linkOnly: { id: 'tpl_copy' } });
     });
 
     it('maps the send service’s refusals to the same reasons', () => {
@@ -132,8 +155,8 @@ describe('PosWhatsAppService.plan — why a bill is not sent', () => {
 });
 
 describe('PosWhatsAppService.sendBill', () => {
-    const plan = { ok: true as const, channelId: 'ch_wa', template: BILL_TEMPLATE as any };
-    const bill = { e164: E164, customerId: 'cust_1', name: 'Asha Menon', values: VALUES, token: 'ord1.sig', idempotencyKey: 'pos-bill:o:919800000001:1' };
+    const plan = { ok: true as const, channelId: 'ch_wa', template: BILL_TEMPLATE as any, linkOnly: null };
+    const bill = { orderId: 'order_1', e164: E164, customerId: 'cust_1', name: 'Asha Menon', values: VALUES, token: 'ord1.sig', idempotencyKey: 'pos-bill:o:919800000001:1', document: null };
 
     it('makes the contact for the number, linked to the customer, with no consent recorded', async () => {
         const { service, prisma, consent } = build();
@@ -158,6 +181,23 @@ describe('PosWhatsAppService.sendBill', () => {
         expect(sent.payload).toMatchObject({ type: 'template', name: 'store_bill', language: 'en', category: 'UTILITY' });
         expect(sent.payload.previewText).toBe('Hi Asha, thank you for shopping at Acme. Your bill INV-1 for ₹1,050.00 dated 26 Oct 2026 is ready.');
         expect(sent.payload.components).toContainEqual({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: 'ord1.sig' }] });
+        expect(sent.payload).not.toHaveProperty('headerMedia');
+        expect(sent.payload.components.some((c: { type: string }) => c.type === 'header')).toBe(false);
+        expect(sent.orderId).toBe('order_1');
+    });
+
+    it('sends a template with a document header with the bill’s PDF as its header file', async () => {
+        const { service, sender } = build();
+        const pdf = { storageKey: `${ORG}/bill.pdf`, filename: 'Bill-M1042.pdf' };
+        await service.sendBill(ORG, 'u_1', { ...plan, template: { ...BILL_TEMPLATE, ...PACK_BILL_PDF } as any }, { ...bill, document: pdf });
+        const sent = sender.send.mock.calls[0][0];
+        expect(sent.payload).toMatchObject({ type: 'template', name: 'collabo_store_bill_v2' });
+        expect(sent.payload.headerMedia).toEqual({ storageKey: `${ORG}/bill.pdf`, mime: 'application/pdf', kind: 'document', filename: 'Bill-M1042.pdf' });
+        // A stand-in the platform sender swaps for the uploaded file's id at delivery.
+        expect(sent.payload.components[0]).toEqual({ type: 'header', parameters: [{ type: 'document', document: { id: 'pending-upload' } }] });
+        expect(sent.payload.components).toContainEqual({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: 'ord1.sig' }] });
+        expect(sent.payload.previewText).toBe('Hi Asha, thank you for shopping at Acme. Your bill INV-1 for ₹1,050.00, dated 26 Oct 2026, is ready. Tap View bill below to see or download it.');
+        expect(sent.orderId).toBe('order_1');
     });
 
     it('does not send to a contact that opted out since the till checked', async () => {

@@ -487,7 +487,8 @@ export class AutomationRunner {
         const skip = (reason: string, extra: Record<string, unknown> = {}): Halt => ({ kind: 'skip', reason, output: { skipped: reason, slot: key, ...extra } });
         const slot = packSlot(this.frontendUrl, key);
         // "Send the invoice" sends the PDF: a slot without a document header has nowhere to put it.
-        if (!slot || (opts.invoice && !slot.invoiceDocument)) return skip('template_unavailable');
+        // The bill from the till goes from the till only, with the sale's own PDF.
+        if (!slot || slot.tillDocument || (opts.invoice && !slot.invoiceDocument)) return skip('template_unavailable');
         const wabaId = await this.currentWaba(s.run.organizationId);
         const rows = wabaId
             ? await this.prisma.messageTemplate.findMany({ where: { organizationId: s.run.organizationId, wabaId, packSlot: key } })

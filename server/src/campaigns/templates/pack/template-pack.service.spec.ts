@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { MetaGraphError } from '../../../channel/meta-graph.types';
 import { Priority, RateLimitedError } from '../../../rate-limit/rate-limit.types';
 import { SAMPLE_INVOICE_PDF } from './sample-invoice-pdf';
-import { TEMPLATE_PACK_VERSION, templatePack } from './template-pack';
+import { TEMPLATE_PACK_VERSION, slotVersion, templatePack } from './template-pack';
 import { TemplatePackService, slotState, utilityRestricted } from './template-pack.service';
 
 /**
@@ -118,7 +118,9 @@ describe('the ensure job', () => {
         expect(w.templates.withAccountLock).toHaveBeenCalledWith(WABA, expect.any(Function), expect.any(Number));
         expect(w.templates.pull).toHaveBeenCalledWith(ORG, expect.objectContaining({ wabaId: WABA }), { adopt: true });
         expect(w.templates.pull.mock.invocationCallOrder[0]).toBeLessThan(w.templates.createFromLibrary.mock.invocationCallOrder[0]);
-        expect(w.created.map((c) => c.name)).toEqual(CORE.map((s) => `collabo_${s.key}_v1`));
+        // Each at its slot's version: the till's bill is at 2.
+        expect(w.created.map((c) => c.name)).toEqual(CORE.map((s) => (s.key === 'store_bill' ? 'collabo_store_bill_v2' : `collabo_${s.key}_v1`)));
+        expect(w.created.find((c) => c.fields.packSlot === 'store_bill')!.fields.packVersion).toBe(2);
         expect(w.created.every((c) => c.priority === Priority.NORMAL)).toBe(true);
     });
 
@@ -140,12 +142,16 @@ describe('the ensure job', () => {
         expect(o).toEqual({ createdById: null, starterKey: null, priority: Priority.NORMAL, pack: { packSlot: 'cod_confirm', packVersion: 1, packSource: 'collabo', libraryTemplateName: null } });
     });
 
-    it('submits the GST invoice with the bundled sample PDF, saved in the organization’s storage', async () => {
+    it('submits the GST invoice and the till’s bill with the bundled sample PDF, saved once in the organization’s storage', async () => {
         const w = world();
         await w.service.ensure(ORG, WABA, 'connect');
+        expect(w.storage.save).toHaveBeenCalledTimes(1);
         expect(w.storage.save).toHaveBeenCalledWith(ORG, SAMPLE_INVOICE_PDF, 'application/pdf');
-        const invoice = w.created.find((c) => c.fields.packSlot === 'gst_invoice')!;
-        expect(invoice.draft!.header).toEqual({ format: 'DOCUMENT', storageKey: `${ORG}/sample.pdf`, mime: 'application/pdf', filename: 'sample-invoice.pdf' });
+        const sample = { format: 'DOCUMENT', storageKey: `${ORG}/sample.pdf`, mime: 'application/pdf', filename: 'sample-invoice.pdf' };
+        expect(w.created.find((c) => c.fields.packSlot === 'gst_invoice')!.draft!.header).toEqual(sample);
+        const bill = w.created.find((c) => c.fields.packSlot === 'store_bill')!;
+        expect(bill.draft!.header).toEqual(sample);
+        expect(bill.draft!.buttons).toEqual([expect.objectContaining({ type: 'URL', text: 'View bill', url: `${APP}/b/{{1}}` })]);
     });
 
     it('falls back to Collabo’s wording when Meta refuses a library template', async () => {
@@ -166,16 +172,66 @@ describe('the ensure job', () => {
     it('skips slots the account already has, and is ready once every slot has a template, whatever its status', async () => {
         const w = world();
         const rejected = w.row({ name: 'collabo_review_request_v1', packSlot: 'review_request', status: 'REJECTED' });
-        const live = CORE.filter((s) => s.key !== 'review_request').map((s) => w.row({ name: `collabo_${s.key}_v1`, packSlot: s.key, status: 'PENDING' }));
+        const live = CORE.filter((s) => s.key !== 'review_request').map((s) =>
+            w.row({ name: `collabo_${s.key}_v${slotVersion(s)}`, packSlot: s.key, packVersion: slotVersion(s), status: 'PENDING' }));
         w.rows.push(rejected, ...live);
         // Its one replacement is used already.
-        w.pack()!.settings = { replaced: { review_request: TEMPLATE_PACK_VERSION } };
+        w.pack()!.settings = { replaced: { review_request: 1 } };
         await w.service.ensure(ORG, WABA, 'backfill');
         expect(w.created).toHaveLength(0);
         expect(w.pack()).toMatchObject({ status: 'ready', version: TEMPLATE_PACK_VERSION });
         expect(w.pack()!.lastRunAt).toBeInstanceOf(Date);
         expect(w.jobs.managedSync).toHaveBeenCalledWith(ORG);
         expect(w.jobs.reconcileLater).toHaveBeenCalledWith(ORG, WABA);
+    });
+
+    it('brings an account set up at pack version 1 up to version 2 with the till’s bill alone, its version 1 left as it is', async () => {
+        const w = world({ pack: {
+            id: 'pack_1', organizationId: ORG, channelId: 'ch_wa', wabaId: WABA, autoActivate: false, origin: 'backfill', version: 1, status: 'ready',
+            stoppedReason: null, lastRunAt: null, settings: { sampleInvoice: `${ORG}/sample.pdf` },
+        } });
+        // Every template the pack made at version 1, whatever Meta made of them since.
+        w.rows.push(...CORE.map((s) => w.row({ name: `collabo_${s.key}_v1`, packSlot: s.key, status: s.key === 'cod_confirm' ? 'PENDING' : 'APPROVED' })));
+        expect(TEMPLATE_PACK_VERSION).toBe(2);
+        await w.service.ensure(ORG, WABA, 'backfill');
+        expect(w.created.map((c) => c.name)).toEqual(['collabo_store_bill_v2']);
+        expect(w.created[0]).toMatchObject({ via: 'collabo', fields: { packSlot: 'store_bill', packVersion: 2, packSource: 'collabo', libraryTemplateName: null }, priority: Priority.BULK });
+        // The sample saved for the GST invoice is reused.
+        expect(w.created[0].draft!.header).toEqual({ format: 'DOCUMENT', storageKey: `${ORG}/sample.pdf`, mime: 'application/pdf', filename: 'sample-invoice.pdf' });
+        expect(w.storage.save).not.toHaveBeenCalled();
+        expect(w.rows.find((r) => r.name === 'collabo_store_bill_v1')).toMatchObject({ status: 'APPROVED', packVersion: 1 });
+        expect(w.pack()).toMatchObject({ status: 'ready', version: 2 });
+
+        // Started again: nothing more.
+        w.created.length = 0;
+        await w.service.ensure(ORG, WABA, 'backfill');
+        expect(w.created).toHaveLength(0);
+    });
+
+    it('makes the till’s bill at version 2 where Meta turned down or refused version 1, and leaves it alone once refused at 2', async () => {
+        const others = (w: ReturnType<typeof world>) =>
+            w.rows.push(...CORE.filter((s) => s.key !== 'store_bill').map((s) => w.row({ name: `collabo_${s.key}_v1`, packSlot: s.key, status: 'APPROVED' })));
+
+        const rejected = world();
+        others(rejected);
+        rejected.rows.push(rejected.row({ name: 'collabo_store_bill_v1', packSlot: 'store_bill', status: 'REJECTED' }));
+        await rejected.service.ensure(ORG, WABA, 'backfill');
+        expect(rejected.created.map((c) => c.name)).toEqual(['collabo_store_bill_v2']);
+
+        const refusedAt1 = world();
+        others(refusedAt1);
+        refusedAt1.pack()!.settings = { refused: { store_bill: { version: 1, reason: 'No', at: 'x' } } };
+        await refusedAt1.service.ensure(ORG, WABA, 'backfill');
+        expect(refusedAt1.created.map((c) => c.name)).toEqual(['collabo_store_bill_v2']);
+
+        const refusedAt2 = world();
+        others(refusedAt2);
+        refusedAt2.pack()!.settings = { refused: { store_bill: { version: 2, reason: 'No', at: 'x' } } };
+        await refusedAt2.service.ensure(ORG, WABA, 'backfill');
+        expect(refusedAt2.created).toHaveLength(0);
+        expect(refusedAt2.pack()).toMatchObject({ status: 'ready', version: 2 });
+        const slot = (await refusedAt2.service.view(ORG)).slots.find((x) => x.slot === 'store_bill')!;
+        expect(slot).toMatchObject({ state: 'attention', template: null, reason: 'Meta did not accept this template: No' });
     });
 
     it('runs at bulk priority for the start-up backfill', async () => {
@@ -286,11 +342,12 @@ describe('never the same wording twice', () => {
         await w.service.ensure(ORG, WABA, 'manual');
         const shipped = w.created.filter((c) => c.fields.packSlot === 'order_shipped');
         expect(shipped.map((c) => [c.via, c.name])).toEqual([['library', 'collabo_order_shipped_v2']]);
-        expect(w.pack()!.settings.replaced).toEqual({ order_shipped: TEMPLATE_PACK_VERSION });
+        // Spent at the slot's version, 1.
+        expect(w.pack()!.settings.replaced).toEqual({ order_shipped: 1 });
         // Merged into its own key in Postgres, never a read-modify-write of the settings.
         const sql = w.prisma.$executeRaw.mock.calls.map((c) => c[0] as Prisma.Sql).find((q) => q.values[0] === 'replaced')!;
         expect(sql.sql.replace(/\s+/g, ' ')).toMatch(/UPDATE "template_packs" SET "settings" = jsonb_set\(/);
-        expect(sql.values.slice(0, 5)).toEqual(['replaced', 'replaced', 'replaced', 'order_shipped', String(TEMPLATE_PACK_VERSION)]);
+        expect(sql.values.slice(0, 5)).toEqual(['replaced', 'replaced', 'replaced', 'order_shipped', '1']);
 
         // The replacement is rejected too: nothing more, from either job.
         w.rows.find((r) => r.name === 'collabo_order_shipped_v2')!.status = 'REJECTED';
@@ -312,7 +369,22 @@ describe('never the same wording twice', () => {
         w.created.length = 0;
         await w.service.ensure(ORG, WABA, 'manual');
         expect(w.created.filter((c) => c.fields.packSlot === 'order_shipped').map((c) => [c.via, c.name])).toEqual([['library', 'collabo_order_shipped_v2']]);
-        expect(w.pack()!.settings.replaced).toEqual({ order_shipped: TEMPLATE_PACK_VERSION });
+        expect(w.pack()!.settings.replaced).toEqual({ order_shipped: 1 });
+    });
+
+    it('a replacement spent at the slot’s version stays spent when the pack version moves on', async () => {
+        const w = world({ pack: {
+            id: 'pack_1', organizationId: ORG, channelId: 'ch_wa', wabaId: WABA, autoActivate: false, origin: 'backfill', version: 1, status: 'ready',
+            stoppedReason: null, lastRunAt: null, settings: { replaced: { order_shipped: 1 } },
+        } });
+        // Collabo's wording rejected, and its library replacement deleted since: the slot has had its one replacement.
+        w.rows.push(
+            w.row({ name: 'collabo_order_shipped_v1', packSlot: 'order_shipped', status: 'REJECTED' }),
+            w.row({ name: 'collabo_order_shipped_v2', packSlot: 'order_shipped', packVersion: 2, packSource: 'library', libraryTemplateName: 'order_shipped', status: 'DELETED' }),
+        );
+        await w.service.ensure(ORG, WABA, 'backfill');
+        await w.service.reconcile(ORG, WABA);
+        expect(w.created.filter((c) => c.fields.packSlot === 'order_shipped')).toHaveLength(0);
     });
 });
 
@@ -380,7 +452,7 @@ describe('a slot left alone until Repair', () => {
         });
         await w.service.ensure(ORG, WABA, 'connect');
         expect(w.pack()!.settings.refused).toEqual({
-            cod_confirm: { version: TEMPLATE_PACK_VERSION, reason: 'The body text reads as promotional for a utility template.', at: expect.any(String) },
+            cod_confirm: { version: 1, reason: 'The body text reads as promotional for a utility template.', at: expect.any(String) },
         });
         expect(w.pack()).toMatchObject({ status: 'ready', version: TEMPLATE_PACK_VERSION });
 
@@ -543,5 +615,13 @@ describe('pack helpers', () => {
         const sending = w.row({ name: 'collabo_order_shipped_v1', packSlot: 'order_shipped', status: 'APPROVED' });
         const review = w.row({ name: 'collabo_order_shipped_v2', packSlot: 'order_shipped', packVersion: 2, status: 'PENDING' });
         expect(slotState([sending, review] as any, { key: 'order_shipped', category: 'UTILITY' })).toEqual({ state: 'approved', template: sending });
+    });
+
+    it('counts a refusal at the slot’s own version only', () => {
+        const refused = (version: number) => ({ refused: { store_bill: { version, reason: 'No', at: 'x' } } });
+        const bill = templatePack(APP).find((s) => s.key === 'store_bill')!;
+        expect(slotState([], bill, refused(1)).state).toBe('not_created');
+        expect(slotState([], bill, refused(2)).state).toBe('attention');
+        expect(slotState([], { key: 'cod_confirm', category: 'UTILITY' }, { refused: { cod_confirm: { version: 1, reason: 'No', at: 'x' } } }).state).toBe('attention');
     });
 });

@@ -11,7 +11,7 @@ import { PACK_STOPPED, classifyPackFailure } from './pack-refusal';
 import { PackSettings, dropPackSettingsSql, packSettingsOf, setPackEntrySql, setPackSettingSql } from './pack-settings';
 import { latestPackTemplate, pickPackTemplate } from './pick-pack-template';
 import { SAMPLE_INVOICE_FILENAME, SAMPLE_INVOICE_PDF } from './sample-invoice-pdf';
-import { PACK_LANGUAGE, PackSet, PackSlot, PackVariant, TEMPLATE_PACK_VERSION, packTemplateName, templatePack } from './template-pack';
+import { PACK_LANGUAGE, PackSet, PackSlot, PackVariant, TEMPLATE_PACK_VERSION, packTemplateName, slotVersion, templatePack } from './template-pack';
 import { TemplatePackJobs } from './template-pack-jobs';
 import { PackEnsureReason, claimPackRow, packPriority } from './template-pack.queue';
 
@@ -28,7 +28,7 @@ const MAX_REQUEUES = 24;
 const NO_FREE_NAME = 'Every name Collabo tried for it is already used on this WhatsApp account.';
 const REMOVED_NOTE = 'You deleted this template. Choose Repair to create it again.';
 
-/** A template of the slot at the pack's version that is not one of these is the slot's template; nothing is made for it. */
+/** A template of the slot at the slot's version that is not one of these is the slot's template; nothing is made for it. */
 const GONE = new Set(['REJECTED', 'DISABLED', 'DELETED']);
 /** Meta's verdict on the wording: it is never submitted again on this account. */
 const REFUSED = new Set(['REJECTED', 'DISABLED']);
@@ -81,9 +81,11 @@ type SlotOutcome =
     | { kind: 'template_limit' }
     | { kind: 'auth' };
 
-/** A slot the pack leaves alone until Repair: the merchant deleted it, or Meta refused all of it at this version. */
-const settled = (settings: PackSettings, slot: string) =>
-    !!settings.removed?.[slot] || settings.refused?.[slot]?.version === TEMPLATE_PACK_VERSION;
+/** A slot the pack leaves alone until Repair: the merchant deleted it, or Meta refused all of it at the slot's version. */
+const settled = (settings: PackSettings, slot: PackSlot) =>
+    !!settings.removed?.[slot.key] || settings.refused?.[slot.key]?.version === slotVersion(slot);
+/** The slot's templates made at its version or later; older ones are a wording or shape it has replaced. */
+const atVersion = (rows: MessageTemplate[], slot: PackSlot) => rows.filter((t) => t.packSlot === slot.key && (t.packVersion ?? 0) >= slotVersion(slot));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -170,31 +172,32 @@ export class TemplatePackService {
         let rows = await this.packRows(orgId, channel.wabaId);
         const pace = this.pacer();
         for (const slot of slots) {
-            if (settled(settings, slot.key)) continue;
-            if (rows.some((t) => t.packSlot === slot.key && (t.packVersion ?? 0) >= TEMPLATE_PACK_VERSION && !GONE.has(t.status))) continue;
-            const slotRows = rows.filter((t) => t.packSlot === slot.key);
-            const variants = slot.variants.filter((v) => !slotRows.some((t) => REFUSED.has(t.status) && sameVariant(t, v)));
+            if (settled(settings, slot)) continue;
+            const current = atVersion(rows, slot);
+            if (current.some((t) => !GONE.has(t.status))) continue;
+            const variants = slot.variants.filter((v) => !current.some((t) => REFUSED.has(t.status) && sameVariant(t, v)));
             if (!variants.length) continue;
-            // A slot whose template Meta turned down gets one replacement per pack version.
-            const replacing = slotRows.some((t) => (t.packVersion ?? 0) >= TEMPLATE_PACK_VERSION);
-            if (replacing && settings.replaced?.[slot.key] === TEMPLATE_PACK_VERSION) continue;
+            // A slot whose template Meta turned down gets one replacement per slot version.
+            const replacing = current.length > 0;
+            if (replacing && settings.replaced?.[slot.key] === slotVersion(slot)) continue;
             const outcome = await this.createSlot(pack, channel, slot, variants, rows, priority, pace, settings);
-            if (replacing) await this.recordReplacement(pack.id, settings, slot.key, outcome);
+            if (replacing) await this.recordReplacement(pack.id, settings, slot, outcome);
             if (outcome.kind === 'created') rows = [...rows.filter((t) => t.id !== outcome.row.id), outcome.row];
-            else if (outcome.kind === 'refused') await this.recordRefusal(pack.id, settings, slot.key, outcome.reason);
+            else if (outcome.kind === 'refused') await this.recordRefusal(pack.id, settings, slot, outcome.reason);
             else if (outcome.kind === 'rate_limited') return (await this.countRequeue(pack.id, settings)) ? this.finish(pack.id, 'running', 'rate_limited') : 'stopped';
             else if (outcome.kind === 'template_limit') return this.halt(pack.id, PACK_STOPPED.templateLimit);
             else if (outcome.kind === 'auth') return this.halt(pack.id, PACK_STOPPED.auth);
         }
         // A run Meta's limits did not cut short starts the count of hourly retries again.
         if (settings.requeues) await this.prisma.$executeRaw(dropPackSettingsSql({ id: pack.id }, ['requeues']));
-        const complete = slots.every((s) => settled(settings, s.key) || rows.some((t) => t.packSlot === s.key && (t.packVersion ?? 0) >= TEMPLATE_PACK_VERSION));
+        const complete = slots.every((s) => settled(settings, s) || atVersion(rows, s).length > 0);
         return this.finish(pack.id, complete ? 'ready' : 'running', 'done');
     }
 
     /**
-     * Ready once every slot of the sets has a template at this version,
-     * whatever Meta made of it, or is left alone until Repair.
+     * Ready at this pack version once every slot of the sets has a template
+     * at its own version, whatever Meta made of it, or is left alone until
+     * Repair.
      */
     private async finish<T extends 'done' | 'rate_limited'>(packId: string, status: 'ready' | 'running', outcome: T): Promise<T> {
         await this.prisma.templatePack.update({
@@ -223,7 +226,7 @@ export class TemplatePackService {
         settings: PackSettings,
     ): Promise<SlotOutcome> {
         const orgId = pack.organizationId;
-        let version = TEMPLATE_PACK_VERSION;
+        let version = slotVersion(slot);
         const taken = (v: number) => rows.some((t) => t.packSlot === slot.key && t.packVersion === v);
         while (taken(version)) version++;
         let refusal: string | null = null;
@@ -279,10 +282,10 @@ export class TemplatePackService {
         return row?.packSlot === slot ? row : null;
     }
 
-    /** Collabo's wording as a draft; the GST invoice's document header gets the bundled sample. */
+    /** Collabo's wording as a draft; a document header (the GST invoice's, the till's bill) gets the bundled sample. */
     private async draftOf(pack: TemplatePack, slot: PackSlot, variant: Extract<PackVariant, { source: 'collabo' }>, settings: PackSettings): Promise<TemplateDraft> {
         const draft: TemplateDraft = { ...variant.draft, name: '', language: PACK_LANGUAGE, category: slot.category };
-        if (slot.invoiceDocument) {
+        if (slot.invoiceDocument || slot.tillDocument) {
             draft.header = { format: 'DOCUMENT', storageKey: await this.sampleInvoice(pack, settings), mime: 'application/pdf', filename: SAMPLE_INVOICE_FILENAME };
         }
         return draft;
@@ -340,11 +343,11 @@ export class TemplatePackService {
             if (pickPackTemplate(rows, slot.key, slot.category)?.category === slot.category) continue;
             const asMarketing = slot.category === 'UTILITY' && latest.status === 'APPROVED' && latest.category !== slot.category;
             if (!asMarketing && !REFUSED.has(latest.status)) continue;
-            if (settings.replaced?.[slot.key] === TEMPLATE_PACK_VERSION) continue;
+            if (settings.replaced?.[slot.key] === slotVersion(slot)) continue;
             const library = slot.variants.find((v) => v.source === 'library' && !rows.some((t) => t.packSlot === slot.key && sameVariant(t, v)));
             if (!library) continue;
             const outcome = await this.createSlot(pack, channel, slot, [library], rows, Priority.NORMAL, pace, settings);
-            await this.recordReplacement(pack.id, settings, slot.key, outcome);
+            await this.recordReplacement(pack.id, settings, slot, outcome);
             if (outcome.kind === 'created') rows = [...rows, outcome.row];
             else if (outcome.kind === 'rate_limited') {
                 if (await this.countRequeue(pack.id, settings)) await this.jobs.reconcileIn(orgId, channel.wabaId, HOUR, 'retry');
@@ -376,7 +379,7 @@ export class TemplatePackService {
                 const refused = settings.refused?.[slot.key];
                 const reason =
                     state === 'not_created' && settings.removed?.[slot.key] ? REMOVED_NOTE
-                        : state === 'attention' && refused?.version === TEMPLATE_PACK_VERSION ? `Meta did not accept this template: ${refused.reason}`
+                        : state === 'attention' && refused?.version === slotVersion(slot) ? `Meta did not accept this template: ${refused.reason}`
                             : null;
                 return {
                     slot: slot.key,
@@ -464,17 +467,17 @@ export class TemplatePackService {
      * next run. Merged in Postgres: the cart discount in the same settings is
      * written by the automations' routes.
      */
-    private async recordReplacement(packId: string, settings: PackSettings, slot: string, outcome: SlotOutcome) {
+    private async recordReplacement(packId: string, settings: PackSettings, slot: PackSlot, outcome: SlotOutcome) {
         if (outcome.kind !== 'created' && outcome.kind !== 'refused') return;
-        settings.replaced = { ...settings.replaced, [slot]: TEMPLATE_PACK_VERSION };
-        await this.prisma.$executeRaw(setPackEntrySql({ id: packId }, 'replaced', slot, TEMPLATE_PACK_VERSION));
+        settings.replaced = { ...settings.replaced, [slot.key]: slotVersion(slot) };
+        await this.prisma.$executeRaw(setPackEntrySql({ id: packId }, 'replaced', slot.key, slotVersion(slot)));
     }
 
-    /** Meta refused every variant of the slot: it is shown with Meta's reason, and not tried again until Repair. */
-    private async recordRefusal(packId: string, settings: PackSettings, slot: string, reason: string) {
-        const entry = { version: TEMPLATE_PACK_VERSION, reason, at: new Date().toISOString() };
-        settings.refused = { ...settings.refused, [slot]: entry };
-        await this.prisma.$executeRaw(setPackEntrySql({ id: packId }, 'refused', slot, entry));
+    /** Meta refused every variant of the slot: it is shown with Meta's reason, and not tried again until Repair or a new slot version. */
+    private async recordRefusal(packId: string, settings: PackSettings, slot: PackSlot, reason: string) {
+        const entry = { version: slotVersion(slot), reason, at: new Date().toISOString() };
+        settings.refused = { ...settings.refused, [slot.key]: entry };
+        await this.prisma.$executeRaw(setPackEntrySql({ id: packId }, 'refused', slot.key, entry));
     }
 
     /** One more hourly retry after Meta's limits; past a day of them the pack stops for Repair. False when it stopped. */
@@ -508,18 +511,18 @@ export class TemplatePackService {
 
 /**
  * A slot's state and the template shown for it: the one it sends with when
- * one is approved, otherwise its newest. A slot Meta refused at this version
+ * one is approved, otherwise its newest. A slot Meta refused at its version
  * needs attention even with no template.
  */
 export function slotState(
     rows: MessageTemplate[],
-    slot: Pick<PackSlot, 'key' | 'category'>,
+    slot: Pick<PackSlot, 'key' | 'category' | 'version'>,
     settings: PackSettings = {},
 ): { state: PackSlotState; template: MessageTemplate | null } {
     const best = pickPackTemplate(rows, slot.key, slot.category);
     if (best) return { state: best.category === slot.category ? 'approved' : 'attention', template: best };
     const latest = latestPackTemplate(rows, slot.key);
-    if (!latest) return { state: settings.refused?.[slot.key]?.version === TEMPLATE_PACK_VERSION ? 'attention' : 'not_created', template: null };
+    if (!latest) return { state: settings.refused?.[slot.key]?.version === slotVersion(slot) ? 'attention' : 'not_created', template: null };
     if (latest.status === 'PENDING' || latest.status === 'IN_APPEAL') return { state: 'pending', template: latest };
     if (latest.status === 'PAUSED') return { state: 'paused', template: latest };
     return { state: 'attention', template: latest };

@@ -1,7 +1,7 @@
 import { templateParams, toMetaComponents, variablesIn } from '../template-components';
-import { isBillTemplate } from '../../../pos/pos-bill-template';
+import { hasBillDocument, isBillTemplate } from '../../../pos/pos-bill-template';
 import { billLinkPrefix } from '../template-starters';
-import { CollaboVariant, LibraryVariant, PACK_LANGUAGE, TEMPLATE_PACK_VERSION, packTemplateName, packVariantOf, templatePack } from './template-pack';
+import { CollaboVariant, LibraryVariant, PACK_LANGUAGE, TEMPLATE_PACK_VERSION, packTemplateName, packVariantOf, slotVersion, templatePack } from './template-pack';
 
 const APP = 'https://app.example.com';
 const pack = templatePack(APP);
@@ -92,11 +92,25 @@ describe('the recommended template pack', () => {
         }
     });
 
-    it("makes a store bill template the till recognises", () => {
+    it('makes a store bill template the till recognises, with the bill’s PDF in a document header, at version 2', () => {
         const entry = collabo.find((e) => e.slot.key === 'store_bill')!;
         const draft = draftOf(entry);
+        expect(draft.header).toEqual({ format: 'DOCUMENT' });
         const t = { category: draft.category, parameterFormat: draft.parameterFormat, components: toMetaComponents(draft, 'handle') };
         expect(isBillTemplate(t, billLinkPrefix(APP))).toBe(true);
+        expect(hasBillDocument(t)).toBe(true);
+        // Filled by the till, never by the automations' GST invoice.
+        expect(entry.slot).toMatchObject({ version: 2, tillDocument: true });
+        expect(entry.slot.invoiceDocument).toBeUndefined();
+        // Version 1, still approved on accounts set up before, had the same template without the header.
+        const v1 = { ...t, components: toMetaComponents({ ...draft, header: undefined }) };
+        expect(isBillTemplate(v1, billLinkPrefix(APP))).toBe(true);
+        expect(hasBillDocument(v1)).toBe(false);
+    });
+
+    it('keeps every slot at version 1 but the till’s bill', () => {
+        expect(pack.filter((s) => slotVersion(s) !== 1).map((s) => [s.key, slotVersion(s)])).toEqual([['store_bill', 2]]);
+        expect(TEMPLATE_PACK_VERSION).toBe(2);
     });
 
     it('finds the variant a template was made from', () => {
