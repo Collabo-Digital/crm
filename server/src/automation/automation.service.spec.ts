@@ -60,7 +60,7 @@ describe('AutomationService: the recommended pack’s system paths', () => {
             platform: 'WHATSAPP', channelId: 'ch', triggers: [], publishedVersion: null,
         };
         const db = {
-            automation: { findFirst: jest.fn(async () => row), update: jest.fn(async () => ({})), create: jest.fn(async () => ({ id: 'a_new' })) },
+            automation: { findFirst: jest.fn(async () => row), update: jest.fn(async () => ({})), create: jest.fn(async () => ({ id: 'a_new' })), updateMany: jest.fn(async () => ({ count: 0 })) },
             automationTrigger: { count: jest.fn(async () => 0), updateMany: jest.fn(), deleteMany: jest.fn(), upsert: jest.fn() },
             automationVersion: { create: jest.fn(async () => ({ id: 'v1' })) },
             channelMedia: { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => null) },
@@ -83,13 +83,25 @@ describe('AutomationService: the recommended pack’s system paths', () => {
 
     it('publishes with nobody behind it, still refusing a draft with issues', async () => {
         const { s, db } = service();
-        await expect(s.publishSystem('a1', 'o')).resolves.toEqual([]);
+        await expect(s.publishSystem('a1', 'o', { steps })).resolves.toEqual([]);
         expect(db.automationVersion.create).toHaveBeenCalledWith({ data: expect.objectContaining({ publishedByUserId: null, version: 1 }) });
         expect(db.automation.update).toHaveBeenCalledWith({ where: { id: 'a1' }, data: expect.objectContaining({ status: 'ACTIVE', activateWhenReady: false }) });
         expect(db.automationTrigger.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ triggerType: 'crm.order.fulfilled', config: expect.objectContaining({ skipPos: true }) }) }));
 
-        const broken = service({ steps: [steps[0], { id: 'pk_send', type: 'send_message', config: { kind: 'template', templateSlot: 'gone' } }] });
-        await expect(broken.s.publishSystem('a1', 'o')).resolves.toEqual([expect.objectContaining({ code: 'template_slot_unknown' })]);
+        const brokenDraft = { steps: [steps[0], { id: 'pk_send', type: 'send_message', config: { kind: 'template', templateSlot: 'gone' } }] };
+        const broken = service(brokenDraft);
+        await expect(broken.s.publishSystem('a1', 'o', brokenDraft)).resolves.toEqual([expect.objectContaining({ code: 'template_slot_unknown' })]);
         expect(broken.db.automationVersion.create).not.toHaveBeenCalled();
+    });
+
+    it('publishes only the draft it was asked to, and saves over only the draft it read', async () => {
+        // The merchant saved an edit after the sync read the draft: it stays a draft.
+        const { s, db } = service({ steps: [steps[0], { id: 'pk_send', type: 'send_message', config: { kind: 'template', templateId: 'tpl_mine' } }] });
+        await expect(s.publishSystem('a1', 'o', { steps })).resolves.toBeNull();
+        expect(db.automationVersion.create).not.toHaveBeenCalled();
+
+        const save = service();
+        await expect(save.s.saveSystemDefinition('a1', 'o', steps as never, { steps: [] })).resolves.toBeNull();
+        expect(save.db.automation.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ definition: { equals: { steps: [] } } }) }));
     });
 });

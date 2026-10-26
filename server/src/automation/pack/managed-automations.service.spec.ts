@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { BadRequestException } from '@nestjs/common';
 import { parseDefinition } from '../blocks/definition.schema';
 import { MANAGED_BY_KEY, templateSlotsIn } from './managed-automations';
@@ -61,11 +62,17 @@ function harness(opts: { pack?: Row | null; shopify?: boolean; templates?: Row[]
             rows.push(row);
             return { id: row.id };
         }),
-        saveSystemDefinition: jest.fn(async (id: string, _org: string, steps: unknown[]) => {
-            rows.find((r) => r.id === id)!.definition = { steps: parseDefinition({ steps }) };
+        // As AutomationService: a draft changed since it was read is left alone.
+        saveSystemDefinition: jest.fn(async (id: string, _org: string, steps: unknown[], current: unknown) => {
+            const row = rows.find((r) => r.id === id)!;
+            if (!isDeepStrictEqual(row.definition, current)) return null;
+            row.definition = { steps: parseDefinition({ steps }) };
+            return row.definition;
         }),
-        publishSystem: jest.fn(async (id: string) => {
-            Object.assign(rows.find((r) => r.id === id)!, { status: 'ACTIVE', activateWhenReady: false });
+        publishSystem: jest.fn(async (id: string, _org: string, draft: unknown) => {
+            const row = rows.find((r) => r.id === id)!;
+            if (!isDeepStrictEqual(JSON.parse(JSON.stringify(row.definition)), JSON.parse(JSON.stringify(draft)))) return null;
+            Object.assign(row, { status: 'ACTIVE', activateWhenReady: false });
             published.push(id);
             return [];
         }),
@@ -182,14 +189,26 @@ describe('ManagedAutomationsService.setCartDiscount', () => {
         expect(cartSlots(h)).toEqual(['cart_reminder_1', 'cart_reminder_2', 'cart_reminder_3']);
         expect(h.published.filter((id) => id === 'a_cart_recovery')).toHaveLength(2);
 
-        expect(await h.service.setCartDiscount('o', {})).toEqual({ cartDiscount: null });
+        expect(await h.service.setCartDiscount('o', null)).toEqual({ cartDiscount: null });
         expect(cartSlots(h)).toEqual(['cart_reminder_1', 'cart_reminder_2']);
         expect(h.published.filter((id) => id === 'a_cart_recovery')).toHaveLength(3);
     });
 
-    it('needs the whole discount, and a pack to keep it on', async () => {
+    it('rebuilds only when the discount changes: a merchant’s edit equal to the other build is theirs', async () => {
+        const h = harness({ shopify: true, templates: approved(...ALL), pack: { settings: { cartDiscount: { code: 'SAVE10', text: '10%', validDays: 7 } } } });
+        await h.service.sync('o');
+        expect(cartSlots(h)).toEqual(['cart_reminder_1', 'cart_reminder_2', 'cart_reminder_3']);
+        // The merchant drops reminder 3 by hand: the next syncs leave it so.
+        const cart = MANAGED_BY_KEY.get('cart_recovery')!;
+        h.state('cart_recovery')!.definition = { steps: parseDefinition({ steps: cart.steps({ cartDiscount: null }) }) };
+        await h.service.sync('o');
+        expect(cartSlots(h)).toEqual(['cart_reminder_1', 'cart_reminder_2']);
+        expect(h.automations.saveSystemDefinition).not.toHaveBeenCalled();
+    });
+
+    it('needs what the code takes off, and a pack to keep it on', async () => {
         const h = harness();
-        await expect(h.service.setCartDiscount('o', { code: 'SAVE10' })).rejects.toThrow('Give the code, what it takes off');
+        await expect(h.service.setCartDiscount('o', { code: 'SAVE10', text: '  ', validDays: 3 })).rejects.toThrow('Say what the code takes off');
         await expect(harness({ pack: null }).service.setCartDiscount('o', { code: 'SAVE10', text: '10%', validDays: 3 })).rejects.toThrow('Set up the recommended WhatsApp templates first.');
     });
 });

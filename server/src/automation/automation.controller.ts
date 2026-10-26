@@ -11,7 +11,7 @@ import { CHANNEL_MANAGERS, ORG_MANAGERS, Roles } from '../auth/decorators/roles.
 import { hasPermission } from '../auth/permissions';
 import { AutomationService, type AutomationViewer } from './automation.service';
 import { ManagedAutomationsService } from './pack/managed-automations.service';
-import { CartDiscountDto, TurnOnPackDto } from './dto/pack.dto';
+import { SetCartDiscountDto, TurnOnPackDto } from './dto/pack.dto';
 import { InstagramMediaService } from './platforms/instagram/instagram-media.service';
 import { CreateAutomationDto } from './dto/create-automation.dto';
 import { DuplicateAutomationDto } from './dto/duplicate-automation.dto';
@@ -70,12 +70,12 @@ export class AutomationController {
         return this.managed.turnOn(orgId, dto.keys);
     }
 
-    // PUT /automations/pack/cart-discount — the code the third cart reminder offers; an empty body removes it.
+    // PUT /automations/pack/cart-discount — the code the third cart reminder offers; { cartDiscount: null } removes it.
     @Put('pack/cart-discount')
     @Roles(...ORG_MANAGERS)
     @RequirePermissions('campaigns.manage')
-    setCartDiscount(@OrgId() orgId: string, @Body() dto: CartDiscountDto) {
-        return this.managed.setCartDiscount(orgId, dto);
+    setCartDiscount(@OrgId() orgId: string, @Body() dto: SetCartDiscountDto) {
+        return this.managed.setCartDiscount(orgId, dto.cartDiscount);
     }
 
     // POST /automations — Create dialog

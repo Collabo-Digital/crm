@@ -16,6 +16,13 @@ const SLOTS = new Map<string, PackSlot>(templatePack('').map((s) => [s.key, s]))
 
 export type WithPackState<T> = T & { packKey: string | null; packState: PackState | null; packNote: string | null };
 
+interface SyncOptions {
+    /** Pack keys to put live once their templates are approved (the turn-on route). */
+    turnOn?: string[];
+    /** The cart discount changed: rebuild the cart recovery for it. */
+    rebuildCart?: boolean;
+}
+
 /**
  * The automations of Collabo's recommended template pack (registry in
  * managed-automations.ts): made for the organization's current WhatsApp
@@ -34,12 +41,12 @@ export class ManagedAutomationsService {
     ) { }
 
     /**
-     * Bring them up to date: make the missing ones, rebuild the cart
-     * recovery for the pack's discount, and put live each one waiting to go
-     * live whose templates are all approved. One sync per organization at a
-     * time, on every server. `turnOn` asks for these to go live too.
+     * Bring them up to date: make the missing ones, and put live each one
+     * waiting to go live whose templates are all approved. One sync per
+     * organization at a time, on every server. `turnOn` asks for these to go
+     * live too; `rebuildCart` follows a change of the cart discount.
      */
-    async sync(orgId: string, opts: { turnOn?: string[] } = {}): Promise<void> {
+    async sync(orgId: string, opts: SyncOptions = {}): Promise<void> {
         await withRedisLock(this.redis, `automation:pack-sync:${orgId}`, () => this.syncNow(orgId, opts), { ttlMs: 120_000, waitMs: 30_000 });
     }
 
@@ -94,15 +101,12 @@ export class ManagedAutomationsService {
     }
 
     /**
-     * Save the cart-recovery discount and rebuild the cart recovery for it: the
-     * third reminder exists only with a discount. Nothing given removes it.
+     * Save the cart-recovery discount (null removes it) and rebuild the cart
+     * recovery for it: the third reminder exists only with a discount.
      */
-    async setCartDiscount(orgId: string, input: { code?: string; text?: string; validDays?: number }): Promise<{ cartDiscount: CartDiscount | null }> {
-        const given = [input.code, input.text, input.validDays].filter((v) => v !== undefined && v !== null && v !== '');
-        if (given.length && (given.length < 3 || !input.text?.trim())) {
-            throw new BadRequestException('Give the code, what it takes off (like ₹200 or 10%) and for how many days it is valid.');
-        }
-        const discount: CartDiscount | null = given.length ? { code: input.code!.toUpperCase(), text: input.text!.trim(), validDays: input.validDays! } : null;
+    async setCartDiscount(orgId: string, input: CartDiscount | null): Promise<{ cartDiscount: CartDiscount | null }> {
+        if (input && !input.text.trim()) throw new BadRequestException('Say what the code takes off, like ₹200 or 10%.');
+        const discount: CartDiscount | null = input ? { code: input.code.toUpperCase(), text: input.text.trim(), validDays: input.validDays } : null;
         const found = await this.packOf(orgId);
         if (!found) throw new BadRequestException('Set up the recommended WhatsApp templates first.');
         // One key of the pack's settings, patched in place: the template pack writes others.
@@ -118,7 +122,7 @@ export class ManagedAutomationsService {
                 WHERE "id" = ${found.pack.id}
             `;
         }
-        await this.sync(orgId);
+        await this.sync(orgId, { rebuildCart: true });
         return { cartDiscount: discount };
     }
 
@@ -131,7 +135,7 @@ export class ManagedAutomationsService {
 
     // ─── Sync ───────────────────────────────────────────────────────────
 
-    private async syncNow(orgId: string, opts: { turnOn?: string[] }): Promise<void> {
+    private async syncNow(orgId: string, opts: SyncOptions): Promise<void> {
         const found = await this.packOf(orgId);
         if (!found) return;
         const { pack, channelId, wabaId, settings } = found;
@@ -167,9 +171,13 @@ export class ManagedAutomationsService {
             const match = registryMatch(entry, row.definition, settings);
             if (match === 'edited') continue;
             const steps = entry.steps(settings);
-            if (match === 'stale') {
-                await this.automations.saveSystemDefinition(row.id, orgId, steps);
-                if (row.status === AutomationStatus.ACTIVE) await this.publish(row.id, orgId, row.packKey!);
+            let draft: unknown = row.definition;
+            // Only on a change of the discount: at other times a draft equal to another build may be the merchant's own edit.
+            if (match === 'stale' && opts.rebuildCart) {
+                const saved = await this.automations.saveSystemDefinition(row.id, orgId, steps, row.definition);
+                if (!saved) continue;
+                draft = saved;
+                if (row.status === AutomationStatus.ACTIVE) await this.publish(row.id, orgId, row.packKey!, draft);
             }
             if (!row.activateWhenReady || row.status === AutomationStatus.ACTIVE) continue;
             if (!templateSlotsIn(steps).every((slot) => this.approved(templates, slot))) continue;
@@ -184,13 +192,21 @@ export class ManagedAutomationsService {
                 this.logger.log(`Recommended automation ${row.packKey} of ${orgId} held back: "${duplicate.automation.name}" already starts on ${triggerType}.`);
                 continue;
             }
-            await this.publish(row.id, orgId, row.packKey!);
+            await this.publish(row.id, orgId, row.packKey!, draft);
         }
     }
 
-    private async publish(id: string, orgId: string, packKey: string) {
-        const issues = await this.automations.publishSystem(id, orgId);
-        if (issues.length) this.logger.warn(`Recommended automation ${packKey} of ${orgId} not published: ${issues.map((i) => i.code).join(', ')}`);
+    /** Publish the draft this sync decided on; a merchant's edit or publish in the meantime wins. */
+    private async publish(id: string, orgId: string, packKey: string, draft: unknown) {
+        try {
+            const issues = await this.automations.publishSystem(id, orgId, draft);
+            if (issues === null) this.logger.log(`Recommended automation ${packKey} of ${orgId} not published: its draft was edited meanwhile.`);
+            else if (issues.length) this.logger.warn(`Recommended automation ${packKey} of ${orgId} not published: ${issues.map((i) => i.code).join(', ')}`);
+        } catch (err) {
+            // Published by someone else at the same moment: that version number is taken.
+            if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) throw err;
+            this.logger.log(`Recommended automation ${packKey} of ${orgId} was published meanwhile.`);
+        }
     }
 
     private approved(templates: PackTemplateRow[], key: string): boolean {

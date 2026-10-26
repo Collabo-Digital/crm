@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { QueryAutomationsDto } from "./dto/query-automations.dto";
 import { CreateAutomationDto } from "./dto/create-automation.dto";
 import { randomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { collectIssues, defaultTriggerStep, keywordsFor, parseDefinition, reidSteps, triggerConfigFor, triggerPostFor, triggerTypeFor, type Issue, type IssueContext, type StepDef } from './blocks/definition.schema';
 import { Flow } from './engine/flow';
 import { templateParams } from '../campaigns/templates/template-components';
@@ -327,19 +328,31 @@ export class AutomationService {
         }
     }
 
-    /** Replace a system automation's draft; a live one keeps running its published version until it is published again. */
-    async saveSystemDefinition(id: string, orgId: string, input: StepDef[]): Promise<void> {
-        const steps = parseDefinition({ steps: input });
-        await this.prisma.automation.updateMany({
-            where: { id, organizationId: orgId, status: { not: AutomationStatus.ARCHIVED } },
-            data: { definition: { steps } as unknown as Prisma.InputJsonValue },
+    /**
+     * Replace a system automation's draft, if it is still the one the caller
+     * read: a merchant's edit saved meanwhile is kept. A live one keeps running
+     * its published version until it is published again. Returns the draft
+     * saved, or null.
+     */
+    async saveSystemDefinition(id: string, orgId: string, input: StepDef[], current: Prisma.JsonValue): Promise<{ steps: StepDef[] } | null> {
+        const definition = { steps: parseDefinition({ steps: input }) };
+        const { count } = await this.prisma.automation.updateMany({
+            where: { id, organizationId: orgId, status: { not: AutomationStatus.ARCHIVED }, definition: { equals: current as Prisma.InputJsonValue } },
+            data: { definition: definition as unknown as Prisma.InputJsonValue },
         });
+        return count ? definition : null;
     }
 
-    /** Publish with nobody behind it. Returns the issues that kept it from going live (none when it did). */
-    async publishSystem(id: string, orgId: string): Promise<Issue[]> {
+    /**
+     * Publish with nobody behind it: the draft the caller decided on, and only
+     * that (a merchant's edit saved meanwhile stays a draft, and null comes
+     * back). Returns the issues that kept it from going live; none when it did.
+     */
+    async publishSystem(id: string, orgId: string, draft: unknown): Promise<Issue[] | null> {
         const row = await this.prisma.automation.findFirst({ where: { id, organizationId: orgId }, include: DETAIL_INCLUDE });
         if (!row) throw new NotFoundException('Automation not found');
+        // As stored: JSON drops undefined keys, and Postgres reorders the others.
+        if (!isDeepStrictEqual(row.definition, JSON.parse(JSON.stringify(draft)))) return null;
         return this.publishRow(row, null);
     }
 
