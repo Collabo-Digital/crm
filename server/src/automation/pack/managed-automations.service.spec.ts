@@ -139,6 +139,9 @@ describe('ManagedAutomationsService.sync', () => {
         expect(h.published).not.toContain('a_gone');
         expect(h.automations.saveSystemDefinition).not.toHaveBeenCalled();
         expect(h.automations.createSystem).not.toHaveBeenCalledWith('o', expect.objectContaining({ packKey: 'order_delivered' }));
+        // Reported as it is: it will not go live by itself.
+        const [listed] = await h.service.withPackState('o', [{ id: 'a_edit', status: 'DRAFT' as never, packKey: 'order_shipped' }]);
+        expect(listed.packState).toBe('ready');
     });
 });
 

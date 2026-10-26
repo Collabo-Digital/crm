@@ -71,9 +71,12 @@ export class ManagedAutomationsService {
                 const slot = SLOTS.get(key);
                 return slot ? [slotStanding(templates, slot)] : [];
             });
+            const entry = MANAGED_BY_KEY.get(row.packKey!);
+            // One the merchant edited never goes live by itself (sync leaves it alone).
+            const edited = !entry || registryMatch(entry, detail.definition, found?.settings ?? { cartDiscount: null }) === 'edited';
             const { state, note } = packStateOf({
                 status: row.status,
-                activateWhenReady: detail.activateWhenReady,
+                activateWhenReady: detail.activateWhenReady && !edited,
                 slots,
                 duplicateOf: merchant.find((t) => t.triggerType === triggerType)?.automation.name ?? null,
             });
