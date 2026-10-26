@@ -36,6 +36,7 @@ import { RateLimitStateService } from '../rate-limit/rate-limit-state.service';
 import { Priority } from '../rate-limit/rate-limit.types';
 import { ShopifyLocationDecisionService } from './shopify-location-decision.service';
 import { ApplyShopifyLocationDecisionsDto } from './dto/shopify-location-decisions.dto';
+import { TEMPLATE_PACK_QUEUE, TemplatePackJobData, queuePackEnsureIfPresent } from '../campaigns/templates/pack/template-pack.queue';
 
 /** Queue states in which a sync job is still going to run, or is running. */
 const PENDING_JOB_STATES: JobType[] = ['active', 'waiting', 'delayed', 'prioritized', 'paused'];
@@ -57,6 +58,7 @@ export class ChannelController {
     private readonly rateLimitState: RateLimitStateService,
     @InjectQueue(SYNC_QUEUE) private readonly syncQueue: Queue,
     private readonly locationDecisions: ShopifyLocationDecisionService,
+    @InjectQueue(TEMPLATE_PACK_QUEUE) private readonly packQueue: Queue<TemplatePackJobData>,
   ) { }
 
   // POST /channels/shopify/install — start public-app OAuth (shop domain only).
@@ -610,7 +612,8 @@ export class ChannelController {
   }
 
   /**
-   * Queue post-connect store setup (webhooks + web pixel).
+   * Queue post-connect store setup (webhooks + web pixel), and the store's
+   * cart reminders on the recommended WhatsApp templates.
    *
    * Never throws: a channel with no webhooks still syncs on demand, so a
    * Redis hiccup must not turn a successful connect into a failed one.
@@ -637,6 +640,10 @@ export class ChannelController {
         error instanceof Error ? error.stack : error,
       );
     }
+    // Only where the organization already has the pack. Not awaited.
+    void queuePackEnsureIfPresent(this.prisma, this.packQueue, organizationId, 'shopify').catch((error) =>
+      this.logger.error(`Could not queue the store's WhatsApp templates for ${organizationId}: ${error instanceof Error ? error.message : error}`),
+    );
   }
 
   // GET /channels/:id/sync-settings — per-entity toggles, per-entity sync

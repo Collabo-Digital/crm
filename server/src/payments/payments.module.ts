@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
+import { BullModule } from '@nestjs/bullmq';
 import { ChannelModule } from '../channel/channel.module';
+import { TEMPLATE_PACK_QUEUE } from '../campaigns/templates/pack/template-pack.queue';
 import { OrderModule } from '../order/order.module';
 import { DraftOrderModule } from '../draft-order/draft-order.module';
 import { CommerceModule } from '../commerce/commerce.module';
@@ -16,7 +18,17 @@ import { WhatsAppPayController } from './whatsapp-pay.controller';
 
 /** Payment links paid into each organization's own Razorpay account, and WhatsApp Pay requests. */
 @Module({
-    imports: [ChannelModule, MessagingModule, OrderModule, DraftOrderModule, CommerceModule, CommerceEventsModule],
+    imports: [
+        ChannelModule,
+        MessagingModule,
+        OrderModule,
+        DraftOrderModule,
+        CommerceModule,
+        CommerceEventsModule,
+        // Razorpay connect adds the payment templates to Collabo's recommended
+        // WhatsApp templates; their processor is in CampaignsModule.
+        BullModule.registerQueue({ name: TEMPLATE_PACK_QUEUE }),
+    ],
     controllers: [PaymentsController, RazorpayMerchantWebhookController, WhatsAppPayController],
     providers: [PaymentAccountsService, PaymentLinksService, PaymentLinksScheduler, RazorpayMerchantClient, WhatsAppPayService],
     exports: [PaymentAccountsService, PaymentLinksService, WhatsAppPayService],

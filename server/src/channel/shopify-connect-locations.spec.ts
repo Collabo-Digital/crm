@@ -9,8 +9,13 @@ import { ChannelController } from './channel.controller';
 
 type Outcome = { warehousing: boolean; recorded: boolean; pending: boolean; linked: boolean };
 
-function build(outcome: Outcome) {
+function build(outcome: Outcome, pack: { wabaId?: string; packOrg?: string } = {}) {
   const syncQueue = { add: jest.fn().mockResolvedValue({ id: 'job_1' }) };
+  const prisma = {
+    channel: { findFirst: jest.fn().mockResolvedValue(pack.wabaId ? { externalStoreId: pack.wabaId } : null) },
+    templatePack: { findUnique: jest.fn().mockResolvedValue(pack.packOrg ? { organizationId: pack.packOrg } : null) },
+  };
+  const packQueue = { getJob: jest.fn().mockResolvedValue(undefined), add: jest.fn().mockResolvedValue({ id: 'pack' }) };
   const shopifyOAuth = {
     handleCallback: jest.fn().mockResolvedValue({
       channelId: 'ch_1',
@@ -21,7 +26,7 @@ function build(outcome: Outcome) {
   };
   const locationDecisions = { onConnect: jest.fn().mockResolvedValue(outcome) };
   const controller = new ChannelController(
-    {} as never,
+    prisma as never,
     {} as never,
     shopifyOAuth as never,
     {} as never,
@@ -33,11 +38,12 @@ function build(outcome: Outcome) {
     {} as never,
     syncQueue as never,
     locationDecisions as never,
+    packQueue as never,
   );
   const res = { redirect: jest.fn() };
   const syncedEntities = () =>
     syncQueue.add.mock.calls.filter(([name]) => name === 'sync').map(([, data]) => data.entityTypes);
-  return { controller, res, syncedEntities, locationDecisions };
+  return { controller, res, syncedEntities, locationDecisions, packQueue };
 }
 
 const query = { code: 'c', hmac: 'h', shop: 'acme.myshopify.com', state: 's', timestamp: '1' };
@@ -86,5 +92,44 @@ describe('connecting a Shopify store', () => {
     await controller.shopifyCallback(query, { redirect: jest.fn() } as never);
 
     expect(syncedEntities()).toEqual([['locations', 'products', 'orders', 'customers', 'inventory']]);
+  });
+});
+
+describe("a connected store and the recommended WhatsApp templates", () => {
+  const decided = { warehousing: false, recorded: false, pending: false, linked: false };
+  const settle = () => new Promise((r) => setImmediate(r));
+
+  it('adds the store set to a pack the organization already has', async () => {
+    const { controller, packQueue } = build(decided, { wabaId: '1029', packOrg: 'org_1' });
+
+    await controller.shopifyCallback(query, { redirect: jest.fn() } as never);
+    await settle();
+
+    expect(packQueue.add).toHaveBeenCalledWith(
+      'ensure',
+      { organizationId: 'org_1', wabaId: '1029', reason: 'shopify' },
+      expect.objectContaining({ jobId: 'pack-ensure-org_1' }),
+    );
+  });
+
+  it('creates nothing for an organization without a pack, or with WhatsApp not connected', async () => {
+    for (const pack of [{ wabaId: '1029' }, {}, { wabaId: '1029', packOrg: 'org_other' }]) {
+      const { controller, packQueue } = build(decided, pack);
+      await controller.manualConnectShopify({ sub: 'u_1', orgId: 'org_1' } as never, {} as never);
+      await settle();
+      expect(packQueue.add).not.toHaveBeenCalled();
+    }
+  });
+
+  it('still lands the merchant on the channels page when the pack cannot be queued', async () => {
+    const { controller, packQueue } = build(decided, { wabaId: '1029', packOrg: 'org_1' });
+    packQueue.add.mockRejectedValue(new Error('redis down'));
+    jest.spyOn(controller['logger'], 'error').mockImplementation(() => undefined);
+    const res = { redirect: jest.fn() };
+
+    await controller.shopifyCallback(query, res as never);
+    await settle();
+
+    expect(res.redirect).toHaveBeenCalledWith('http://app/settings/channels?connected=shopify&channelId=ch_1');
   });
 });

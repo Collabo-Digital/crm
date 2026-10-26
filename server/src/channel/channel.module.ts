@@ -25,6 +25,7 @@ import { SYNC_QUEUE } from './sync.queue';
 import { SHOPIFY_PUSH_QUEUE } from './shopify-push.queue';
 import { WHATSAPP_MESSAGING_QUEUE } from './whatsapp.queue';
 import { WHATSAPP_ONBOARDING_QUEUE } from './whatsapp-onboarding.queue';
+import { TEMPLATE_PACK_QUEUE } from '../campaigns/templates/pack/template-pack.queue';
 import { WhatsAppAccountService } from './whatsapp-account.service';
 import { WhatsAppOnboardingProcessor } from './whatsapp-onboarding.processor';
 import { MetaPagesOAuthService } from './meta-pages-oauth.service';
@@ -48,6 +49,9 @@ import { CommerceEventsModule } from '../commerce/commerce-events.module';
     // DraftOrderModule (which already depends on us). BullMQ multi-registers
     // are safe — they share the same underlying Redis queue.
     BullModule.registerQueue({ name: DRAFT_MIRROR_QUEUE }),
+    // WhatsApp and Shopify connect start Collabo's recommended templates on
+    // this queue; its processor is in CampaignsModule, which imports this one.
+    BullModule.registerQueue({ name: TEMPLATE_PACK_QUEUE }),
     LoyaltyModule,
     OrganizationSettingsModule,
     // InventoryLedgerService — sync/webhook paths must respect the

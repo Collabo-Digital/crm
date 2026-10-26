@@ -1,8 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { PaymentProvider } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EncryptionService } from '../channel/encryption.service';
+import { TEMPLATE_PACK_QUEUE, TemplatePackJobData, queuePackEnsureIfPresent } from '../campaigns/templates/pack/template-pack.queue';
 import { RazorpayKeys, RazorpayMerchantClient } from './razorpay-merchant.client';
 
 /** The Razorpay webhook events this app needs, to enable on the merchant's webhook. */
@@ -33,10 +36,13 @@ export interface PaymentAccountView {
  */
 @Injectable()
 export class PaymentAccountsService {
+    private readonly logger = new Logger(PaymentAccountsService.name);
+
     constructor(
         private readonly prisma: PrismaService,
         private readonly encryption: EncryptionService,
         private readonly razorpay: RazorpayMerchantClient,
+        @InjectQueue(TEMPLATE_PACK_QUEUE) private readonly packQueue: Queue<TemplatePackJobData>,
     ) { }
 
     async view(orgId: string): Promise<PaymentAccountView> {
@@ -73,6 +79,11 @@ export class PaymentAccountsService {
                 data: { ...data, organizationId: orgId, provider: PaymentProvider.RAZORPAY, webhookToken: randomBytes(24).toString('base64url') },
             });
         }
+        // Adds the payment templates to the recommended WhatsApp templates, where the
+        // organization has them. Not awaited.
+        void queuePackEnsureIfPresent(this.prisma, this.packQueue, orgId, 'razorpay').catch((err) =>
+            this.logger.error(`Could not queue the payment WhatsApp templates for ${orgId}: ${err instanceof Error ? err.message : err}`),
+        );
         return { ...(await this.view(orgId)), webhookSecret };
     }
 
