@@ -7,7 +7,7 @@ import {
     toMetaComponents,
     type TemplateDraft,
 } from './template-components';
-import { TEMPLATE_STARTERS } from './template-starters';
+import { templateStarters } from './template-starters';
 
 const sale: TemplateDraft = {
     name: 'sale_announcement',
@@ -70,7 +70,7 @@ describe('toMetaComponents', () => {
     });
 
     it('turns every starter into valid components', () => {
-        for (const starter of TEMPLATE_STARTERS) {
+        for (const starter of templateStarters('https://app.example.com')) {
             expect(() => toMetaComponents({ ...starter.draft, language: 'en' }, 'handle')).not.toThrow();
         }
     });

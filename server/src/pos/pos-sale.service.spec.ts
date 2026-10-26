@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { OrderFinancialStatus, PosStaffRole, ProductStatus } from '@prisma/client';
+import { OrderFinancialStatus, PosStaffRole, Prisma, ProductStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PosSaleService } from './pos-sale.service';
 import { PosStaffService } from './pos-staff.service';
@@ -26,7 +26,13 @@ interface Opts {
     /** A copy of the bill another request saved while this one ran. */
     twin?: string | null;
     warehousing?: boolean;
+    /** A customer on file the sale's customer turns out to be. */
+    buyer?: Record<string, unknown> | null;
+    /** Another customer with the email typed. */
+    emailTaken?: { id: string } | null;
 }
+
+const BUYER = { id: 'cust_9', firstName: null, lastName: null, email: null, phone: '+919800000009', gstin: null, billingStateCode: null, defaultAddress: null };
 
 async function build(opts: Opts = {}) {
     const settings = parsePosSettings(opts.settings ?? {});
@@ -66,15 +72,20 @@ async function build(opts: Opts = {}) {
         },
         channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch_manual' }) },
         customer: {
-            findFirst: jest.fn().mockResolvedValue({ gstin: null, billingStateCode: null }),
-            findUnique: jest.fn().mockResolvedValue({ id: 'cust_1', phone: '+919800000001', defaultAddress: null, firstName: 'Asha', lastName: null }),
-            updateMany: jest.fn(),
+            // The customer on file the counter finds: by id, by phone or by email.
+            findFirst: jest.fn(async () => opts.buyer ?? null),
         },
     };
     const tx = {
-        order: { findFirst: jest.fn(async () => (opts.twin ? { id: opts.twin } : null)) },
+        order: { findFirst: jest.fn(async () => (opts.twin ? { id: opts.twin } : null)), update: jest.fn() },
         orderPayment: { createMany: jest.fn() },
         posActivity: { create: jest.fn() },
+        customer: {
+            findUniqueOrThrow: jest.fn(async () => opts.buyer),
+            findFirst: jest.fn(async () => opts.emailTaken ?? null),
+            update: jest.fn(),
+            updateMany: jest.fn(),
+        },
     };
     const orders = {
         createOfflineOrder: jest.fn(async (_org: string, _user: string, dto: any, options: any) => {
@@ -94,13 +105,19 @@ async function build(opts: Opts = {}) {
         cataloguePrices: jest.fn(async (_c: string, variants: any[]) => variants.map((v) => Number(v.price))),
     };
     const staff = new PosStaffService(prisma, redis as any, { get: () => 'a'.repeat(32) } as any);
-    const whatsapp = { reach: jest.fn().mockResolvedValue({ canSend: false, reason: 'No WhatsApp number is connected.' }), optIn: jest.fn().mockResolvedValue(undefined) };
+    const whatsapp = { optIn: jest.fn().mockResolvedValue(undefined) };
+    const bills = {
+        afterSale: jest.fn().mockResolvedValue(undefined),
+        delivery: jest.fn().mockResolvedValue([]),
+        billUrl: jest.fn((id: string) => `https://app.example.com/b/${id}.sig`),
+    };
     const service = new PosSaleService(
         prisma,
         orders as any,
         catalog as any,
         staff,
         whatsapp as any,
+        bills as any,
         { autoInvoiceForPaidOrder: jest.fn() } as any,
         { order: jest.fn() } as any,
         { findShopifyChannel: jest.fn() } as any,
@@ -109,7 +126,7 @@ async function build(opts: Opts = {}) {
     );
     const result = jest.spyOn(service, 'result').mockImplementation(async (_o, orderId, change) => ({ orderId, change }) as any);
     const call = () => orders.createOfflineOrder.mock.calls[0] as [string, string, any, any];
-    return { service, orders, call, tx, prisma, staff, whatsapp, catalog, result, redis };
+    return { service, orders, call, tx, prisma, staff, whatsapp, bills, catalog, result, redis };
 }
 
 const input = (over: Partial<SaleInput> = {}): SaleInput => ({
@@ -154,13 +171,6 @@ describe('PosSaleService.createSale — the bill handed to createOfflineOrder', 
         await expect(service.createSale(ORG, USER, input({ customer: { phone: '12345' } }))).rejects.toThrow('Enter a valid phone number for the customer.');
     });
 
-    it('a store that asks for the customer refuses a walk-in bill', async () => {
-        const { service, orders } = await build({ settings: { askCustomer: 'required' } });
-        await expect(service.createSale(ORG, USER, input())).rejects.toThrow('Add the customer to this bill.');
-        // An opt-in tick alone names nobody.
-        await expect(service.createSale(ORG, USER, input({ customer: { whatsappOptIn: true } }))).rejects.toThrow('Add the customer to this bill.');
-        expect(orders.createOfflineOrder).not.toHaveBeenCalled();
-    });
 
     it('turns line and cart discounts into one amount off each line', async () => {
         const { service, call } = await build();
@@ -363,33 +373,215 @@ describe('PosSaleService.createSale — the same bill twice', () => {
     });
 });
 
-describe('PosSaleService.createSale — WhatsApp opt-in', () => {
-    it('records the opt-in on the customer the sale was made for', async () => {
-        const { service, whatsapp } = await build();
-        await service.createSale(ORG, USER, input({ customer: { phone: '9800000001', name: 'Asha', whatsappOptIn: true } }));
-        expect(whatsapp.optIn).toHaveBeenCalledWith(ORG, USER, expect.objectContaining({ id: 'cust_1' }), 'order_1');
+describe('PosSaleService.createSale — the customer at checkout', () => {
+    it('a store that requires the customer needs a mobile number or a customer on file', async () => {
+        const { service, orders } = await build({ settings: { customerAtCheckout: 'required' }, buyer: BUYER });
+        const refusal = "Add the customer's mobile number to bill.";
+        await expect(service.createSale(ORG, USER, input())).rejects.toThrow(refusal);
+        // A name, an offers tick or an address alone is not enough.
+        await expect(service.createSale(ORG, USER, input({ customer: { name: 'Asha', offersOptIn: true } }))).rejects.toThrow(refusal);
+        expect(orders.createOfflineOrder).not.toHaveBeenCalled();
+        await service.createSale(ORG, USER, input({ customer: { phone: '9800000001' } }));
+        await service.createSale(ORG, USER, input({ clientSaleId: '0d4c1f9e-3333-4a2b-8c3d-5e6f7a8b9c0d', customer: { customerId: 'cust_9' } }));
+        expect(orders.createOfflineOrder).toHaveBeenCalledTimes(2);
     });
 
-    it('a failed consent write does not fail the sale', async () => {
-        const { service, whatsapp, result } = await build();
+    it('reads an old stored askCustomer: required still requires the customer', async () => {
+        const { service } = await build({ settings: { askCustomer: 'required' } });
+        await expect(service.createSale(ORG, USER, input())).rejects.toThrow("Add the customer's mobile number to bill.");
+    });
+
+    it.each(['ask', 'off'])('with %s, a walk-in with nothing below the limit is billed', async (customerAtCheckout) => {
+        const { service, call } = await build({ settings: { customerAtCheckout } });
+        await service.createSale(ORG, USER, input());
+        expect(call()[3].walkIn).toBe(true);
+    });
+
+    it('finds the customer by their number, however it was saved, before making one', async () => {
+        const { service, call, prisma } = await build({ buyer: BUYER });
+        await service.createSale(ORG, USER, input({ customer: { phone: '98000 00009', name: 'Asha Menon' } }));
+        const where = prisma.customer.findFirst.mock.calls[0][0].where;
+        expect(where).toMatchObject({ organizationId: ORG, deletedAt: null });
+        expect(where.phone.in).toEqual(expect.arrayContaining(['+919800000009', '9800000009']));
+        expect(call()[2].customer).toEqual({ customerId: 'cust_9' });
+    });
+
+    it('a number nobody has, with an email another customer has, is that customer: one customer per email', async () => {
+        const { service, call, prisma, tx } = await build();
+        prisma.customer.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(BUYER);
+        tx.customer.findUniqueOrThrow.mockResolvedValueOnce(BUYER);
+        await service.createSale(ORG, USER, input({ customer: { phone: '9800000001', email: 'asha@example.com' } }));
+        expect(prisma.customer.findFirst.mock.calls[1][0].where).toMatchObject({ organizationId: ORG, email: 'asha@example.com' });
+        expect(call()[2].customer).toEqual({ customerId: 'cust_9' });
+    });
+
+    it('someone new is made with the name, email and number given', async () => {
+        const { service, call } = await build();
+        await service.createSale(ORG, USER, input({ customer: { phone: '9800000001', name: 'Asha Rani Menon', email: 'asha@example.com' } }));
+        expect(call()[2].customer).toEqual({ phone: '+919800000001', email: 'asha@example.com', firstName: 'Asha', lastName: 'Rani Menon' });
+        expect(call()[3].walkIn).toBe(false);
+    });
+
+    it('a customer picked by id who is not this org’s is refused', async () => {
+        const { service, orders } = await build();
+        await expect(service.createSale(ORG, USER, input({ customer: { customerId: 'cust_x' } }))).rejects.toThrow('That customer was not found.');
+        expect(orders.createOfflineOrder).not.toHaveBeenCalled();
+    });
+
+    it('fills a customer on file only where empty, inside the sale’s transaction', async () => {
+        const { service, tx } = await build({ buyer: { ...BUYER, phone: null } });
+        await service.createSale(ORG, USER, input({ customer: { customerId: 'cust_9', phone: '9800000001', name: 'Asha Menon', email: 'asha@example.com', gstin: '29ABCDE1234F1Z5' } }));
+        expect(tx.customer.update).toHaveBeenCalledWith({
+            where: { id: 'cust_9' },
+            data: { firstName: 'Asha', lastName: 'Menon', phone: '+919800000001', gstin: '29ABCDE1234F1Z5', email: 'asha@example.com' },
+        });
+    });
+
+    it('never overwrites what a customer has, and leaves an email that is someone else’s', async () => {
+        const kept = await build({ buyer: { ...BUYER, firstName: 'Ravi', email: 'ravi@example.com' } });
+        await kept.service.createSale(ORG, USER, input({ customer: { customerId: 'cust_9', name: 'Asha Menon', email: 'asha@example.com' } }));
+        expect(kept.tx.customer.update).not.toHaveBeenCalled();
+
+        const taken = await build({ buyer: BUYER, emailTaken: { id: 'cust_other' } });
+        await taken.service.createSale(ORG, USER, input({ customer: { customerId: 'cust_9', email: 'asha@example.com' } }));
+        expect(taken.tx.customer.update).not.toHaveBeenCalled();
+    });
+
+    it('a B2B customer found by phone keeps the order form’s place of supply', async () => {
+        const { service, call } = await build({ buyer: { ...BUYER, gstin: '32ABCDE1234F1Z1' } });
+        await service.createSale(ORG, USER, input({ customer: { phone: '9800000009' } }));
+        expect(call()[2]).not.toHaveProperty('placeOfSupplyCode');
+    });
+});
+
+describe('PosSaleService.createSale — bills of the limit or more name the buyer', () => {
+    const big = { total: 52_000, settings: {} };
+    const address = { address1: '12 MG Road', city: 'Kochi', zip: '682016', stateCode: '32' };
+
+    it("refuses a walk-in bill of ₹50,000 or more, saying what GST needs", async () => {
+        const { service } = await build(big);
+        await expect(service.createSale(ORG, USER, input({ payments: [] }))).rejects.toThrow(new BadRequestException("GST rules need the buyer's name and address on bills of ₹50,000 or more."));
+    });
+
+    it('names the amount the store set', async () => {
+        const { service } = await build({ total: 150_000, settings: { customerRequiredAbove: 100_000 } });
+        await expect(service.createSale(ORG, USER, input({ customer: { phone: '9800000001' }, payments: [] }))).rejects.toThrow("GST rules need the buyer's name and address on bills of ₹1,00,000 or more.");
+    });
+
+    it('counts the amount to pay, so ₹49,999.60 rounded up to ₹50,000 needs it too', async () => {
+        const { service } = await build({ total: 49_999.6 });
+        await expect(service.createSale(ORG, USER, input({ payments: [] }))).rejects.toThrow(/GST rules need/);
+        const off = await build({ total: 49_999.6, settings: { roundOff: false } });
+        await off.service.createSale(ORG, USER, input({ payments: [] }));
+        expect(off.orders.createOfflineOrder).toHaveBeenCalled();
+    });
+
+    it('a name and a typed address let it through, the address on the bill and, if they had none, the customer', async () => {
+        const { service, call, tx } = await build(big);
+        await service.createSale(ORG, USER, input({ customer: { phone: '9800000001', name: 'Asha', address }, payments: [] }));
+        const typed = { address1: '12 MG Road', city: 'Kochi', zip: '682016', province: 'Kerala', stateCode: '32', country: 'India', country_code: 'IN' };
+        expect(tx.order.update).toHaveBeenCalledWith({ where: { id: 'order_1' }, data: { billingAddress: typed } });
+        expect(tx.customer.updateMany).toHaveBeenCalledWith({ where: { id: 'cust_1', defaultAddress: { equals: Prisma.DbNull } }, data: { defaultAddress: typed, addresses: [typed] } });
+        // Not handed to the sale itself: a counter sale is supplied where the store is, wherever the buyer lives.
+        expect(call()[2]).not.toHaveProperty('billingAddress');
+        expect(call()[2].placeOfSupplyCode).toBe('29');
+    });
+
+    it('a customer on file with a name and an address needs nothing typed; their address goes on the bill', async () => {
+        const saved = { address1: '4 Beach Road', city: 'Kochi', zip: '682001', stateCode: '32' };
+        const { service, tx } = await build({ ...big, buyer: { ...BUYER, firstName: 'Asha', defaultAddress: saved } });
+        await service.createSale(ORG, USER, input({ customer: { customerId: 'cust_9' }, payments: [] }));
+        expect(tx.order.update).toHaveBeenCalledWith({ where: { id: 'order_1' }, data: { billingAddress: saved } });
+    });
+
+    it('an address with no state is not enough', async () => {
+        const { service } = await build({ ...big, buyer: { ...BUYER, firstName: 'Asha', defaultAddress: { address1: '4 Beach Road', city: 'Kochi' } } });
+        await expect(service.createSale(ORG, USER, input({ customer: { customerId: 'cust_9' }, payments: [] }))).rejects.toThrow(/GST rules need/);
+    });
+
+    it('below the limit, or with no limit, a walk-in is billed', async () => {
+        const below = await build({ total: 49_000 });
+        await below.service.createSale(ORG, USER, input({ payments: [] }));
+        const none = await build({ total: 900_000, settings: { customerRequiredAbove: null } });
+        await none.service.createSale(ORG, USER, input({ payments: [] }));
+        expect(below.orders.createOfflineOrder).toHaveBeenCalled();
+        expect(none.orders.createOfflineOrder).toHaveBeenCalled();
+    });
+
+    it('gives the manager’s approval back when the limit refuses the bill', async () => {
+        const { service, staff } = await build({ ...big, settings: { discountApprovalPercent: 0 } });
+        const { approvalToken } = await staff.approve(ORG, USER, { pin: '9876', reason: 'discount' });
+        const bill = input({ lines: [{ variantId: 'var_shirt', quantity: 1, discount: { type: 'amount', value: 10 } }], payments: [], approvalToken });
+        await expect(service.createSale(ORG, USER, bill)).rejects.toThrow(/GST rules need/);
+        await expect(service.createSale(ORG, USER, { ...bill, customer: { name: 'Asha', address } })).resolves.toBeDefined();
+    });
+});
+
+describe('PosSaleService.createSale — consent and the bill', () => {
+    it('a number for the bill is not marketing consent: no opt-in is recorded, the bill goes to it', async () => {
+        const { service, whatsapp, bills } = await build();
+        await service.createSale(ORG, USER, input({ customer: { phone: '9800000001', name: 'Asha' } }));
+        expect(whatsapp.optIn).not.toHaveBeenCalled();
+        expect(bills.afterSale).toHaveBeenCalledWith(ORG, USER, {
+            orderId: 'order_1', staffId: null, phone: { raw: '+919800000001', e164: '+919800000001' }, customerId: 'cust_1', name: 'Asha', autoSend: true,
+        });
+    });
+
+    it('the offers tick records the marketing opt-in for the number given', async () => {
+        const { service, whatsapp } = await build();
+        await service.createSale(ORG, USER, input({ customer: { phone: '9800000001', name: 'Asha', offersOptIn: true } }));
+        expect(whatsapp.optIn).toHaveBeenCalledWith(ORG, USER, { customerId: 'cust_1', e164: '+919800000001', name: 'Asha' }, 'order_1');
+    });
+
+    it('a customer picked from the list gets the bill on the number on file', async () => {
+        const { service, bills } = await build({ buyer: BUYER });
+        await service.createSale(ORG, USER, input({ customer: { customerId: 'cust_9' } }));
+        expect(bills.afterSale.mock.calls[0][2]).toMatchObject({ phone: { raw: '+919800000009', e164: '+919800000009' }, customerId: 'cust_9' });
+    });
+
+    it('with bills sent only when asked, the bill is kept back', async () => {
+        const { service, bills } = await build({ settings: { autoSendBill: false } });
+        await service.createSale(ORG, USER, input({ customer: { phone: '9800000001' } }));
+        expect(bills.afterSale.mock.calls[0][2]).toMatchObject({ autoSend: false });
+    });
+
+    it('no number, no bill', async () => {
+        const { service, bills } = await build();
+        await service.createSale(ORG, USER, input({ customer: { name: 'Asha' } }));
+        await service.createSale(ORG, USER, input({ clientSaleId: '0d4c1f9e-4444-4a2b-8c3d-5e6f7a8b9c0d' }));
+        expect(bills.afterSale).not.toHaveBeenCalled();
+    });
+
+    it('a bill that fails to send, or an opt-in that fails to save, never fails the sale', async () => {
+        const { service, whatsapp, bills, result } = await build();
         whatsapp.optIn.mockRejectedValueOnce(new Error('db hiccup'));
-        await service.createSale(ORG, USER, input({ customer: { phone: '9800000001', whatsappOptIn: true } }));
-        expect(result).toHaveBeenCalled();
+        bills.afterSale.mockRejectedValueOnce(new Error('redis down'));
+        await service.createSale(ORG, USER, input({ customer: { phone: '9800000001', offersOptIn: true } }));
+        expect(result).toHaveBeenCalledWith(ORG, 'order_1', 950);
+    });
+
+    it('a retried sale already saved sends nothing again', async () => {
+        const { service, bills } = await build({ saved: 'order_saved' });
+        await service.createSale(ORG, USER, input({ customer: { phone: '9800000001' } }));
+        expect(bills.afterSale).not.toHaveBeenCalled();
     });
 });
 
 describe('PosSaleService.result', () => {
-    it('reports the exact total, the rounded amount to pay, what is paid and due, and the change', async () => {
-        const { service, prisma, result, whatsapp } = await build();
+    const bill = {
+        id: 'order_1', name: '#M1001', totalPrice: 1049.6, financialStatus: OrderFinancialStatus.PARTIALLY_PAID,
+        metadata: { pos: { storeId: 'wh_main', roundOff: 0.4, clientSaleId: CLIENT_SALE_ID } },
+        payments: [{ method: 'CASH', amount: 500, tendered: 600 }],
+        customerId: 'cust_1',
+        invoices: [{ id: 'inv_1', invoiceNumber: 'INV-26-27/000001' }],
+    };
+    const sending = [{ channel: 'whatsapp', status: 'sending', to: '+919800000001', reason: null }];
+
+    it('reports the exact total, the rounded amount to pay, what is paid and due, the change, and the bill’s link and delivery', async () => {
+        const { service, prisma, result, bills } = await build();
         result.mockRestore();
-        prisma.order.findFirst.mockResolvedValueOnce({
-            id: 'order_1', name: '#M1001', totalPrice: 1049.6, financialStatus: OrderFinancialStatus.PARTIALLY_PAID,
-            metadata: { pos: { storeId: 'wh_main', roundOff: 0.4, clientSaleId: CLIENT_SALE_ID } },
-            payments: [{ method: 'CASH', amount: 500, tendered: 600 }],
-            customer: { id: 'cust_1', phone: '+919800000001', defaultAddress: null },
-            customerId: 'cust_1',
-            invoices: [{ id: 'inv_1', invoiceNumber: 'INV-26-27/000001' }],
-        });
+        prisma.order.findFirst.mockResolvedValueOnce(bill);
+        bills.delivery.mockResolvedValueOnce(sending);
         expect(await service.result(ORG, 'order_1')).toEqual({
             orderId: 'order_1',
             orderName: '#M1001',
@@ -403,9 +595,18 @@ describe('PosSaleService.result', () => {
             invoiceId: 'inv_1',
             invoiceNumber: 'INV-26-27/000001',
             customerId: 'cust_1',
-            whatsapp: { canSend: false, reason: 'No WhatsApp number is connected.' },
+            billUrl: 'https://app.example.com/b/order_1.sig',
+            delivery: sending,
         });
-        expect(whatsapp.reach).toHaveBeenCalledWith(ORG, expect.objectContaining({ id: 'cust_1' }));
+        expect(bills.delivery).toHaveBeenCalledWith(ORG, bill.metadata);
+    });
+
+    it('a delivery that cannot be read leaves the sale’s result whole', async () => {
+        const { service, prisma, result, bills } = await build();
+        result.mockRestore();
+        prisma.order.findFirst.mockResolvedValueOnce(bill);
+        bills.delivery.mockRejectedValueOnce(new Error('db hiccup'));
+        expect(await service.result(ORG, 'order_1')).toMatchObject({ orderId: 'order_1', paid: 500, delivery: [] });
     });
 });
 

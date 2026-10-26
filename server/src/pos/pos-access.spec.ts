@@ -8,7 +8,9 @@ import { REQUIRE_SECTION_KEY } from '../auth/decorators/require-section.decorato
 import { RolesGuard } from '../auth/roles.guard';
 import { VendorAccessGuard } from '../auth/guards/vendor-access.guard';
 import { SectionAccessGuard } from '../auth/guards/section-access.guard';
+import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { PosController } from './pos.controller';
+import { PosPublicController } from './pos-public.controller';
 
 /**
  * Who may use the till, read off the real decorators and run through the
@@ -48,7 +50,7 @@ const MANAGER_ONLY = ['updateSettings', 'listStaff', 'createStaff', 'updateStaff
 describe('point-of-sale access', () => {
     it('has the routes of the contract', () => {
         expect(handlers.map(([name]) => name).sort()).toEqual(
-            ['setup', 'updateSettings', 'listStaff', 'createStaff', 'updateStaff', 'unlock', 'approve', 'products', 'scan', 'customers', 'createSale', 'collectPayment', 'receipt', 'sendReceipt'].sort(),
+            ['setup', 'updateSettings', 'listStaff', 'createStaff', 'updateStaff', 'unlock', 'approve', 'products', 'scan', 'customers', 'createSale', 'collectPayment', 'delivery', 'sendBill', 'receipt'].sort(),
         );
     });
 
@@ -84,6 +86,13 @@ describe('point-of-sale access', () => {
 
     it.each(handlers)('%s refuses an agent without the Orders section', (_name, fn) => {
         expect(passes(fn, { role: UserRole.AGENT, permissions: ['section.chat'] })).toBe(false);
+    });
+
+    it('the public bill needs no login and no section, and is not throttle-exempt', () => {
+        const bill = PosPublicController.prototype.bill;
+        expect(Reflect.getMetadata(IS_PUBLIC_KEY, bill)).toBe(true);
+        expect(Reflect.getMetadata(REQUIRE_SECTION_KEY, PosPublicController)).toBeUndefined();
+        expect(Reflect.getMetadataKeys(bill).concat(Reflect.getMetadataKeys(PosPublicController)).some((k) => String(k).includes('SKIP'))).toBe(false);
     });
 
     it('prints a receipt for an agent who has Orders but not Invoices', () => {

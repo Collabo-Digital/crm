@@ -11,10 +11,14 @@ import { ShopifyOAuthService } from '../channel/shopify-oauth.service';
 import { ShopifyGraphqlClient } from '../channel/shopify-graphql.client';
 import { ORDER_MARK_AS_PAID_MUTATION, OrderMarkAsPaidResponse, OrderMarkAsPaidVariables } from '../channel/shopify-graphql.types';
 import { ensureManualChannel } from '../channel/ensure-manual-channel';
-import { normalizePhone } from '../common/phone.util';
+import { countryCodeOf, normalizePhone, phoneLookupVariants } from '../common/phone.util';
+import { extractStateFromAddress } from '../gst/place-of-supply.util';
+import { getStateName } from '../gst/constants/indian-states';
 import { PosCatalogService } from './pos-catalog.service';
 import { PosStaffService } from './pos-staff.service';
-import { PosWhatsAppService, WhatsAppReach } from './pos-whatsapp.service';
+import { PosWhatsAppService } from './pos-whatsapp.service';
+import { BillDelivery, PosBillService } from './pos-bill.service';
+import { PosOrderMeta, readPosMeta } from './pos-order-meta';
 import { PosSettings } from './pos-settings.schema';
 import { PosApprovalReason, PosTokenClaims } from './pos-tokens';
 import { CollectPaymentInput, SaleCustomerInput, SaleInput } from './pos-requests.schema';
@@ -42,27 +46,23 @@ export type PosSaleResult = {
     invoiceId: string | null;
     invoiceNumber: string | null;
     customerId: string | null;
-    whatsapp: WhatsAppReach;
+    /** The bill's public page, sent to the customer. */
+    billUrl: string;
+    delivery: BillDelivery[];
 };
 
-/** What a bill keeps on `Order.metadata.pos`. */
-export interface PosOrderMeta {
-    storeId: string;
-    roundOff: number;
-    clientSaleId: string;
-}
-
-export function readPosMeta(metadata: Prisma.JsonValue | null | undefined): PosOrderMeta | null {
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
-    const pos = (metadata as Record<string, unknown>).pos;
-    if (!pos || typeof pos !== 'object' || Array.isArray(pos)) return null;
-    const p = pos as Record<string, unknown>;
-    return {
-        storeId: typeof p.storeId === 'string' ? p.storeId : '',
-        roundOff: typeof p.roundOff === 'number' ? p.roundOff : 0,
-        clientSaleId: typeof p.clientSaleId === 'string' ? p.clientSaleId : '',
-    };
-}
+/** A customer already on file that the bill is for, as the sale needs them. */
+const buyerSelect = {
+    id: true,
+    firstName: true,
+    lastName: true,
+    email: true,
+    phone: true,
+    gstin: true,
+    billingStateCode: true,
+    defaultAddress: true,
+} satisfies Prisma.CustomerSelect;
+type Buyer = Prisma.CustomerGetPayload<{ select: typeof buyerSelect }>;
 
 /** Thrown inside the sale's transaction when a retry of the same bill finds the first one saved. */
 class SaleAlreadySaved extends Error {
@@ -90,6 +90,7 @@ export class PosSaleService {
         private readonly catalog: PosCatalogService,
         private readonly staff: PosStaffService,
         private readonly whatsapp: PosWhatsAppService,
+        private readonly bills: PosBillService,
         private readonly invoices: InvoiceService,
         private readonly commerceEvents: CommerceEventsService,
         private readonly shopifyPush: ShopifyPushService,
@@ -105,18 +106,30 @@ export class PosSaleService {
         const settings = await this.catalog.settings(orgId);
         const staff = await this.staffFor(orgId, userId, input.staffToken, settings.requireStaffPin);
         const customer = identifiedCustomer(input.customer);
-        if (!customer && settings.askCustomer === 'required') {
-            throw new BadRequestException('Add the customer to this bill.');
+        let phone: string | null = null;
+        if (customer?.phone) {
+            phone = normalizePhone(customer.phone, 'IN');
+            if (!phone) throw new BadRequestException('Enter a valid phone number for the customer.');
+        }
+        if (settings.customerAtCheckout === 'required' && !phone && !customer?.customerId) {
+            throw new BadRequestException("Add the customer's mobile number to bill.");
         }
         const store = await this.catalog.resolveStore(orgId, input.storeId);
         const lines = await this.priceLines(orgId, input);
+        const buyer = customer ? await this.findBuyer(orgId, customer, phone) : null;
         const approval = await this.checkApprovals(orgId, userId, settings, lines, input.approvalToken);
+
+        // GST rule 46: a bill of the store's limit or more names the buyer and their address.
+        const address = customer?.address ? billingAddress(customer.address) : null;
+        const savedAddress = !address && buyer && hasStatedAddress(buyer.defaultAddress) ? buyer.defaultAddress : null;
+        const named = !!customer?.name?.trim() || !!(buyer?.firstName || buyer?.lastName);
+        let overLimit = false;
 
         let order: { id: string; customerId: string | null };
         let change = 0;
         try {
             const dto: CreateOfflineOrderDto = {
-                customer: customer ? await this.customerFields(orgId, customer) : {},
+                customer: customer ? customerFields(customer, buyer, phone) : {},
                 lineItems: lines.items.map((l, i) => ({
                     productVariantId: l.variantId,
                     quantity: l.quantity,
@@ -124,7 +137,7 @@ export class PosSaleService {
                     discount: lines.discounts[i],
                 })),
                 ...(store.warehouseId ? { warehouseId: store.warehouseId } : {}),
-                ...((await this.sellsAtStoreState(orgId, customer)) && store.stateCode ? { placeOfSupplyCode: store.stateCode } : {}),
+                ...(sellsAtStoreState(customer, buyer) && store.stateCode ? { placeOfSupplyCode: store.stateCode } : {}),
                 // `settle` writes the method to the order; a bill paid later has none yet.
                 paymentMethod: mainPaymentMethod(input.payments) ?? 'OTHER',
                 ...(input.note ? { note: input.note } : {}),
@@ -135,6 +148,11 @@ export class PosSaleService {
                 pos: { staffId: staff?.id ?? null },
                 settle: (grandTotal) => {
                     const { payable, roundOff } = payableFor(grandTotal, settings.roundOff);
+                    const limit = settings.customerRequiredAbove;
+                    overLimit = limit !== null && payable >= limit - 0.005;
+                    if (overLimit && !(named && (address || savedAddress))) {
+                        throw new BadRequestException(`GST rules need the buyer's name and address on bills of ${wholeRupees(limit!)} or more.`);
+                    }
                     const settled = settlePayments(input.payments, payable);
                     change = settled.change;
                     const pos: PosOrderMeta = { storeId: store.id, roundOff, clientSaleId: input.clientSaleId };
@@ -151,6 +169,18 @@ export class PosSaleService {
                         select: { id: true },
                     });
                     if (twin) throw new SaleAlreadySaved(twin.id);
+                    if (buyer && customer) await fillBuyer(tx, orgId, buyer.id, customer, phone);
+                    // On the bill only, put there after the place of supply is settled: goods
+                    // handed over at the counter are supplied where the store is, wherever the
+                    // buyer lives. The invoice, made after this, prints it.
+                    const billTo = address ?? (overLimit ? savedAddress : null);
+                    if (billTo) await tx.order.update({ where: { id: order.id }, data: { billingAddress: billTo as Prisma.InputJsonValue } });
+                    if (address && order.customerId) {
+                        await tx.customer.updateMany({
+                            where: { id: order.customerId, defaultAddress: { equals: Prisma.DbNull } },
+                            data: { defaultAddress: address, addresses: [address] },
+                        });
+                    }
                     if (input.payments.length) {
                         await tx.orderPayment.createMany({
                             data: input.payments.map((p) => ({
@@ -191,17 +221,19 @@ export class PosSaleService {
             throw err;
         }
 
-        if (customer?.whatsappOptIn && order.customerId) {
-            const buyer = await this.prisma.customer.findUnique({
-                where: { id: order.customerId },
-                select: { id: true, phone: true, defaultAddress: true, firstName: true, lastName: true },
-            });
-            // The sale is made; a consent write that fails only leaves the opt-in unrecorded.
-            if (buyer) {
-                await this.whatsapp.optIn(orgId, userId, buyer, order.id).catch((err) =>
-                    this.logger.warn(`WhatsApp opt-in for order ${order.id} not recorded: ${err instanceof Error ? err.message : err}`),
-                );
-            }
+        // The sale is made: from here a failure only leaves the opt-in unrecorded or the bill unsent.
+        const raw = phone ?? buyer?.phone ?? null;
+        const billPhone = raw ? { raw, e164: phone ?? normalizePhone(raw, countryCodeOf(buyer?.defaultAddress) ?? 'IN') } : null;
+        const name = customer?.name?.trim() || [buyer?.firstName, buyer?.lastName].filter(Boolean).join(' ') || null;
+        if (customer?.offersOptIn && order.customerId && billPhone?.e164) {
+            await this.whatsapp.optIn(orgId, userId, { customerId: order.customerId, e164: billPhone.e164, name }, order.id).catch((err) =>
+                this.logger.warn(`WhatsApp opt-in for order ${order.id} not recorded: ${err instanceof Error ? err.message : err}`),
+            );
+        }
+        if (billPhone) {
+            await this.bills
+                .afterSale(orgId, userId, { orderId: order.id, staffId: staff?.id ?? null, phone: billPhone, customerId: order.customerId, name, autoSend: settings.autoSendBill })
+                .catch((err) => this.logger.warn(`Bill for order ${order.id} not sent: ${err instanceof Error ? err.message : err}`));
         }
         return this.result(orgId, order.id, change);
     }
@@ -271,7 +303,6 @@ export class PosSaleService {
             where: { id: orderId, organizationId: orgId },
             include: {
                 payments: { select: { method: true, amount: true, tendered: true } },
-                customer: { select: { id: true, phone: true, defaultAddress: true } },
                 invoices: {
                     where: { status: { notIn: [InvoiceStatus.CANCELLED, InvoiceStatus.CREDIT_NOTE] } },
                     select: { id: true, invoiceNumber: true },
@@ -280,6 +311,11 @@ export class PosSaleService {
             },
         });
         if (!order) throw new NotFoundException('That bill was not found.');
+        // A bill whose delivery can't be read is still a sale made.
+        const delivery = await this.bills.delivery(orgId, order.metadata).catch((err) => {
+            this.logger.warn(`Bill delivery of order ${order.id} not read: ${err instanceof Error ? err.message : err}`);
+            return [];
+        });
         const total = Number(order.totalPrice);
         const roundOff = readPosMeta(order.metadata)?.roundOff ?? 0;
         const payable = round2(total + roundOff);
@@ -304,7 +340,8 @@ export class PosSaleService {
             invoiceId: order.invoices[0]?.id ?? null,
             invoiceNumber: order.invoices[0]?.invoiceNumber ?? null,
             customerId: order.customerId,
-            whatsapp: await this.whatsapp.reach(orgId, order.customer),
+            billUrl: this.bills.billUrl(order.id),
+            delivery,
         };
     }
 
@@ -422,48 +459,26 @@ export class PosSaleService {
         return claims;
     }
 
-    /** The customer block `createOfflineOrder` takes, filling a known customer's missing GST details first. */
-    private async customerFields(orgId: string, c: SaleCustomerInput): Promise<CreateOfflineOrderDto['customer']> {
-        let phone: string | undefined;
-        if (c.phone) {
-            phone = normalizePhone(c.phone, 'IN') ?? undefined;
-            if (!phone) throw new BadRequestException('Enter a valid phone number for the customer.');
-        }
-        const [firstName, ...rest] = (c.name ?? '').trim().split(/\s+/).filter(Boolean);
-        if (c.customerId && (c.gstin || c.billingStateCode)) {
-            // Fill-if-empty, like a customer found by phone or email: a GSTIN
-            // typed at the counter makes the invoice B2B.
-            if (c.gstin) await this.prisma.customer.updateMany({ where: { id: c.customerId, organizationId: orgId, gstin: null }, data: { gstin: c.gstin } });
-            if (c.billingStateCode) {
-                await this.prisma.customer.updateMany({ where: { id: c.customerId, organizationId: orgId, billingStateCode: null }, data: { billingStateCode: c.billingStateCode } });
-            }
-        }
-        return {
-            ...(c.customerId ? { customerId: c.customerId } : {}),
-            ...(c.email ? { email: c.email } : {}),
-            ...(phone ? { phone } : {}),
-            ...(firstName ? { firstName } : {}),
-            ...(rest.length ? { lastName: rest.join(' ') } : {}),
-            ...(c.gstin ? { gstin: c.gstin } : {}),
-            ...(c.billingStateCode ? { billingStateCode: c.billingStateCode } : {}),
-        };
-    }
-
     /**
-     * Whether the place of supply is the store's own state. Goods handed over
-     * at the counter are supplied where the store is; without this a store in
-     * a second state would fall back to the default registration's. A buyer
-     * whose state is known keeps the rule the offline order form applies.
+     * The customer on file the bill is for: by id, else by phone, else by
+     * email — one customer per email, so a new one cannot take it. Null for
+     * someone new, whom the sale creates.
      */
-    private async sellsAtStoreState(orgId: string, c: SaleCustomerInput | null): Promise<boolean> {
-        if (!c) return true;
-        if (c.gstin || c.billingStateCode) return false;
-        if (!c.customerId) return true;
-        const known = await this.prisma.customer.findFirst({
-            where: { id: c.customerId, organizationId: orgId },
-            select: { gstin: true, billingStateCode: true, defaultAddress: true },
-        });
-        return !known?.gstin && !known?.billingStateCode;
+    private async findBuyer(orgId: string, c: SaleCustomerInput, phone: string | null): Promise<Buyer | null> {
+        if (c.customerId) {
+            const known = await this.prisma.customer.findFirst({ where: { id: c.customerId, organizationId: orgId }, select: buyerSelect });
+            if (!known) throw new NotFoundException('That customer was not found.');
+            return known;
+        }
+        const byPhone = phone
+            ? await this.prisma.customer.findFirst({
+                where: { organizationId: orgId, deletedAt: null, phone: { in: phoneLookupVariants(phone) } },
+                orderBy: [{ ordersCount: 'desc' }, { updatedAt: 'desc' }],
+                select: buyerSelect,
+            })
+            : null;
+        if (byPhone || !c.email) return byPhone;
+        return this.prisma.customer.findFirst({ where: { organizationId: orgId, deletedAt: null, email: c.email }, select: buyerSelect });
     }
 
     /** The org's custom-item variant for this GST rate and HSN, made on first use. */
@@ -555,8 +570,69 @@ export class PosSaleService {
     }
 }
 
-/** The customer on the bill, or null for a walk-in: an opt-in tick alone names nobody. */
+/** The customer on the bill, or null for a walk-in: an opt-in tick or an address alone names nobody. */
 function identifiedCustomer(c: SaleCustomerInput | undefined): SaleCustomerInput | null {
     if (!c) return null;
-    return c.customerId || c.phone || c.name || c.email ? c : null;
+    return c.customerId || c.phone || c.name?.trim() || c.email ? c : null;
 }
+
+function splitName(name: string | undefined): { firstName?: string; lastName?: string } {
+    const [firstName, ...rest] = (name ?? '').trim().split(/\s+/).filter(Boolean);
+    return { ...(firstName ? { firstName } : {}), ...(rest.length ? { lastName: rest.join(' ') } : {}) };
+}
+
+/**
+ * The customer block `createOfflineOrder` takes: a customer on file by id,
+ * with a GSTIN typed at the counter so the sale is taxed as B2B; else the
+ * details it creates the new customer with.
+ */
+function customerFields(c: SaleCustomerInput, buyer: Buyer | null, phone: string | null): CreateOfflineOrderDto['customer'] {
+    const gst = { ...(c.gstin ? { gstin: c.gstin } : {}), ...(c.billingStateCode ? { billingStateCode: c.billingStateCode } : {}) };
+    if (buyer) return { customerId: buyer.id, ...gst };
+    return { ...(c.email ? { email: c.email } : {}), ...(phone ? { phone } : {}), ...splitName(c.name), ...gst };
+}
+
+/**
+ * A customer on file gets what the counter typed where they have nothing:
+ * a name only when they have none at all, and an email only if no other
+ * customer has it. Read again inside the sale's transaction.
+ */
+async function fillBuyer(tx: Prisma.TransactionClient, orgId: string, buyerId: string, c: SaleCustomerInput, phone: string | null): Promise<void> {
+    const current = await tx.customer.findUniqueOrThrow({ where: { id: buyerId }, select: buyerSelect });
+    const name = splitName(c.name);
+    const data: Prisma.CustomerUpdateInput = {
+        ...(name.firstName && !current.firstName && !current.lastName ? name : {}),
+        ...(phone && !current.phone ? { phone } : {}),
+        ...(c.gstin && !current.gstin ? { gstin: c.gstin } : {}),
+        ...(c.billingStateCode && !current.billingStateCode ? { billingStateCode: c.billingStateCode } : {}),
+    };
+    if (c.email && !current.email && !(await tx.customer.findFirst({ where: { organizationId: orgId, email: c.email }, select: { id: true } }))) {
+        data.email = c.email;
+    }
+    if (Object.keys(data).length) await tx.customer.update({ where: { id: buyerId }, data });
+}
+
+/**
+ * Whether the place of supply is the store's own state. Goods handed over
+ * at the counter are supplied where the store is; without this a store in
+ * a second state would fall back to the default registration's. A buyer
+ * whose state is known keeps the rule the offline order form applies.
+ */
+function sellsAtStoreState(c: SaleCustomerInput | null, buyer: Buyer | null): boolean {
+    if (!c) return true;
+    if (c.gstin || c.billingStateCode) return false;
+    return !buyer?.gstin && !buyer?.billingStateCode;
+}
+
+/** The address typed at the counter, in the keys offline orders keep addresses in. */
+function billingAddress(a: NonNullable<SaleCustomerInput['address']>): Record<string, string> {
+    return { address1: a.address1, city: a.city, zip: a.zip, province: getStateName(a.stateCode) ?? '', stateCode: a.stateCode, country: 'India', country_code: 'IN' };
+}
+
+/** A saved address with a street and a state the invoice can name. */
+function hasStatedAddress(a: Prisma.JsonValue | null): boolean {
+    return !!a && typeof a === 'object' && !Array.isArray(a) && typeof a.address1 === 'string' && !!a.address1.trim() && !!extractStateFromAddress(a);
+}
+
+/** "₹50,000", or with paise when there are some. */
+const wholeRupees = (n: number) => (Number.isInteger(n) ? `₹${n.toLocaleString('en-IN')}` : rupees(n));

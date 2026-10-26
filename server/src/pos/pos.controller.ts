@@ -7,13 +7,14 @@ import { PosCatalogService } from './pos-catalog.service';
 import { PosStaffService } from './pos-staff.service';
 import { PosSaleService } from './pos-sale.service';
 import { PosReceiptService } from './pos-receipt.service';
-import { PosWhatsAppService } from './pos-whatsapp.service';
+import { PosBillService } from './pos-bill.service';
 import { validatePosSettingsPatch } from './pos-settings.schema';
 import {
     ApproveSchema,
     CollectPaymentSchema,
     CreateStaffSchema,
     SaleSchema,
+    SendBillSchema,
     UnlockSchema,
     UpdateStaffSchema,
     parsePosBody,
@@ -32,14 +33,15 @@ export class PosController {
         private readonly staff: PosStaffService,
         private readonly sales: PosSaleService,
         private readonly receipts: PosReceiptService,
-        private readonly whatsapp: PosWhatsAppService,
+        private readonly bills: PosBillService,
     ) { }
 
     // GET /api/v1/pos/setup?storeId= — everything the billing screen loads first.
     @Get('setup')
     @Roles(...ORG_OPERATORS)
-    setup(@CurrentUser() user: JwtPayload, @Query('storeId') storeId?: string) {
-        return this.catalog.setup(user.orgId!, storeId);
+    async setup(@CurrentUser() user: JwtPayload, @Query('storeId') storeId?: string) {
+        const [setup, billDelivery] = await Promise.all([this.catalog.setup(user.orgId!, storeId), this.bills.setup(user.orgId!)]);
+        return { ...setup, billDelivery };
     }
 
     @Patch('settings')
@@ -117,16 +119,23 @@ export class PosController {
         return this.sales.collectPayment(user.orgId!, user.sub, orderId, parsePosBody(CollectPaymentSchema, body, 'payment'));
     }
 
+    // Where the bill's sending stands, for the screen after a sale to follow.
+    @Get('sales/:orderId/delivery')
+    @Roles(...ORG_OPERATORS)
+    delivery(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
+        return this.bills.view(user.orgId!, orderId);
+    }
+
+    @Post('sales/:orderId/send-bill')
+    @HttpCode(200)
+    @Roles(...ORG_OPERATORS)
+    sendBill(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string, @Body() body: unknown) {
+        return this.bills.sendAgain(user.orgId!, user.sub, orderId, parsePosBody(SendBillSchema, body, 'bill to send'));
+    }
+
     @Get('receipts/:orderId')
     @Roles(...ORG_OPERATORS)
     receipt(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
         return this.receipts.receipt(user.orgId!, orderId);
-    }
-
-    @Post('receipts/:orderId/whatsapp')
-    @HttpCode(200)
-    @Roles(...ORG_OPERATORS)
-    sendReceipt(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
-        return this.whatsapp.sendInvoice(user.orgId!, user.sub, orderId);
     }
 }

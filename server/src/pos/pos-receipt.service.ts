@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { readStoredTaxLines } from '../channel/shopify-push.service';
 import { PosCatalogService } from './pos-catalog.service';
-import { readPosMeta } from './pos-sale.service';
+import { readPosMeta } from './pos-order-meta';
 import { round2 } from './pos-pricing';
 
 type ReceiptLine = {
