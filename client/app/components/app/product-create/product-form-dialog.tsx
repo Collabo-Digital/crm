@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { ChevronDown, ChevronRight, X, Loader2, Check, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
-import { useInventoryStatus } from "~/hooks/use-inventory-queries";
+import { useInventoryStatus, useWarehouses } from "~/hooks/use-inventory-queries";
 import { formatMargin } from "~/lib/utils";
 import { normalizeProductOptions } from "~/lib/product-options";
 import { handleMutationError } from "~/lib/handle-mutation-error";
@@ -35,6 +35,7 @@ import type {
   ProductVariantInput,
   UpdateProductRequest,
   UpdateVariantRequest,
+  Warehouse,
 } from "~/types/api";
 import { COMMON_UQC, GST_RATE_OPTIONS, GST_SUPPLY_TYPES } from "~/lib/gst-uqc";
 
@@ -61,6 +62,7 @@ function optionsEqual(a: ProductOption[] | null | undefined, b: ProductOption[] 
 import { OptionsEditor } from "./options-editor";
 import { VariantEditor } from "./variant-editor";
 import { ImageGalleryUploader } from "./image-gallery-uploader";
+import { StockLocationRows, nextUnusedLocation, stockLinesFor } from "./stock-locations";
 import { CODE_TERMS } from "~/lib/inventory-vocabulary";
 
 // Feature flag — media uploads are temporarily held while we finalize storage
@@ -102,11 +104,19 @@ type FormState = {
     continueSellingWhenOutOfStock: boolean;
     requiresShipping: boolean;
     taxable: boolean;
+    /** Opening stock at each of `stockLocationIds`, by row. */
+    stockQuantities: string[];
   };
   // Multi-variant flow (toggle ON)
   hasOptions: boolean;
   options: ProductOption[];
   variants: ProductVariantInput[];
+  /**
+   * Where a new product is stocked, in a workspace with stock locations. One
+   * list for both flows: rows of the single-variant Stock section, columns of
+   * the variant table (each variant's `stock` lines up with it).
+   */
+  stockLocationIds: string[];
 };
 
 const EMPTY: FormState = {
@@ -136,10 +146,12 @@ const EMPTY: FormState = {
     continueSellingWhenOutOfStock: false,
     requiresShipping: true,
     taxable: true,
+    stockQuantities: [],
   },
   hasOptions: false,
   options: [],
   variants: [],
+  stockLocationIds: [],
 };
 
 function fromProduct(p: ProductDetail): FormState {
@@ -172,6 +184,7 @@ function fromProduct(p: ProductDetail): FormState {
       continueSellingWhenOutOfStock: v?.continueSellingWhenOutOfStock ?? false,
       requiresShipping: v?.requiresShipping ?? true,
       taxable: v?.taxable ?? true,
+      stockQuantities: [],
     },
     hasOptions: isMulti,
     options: normalizeProductOptions(p.options ?? []),
@@ -201,6 +214,7 @@ function fromProduct(p: ProductDetail): FormState {
       position: vv.position,
       imageId: vv.imageId ?? undefined,
     })),
+    stockLocationIds: [],
   };
 }
 
@@ -257,6 +271,34 @@ export function ProductFormDialog({
   // Warehousing orgs keep stock per warehouse; the variant column is a cache
   // the ledger recomputes, so the dialog must neither offer nor send it.
   const warehousingEnabled = useInventoryStatus().data?.warehousingEnabled === true;
+  // A new product there takes its opening stock per location. Editing leaves
+  // stock to the product page and Inventory, as before.
+  const stockPerLocation = warehousingEnabled && !isEdit;
+  const warehousesQuery = useWarehouses(stockPerLocation);
+  const activeLocations = useMemo(
+    () => (warehousesQuery.data ?? []).filter((location) => location.isActive),
+    [warehousesQuery.data],
+  );
+  const stockLocations = form.stockLocationIds
+    .map((id) => activeLocations.find((location) => location.id === id))
+    .filter((location): location is Warehouse => !!location);
+
+  // The first row starts at the default location once the list arrives.
+  useEffect(() => {
+    if (!stockPerLocation) return;
+    const first = nextUnusedLocation(activeLocations, []);
+    if (!first) return;
+    setForm((prev) =>
+      prev.stockLocationIds.length > 0
+        ? prev
+        : {
+            ...prev,
+            stockLocationIds: [first.id],
+            variant: { ...prev.variant, stockQuantities: ["0"] },
+            variants: prev.variants.map((v) => ({ ...v, stock: stockLinesFor(v, [first.id]) })),
+          },
+    );
+  }, [stockPerLocation, activeLocations]);
 
   // Hydrate ONCE per opened product. This used to run on every new `product`
   // object, and react-query hands out a new object on every refetch — the
@@ -312,8 +354,79 @@ export function ProductFormDialog({
   }
 
   function regenerateVariantsClient() {
-    patch({ variants: generateVariantsLocally(form.options) });
+    patch({
+      variants: generateVariantsLocally(form.options).map((v) => ({
+        ...v,
+        stock: stockLinesFor(v, form.stockLocationIds),
+      })),
+    });
   }
+
+  function setStockLocation(index: number, warehouseId: string) {
+    setForm((prev) => {
+      const ids = prev.stockLocationIds.map((id, i) => (i === index ? warehouseId : id));
+      return {
+        ...prev,
+        stockLocationIds: ids,
+        variants: prev.variants.map((v) => ({ ...v, stock: stockLinesFor(v, ids) })),
+      };
+    });
+  }
+
+  function addStockLocation() {
+    const next = nextUnusedLocation(activeLocations, form.stockLocationIds);
+    if (!next) return;
+    setForm((prev) => {
+      const ids = [...prev.stockLocationIds, next.id];
+      return {
+        ...prev,
+        stockLocationIds: ids,
+        variant: { ...prev.variant, stockQuantities: [...prev.variant.stockQuantities, "0"] },
+        variants: prev.variants.map((v) => ({ ...v, stock: stockLinesFor(v, ids) })),
+      };
+    });
+  }
+
+  function removeStockLocation(index: number) {
+    setForm((prev) => {
+      const ids = prev.stockLocationIds.filter((_, i) => i !== index);
+      return {
+        ...prev,
+        stockLocationIds: ids,
+        variant: {
+          ...prev.variant,
+          stockQuantities: prev.variant.stockQuantities.filter((_, i) => i !== index),
+        },
+        variants: prev.variants.map((v) => ({
+          ...v,
+          stock: stockLinesFor({ stock: v.stock?.filter((_, i) => i !== index) }, ids),
+        })),
+      };
+    });
+  }
+
+  function setStockQuantity(index: number, quantity: string) {
+    setForm((prev) => ({
+      ...prev,
+      variant: {
+        ...prev.variant,
+        stockQuantities: prev.variant.stockQuantities.map((q, i) => (i === index ? quantity : q)),
+      },
+    }));
+  }
+
+  /** The `stock` lines sent for a variant, or undefined when it sends none. */
+  function stockPayload(quantities: number[], trackQuantity: boolean | undefined) {
+    if (!stockPerLocation || form.stockLocationIds.length === 0 || trackQuantity === false) {
+      return undefined;
+    }
+    return form.stockLocationIds.map((warehouseId, i) => ({
+      warehouseId,
+      quantity: quantities[i] ?? 0,
+    }));
+  }
+
+  const singleStockQuantities = form.variant.stockQuantities.map((q) => (q === "" ? 0 : Number(q)));
 
   function optionsError(): string | null {
     if (form.options.length === 0) return "Add at least one option type";
@@ -489,6 +602,19 @@ export function ProductFormDialog({
     if (form.gstRate && (parseFloat(form.gstRate) < 0 || parseFloat(form.gstRate) > 28)) {
       e.gstRate = "GST rate must be 0–28";
     }
+
+    if (stockPerLocation) {
+      const quantities = form.hasOptions
+        ? form.variants
+            .filter((v) => v.trackQuantity !== false)
+            .flatMap((v) => stockLinesFor(v, form.stockLocationIds).map((line) => line.quantity))
+        : form.variant.trackQuantity
+          ? singleStockQuantities
+          : [];
+      if (quantities.some((q) => !Number.isInteger(q) || q < 0)) {
+        e.stock = "Stock must be a whole number, 0 or more.";
+      }
+    }
     return e;
   }
 
@@ -537,8 +663,12 @@ export function ProductFormDialog({
             barcode: v.barcode || undefined,
             compareAtPrice: v.compareAtPrice ?? undefined,
             cost: v.cost ?? undefined,
-            // Warehousing orgs seed stock per warehouse, never via this column.
+            // Warehousing orgs seed stock per location, never via this column.
             inventoryQuantity: warehousingEnabled ? undefined : (v.inventoryQuantity ?? 0),
+            stock: stockPayload(
+              stockLinesFor(v, form.stockLocationIds).map((line) => line.quantity),
+              v.trackQuantity,
+            ),
             trackQuantity: v.trackQuantity,
             continueSellingWhenOutOfStock: v.continueSellingWhenOutOfStock,
             weight: v.weight ?? undefined,
@@ -564,6 +694,8 @@ export function ProductFormDialog({
           variant: (() => {
             const single = buildSingleVariantPayload(form.variant);
             if (warehousingEnabled) delete single.inventoryQuantity;
+            const stock = stockPayload(singleStockQuantities, form.variant.trackQuantity);
+            if (stock) single.stock = stock;
             return single;
           })(),
         };
@@ -778,6 +910,39 @@ export function ProductFormDialog({
                   patch={patchVariant}
                   priceError={errors.price}
                   stockReadOnly={warehousingEnabled}
+                  stockSection={
+                    stockPerLocation ? (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-2 text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                          <span className="flex-1">Stock</span>
+                          {form.variant.trackQuantity && stockLocations.length > 0 && (
+                            <span className="w-20 pr-3 text-right sm:w-24">Quantity</span>
+                          )}
+                          {form.variant.trackQuantity && stockLocations.length > 0 && (
+                            <span className="w-9" aria-hidden />
+                          )}
+                        </div>
+                        <OpeningStockBody
+                          tracked={form.variant.trackQuantity}
+                          loading={warehousesQuery.isLoading}
+                          hasLocations={stockLocations.length > 0}
+                        >
+                          <StockLocationRows
+                            locations={activeLocations}
+                            locationIds={form.stockLocationIds}
+                            onLocationChange={setStockLocation}
+                            onAdd={addStockLocation}
+                            onRemove={removeStockLocation}
+                            quantities={form.variant.stockQuantities}
+                            onQuantityChange={setStockQuantity}
+                          />
+                        </OpeningStockBody>
+                        {errors.stock && (
+                          <p className="text-[10px] text-red-600">{errors.stock}</p>
+                        )}
+                      </div>
+                    ) : undefined
+                  }
                 />
               ) : (
                 <div className="space-y-3 mt-3">
@@ -794,6 +959,35 @@ export function ProductFormDialog({
                       />
                       {errors.options && (
                         <p className="mt-1 text-[10px] text-red-600">{errors.options}</p>
+                      )}
+                    </div>
+                  )}
+
+                  {stockPerLocation && (
+                    <div>
+                      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Stock at
+                      </p>
+                      <OpeningStockBody
+                        tracked
+                        loading={warehousesQuery.isLoading}
+                        hasLocations={stockLocations.length > 0}
+                      >
+                        <div className="max-w-md">
+                          <StockLocationRows
+                            locations={activeLocations}
+                            locationIds={form.stockLocationIds}
+                            onLocationChange={setStockLocation}
+                            onAdd={addStockLocation}
+                            onRemove={removeStockLocation}
+                          />
+                        </div>
+                        <p className="mt-1.5 text-[10px] text-muted-foreground">
+                          Enter each variant&apos;s quantity at these locations in the table below.
+                        </p>
+                      </OpeningStockBody>
+                      {errors.stock && (
+                        <p className="mt-1 text-[10px] text-red-600">{errors.stock}</p>
                       )}
                     </div>
                   )}
@@ -839,6 +1033,7 @@ export function ProductFormDialog({
                         variants={form.variants}
                         onChange={(next) => patch({ variants: next })}
                         stockReadOnly={warehousingEnabled}
+                        stockLocations={stockPerLocation ? stockLocations : undefined}
                       />
                     ) : (
                       <p className="rounded-lg border border-dashed border-input bg-gray-50 dark:bg-gray-800/40 py-4 text-center text-[11px] text-muted-foreground">
@@ -893,6 +1088,50 @@ export function ProductFormDialog({
       </div>
     </div>
   );
+}
+
+/**
+ * What stands in for the opening-stock rows when they cannot be shown: the
+ * variant does not track quantity, or the locations are not there yet.
+ */
+function OpeningStockBody({
+  tracked,
+  loading,
+  hasLocations,
+  children,
+}: {
+  tracked: boolean;
+  loading: boolean;
+  hasLocations: boolean;
+  children: React.ReactNode;
+}) {
+  if (!tracked) {
+    return <p className="flex h-9 items-center text-xs italic text-muted-foreground">Untracked</p>;
+  }
+  if (loading) {
+    return (
+      <p className="flex h-9 items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" />
+        Loading locations…
+      </p>
+    );
+  }
+  if (!hasLocations) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Couldn&apos;t load your locations. The product will start with no stock; you can add
+        it in{" "}
+        <Link
+          to="/products/inventory"
+          className="text-brand-strong underline underline-offset-2 hover:no-underline"
+        >
+          Inventory
+        </Link>
+        .
+      </p>
+    );
+  }
+  return <>{children}</>;
 }
 
 function Section({
@@ -1028,11 +1267,14 @@ function SingleVariantFields({
   patch,
   priceError,
   stockReadOnly = false,
+  stockSection,
 }: {
   variant: FormState["variant"];
   patch: (p: Partial<FormState["variant"]>) => void;
   priceError?: string;
   stockReadOnly?: boolean;
+  /** Replaces the Stock on hand field: opening stock per location. */
+  stockSection?: React.ReactNode;
 }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const { data: org } = useCurrentOrg();
@@ -1065,7 +1307,7 @@ function SingleVariantFields({
           onChange={(v) => patch({ sku: v })}
           mono
         />
-        {variant.trackQuantity && stockReadOnly ? (
+        {stockSection ? null : variant.trackQuantity && stockReadOnly ? (
           <div className="flex flex-col">
             <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
               Stock on hand
@@ -1101,10 +1343,12 @@ function SingleVariantFields({
         )}
       </div>
 
+      {stockSection}
+
       <button
         type="button"
         onClick={() => setAdvancedOpen((v) => !v)}
-        className="inline-flex items-center gap-1 text-[11px] font-medium text-[#084734] hover:underline"
+        className="inline-flex items-center gap-1 text-[11px] font-medium text-brand-strong hover:underline"
       >
         {advancedOpen ? (
           <ChevronDown className="size-3" />
