@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { z } from 'zod';
 import { GSTIN_REGEX, isGstRateSlab } from '../gst/constants/gst-rates';
+import { isValidStateCode } from '../gst/constants/indian-states';
 
 /**
  * Request bodies of the point-of-sale API. Zod rather than DTO classes
@@ -90,10 +91,23 @@ const PaymentSchema = z
     })
     .strict();
 
+const Phone = z.string().trim().max(24, 'That phone number is too long.');
+
+/** The buyer's address, for bills over the amount that needs it. */
+const AddressSchema = z
+    .object({
+        address1: z.string({ error: "Enter the buyer's address." }).trim().min(1, "Enter the buyer's address.").max(200, 'Keep the address under 200 characters.'),
+        city: z.string({ error: "Enter the buyer's city." }).trim().min(1, "Enter the buyer's city.").max(80, 'Keep the city under 80 characters.'),
+        zip: z.string({ error: 'Enter the PIN code.' }).trim().regex(/^\d{6}$/, 'A PIN code is 6 digits.'),
+        // 96 is "Other Country", the place of supply of an export, not a state.
+        stateCode: z.string({ error: "Pick the buyer's state." }).refine((c) => c !== '96' && isValidStateCode(c), "Pick the buyer's state."),
+    })
+    .strict();
+
 const CustomerSchema = z
     .object({
         customerId: z.string().min(1).max(40).optional(),
-        phone: z.string().trim().max(24, 'That phone number is too long.').optional(),
+        phone: Phone.optional(),
         name: z.string().trim().max(120, "Keep the customer's name under 120 characters.").optional(),
         email: z.email('Enter a valid email address.').optional(),
         gstin: z
@@ -103,7 +117,9 @@ const CustomerSchema = z
             .refine((v) => GSTIN_REGEX.test(v), 'Enter a valid 15-character GSTIN.')
             .optional(),
         billingStateCode: z.string().regex(/^\d{2}$/, 'The billing state code is 2 digits.').optional(),
-        whatsappOptIn: z.boolean().optional(),
+        address: AddressSchema.optional(),
+        /** Marketing on WhatsApp, ticked by the customer. Giving a number for the bill is not this. */
+        offersOptIn: z.boolean().optional(),
     })
     .strict();
 
@@ -123,6 +139,14 @@ export const SaleSchema = z
 
 export const CollectPaymentSchema = PaymentSchema.extend({ staffToken: z.string().max(2000).optional() }).strict();
 
+export const SendBillSchema = z
+    .object({
+        channel: z.literal('whatsapp', { error: 'Bills go out on WhatsApp for now.' }),
+        phone: Phone.optional(),
+        staffToken: z.string().max(2000).optional(),
+    })
+    .strict();
+
 export type CreateStaffInput = z.infer<typeof CreateStaffSchema>;
 export type UpdateStaffInput = z.infer<typeof UpdateStaffSchema>;
 export type ApproveInput = z.infer<typeof ApproveSchema>;
@@ -130,6 +154,7 @@ export type SaleInput = z.infer<typeof SaleSchema>;
 export type SaleLineInput = SaleInput['lines'][number];
 export type SaleCustomerInput = NonNullable<SaleInput['customer']>;
 export type CollectPaymentInput = z.infer<typeof CollectPaymentSchema>;
+export type SendBillInput = z.infer<typeof SendBillSchema>;
 
 /** The body, or a 400 whose message is the first problem as a sentence. */
 export function parsePosBody<T extends z.ZodType>(schema: T, raw: unknown, what: string): z.infer<T> {

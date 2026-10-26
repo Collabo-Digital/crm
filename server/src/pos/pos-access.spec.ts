@@ -48,7 +48,7 @@ const MANAGER_ONLY = ['updateSettings', 'listStaff', 'createStaff', 'updateStaff
 describe('point-of-sale access', () => {
     it('has the routes of the contract', () => {
         expect(handlers.map(([name]) => name).sort()).toEqual(
-            ['setup', 'updateSettings', 'listStaff', 'createStaff', 'updateStaff', 'unlock', 'approve', 'products', 'scan', 'customers', 'createSale', 'collectPayment', 'receipt', 'sendReceipt'].sort(),
+            ['setup', 'updateSettings', 'listStaff', 'createStaff', 'updateStaff', 'unlock', 'approve', 'products', 'scan', 'customers', 'createSale', 'collectPayment', 'delivery', 'sendBill', 'receipt'].sort(),
         );
     });
 

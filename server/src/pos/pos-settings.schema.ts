@@ -28,8 +28,16 @@ const fields = {
     receiptFooter: z.preprocess(blankToNull, z.string().trim().max(300, 'Keep the receipt footer under 300 characters.').nullable()),
     /** Variants shown as one-tap tiles on the billing screen. */
     tileVariantIds: z.array(z.string().min(1).max(40)).max(24, 'Pick at most 24 quick tiles.').transform((ids) => [...new Set(ids)]),
-    /** 'optional' allows walk-in bills without a customer. */
-    askCustomer: z.enum(['optional', 'required']),
+    /** Whether the till asks for the customer at checkout: never, with a skip, or always. */
+    customerAtCheckout: z.enum(['off', 'ask', 'required'], { error: 'Customer at checkout is off, ask or required.' }),
+    /** A bill to pay of this much or more needs the buyer's name and address (GST rule 46); null never does. */
+    customerRequiredAbove: z
+        .number({ error: 'Enter the bill amount as a number.' })
+        .min(0, "The bill amount that needs the buyer's details can't be negative.")
+        .max(10_000_000, "The bill amount that needs the buyer's details is too large.")
+        .nullable(),
+    /** Send the bill on WhatsApp after every sale with a mobile number. */
+    autoSendBill: z.boolean(),
 };
 
 export const PosSettingsSchema = z.object({
@@ -42,7 +50,9 @@ export const PosSettingsSchema = z.object({
     receiptWidth: fields.receiptWidth.default(80),
     receiptFooter: fields.receiptFooter.default(null),
     tileVariantIds: fields.tileVariantIds.default([]),
-    askCustomer: fields.askCustomer.default('optional'),
+    customerAtCheckout: fields.customerAtCheckout.default('ask'),
+    customerRequiredAbove: fields.customerRequiredAbove.default(50_000),
+    autoSendBill: fields.autoSendBill.default(true),
 });
 
 export type PosSettings = z.infer<typeof PosSettingsSchema>;
@@ -58,15 +68,26 @@ export const UpdatePosSettingsSchema = z
         receiptWidth: fields.receiptWidth.optional(),
         receiptFooter: fields.receiptFooter.optional(),
         tileVariantIds: fields.tileVariantIds.optional(),
-        askCustomer: fields.askCustomer.optional(),
+        customerAtCheckout: fields.customerAtCheckout.optional(),
+        customerRequiredAbove: fields.customerRequiredAbove.optional(),
+        autoSendBill: fields.autoSendBill.optional(),
     })
     .strict();
 
 export type UpdatePosSettingsInput = z.infer<typeof UpdatePosSettingsSchema>;
 
+/** What a stored `askCustomer` from before `customerAtCheckout` meant. */
+const ASKED_BEFORE: Record<string, PosSettings['customerAtCheckout']> = { true: 'ask', false: 'off', optional: 'ask', required: 'required' };
+
 /** Stored settings with defaults filled in; a blob that no longer parses falls back to the defaults. */
 export function parsePosSettings(raw: unknown): PosSettings {
-    const parsed = PosSettingsSchema.safeParse(raw ?? {});
+    let stored = raw ?? {};
+    if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+        const { askCustomer, ...rest } = stored as Record<string, unknown>;
+        const before = ASKED_BEFORE[String(askCustomer)];
+        stored = before && rest.customerAtCheckout === undefined ? { ...rest, customerAtCheckout: before } : rest;
+    }
+    const parsed = PosSettingsSchema.safeParse(stored);
     return parsed.success ? parsed.data : PosSettingsSchema.parse({});
 }
 
