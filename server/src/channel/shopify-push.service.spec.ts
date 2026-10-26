@@ -15,6 +15,7 @@ import {
   INVENTORY_LEVEL_AT_LOCATION_QUERY,
   INVENTORY_SET_QUANTITIES_MUTATION,
   ORDER_CREATE_MUTATION,
+  PRODUCT_SET_MUTATION,
 } from './shopify-graphql.types';
 
 /**
@@ -887,6 +888,114 @@ describe('ShopifyPushService — which locations a stock push writes to', () => 
  * Linking a location with "keep Collabo's counts": its own count of every
  * tracked variant goes to its Shopify location, before anything is pulled.
  */
+/**
+ * A product made in the CRM reaches Shopify through productSet. Where stock is
+ * held per location, its stock must follow the rule an Inventory adjustment
+ * follows: each location linked to a Shopify location sends its own count
+ * there, and stock at a location that is not linked never reaches Shopify.
+ */
+describe('ShopifyPushService.pushProduct — a new product’s stock per location', () => {
+  const LINKED = { id: 'wh_kochi', shopifyLocationId: '111' };
+  const PRIMARY = 999;
+
+  function setup(warehousing: boolean) {
+    const { service, prisma, graphql } = build(null);
+    const p = prisma as any;
+    // 5 at Kochi (linked to Shopify location 111) and 3 at a store that is
+    // not linked: 8 in all.
+    const variant = {
+      id: 'v1', externalId: 'manual_v1', inventoryItemId: null, inventoryQuantity: 8,
+      price: decimal('1000'), compareAtPrice: null, cost: null, sku: 'LIN-M', barcode: null, barcodeSource: null,
+      option1: 'Default Title', option2: null, option3: null, requiresShipping: true, taxable: true,
+      weight: null, weightUnit: null, hsCode: null, countryOfOrigin: null,
+      trackQuantity: true, continueSellingWhenOutOfStock: false,
+    };
+    p.product = {};
+    p.product.findFirst = jest.fn().mockResolvedValue({
+      id: 'p1', organizationId: ORG, title: 'Linen shirt', bodyHtml: null, vendor: null, productType: null,
+      status: 'ACTIVE', tags: [], options: null, metadata: {}, externalId: 'manual_p1',
+      variants: [variant], images: [], channel: { platform: ChannelPlatform.MANUAL, currency: 'INR' },
+    });
+    // After the rebadge, which persisted the Shopify inventory item.
+    p.productVariant = {
+      findMany: jest.fn().mockResolvedValue([{ id: 'v1', externalId: '501', inventoryItemId: '601', inventoryQuantity: 8 }]),
+    };
+    p.warehouse = { findMany: jest.fn().mockResolvedValue([LINKED]) };
+    p.stockLevel = {
+      findMany: jest.fn((args: { where: { warehouseId?: unknown } }) =>
+        Promise.resolve(
+          args.where.warehouseId
+            ? [{ variantId: 'v1', warehouseId: LINKED.id, available: 5 }]
+            : [{ variantId: 'v1' }],
+        ),
+      ),
+    };
+    const s = service as any;
+    s.orgSettings = {
+      getProductSettings: jest.fn().mockResolvedValue({}),
+      getInventorySettings: jest.fn().mockResolvedValue({}),
+    };
+    s.inventoryLedger = { isWarehousingEnabled: jest.fn().mockResolvedValue(warehousing) };
+    jest.spyOn(s, 'priceConverter').mockResolvedValue((v: unknown) => String(v));
+    jest.spyOn(s, 'resolveLocationId').mockResolvedValue(PRIMARY);
+    jest.spyOn(s, 'recordProductSuccess').mockResolvedValue(undefined);
+    jest.spyOn(s, 'applyPendingLocationChanges').mockResolvedValue(undefined);
+    graphql.request.mockImplementation(async (_auth: unknown, query: string) => {
+      if (query === PRODUCT_SET_MUTATION) {
+        return {
+          productSet: {
+            product: {
+              id: 'gid://shopify/Product/401',
+              variants: { nodes: [{ id: 'gid://shopify/ProductVariant/501', inventoryItem: { id: 'gid://shopify/InventoryItem/601' } }] },
+              media: { nodes: [] },
+            },
+            userErrors: [],
+          },
+        };
+      }
+      if (query === INVENTORY_SET_QUANTITIES_MUTATION) {
+        return { inventorySetQuantities: { inventoryAdjustmentGroup: { createdAt: 'now' }, userErrors: [] } };
+      }
+      return {};
+    });
+    const sent = (query: string) => graphql.request.mock.calls.filter((c) => c[1] === query).map((c) => c[2] as any);
+    return { run: () => service.pushProduct('p1', ORG), sent };
+  }
+
+  it('creates the product without seeding any location’s stock', async () => {
+    const { run, sent } = setup(true);
+    await run();
+
+    const [productSet] = sent(PRODUCT_SET_MUTATION);
+    expect(productSet.input.variants[0].inventoryQuantities).toBeUndefined();
+  });
+
+  it('then sends the linked location its own count, and nothing for the location that is not linked', async () => {
+    const { run, sent } = setup(true);
+    await run();
+
+    // Every stock figure Shopify was given, by either mutation.
+    const seeded = sent(PRODUCT_SET_MUTATION).flatMap((v) =>
+      v.input.variants.flatMap((variant: any) => variant.inventoryQuantities ?? []),
+    );
+    const set = sent(INVENTORY_SET_QUANTITIES_MUTATION).flatMap((v) => v.input.quantities);
+    expect([...seeded, ...set]).toEqual([
+      { inventoryItemId: 'gid://shopify/InventoryItem/601', locationId: 'gid://shopify/Location/111', quantity: 5 },
+    ]);
+  });
+
+  it('a workspace without locations still seeds its one quantity at the primary location', async () => {
+    const { run, sent } = setup(false);
+    await run();
+
+    const [productSet] = sent(PRODUCT_SET_MUTATION);
+    expect(productSet.input.variants[0].inventoryQuantities).toEqual([
+      { locationId: `gid://shopify/Location/${PRIMARY}`, name: 'available', quantity: 8 },
+    ]);
+    expect(sent(INVENTORY_SET_QUANTITIES_MUTATION)).toEqual([]);
+  });
+});
+
 describe('ShopifyPushService.pushWarehouseStock', () => {
   function setup(shopifyLocationId: string | null) {
     const { service, prisma } = build(null);

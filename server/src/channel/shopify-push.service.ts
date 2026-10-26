@@ -996,7 +996,14 @@ export class ShopifyPushService {
       channelId: shopify.id,
       priority,
     };
-    const locationId = await this.resolveLocationId(shopify.id, shopDomain, token);
+    // Where stock is held per location, the variant's quantity is a total over
+    // locations some of which may not be on Shopify. Seeding it at the primary
+    // would put stock there that is not there, so nothing is seeded; each
+    // linked location's own figure is sent after the create, below.
+    const warehousing = await this.inventoryLedger.isWarehousingEnabled(orgId);
+    const locationId = warehousing
+      ? null
+      : await this.resolveLocationId(shopify.id, shopDomain, token);
     const input = this.buildProductSetInput(
       product,
       oversellGlobally,
@@ -1080,14 +1087,11 @@ export class ShopifyPushService {
 
     await this.recordProductSuccess(productId, orgId, remoteProductId);
 
-    // productSet seeded the whole quantity at the primary location, because
-    // that is the only location its per-variant input can name. For an org
-    // running multi-location warehouses that is the wrong distribution — the
-    // stock may live in a different warehouse entirely — so redistribute now
-    // that the rebadge transaction above has persisted each inventoryItemId.
-    // Skipped for non-warehousing orgs, where the seed is already correct and
-    // this would be a redundant mutation.
-    if (await this.inventoryLedger.isWarehousingEnabled(orgId)) {
+    // Now that the rebadge above has persisted each inventoryItemId, send each
+    // linked location its own stock — the same push an Inventory adjustment
+    // makes, so stock at a location not linked to Shopify stays off it.
+    // Legacy orgs were already seeded at the primary by productSet.
+    if (warehousing) {
       await this.pushAvailability(orgId, product.variants.map((v) => v.id));
     }
     // Locations chosen before the product was ever on Shopify. The quantity

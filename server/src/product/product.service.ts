@@ -544,14 +544,22 @@ export class ProductService {
       // Lazy-create the MANUAL channel.
       const channel = await ensureManualChannel(tx, orgId);
 
+      const incoming = hasMulti ? dto.variants! : [dto.variant!];
+      const openingStock = await this.openingStockFor(tx, orgId, incoming);
+
       // Build variants payload.
       // Product create is admin-only (no @AllowVendor on the route), so no
       // vendor scope to thread here; the builder still takes one for parity.
-      const variantsCreate = hasMulti
-        ? dto.variants!.map((v, idx) =>
-          this.buildVariantCreate(orgId, v, idx + 1, dto.options),
-        )
-        : [this.buildVariantCreate(orgId, dto.variant!, 1, undefined)];
+      // A variant given stock per location starts at 0; the movements below
+      // bring its quantity to the sum.
+      const variantsCreate = incoming.map((v, idx) =>
+        this.buildVariantCreate(
+          orgId,
+          openingStock[idx] ? { ...v, inventoryQuantity: 0 } : v,
+          idx + 1,
+          hasMulti ? dto.options : undefined,
+        ),
+      );
 
       // SKUs and barcodes must be free — the same check `createVariant`,
       // `updateVariant` and the bulk update already run. Product create was
@@ -559,7 +567,6 @@ export class ProductService {
       // colliding codes: three products were created here sharing SKU
       // "QA-DUP-001". Inventory, label printing and barcode scanning all
       // identify a variant by these codes, so a duplicate is not cosmetic.
-      const incoming = hasMulti ? dto.variants! : [dto.variant!];
       for (const v of incoming) {
         await this.assertVariantCodesFree(orgId, v);
       }
@@ -628,12 +635,48 @@ export class ProductService {
         _userId,
       );
 
+      // Variants are matched to their payload by the external id minted for
+      // them, since the payload's `position` need not follow its order.
+      const stockByExternalId = new Map(
+        variantsCreate.map((v, idx) => [v.externalId, openingStock[idx]]),
+      );
+      const seededQuantity = new Map<string, number>();
+      // Sorted: applyMovement locks each variant, and a transaction moving
+      // several must take those locks in a stable order.
+      const withStock = created.variants
+        .filter((v) => stockByExternalId.get(v.externalId))
+        .sort((a, b) => a.id.localeCompare(b.id));
+      for (const v of withStock) {
+        seededQuantity.set(
+          v.id,
+          await this.inventoryLedger.recordOpeningStock(tx, {
+            orgId,
+            variantId: v.id,
+            stock: stockByExternalId.get(v.externalId)!,
+            referenceType: 'product',
+            referenceId: created.id,
+            actorId: _userId,
+          }),
+        );
+      }
+
       // …and a stock row per variant, in the same transaction. Without this a
       // warehousing org's new product never appears in Inventory, so it can
       // never be given stock, so the order builder permanently disables it.
-      await this.inventoryLedger.ensureStockRows(tx, orgId, created.variants);
+      await this.inventoryLedger.ensureStockRows(
+        tx,
+        orgId,
+        created.variants.filter((v) => !seededQuantity.has(v.id)),
+      );
 
-      return created;
+      return {
+        ...created,
+        variants: created.variants.map((v) =>
+          seededQuantity.has(v.id)
+            ? { ...v, inventoryQuantity: seededQuantity.get(v.id)! }
+            : v,
+        ),
+      };
     });
 
     // Give every new variant a SKU, then a scannable barcode, before anything
@@ -765,6 +808,63 @@ export class ProductService {
       taxable: vendorScope ? true : (v.taxable ?? true),
       ...(vendorScope ? {} : this.variantGstOverride(v)),
     };
+  }
+
+  /**
+   * The opening stock lines each new variant is created with, by payload
+   * index, or null for a variant that gets the old seed instead (one row at
+   * the default location, via `ensureStockRows`). Lines apply only where
+   * stock is tracked per location and the variant tracks quantity.
+   *
+   * Every location must be one of the org's active locations, listed once per
+   * variant; anything else is refused before a row is written.
+   */
+  private async openingStockFor(
+    db: Prisma.TransactionClient,
+    orgId: string,
+    variants: CreateVariantDto[],
+  ): Promise<Array<Array<{ warehouseId: string; quantity: number }> | null>> {
+    const lines = variants.map((v) =>
+      v.stock && v.stock.length > 0 && v.trackQuantity !== false ? v.stock : null,
+    );
+    if (!lines.some(Boolean)) return lines;
+    if (!(await this.inventoryLedger.isWarehousingEnabled(orgId))) {
+      return lines.map(() => null);
+    }
+
+    const warehouseIds = [
+      ...new Set(lines.flatMap((stock) => (stock ?? []).map((line) => line.warehouseId))),
+    ];
+    const warehouses = await db.warehouse.findMany({
+      where: { id: { in: warehouseIds }, organizationId: orgId },
+      select: { id: true, name: true, isActive: true },
+    });
+    if (warehouses.length !== warehouseIds.length) {
+      throw new BadRequestException(
+        'One of the stock locations is not a location of this workspace.',
+      );
+    }
+    const inactive = warehouses.find((w) => !w.isActive);
+    if (inactive) {
+      throw new BadRequestException(
+        `${inactive.name} is inactive. Choose an active location for this stock.`,
+      );
+    }
+    const nameById = new Map(warehouses.map((w) => [w.id, w.name]));
+    for (const stock of lines) {
+      const seen = new Set<string>();
+      for (const line of stock ?? []) {
+        if (seen.has(line.warehouseId)) {
+          throw new BadRequestException(
+            `${nameById.get(line.warehouseId)} is listed more than once for the same variant. Give each location one quantity.`,
+          );
+        }
+        seen.add(line.warehouseId);
+      }
+    }
+    return lines.map((stock) =>
+      stock ? stock.map((line) => ({ warehouseId: line.warehouseId, quantity: line.quantity })) : null,
+    );
   }
 
   /**
@@ -1238,6 +1338,7 @@ export class ProductService {
     await this.assertVariantCodesFree(orgId, dto);
 
     const created = await this.prisma.$transaction(async (tx) => {
+      const [openingStock] = await this.openingStockFor(tx, orgId, [dto]);
       const row = await tx.productVariant.create({
       data: {
         productId,
@@ -1250,7 +1351,7 @@ export class ProductService {
         price,
         compareAtPrice: dto.compareAtPrice ?? null,
         cost: dto.cost ?? null,
-        inventoryQuantity: dto.inventoryQuantity ?? 0,
+        inventoryQuantity: openingStock ? 0 : (dto.inventoryQuantity ?? 0),
         trackQuantity: dto.trackQuantity ?? true,
         continueSellingWhenOutOfStock:
           dto.continueSellingWhenOutOfStock ?? false,
@@ -1269,6 +1370,16 @@ export class ProductService {
         ...(vendorScope ? {} : this.variantGstOverride(dto)),
       },
       });
+      if (openingStock) {
+        const inventoryQuantity = await this.inventoryLedger.recordOpeningStock(tx, {
+          orgId,
+          variantId: row.id,
+          stock: openingStock,
+          referenceType: 'variant',
+          referenceId: row.id,
+        });
+        return { ...row, inventoryQuantity };
+      }
       // Ledger: initial stock when created with a non-zero quantity.
       await this.inventoryLedger.recordInitialQuantities(
         tx,
