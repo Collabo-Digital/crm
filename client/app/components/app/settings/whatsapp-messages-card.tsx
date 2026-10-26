@@ -20,11 +20,22 @@ export function WhatsAppMessagesCard() {
   if (!view?.pack) return null;
 
   const progress = packProgress(view, "messages");
+  // Slots the server explains (a template Meta refused, one the merchant deleted).
+  const explained = view.slots.filter((s) => s.reason);
   return (
     <div className="mt-4 space-y-1 border-t border-border pt-3">
       <p className="text-caption font-medium text-foreground">WhatsApp messages</p>
       <p className={cn("text-caption", TONE_TEXT[progress.tone])}>{progress.title}</p>
       {progress.detail && <p className="text-caption text-muted-foreground">{progress.detail}</p>}
+      {explained.length > 0 && (
+        <ul className="space-y-0.5">
+          {explained.map((s) => (
+            <li key={s.slot} className={cn("text-caption", s.state === "attention" ? "text-danger" : "text-warning-strong")}>
+              <span className="font-medium">{s.title}:</span> {s.reason}
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="text-caption text-muted-foreground">Meta charges per message.</p>
       <div className="pt-2">
         <Button asChild variant="outline" size="sm">

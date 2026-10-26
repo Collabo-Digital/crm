@@ -4512,6 +4512,8 @@ export interface TemplatePackSlot {
   description: string;
   category: "UTILITY" | "MARKETING";
   state: PackSlotState;
+  /** Why the slot needs the merchant, as a plain sentence: Meta refused the template, or the merchant deleted it. */
+  reason: string | null;
   template: null | {
     id: string;
     name: string;

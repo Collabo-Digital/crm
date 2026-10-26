@@ -653,19 +653,22 @@ const SLOT_STATE_TEXT: Record<PackSlotState, string> = {
   not_created: "text-muted-foreground",
 };
 
-/** What a run does with the step while its template is not simply approved. */
+/**
+ * Why the template is not simply approved (the server's sentence when it has
+ * one), and what a run does with the step meanwhile.
+ */
 function slotNote(info: TemplatePackSlot): string | null {
+  const skips = "Until it is approved, runs skip this step.";
   switch (info.state) {
     case "pending":
-      return "Meta is reviewing it. Until it is approved, runs skip this step.";
+      return `${info.reason ?? "Meta is reviewing it."} ${skips}`;
     case "paused":
-      return "Meta paused it. Runs wait for the pause to end, for up to 12 hours, then skip this step.";
+      return `${info.reason ?? "Meta paused it."} Runs wait for the pause to end, for up to 12 hours, then skip this step.`;
     case "not_created":
-      return "Collabo has not created it yet. Until it is approved, runs skip this step.";
+      return `${info.reason ?? "Collabo has not created it yet."} ${skips}`;
     case "attention":
-      return info.template && approvedAsMarketing(info.template)
-        ? "Meta approved it as marketing, not utility: it is still sent, at Meta’s marketing rate."
-        : "It needs your attention in Templates. Until it is approved, runs skip this step.";
+      if (!info.reason && info.template && approvedAsMarketing(info.template)) return "Meta approved it as marketing, not utility: it is still sent, at Meta’s marketing rate.";
+      return `${info.reason ?? "It needs your attention in Templates."} ${skips}`;
     default:
       return null;
   }
@@ -699,11 +702,9 @@ function ManagedTemplateFields({ slot, templates, set, ctx }: { slot: PackSlotKe
         {note && (
           <p className="text-micro text-muted-foreground">
             {note}{" "}
-            {info?.template && (
-              <Link to={`/campaigns/templates/${info.template.id}`} className="underline">
-                Open the template
-              </Link>
-            )}
+            <Link to={info?.template ? `/campaigns/templates/${info.template.id}` : "/campaigns/templates"} className="underline">
+              {info?.template ? "Open the template" : "Open Templates"}
+            </Link>
           </p>
         )}
         {current && <p className="whitespace-pre-wrap rounded-lg bg-muted p-2 text-caption">{current.preview.body}</p>}
