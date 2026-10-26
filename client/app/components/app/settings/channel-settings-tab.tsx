@@ -17,6 +17,7 @@ import { ChannelManageDialog } from "~/components/app/channels/channel-manage-di
 import { ChannelDisconnectDialog } from "~/components/app/channels/channel-disconnect-dialog";
 import { InstagramConnectDialog } from "~/components/app/channels/instagram-connect-dialog";
 import { InstagramAccountPickerDialog } from "~/components/app/channels/instagram-account-picker-dialog";
+import { WhatsAppMessagesCard } from "~/components/app/settings/whatsapp-messages-card";
 import {
   useChannels,
   usePendingShopifyLocations,
@@ -219,6 +220,8 @@ export function ChannelSettingsTab() {
                 );
               })}
             </div>
+          ) : provider.platform === "WHATSAPP" && active.length > 0 ? (
+            <WhatsAppMessagesCard />
           ) : null
         }
       />

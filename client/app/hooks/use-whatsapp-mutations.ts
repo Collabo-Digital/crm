@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { channelService } from "~/services/channel.service";
 import { channelKeys } from "~/hooks/use-channel-queries";
+import { campaignKeys } from "~/hooks/use-campaign-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import type { WhatsAppCallbackRequest, WhatsAppInstallRequest } from "~/types/api";
 
@@ -28,6 +29,8 @@ export function useCompleteWhatsAppInstallMutation() {
     mutationFn: (data: WhatsAppCallbackRequest) => channelService.completeWhatsAppInstall(data),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: channelKeys.all });
+      // A new number gets Collabo's recommended templates, set up in the background.
+      queryClient.invalidateQueries({ queryKey: campaignKeys.templates() });
       const incomplete = result.setup.webhooks === "failed" || result.setup.registration === "failed";
       if (incomplete) {
         toast.warning("WhatsApp connected, but setup is incomplete. Open the channel to retry.");

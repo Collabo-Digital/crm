@@ -20,6 +20,7 @@ import type {
   SegmentDefinition,
   SegmentPreview,
   TemplateDraft,
+  TemplatePackView,
   TemplateStarter,
   TemplateWriterStatus,
   WriteTemplateRequest,
@@ -56,6 +57,10 @@ export const campaignsService = {
   updateTemplate: (id: string, draft: TemplateDraft) =>
     apiClient.patch<MessageTemplate>(`/campaigns/templates/${id}`, { draft }, { timeout: 120_000 }).then((r) => r.data),
   deleteTemplate: (id: string) => apiClient.delete<{ deleted: true }>(`/campaigns/templates/${id}`).then((r) => r.data),
+  /** Collabo's recommended templates on the connected number: the pack, its slots and their states. */
+  templatePack: () => apiClient.get<TemplatePackView>("/campaigns/templates/pack").then((r) => r.data),
+  /** Creates the pack when it is missing, or repairs it; the work runs in the background. */
+  runTemplatePack: () => apiClient.post<TemplatePackView>("/campaigns/templates/pack").then((r) => r.data),
   upload: (file: File) => {
     const form = new FormData();
     form.append("file", file);

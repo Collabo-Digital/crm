@@ -2,7 +2,9 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { CircleAlert, FileSpreadsheet, MessagesSquare, Plus, Search, Workflow } from "lucide-react";
 
+import { CartDiscountCard } from "~/components/app/automations/cart-discount-card";
 import { CreateAutomationDialog } from "~/components/app/automations/create-automation-dialog";
+import { PackTurnOnBanner } from "~/components/app/automations/pack-turn-on-banner";
 import { ChannelBadge } from "~/components/app/channel-badge";
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
@@ -12,11 +14,13 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "~/components/ui/page-header";
 import { useAutomations } from "~/hooks/use-automation-queries";
+import { useTemplatePack } from "~/hooks/use-campaign-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { canEditAutomations } from "~/lib/permissions";
 import { useDebounced } from "~/hooks/use-debounced";
 import { AUTOMATION_STATUS_CLASS, AUTOMATION_STATUS_LABEL, CHANNEL_LABEL, PLAYBOOKS, type Playbook } from "~/lib/automation-blocks";
 import { formatRelativeTime } from "~/lib/format-date";
+import { PACK_STATE_CLASS, PACK_STATE_LABEL } from "~/lib/template-pack";
 import { cn } from "~/lib/utils";
 import type { AutomationStatus } from "~/types/api";
 import { SOCIAL_CHANNELS_OFFERED, platformOffered } from "~/lib/channel-providers";
@@ -45,6 +49,9 @@ export default function AutomationsPage() {
   const canManage = canEditAutomations(role, permissions);
   const [creating, setCreating] = useState<Playbook | null | "blank">(null);
   const rows = data?.data ?? [];
+  // Collabo's recommended messages: whether they go live by themselves, and the cart discount.
+  const { data: packView } = useTemplatePack();
+  const pack = packView?.pack ?? null;
 
   return (
     <div className="space-y-6">
@@ -78,6 +85,8 @@ export default function AutomationsPage() {
           )}
         </PageHeaderActions>
       </PageHeader>
+
+      {canManage && pack && <PackTurnOnBanner rows={rows} autoActivate={pack.autoActivate} />}
 
       <SectionCard
         title="Your automations"
@@ -122,26 +131,36 @@ export default function AutomationsPage() {
           <div className="divide-y">
             {rows.map((a) => (
               <Link key={a.id} to={`/campaigns/automations/${a.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3 hover:bg-muted/50">
-                <div className="min-w-0 flex-1">
+                {/* On a phone the name and its notes take the first line, the counts and status the second. */}
+                <div className="min-w-0 basis-full sm:basis-0 sm:flex-1">
                   <p className="flex items-center gap-2 truncate text-body font-medium">
                     {a.name}
                     {a.lastError && a.status === "ACTIVE" && <CircleAlert className="size-3.5 shrink-0 text-danger" aria-label="Last run stopped" />}
                   </p>
                   <p className="mt-0.5 flex items-center gap-2 truncate text-caption text-muted-foreground">
+                    {a.packKey && <span className="shrink-0">Recommended by Collabo</span>}
                     <ChannelBadge platform={a.channel?.platform ?? a.platform} name={a.channel?.name} size={11} />
                     {a.version > 0 && <span>v{a.version}</span>}
                   </p>
+                  {a.packNote && <p className="mt-0.5 text-caption text-muted-foreground">{a.packNote}</p>}
                 </div>
-                <span className="w-24 text-right text-caption tabular-nums text-muted-foreground">
+                <span className="text-caption tabular-nums text-muted-foreground sm:w-24 sm:text-right">
                   {a.triggeredCount.toLocaleString("en-IN")} run{a.triggeredCount === 1 ? "" : "s"}
                 </span>
                 <span className="hidden w-28 text-caption text-muted-foreground sm:inline">{a.lastTriggeredAt ? `Last ${formatRelativeTime(a.lastTriggeredAt)}` : "Not run yet"}</span>
-                <span className={cn("rounded-full px-2 py-0.5 text-micro font-medium", AUTOMATION_STATUS_CLASS[a.status])}>{AUTOMATION_STATUS_LABEL[a.status]}</span>
+                {/* A pack automation shows where it stands with Meta; paused, failed and archived say so as before. */}
+                {a.packState && (a.status === "DRAFT" || a.status === "ACTIVE") ? (
+                  <span className={cn("ml-auto rounded-full px-2 py-0.5 text-micro font-medium sm:ml-0", PACK_STATE_CLASS[a.packState])}>{PACK_STATE_LABEL[a.packState]}</span>
+                ) : (
+                  <span className={cn("ml-auto rounded-full px-2 py-0.5 text-micro font-medium sm:ml-0", AUTOMATION_STATUS_CLASS[a.status])}>{AUTOMATION_STATUS_LABEL[a.status]}</span>
+                )}
               </Link>
             ))}
           </div>
         )}
       </SectionCard>
+
+      {pack && packView?.sets.includes("online_store") && (canManage || pack.cartDiscount) && <CartDiscountCard discount={pack.cartDiscount} readOnly={!canManage} />}
 
       {canManage && (
         <SectionCard title="Start from a playbook" description="Each opens as a draft with our suggested wording, to adjust before you publish.">

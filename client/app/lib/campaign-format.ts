@@ -51,6 +51,20 @@ export function templateStatusClass(status: string): string {
   }
 }
 
+/** Meta's rejection reasons, with what to change. */
+const REJECTION_HELP: Record<string, string> = {
+  INVALID_FORMAT: "Formatting problem: check variables, length and buttons",
+  TAG_CONTENT_MISMATCH: "Category does not match the content",
+  INCORRECT_CATEGORY: "Category does not match the content",
+  PROMOTIONAL: "Promotional content needs the Marketing category",
+  ABUSIVE_CONTENT: "Meta judged the content against its policies",
+  SCAM: "Meta judged the content against its policies",
+};
+
+export function rejectionHelp(reason: string): string {
+  return REJECTION_HELP[reason] ?? reason.toLowerCase().replace(/_/g, " ");
+}
+
 export const CATEGORY_LABEL: Record<TemplateCategory, string> = {
   MARKETING: "Marketing",
   UTILITY: "Utility",
