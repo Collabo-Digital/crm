@@ -81,10 +81,9 @@ export function useCollectPosPaymentMutation() {
   });
 }
 
-/** A refusal ("This bill has no GST invoice to send.") is shown on the success screen, not as a toast. */
-export function useSendPosReceiptMutation() {
+/** The answer and any refusal are shown on the bill's delivery row, not as a toast. */
+export function useSendPosBillMutation() {
   return useMutation({
-    mutationFn: posService.sendReceipt,
-    onSuccess: () => toast.success("The receipt was sent on WhatsApp."),
+    mutationFn: ({ orderId, ...data }: { orderId: string; phone?: string; staffToken?: string }) => posService.sendBill(orderId, data),
   });
 }

@@ -3,6 +3,10 @@ import { type RouteConfig, index, layout, route } from "@react-router/dev/routes
 export default [
   index("routes/home.tsx"),
 
+  // The bill a customer opens from the link sent after a counter sale. Public:
+  // outside the app layout and its sign-in.
+  route("b/:token", "routes/public/bill.tsx"),
+
   layout("routes/auth/_layout.tsx", [
     route("auth/login", "routes/auth/login.tsx"),
     route("auth/signup", "routes/auth/signup.tsx"),

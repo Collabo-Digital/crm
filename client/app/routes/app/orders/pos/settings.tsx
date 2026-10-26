@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import { ArrowLeft, ImageIcon, LayoutGrid, Loader2, Lock, Plus, Printer, ReceiptIndianRupee, Search, ShieldCheck, Users, Wallet, X } from "lucide-react";
+import { ArrowLeft, CheckCircle2, CircleAlert, Clock, ImageIcon, LayoutGrid, Loader2, Lock, MessageCircle, Plus, Printer, ReceiptIndianRupee, Search, ShieldCheck, Users, Wallet, X } from "lucide-react";
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { SectionCard } from "~/components/app/section-card";
@@ -17,7 +17,7 @@ import { useCreatePosStaffMutation, useUpdatePosSettingsMutation, useUpdatePosSt
 import { usePosProducts, usePosSetup, usePosStaff } from "~/hooks/use-pos-queries";
 import { serverMessage } from "~/lib/handle-mutation-error";
 import { cn, formatCurrency } from "~/lib/utils";
-import type { PosProduct, PosSettings, PosStaffRole, PosStaffView } from "~/types/api";
+import type { PosProduct, PosSettings, PosSetup, PosStaffRole, PosStaffView } from "~/types/api";
 
 export function meta() {
   return [{ title: "Point of sale settings | Collabo CRM" }];
@@ -37,7 +37,9 @@ interface Form {
   receiptWidth: 58 | 80;
   receiptFooter: string;
   tileVariantIds: string[];
-  askCustomer: PosSettings["askCustomer"];
+  customerAtCheckout: PosSettings["customerAtCheckout"];
+  customerRequiredAbove: string;
+  autoSendBill: boolean;
 }
 
 function toForm(s: PosSettings): Form {
@@ -51,7 +53,9 @@ function toForm(s: PosSettings): Form {
     receiptWidth: s.receiptWidth,
     receiptFooter: s.receiptFooter ?? "",
     tileVariantIds: s.tileVariantIds,
-    askCustomer: s.askCustomer,
+    customerAtCheckout: s.customerAtCheckout,
+    customerRequiredAbove: s.customerRequiredAbove == null ? "" : String(s.customerRequiredAbove),
+    autoSendBill: s.autoSendBill,
   };
 }
 
@@ -66,7 +70,9 @@ function toSettings(f: Form): PosSettings {
     receiptWidth: f.receiptWidth,
     receiptFooter: f.receiptFooter.trim() || null,
     tileVariantIds: f.tileVariantIds,
-    askCustomer: f.askCustomer,
+    customerAtCheckout: f.customerAtCheckout,
+    customerRequiredAbove: f.customerRequiredAbove.trim() === "" ? null : Number(f.customerRequiredAbove),
+    autoSendBill: f.autoSendBill,
   };
 }
 
@@ -120,7 +126,9 @@ export default function PosSettingsPage() {
   const upiInvalid = !!form?.upiId.trim() && !UPI_ID.test(form.upiId.trim());
   const limit = Number(form?.discountApprovalPercent);
   const limitInvalid = !!form?.discountApprovalPercent.trim() && (!Number.isFinite(limit) || limit < 0 || limit > 100);
-  const canSave = dirty && !upiInvalid && !limitInvalid && !save.isPending;
+  const above = Number(form?.customerRequiredAbove);
+  const aboveInvalid = !!form?.customerRequiredAbove.trim() && (!Number.isInteger(above) || above < 1);
+  const canSave = dirty && !upiInvalid && !limitInvalid && !aboveInvalid && !save.isPending;
   const patch = (p: Partial<Form>) => setForm((f) => (f ? { ...f, ...p } : f));
 
   const saveButton = (
@@ -178,12 +186,36 @@ export default function PosSettingsPage() {
               <div className="divide-y">
                 <Toggle id="pos-roundoff" label="Round off the payable" hint="Takes each bill to the nearest rupee, and shows the difference on the receipt." checked={form.roundOff} onChange={(v) => patch({ roundOff: v })} />
                 <div className="space-y-2 px-5 py-4">
-                  <p className="text-label">Customer on the bill</p>
-                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Customer on the bill">
-                    <Choice checked={form.askCustomer === "optional"} onSelect={() => patch({ askCustomer: "optional" })} title="Optional" hint="Walk-in customers can be billed without a name." />
-                    <Choice checked={form.askCustomer === "required"} onSelect={() => patch({ askCustomer: "required" })} title="Required" hint="Every bill needs a customer's mobile number." />
+                  <p className="text-label">Customer at checkout</p>
+                  <p className="text-micro text-muted-foreground">When the cashier taps Charge and no customer is on the bill yet.</p>
+                  <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Customer at checkout">
+                    <Choice checked={form.customerAtCheckout === "off"} onSelect={() => patch({ customerAtCheckout: "off" })} title="Off" hint="Never asks. A customer can still be added from the cart." />
+                    <Choice checked={form.customerAtCheckout === "ask"} onSelect={() => patch({ customerAtCheckout: "ask" })} title="Ask" hint="Asks for their mobile number, with Skip for walk-ins." />
+                    <Choice checked={form.customerAtCheckout === "required"} onSelect={() => patch({ customerAtCheckout: "required" })} title="Required" hint="Every bill needs the customer's mobile number." />
                   </div>
                 </div>
+                <div className="grid gap-2 px-5 py-4 sm:grid-cols-[1fr_160px] sm:items-center">
+                  <div>
+                    <Label htmlFor="pos-above">Ask for name and address on bills of</Label>
+                    <p className="mt-1 text-micro text-muted-foreground">
+                      GST rules need the buyer's name and address from ₹50,000. Asked even when the till doesn't ask for the customer. Leave empty to never ask.
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="relative">
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-caption text-muted-foreground">₹</span>
+                      <Input id="pos-above" type="number" inputMode="numeric" min={1} step="1" value={form.customerRequiredAbove} placeholder="50000" aria-invalid={aboveInvalid || undefined} onChange={(e) => patch({ customerRequiredAbove: e.target.value })} className="pl-7 tabular-nums" />
+                    </div>
+                    {aboveInvalid && <p className="text-micro text-danger">Enter a whole amount in rupees.</p>}
+                  </div>
+                </div>
+              </div>
+            </SectionCard>
+
+            <SectionCard title="Bill on WhatsApp" icon={<MessageCircle className="size-4 text-muted-foreground" />} description="After a sale, the customer gets a link to their bill on WhatsApp.">
+              <div className="divide-y">
+                <Toggle id="pos-autosend" label="Send the bill on WhatsApp automatically" hint="To the mobile number on the bill, right after payment. Cashiers can always send or share it from the payment screen." checked={form.autoSendBill} onChange={(v) => patch({ autoSendBill: v })} />
+                {setup.data && <WhatsAppBillStatus whatsapp={setup.data.billDelivery.whatsapp} />}
               </div>
             </SectionCard>
 
@@ -243,6 +275,54 @@ export default function PosSettingsPage() {
           <StaffSection requirePin={form.requireStaffPin} />
         </>
       )}
+    </div>
+  );
+}
+
+/** Whether bills can go out on WhatsApp: the connection, and the bill message template Meta must approve. */
+function WhatsAppBillStatus({ whatsapp }: { whatsapp: PosSetup["billDelivery"]["whatsapp"] }) {
+  const template = {
+    approved: { icon: CheckCircle2, tone: "text-success", text: "Approved" },
+    pending: { icon: Clock, tone: "text-warning-strong", text: "Waiting for Meta's approval" },
+    missing: { icon: CircleAlert, tone: "text-danger", text: "Not set up" },
+  }[whatsapp.template];
+  const TemplateIcon = template.icon;
+  return (
+    <div className="space-y-3 px-5 py-4">
+      <p className="text-label">WhatsApp bill</p>
+      <dl className="grid gap-2 rounded-lg border p-3 text-caption sm:grid-cols-[max-content_1fr] sm:gap-x-6">
+        <dt className="text-muted-foreground">WhatsApp</dt>
+        <dd className={cn("flex items-center gap-1.5 font-medium", whatsapp.connected ? "text-success" : "text-danger")}>
+          {whatsapp.connected ? <CheckCircle2 className="size-3.5" /> : <CircleAlert className="size-3.5" />}
+          {whatsapp.connected ? "Connected" : "Not connected"}
+        </dd>
+        <dt className="text-muted-foreground">Bill template</dt>
+        <dd className={cn("flex flex-wrap items-center gap-1.5 font-medium", template.tone)}>
+          <TemplateIcon className="size-3.5" />
+          {template.text}
+          {whatsapp.templateName && <span className="font-mono font-normal text-muted-foreground">{whatsapp.templateName}</span>}
+        </dd>
+      </dl>
+      <p className="text-micro text-muted-foreground">
+        {!whatsapp.connected
+          ? "Until WhatsApp is connected, the payment screen says the bill wasn't sent, and cashiers can share the link instead. "
+          : whatsapp.template === "pending"
+            ? "Until Meta approves the bill template, the payment screen says the bill wasn't sent, and cashiers can share the link instead. "
+            : whatsapp.template === "missing"
+              ? "Until a bill template is set up and approved, the payment screen says the bill wasn't sent, and cashiers can share the link instead. "
+              : "Bills go out with this template. "}
+        {!whatsapp.connected && (
+          <>
+            <Link to="/settings/channels" className="font-medium text-foreground underline underline-offset-2">
+              Connect WhatsApp
+            </Link>
+            {" · "}
+          </>
+        )}
+        <Link to="/campaigns/templates" className="font-medium text-foreground underline underline-offset-2">
+          Campaigns → Templates
+        </Link>
+      </p>
     </div>
   );
 }

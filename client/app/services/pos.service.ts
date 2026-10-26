@@ -1,10 +1,11 @@
-import type { AxiosRequestConfig } from "axios";
-import { apiClient } from "~/lib/api-client";
+import axios, { type AxiosRequestConfig } from "axios";
+import { apiClient, apiUrl } from "~/lib/api-client";
 import { readTokenExpiry } from "~/lib/jwt";
 import { useAuthStore } from "~/stores/auth.store";
 import type {
   PosApprovalReason,
   PosApprovalResult,
+  PosBillState,
   PosCustomer,
   PosPaymentInput,
   PosProduct,
@@ -56,7 +57,19 @@ export const posService = {
   collectPayment: (orderId: string, data: PosPaymentInput & { staffToken?: string }) =>
     apiClient.post<PosSaleResult>(`/pos/sales/${orderId}/payments`, data).then((r) => r.data),
 
+  delivery: (orderId: string) => apiClient.get<PosBillState>(`/pos/sales/${orderId}/delivery`).then((r) => r.data),
+  /** Sends the bill again, to `phone` when given (+91…), else to the number already on the sale. */
+  sendBill: (orderId: string, data: { phone?: string; staffToken?: string }) =>
+    apiClient.post<PosBillState>(`/pos/sales/${orderId}/send-bill`, { channel: "whatsapp", ...data }).then((r) => r.data),
+
   receipt: (orderId: string) => apiClient.get<PosReceipt>(`/pos/receipts/${orderId}`).then((r) => r.data),
-  sendReceipt: (orderId: string) =>
-    apiClient.post<{ sent: true }>(`/pos/receipts/${orderId}/whatsapp`).then((r) => r.data),
+  /**
+   * The customer's bill behind a link. Plain axios rather than apiClient: the
+   * page is public, so it must send no staff token, and a 401 must not start
+   * a session refresh.
+   */
+  publicBill: (token: string) =>
+    axios
+      .get<{ data: PosReceipt }>(apiUrl(`/public/bills/${encodeURIComponent(token)}`), { timeout: 30_000 })
+      .then((r) => r.data.data),
 };

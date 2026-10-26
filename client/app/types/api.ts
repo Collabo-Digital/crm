@@ -5257,7 +5257,12 @@ export interface PosSettings {
   receiptWidth: 58 | 80;
   receiptFooter: string | null;
   tileVariantIds: string[];
-  askCustomer: "optional" | "required";
+  /** Whether Charge first asks who is buying: never, with a skip, or always. */
+  customerAtCheckout: "off" | "ask" | "required";
+  /** From this payable the bill needs the buyer's name and address (GST Rule 46). Null: never. */
+  customerRequiredAbove: number | null;
+  /** Send the bill on WhatsApp after every sale with a mobile number. */
+  autoSendBill: boolean;
 }
 
 export interface PosStore {
@@ -5303,6 +5308,9 @@ export interface PosSetup {
   gstEnabled: boolean;
   storeName: string;
   currency: "INR";
+  billDelivery: {
+    whatsapp: { connected: boolean; template: "approved" | "pending" | "missing"; templateName: string | null };
+  };
 }
 
 export interface PosUnlockResult {
@@ -5328,7 +5336,6 @@ export interface PosCustomer {
   ordersCount: number;
   totalSpent: number;
   vipLevel: VipLevel;
-  whatsappOptIn: boolean;
 }
 
 export type PosPaymentMethod = "CASH" | "UPI" | "CARD" | "OTHER";
@@ -5346,6 +5353,17 @@ export interface PosPaymentInput {
   reference?: string;
 }
 
+export interface PosAddressInput {
+  address1: string;
+  city: string;
+  zip: string;
+  stateCode: string;
+}
+
+/**
+ * A phone given for the bill is consent for the bill itself; `offersOptIn` is
+ * marketing consent, sent only when the customer agreed.
+ */
 export interface PosSaleCustomerInput {
   customerId?: string;
   phone?: string;
@@ -5353,7 +5371,8 @@ export interface PosSaleCustomerInput {
   email?: string;
   gstin?: string;
   billingStateCode?: string;
-  whatsappOptIn?: boolean;
+  address?: PosAddressInput;
+  offersOptIn?: boolean;
 }
 
 export type PosSaleLineInput =
@@ -5387,9 +5406,28 @@ export interface PosSaleResult {
   invoiceId: string | null;
   invoiceNumber: string | null;
   customerId: string | null;
-  whatsapp: { canSend: boolean; reason: string | null };
+  /** The public bill page, e.g. https://app.example/b/<token>. */
+  billUrl: string;
+  delivery: PosBillDelivery[];
 }
 
+export type PosBillDeliveryStatus = "sending" | "sent" | "delivered" | "read" | "not_sent" | "failed";
+
+/** How the bill went out on one channel. `reason` is a plain sentence when it was not sent. */
+export interface PosBillDelivery {
+  channel: "whatsapp";
+  status: PosBillDeliveryStatus;
+  to: string | null;
+  reason: string | null;
+}
+
+/** GET /pos/sales/:orderId/delivery and POST /pos/sales/:orderId/send-bill. */
+export interface PosBillState {
+  billUrl: string;
+  delivery: PosBillDelivery[];
+}
+
+/** GET /pos/receipts/:orderId, and the customer's public bill at GET /public/bills/:token. */
 export interface PosReceipt {
   width: 58 | 80;
   footer: string | null;

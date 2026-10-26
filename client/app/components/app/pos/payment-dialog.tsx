@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { AlertTriangle, Banknote, CreditCard, Loader2, QrCode, Wallet, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Banknote, CreditCard, Loader2, QrCode, Wallet, X } from "lucide-react";
+import { PosScreen, PosScreenBody, PosScreenFooter, PosScreenHeader } from "~/components/app/pos/pos-screen";
 import { Button } from "~/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { UpiQr } from "~/components/app/pos/upi-qr";
@@ -27,10 +27,11 @@ export const METHOD_LABEL: Record<PosPaymentMethod, string> = { CASH: "Cash", UP
 const changeOf = (p: PosPaymentInput) => (p.method === "CASH" && p.tendered ? round2(p.tendered - p.amount) : 0);
 
 /**
- * Takes payment for a sale: cash with change, UPI by QR, card or anything
- * else, split across several until the bill is covered — then the sale is
- * sent at once. A bill can also be finished with a balance due. In "collect"
- * mode it takes one payment towards a sale's balance.
+ * Takes payment for a sale (the whole screen on a phone): cash with change,
+ * UPI by a QR code on the same screen, card or anything else, split across
+ * several until the bill is covered — then the sale is sent at once. A bill
+ * can also be finished with a balance due. In "collect" mode it takes one
+ * payment towards a sale's balance.
  */
 export function PaymentDialog({
   open,
@@ -102,9 +103,10 @@ export function PaymentDialog({
   const applied = validAmount ? round2(Math.min(entered, remaining)) : 0;
   const cashChange = method === "CASH" && validAmount ? round2(Math.max(0, entered - remaining)) : 0;
   const tooMuch = method !== "CASH" && validAmount && entered > remaining + 0.001;
+  const canTake = validAmount && !tooMuch && applied > 0 && !submitting;
 
   const take = () => {
-    if (!validAmount || tooMuch || applied <= 0 || submitting) return;
+    if (!canTake) return;
     add(
       method === "CASH"
         ? { method, amount: applied, tendered: round2(entered) }
@@ -113,17 +115,29 @@ export function PaymentDialog({
   };
 
   const settled = mode === "sale" && remaining <= 0;
+  const title = mode === "collect" ? "Collect the balance" : confirmingBalance ? "Finish with a balance due?" : "Payment";
 
   return (
-    <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="sm:max-w-lg" showCloseButton={!submitting}>
-        <DialogHeader>
-          <DialogTitle>{mode === "collect" ? "Collect the balance" : confirmingBalance ? "Finish with a balance due?" : "Take payment"}</DialogTitle>
-          <DialogDescription>
-            {mode === "collect" ? `${inr(due)} is still due on this bill.` : `Bill ${billRef} · payable ${inr(due)}`}
-          </DialogDescription>
-        </DialogHeader>
+    <PosScreen
+      open={open}
+      onOpenChange={close}
+      title={title}
+      description={mode === "collect" ? `${inr(due)} is still due on this bill.` : `Bill ${billRef}, payable ${inr(due)}.`}
+      onOpenAutoFocus={(e) => {
+        if (!finePointer) e.preventDefault();
+      }}
+    >
+      <PosScreenHeader
+        left={
+          <Button type="button" variant="ghost" size="icon" className="size-11" aria-label={mode === "collect" ? "Close" : "Back to the cart"} disabled={submitting} onClick={() => close(false)}>
+            {mode === "collect" ? <X /> : <ArrowLeft />}
+          </Button>
+        }
+        title={title}
+        right={<span className="pr-3 text-caption text-muted-foreground">{mode === "collect" ? null : `Bill ${billRef}`}</span>}
+      />
 
+      <PosScreenBody className="space-y-4">
         {confirmingBalance ? (
           <div className="space-y-3">
             <p className="rounded-xl bg-warning-subtle px-4 py-3 text-body text-warning-strong">
@@ -147,11 +161,16 @@ export function PaymentDialog({
             )}
           </div>
         ) : (
-          <div className="space-y-4">
+          <>
+            <div className="text-center">
+              <p className="text-caption text-muted-foreground">{mode === "collect" ? "Balance due" : payments.length ? "Left to pay" : "To pay"}</p>
+              <p className="font-heading text-[40px] leading-tight font-semibold tabular-nums">{inr(settled ? due : remaining)}</p>
+            </div>
+
             {payments.length > 0 && (
               <ul className="divide-y rounded-xl border">
                 {payments.map((p, i) => (
-                  <li key={i} className="flex items-center gap-3 px-3 py-2">
+                  <li key={i} className="flex items-center gap-3 py-1 pr-1 pl-3">
                     <span className="min-w-0 flex-1 text-label">
                       {METHOD_LABEL[p.method]}
                       <span className="block truncate text-caption font-normal text-muted-foreground">
@@ -164,8 +183,8 @@ export function PaymentDialog({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="icon-sm"
-                      className="max-md:size-11"
+                      size="icon"
+                      className="size-11"
                       disabled={submitting}
                       aria-label={`Remove the ${METHOD_LABEL[p.method]} payment`}
                       onClick={() => {
@@ -194,13 +213,15 @@ export function PaymentDialog({
                 {submitting ? "Saving the sale…" : "Fully paid."}
               </p>
             ) : (
-              <>
-                <div className="flex items-baseline justify-between">
-                  <span className="text-label text-muted-foreground">{payments.length ? "Left to pay" : "To pay"}</span>
-                  <span className="text-subhead tabular-nums">{inr(remaining)}</span>
-                </div>
-
-                <div className="grid grid-cols-4 gap-1.5 rounded-xl bg-muted p-1" role="radiogroup" aria-label="Payment method">
+              <form
+                id="pos-pay-form"
+                className="space-y-4"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  take();
+                }}
+              >
+                <div className="grid grid-cols-4 gap-1 rounded-xl bg-muted p-1" role="radiogroup" aria-label="Payment method">
                   {METHODS.map(({ id, label, icon: Icon }) => (
                     <button
                       key={id}
@@ -213,7 +234,7 @@ export function PaymentDialog({
                         setAmountText(String(remaining));
                       }}
                       className={cn(
-                        "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-lg text-caption font-medium transition-colors sm:flex-row sm:gap-1.5",
+                        "flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-lg text-caption font-medium transition-colors sm:flex-row sm:gap-1.5",
                         method === id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
                       )}
                     >
@@ -223,102 +244,95 @@ export function PaymentDialog({
                   ))}
                 </div>
 
-                <form
-                  className="space-y-3"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    take();
-                  }}
-                >
-                  {method === "UPI" && (
-                    <div className="flex flex-col items-center gap-2 rounded-xl border p-3 text-center">
-                      {upi ? (
-                        validAmount && !tooMuch ? (
-                          <>
-                            <UpiQr uri={upiPayUri({ upiId: upi.upiId, payeeName: upi.payeeName, amount: applied, note: `Bill ${billRef}` })} label={`UPI QR code for ${inr(applied)}`} />
-                            <p className="text-caption text-muted-foreground">
-                              Scan with any UPI app to pay <span className="font-medium text-foreground">{inr(applied)}</span> to {upi.upiId}.
-                            </p>
-                          </>
-                        ) : (
-                          <p className="py-6 text-caption text-muted-foreground">Enter the amount to show its QR code.</p>
-                        )
+                {method === "UPI" && (
+                  <div className="flex flex-col items-center gap-2 rounded-xl border p-3 text-center">
+                    {upi ? (
+                      validAmount && !tooMuch ? (
+                        <>
+                          <UpiQr uri={upiPayUri({ upiId: upi.upiId, payeeName: upi.payeeName, amount: applied, note: `Bill ${billRef}` })} label={`UPI QR code for ${inr(applied)}`} />
+                          <p className="text-caption text-muted-foreground">
+                            Scan with any UPI app to pay <span className="font-medium text-foreground">{inr(applied)}</span> to {upi.upiId}.
+                          </p>
+                        </>
                       ) : (
-                        <p className="py-2 text-caption text-muted-foreground">
-                          No UPI ID is set up for this till, so there is no QR code to show. You can still record a UPI payment made to your shop's own QR.{" "}
-                          {canManage ? (
-                            <Link to="/orders/pos/settings" target="_blank" className="font-medium text-foreground underline underline-offset-2">
-                              Add a UPI ID in POS settings
-                            </Link>
-                          ) : (
-                            "A manager can add one in POS settings."
-                          )}
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="space-y-1.5">
-                    <Label htmlFor="pos-pay-amount">{method === "CASH" ? "Cash received (₹)" : "Amount (₹)"}</Label>
-                    <Input
-                      id="pos-pay-amount"
-                      key={method}
-                      autoFocus={finePointer}
-                      type="number"
-                      inputMode="decimal"
-                      min={0}
-                      step="0.01"
-                      value={amountText}
-                      onFocus={(e) => e.currentTarget.select()}
-                      onChange={(e) => setAmountText(e.target.value)}
-                      aria-invalid={tooMuch || undefined}
-                      className="h-12 text-lg tabular-nums"
-                    />
-                    {tooMuch && <p className="text-caption text-danger">That is more than the {inr(remaining)} left to pay.</p>}
+                        <p className="py-6 text-caption text-muted-foreground">Enter the amount to show its QR code.</p>
+                      )
+                    ) : (
+                      <p className="py-2 text-caption text-muted-foreground">
+                        No UPI ID is set up for this till, so there is no QR code to show. You can still record a UPI payment made to your shop's own QR.{" "}
+                        {canManage ? (
+                          <Link to="/orders/pos/settings" target="_blank" className="font-medium text-foreground underline underline-offset-2">
+                            Add a UPI ID in POS settings
+                          </Link>
+                        ) : (
+                          "A manager can add one in POS settings."
+                        )}
+                      </p>
+                    )}
                   </div>
+                )}
 
-                  {method === "CASH" && (
-                    <div className="flex flex-wrap gap-2">
-                      {quickCashAmounts(remaining).map((n, i) => (
-                        <Button key={n} type="button" variant="outline" className="h-11 min-w-16 tabular-nums" onClick={() => setAmountText(String(n))}>
-                          {i === 0 ? `Exact ${whole(n)}` : whole(n)}
-                        </Button>
-                      ))}
-                    </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pos-pay-amount">{method === "CASH" ? "Cash received (₹)" : "Amount (₹)"}</Label>
+                  <Input
+                    id="pos-pay-amount"
+                    key={method}
+                    autoFocus={finePointer}
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step="0.01"
+                    value={amountText}
+                    onFocus={(e) => e.currentTarget.select()}
+                    onChange={(e) => setAmountText(e.target.value)}
+                    aria-invalid={tooMuch || undefined}
+                    className="h-12 text-lg tabular-nums md:text-lg"
+                  />
+                  {tooMuch && <p className="text-caption text-danger">That is more than the {inr(remaining)} left to pay.</p>}
+                  {mode === "sale" && method !== "CASH" && validAmount && !tooMuch && applied < remaining && (
+                    <p className="text-caption text-muted-foreground">Split: {inr(round2(remaining - applied))} is left for another method.</p>
                   )}
+                </div>
 
-                  {method !== "CASH" && (
-                    <div className="space-y-1.5">
-                      <Label htmlFor="pos-pay-ref">
-                        {method === "UPI" ? "UPI transaction ID (optional)" : method === "CARD" ? "Reference or last 4 digits (optional)" : "Reference (optional)"}
-                      </Label>
-                      <Input
-                        id="pos-pay-ref"
-                        value={reference}
-                        maxLength={60}
-                        autoComplete="off"
-                        inputMode={method === "CARD" ? "numeric" : "text"}
-                        onChange={(e) => setReference(e.target.value)}
-                        className="h-11"
-                      />
-                    </div>
-                  )}
+                {method === "CASH" && (
+                  <div className="flex flex-wrap gap-2">
+                    {quickCashAmounts(remaining).map((n, i) => (
+                      <Button key={n} type="button" variant={entered === n ? "secondary" : "outline"} className="h-11 min-w-16 tabular-nums" onClick={() => setAmountText(String(n))}>
+                        {i === 0 ? `Exact ${whole(n)}` : whole(n)}
+                      </Button>
+                    ))}
+                  </div>
+                )}
 
-                  {cashChange > 0 && (
-                    <p className="flex items-baseline justify-between rounded-xl bg-success-subtle px-4 py-2 text-success">
-                      <span className="text-label">Change to give</span>
-                      <span className="text-subhead tabular-nums">{inr(cashChange)}</span>
-                    </p>
-                  )}
+                {method !== "CASH" && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pos-pay-ref">
+                      {method === "UPI" ? "UPI transaction ID (optional)" : method === "CARD" ? "Reference or last 4 digits (optional)" : "Reference (optional)"}
+                    </Label>
+                    <Input
+                      id="pos-pay-ref"
+                      value={reference}
+                      maxLength={60}
+                      autoComplete="off"
+                      inputMode={method === "CARD" ? "numeric" : "text"}
+                      onChange={(e) => setReference(e.target.value)}
+                      className="h-11"
+                    />
+                  </div>
+                )}
 
-                  <Button type="submit" variant="accent" className="h-12 w-full text-body" disabled={!validAmount || tooMuch || applied <= 0 || submitting}>
-                    {submitting && <Loader2 className="animate-spin" />}
-                    {method === "CASH" ? `Take ${inr(applied)} in cash` : `${METHOD_LABEL[method]} received · ${inr(applied)}`}
-                  </Button>
-                </form>
-              </>
+                {cashChange > 0 && (
+                  <p className="flex items-baseline justify-between rounded-xl bg-success-subtle px-4 py-3 text-success">
+                    <span className="text-label">Change to give</span>
+                    <span className="text-stat tabular-nums">{inr(cashChange)}</span>
+                  </p>
+                )}
+                {method === "CASH" && validAmount && entered < remaining && mode === "sale" && (
+                  <p className="text-caption text-muted-foreground">Split: {inr(round2(remaining - entered))} is left for another method.</p>
+                )}
+              </form>
             )}
-          </div>
+          </>
         )}
 
         {error && (
@@ -330,34 +344,38 @@ export function PaymentDialog({
             </span>
           </div>
         )}
+      </PosScreenBody>
 
-        {mode === "sale" && (
-          <DialogFooter>
-            {confirmingBalance ? (
-              <>
-                <Button type="button" variant="outline" disabled={submitting} onClick={() => setConfirmingBalance(false)}>
-                  Go back
-                </Button>
-                <Button type="button" variant="accent" disabled={submitting} onClick={() => onSubmit(payments)}>
-                  {submitting && <Loader2 className="animate-spin" />}
-                  Finish sale
-                </Button>
-              </>
-            ) : settled ? (
-              error && (
-                <Button type="button" variant="accent" disabled={submitting} onClick={() => onSubmit(payments)}>
-                  {submitting && <Loader2 className="animate-spin" />}
-                  Try again
-                </Button>
-              )
-            ) : (
-              <Button type="button" variant="ghost" disabled={submitting} onClick={() => setConfirmingBalance(true)}>
+      <PosScreenFooter>
+        {confirmingBalance ? (
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" className="h-12 flex-1" disabled={submitting} onClick={() => setConfirmingBalance(false)}>
+              Go back
+            </Button>
+            <Button type="button" variant="accent" className="h-12 flex-1 text-section" disabled={submitting} onClick={() => onSubmit(payments)}>
+              {submitting && <Loader2 className="animate-spin" />}
+              Finish sale
+            </Button>
+          </div>
+        ) : settled ? (
+          <Button type="button" variant="accent" className="h-12 w-full text-section" disabled={submitting || !error} onClick={() => onSubmit(payments)}>
+            {submitting && <Loader2 className="animate-spin" />}
+            {submitting ? "Saving the sale…" : "Try again"}
+          </Button>
+        ) : (
+          <>
+            <Button type="submit" form="pos-pay-form" variant="accent" className="h-12 w-full rounded-xl text-section" disabled={!canTake}>
+              {submitting && <Loader2 className="animate-spin" />}
+              {method === "CASH" ? `Take ${inr(applied)} in cash` : `${METHOD_LABEL[method]} received · ${inr(applied)}`}
+            </Button>
+            {mode === "sale" && (
+              <Button type="button" variant="ghost" className="h-11 w-full text-muted-foreground" disabled={submitting} onClick={() => setConfirmingBalance(true)}>
                 Finish with balance due
               </Button>
             )}
-          </DialogFooter>
+          </>
         )}
-      </DialogContent>
-    </Dialog>
+      </PosScreenFooter>
+    </PosScreen>
   );
 }
