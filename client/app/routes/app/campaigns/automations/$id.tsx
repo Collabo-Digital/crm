@@ -179,6 +179,7 @@ export default function AutomationPage() {
     canEdit: editor,
     sheets: (google?.sheets ?? []).map((s) => ({ id: s.id, title: s.title })),
     sheetColumns,
+    packKey: detail.packKey ?? null,
   };
 
   const publish = async () => {

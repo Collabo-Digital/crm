@@ -20,13 +20,14 @@ const TONE = {
   danger: { icon: CircleAlert, text: "text-danger" },
 } as const;
 
-/** Why a slot needs the merchant, in Meta's words where Meta gave them. */
+/** Why a slot needs the merchant: the server's own sentence when it has one, else Meta's words where Meta gave them. */
 function slotProblem(slot: TemplatePackSlot): { reason: string; recommendation?: string } | null {
   const t = slot.template;
+  if (slot.reason) return { reason: slot.reason, recommendation: t?.rejectionInfo?.recommendation };
   if (slot.state === "paused") return { reason: "Meta paused it because many people blocked or reported its messages. Automations wait to send it until the pause ends." };
   if (slot.state !== "attention" || !t) return null;
   if (approvedAsMarketing(t)) {
-    return { reason: "Meta approved it as marketing, not utility. Marketing messages cost more, and automations hold them between 9 PM and 9 AM (store time)." };
+    return { reason: "Meta approved it as marketing, not utility. Marketing messages cost more, and Collabo’s recommended automations hold them between 9 PM and 9 AM (store time)." };
   }
   const reason = t.rejectionInfo?.reason ?? (t.statusReason ? rejectionHelp(t.statusReason) : null);
   const status = t.status === "DISABLED" ? "Meta disabled it" : t.status === "REJECTED" ? "Meta rejected it" : `Meta marked it ${t.status.toLowerCase().replace(/_/g, " ")}`;
@@ -42,7 +43,7 @@ function SlotRow({ slot }: { slot: TemplatePackSlot }) {
         <p className="text-caption text-muted-foreground">{slot.description}</p>
         {problem && (
           <div className="mt-1 space-y-0.5 text-caption">
-            <p className={slot.state === "paused" ? "text-warning-strong" : "text-danger"}>{problem.reason}</p>
+            <p className={slot.state === "attention" ? "text-danger" : "text-warning-strong"}>{problem.reason}</p>
             {problem.recommendation && <p className="text-muted-foreground">Meta recommends: {problem.recommendation}</p>}
           </div>
         )}
@@ -102,9 +103,10 @@ export function TemplatePackCard() {
   const progress = packProgress(view, "templates");
   const Tone = TONE[progress.tone];
   const action = can("templates.manage") ? repairLabel(view) : null;
-  // While the pack is being created, the ones not created yet are counted in the summary instead of listed.
+  // While the pack is being created, the ones not created yet are counted in the summary instead of
+  // listed, unless there is a reason to show (one the merchant deleted is not created again).
   const creating = view.pack.status === "pending" || view.pack.status === "running";
-  const open = view.slots.filter((s) => s.state !== "approved" && !(creating && s.state === "not_created"));
+  const open = view.slots.filter((s) => s.state !== "approved" && !(creating && s.state === "not_created" && !s.reason));
   const rows = showAll ? view.slots : open;
   const sets = [...new Set(rows.map((s) => s.set))] as PackSet[];
 

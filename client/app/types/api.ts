@@ -4512,6 +4512,8 @@ export interface TemplatePackSlot {
   description: string;
   category: "UTILITY" | "MARKETING";
   state: PackSlotState;
+  /** Why the slot needs the merchant, as a plain sentence: Meta refused the template, or the merchant deleted it. */
+  reason: string | null;
   template: null | {
     id: string;
     name: string;
@@ -4850,6 +4852,8 @@ export interface Automation {
   updatedAt: string;
   channel: { id: string; name: string; platform: AutomationPlatform } | null;
   ownerUser: { id: string; firstName: string; lastName: string; email: string } | null;
+  /** Set on the automations Collabo creates for its recommended templates. */
+  packKey: string | null;
 }
 
 /**
@@ -4862,8 +4866,6 @@ export type AutomationPackState = "live" | "waiting" | "ready" | "off" | "attent
 
 /** A row of GET /automations. */
 export interface AutomationListItem extends Automation {
-  /** Set on the automations Collabo creates for its recommended templates. */
-  packKey: string | null;
   packState: AutomationPackState | null;
   /** A plain sentence about the pack state. */
   packNote: string | null;
