@@ -11,11 +11,15 @@ export interface TemplateStarter {
 /// Shown on promotional starters: the reply that records an opt-out (see consent.service.ts).
 export const STOP_BUTTON = { type: 'QUICK_REPLY' as const, text: 'Stop promotions' };
 
+/** A bill's public page is `<app>/b/<token>`; the point of sale knows its bill template by a link button to it. */
+export const billLinkPrefix = (appUrl: string) => `${appUrl.replace(/\/+$/, '')}/b/`;
+
 /**
  * Starting points for common store messages, written for Collabo. Each is a
  * normal draft: the merchant edits it and submits it to Meta for review.
+ * `appUrl` is this app's own address, which the bill's link button opens.
  */
-export const TEMPLATE_STARTERS: TemplateStarter[] = [
+export const templateStarters = (appUrl: string): TemplateStarter[] => [
     {
         key: 'order_confirmed',
         useCase: 'orders',
@@ -78,6 +82,24 @@ export const TEMPLATE_STARTERS: TemplateStarter[] = [
                 text: 'Hi {{first_name}}, thank you for your order {{order_number}}. Your GST invoice {{invoice_number}} for {{invoice_total}} is attached.',
                 examples: { first_name: 'Ananya', order_number: '#1042', invoice_number: 'INV-26-27/000042', invoice_total: '₹2,499' },
             },
+        },
+    },
+    {
+        key: 'store_bill',
+        useCase: 'orders',
+        title: 'Bill from the till',
+        description: 'Sends the customer a link to their bill after a sale at the point of sale. Once Meta approves it, the till sends it by itself.',
+        draft: {
+            name: 'store_bill',
+            // A bill the customer just paid for. Keep offers out, or Meta files it under marketing.
+            category: 'UTILITY',
+            parameterFormat: 'NAMED',
+            body: {
+                text: 'Hi {{first_name}}, thank you for shopping at {{store_name}}. Your bill {{bill_number}} for {{bill_total}} dated {{bill_date}} is ready.',
+                examples: { first_name: 'Ananya', store_name: 'Acme Store', bill_number: 'INV-26-27/000123', bill_total: '₹2,340.00', bill_date: '26 Oct 2026' },
+            },
+            footer: 'Reply here if you need help with your bill',
+            buttons: [{ type: 'URL', text: 'View bill', url: `${billLinkPrefix(appUrl)}{{1}}`, example: 'cm3x8k2p40000qz7w1rbt9e4d.Zq1v7Xc9QmJ4rT2yLw8sNa' }],
         },
     },
     {

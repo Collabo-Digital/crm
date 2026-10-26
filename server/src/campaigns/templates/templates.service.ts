@@ -16,7 +16,7 @@ import {
     templateParams,
     toMetaComponents,
 } from './template-components';
-import { TEMPLATE_STARTERS } from './template-starters';
+import { templateStarters } from './template-starters';
 
 const TEMPLATE_FIELDS = 'id,name,language,status,category,components,quality_score,rejected_reason,parameter_format';
 const DAY = 24 * 3600_000;
@@ -64,6 +64,7 @@ const qualityOf = (q: MetaTemplate['quality_score']): string | null =>
 export class TemplatesService {
     private readonly logger = new Logger(TemplatesService.name);
     private readonly appId: string;
+    private readonly appUrl: string;
 
     constructor(
         private readonly prisma: PrismaService,
@@ -73,6 +74,7 @@ export class TemplatesService {
         config: ConfigService,
     ) {
         this.appId = config.get<string>('meta.appId') ?? '';
+        this.appUrl = config.get<string>('frontendUrl') ?? '';
     }
 
     /** The organization's connected WhatsApp channel; templates live on its account. */
@@ -115,7 +117,7 @@ export class TemplatesService {
     }
 
     starters() {
-        return TEMPLATE_STARTERS;
+        return templateStarters(this.appUrl);
     }
 
     /** Pull every template on the account; ones deleted at Meta go here too. */
