@@ -28,6 +28,19 @@ export function patchChannelMetadataSql(
 }
 
 /**
+ * Replace `channels.metadata[key]` with `value` in one statement, for a key
+ * that is a list (which a merge would not shorten); other keys are kept.
+ */
+export function setChannelMetadataSql(channelId: string, key: string, value: unknown): Prisma.Sql {
+    return Prisma.sql`
+        UPDATE "channels"
+        SET "metadata" = jsonb_set(coalesce("metadata", '{}'::jsonb), ARRAY[${key}]::text[], ${JSON.stringify(value)}::jsonb),
+            "updated_at" = now()
+        WHERE "id" = ${channelId}
+    `;
+}
+
+/**
  * Record one coexistence history chunk: count it, keep the highest progress
  * seen (chunks arrive out of order), and mark the import complete at 100.
  */

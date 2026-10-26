@@ -1,5 +1,5 @@
 import { ChannelStatus } from '@prisma/client';
-import { RESTRICTION_ERRORS, accountUpdateEffect, channelChange, healthClearsRestriction } from './whatsapp-account-update.util';
+import { RESTRICTION_ERRORS, accountRestrictionsOf, accountUpdateEffect, channelChange, healthClearsRestriction } from './whatsapp-account-update.util';
 
 describe('accountUpdateEffect', () => {
     it('marks a partner removal for phone inactivity with copy the merchant can act on', () => {
@@ -76,5 +76,29 @@ describe('accountUpdateEffect', () => {
         expect(accountUpdateEffect('PARTNER_ADDED', null)).toBeNull();
         expect(accountUpdateEffect('MM_LITE_TERMS_SIGNED', null)).toBeNull();
         expect(accountUpdateEffect(null, null)).toBeNull();
+    });
+});
+
+describe('accountRestrictionsOf', () => {
+    const utility = { restriction_type: 'RESTRICTED_UTILITY_TEMPLATES', expiration: 1751852500 };
+
+    it('keeps a restriction event’s restriction_info as Meta sent it', () => {
+        const info = [utility, { restriction_type: 'RESTRICTED_BIZ_INITIATED_MESSAGING', expiration: 1751852500 }];
+        expect(accountRestrictionsOf('ACCOUNT_RESTRICTION', { restriction_info: info })).toEqual(info);
+    });
+
+    it('reads a single restriction sent without its list as a list of one', () => {
+        expect(accountRestrictionsOf('ACCOUNT_RESTRICTION', { restriction_info: utility })).toEqual([utility]);
+    });
+
+    it('is an empty list when Meta lifts the restrictions', () => {
+        expect(accountRestrictionsOf('ACCOUNT_RESTRICTION', { restriction_info: [] })).toEqual([]);
+        expect(accountRestrictionsOf('ACCOUNT_RESTRICTION', {})).toEqual([]);
+    });
+
+    it('leaves the stored list alone for every other event', () => {
+        for (const event of ['PARTNER_REMOVED', 'ACCOUNT_VIOLATION', 'DISABLED_UPDATE', 'ACCOUNT_RECONNECTED', null]) {
+            expect(accountRestrictionsOf(event, { restriction_info: [utility] })).toBeNull();
+        }
     });
 });
