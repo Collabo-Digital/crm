@@ -10,7 +10,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { InviteStatus, Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -43,6 +43,32 @@ type ImpersonationOrigin = Pick<RefreshTokenData, 'impersonatedBy' | 'impersonat
 // How long a duplicate refresh waits for the rotation it lost to: 30 x 100ms.
 const ROTATION_WAIT_ATTEMPTS = 30;
 const ROTATION_WAIT_INTERVAL_MS = 100;
+
+// Accepting any code would make the flag meaningless, so until a real second
+// factor check exists an account with it turned on cannot sign in at all.
+const TWO_FACTOR_UNAVAILABLE =
+  'Two-factor sign-in is not available yet, so this account cannot sign in. Please contact support.';
+
+// Reset and refresh tokens are stored as SHA-256 hashes, so a read of the
+// table yields nothing that works as a token. The prefix tells a hash apart
+// from a raw token stored before hashing began.
+const HASHED_TOKEN_PREFIX = 'sha256:';
+
+function hashToken(token: string): string {
+  return HASHED_TOKEN_PREFIX + createHash('sha256').update(token).digest('hex');
+}
+
+/**
+ * Stored values a presented token may match: its hash, and the raw token for
+ * rows written before hashing began. Those rows run out on their own (reset
+ * links within the hour, refresh rows with their token) and must keep working
+ * until then.
+ */
+function storedTokenValues(token: string): string[] {
+  const hashed = hashToken(token);
+  // A hash copied out of the table must not pass as a raw token.
+  return token.startsWith(HASHED_TOKEN_PREFIX) ? [hashed] : [hashed, token];
+}
 
 @Injectable()
 export class AuthService {
@@ -193,12 +219,7 @@ export class AuthService {
       );
     }
 
-    if (user.twoFactorEnabled) {
-      if (!dto.totpCode) {
-        throw new ForbiddenException('Two-factor authentication code required');
-      }
-      // TODO: Validate TOTP
-    }
+    if (user.twoFactorEnabled) throw new ForbiddenException(TWO_FACTOR_UNAVAILABLE);
 
     // Reset rate limit on successful login
     await this.redis.resetLoginAttempts(dto.email, clientIp);
@@ -347,7 +368,7 @@ export class AuthService {
     if (user && !user.deletedAt) {
       const token = randomBytes(32).toString('hex');
       await this.prisma.passwordResetToken.create({
-        data: { userId: user.id, token, expiresAt: new Date(Date.now() + 3600000) },
+        data: { userId: user.id, token: hashToken(token), expiresAt: new Date(Date.now() + 3600000) },
       });
       // The account's own address: the lookup ignores case, the mailbox is the account's.
       await this.emailService.sendPasswordResetLink(user.email, token);
@@ -357,7 +378,7 @@ export class AuthService {
 
   async resetPassword(dto: ResetPasswordDto) {
     const resetToken = await this.prisma.passwordResetToken.findFirst({
-      where: { token: dto.token, usedAt: null, expiresAt: { gt: new Date() } },
+      where: { token: { in: storedTokenValues(dto.token) }, usedAt: null, expiresAt: { gt: new Date() } },
     });
     if (!resetToken) throw new NotFoundException('Invalid or expired reset token');
 
@@ -480,6 +501,8 @@ export class AuthService {
       if (!dto.password || !(await bcrypt.compare(dto.password, user.password))) {
         throw new UnauthorizedException('Enter your account password to accept this invite');
       }
+      // This signs the account in, so it is held to the same rule as login.
+      if (user.twoFactorEnabled) throw new ForbiddenException(TWO_FACTOR_UNAVAILABLE);
     }
 
     if (!user) {
@@ -612,7 +635,9 @@ export class AuthService {
 
     // Audit trail: DB (fire-and-forget, don't block)
     const expiresAt = this.calculateExpiry(this.refreshExpires);
-    this.prisma.refreshToken.create({ data: { userId, token, userAgent, ipAddress, expiresAt } }).catch(() => { });
+    this.prisma.refreshToken
+      .create({ data: { userId, token: hashToken(token), userAgent, ipAddress, expiresAt } })
+      .catch(() => { });
 
     return token;
   }
@@ -681,7 +706,9 @@ export class AuthService {
     if (!user || user.deletedAt) throw new UnauthorizedException('Account has been deactivated');
 
     // Audit trail (fire-and-forget)
-    this.prisma.refreshToken.updateMany({ where: { token: oldToken, revokedAt: null }, data: { revokedAt: new Date() } }).catch(() => { });
+    this.prisma.refreshToken
+      .updateMany({ where: { token: { in: storedTokenValues(oldToken) }, revokedAt: null }, data: { revokedAt: new Date() } })
+      .catch(() => { });
 
     // Keep the org the session was in. Taking memberships[0] here silently
     // moved a multi-org user back to their first org every time the access
@@ -761,7 +788,9 @@ export class AuthService {
   async revokeRefreshToken(token: string, userId?: string): Promise<void> {
     await this.redis.deleteRefreshToken(token, userId);
     // Audit trail (fire-and-forget)
-    this.prisma.refreshToken.updateMany({ where: { token, revokedAt: null }, data: { revokedAt: new Date() } }).catch(() => { });
+    this.prisma.refreshToken
+      .updateMany({ where: { token: { in: storedTokenValues(token) }, revokedAt: null }, data: { revokedAt: new Date() } })
+      .catch(() => { });
   }
 
   /** End every session of a user; `keepSid` keeps that one (the caller's own) signed in. */
@@ -925,6 +954,14 @@ export class AuthService {
     if (!superAdmin?.isSuperAdmin) {
       throw new ForbiddenException('Impersonation can only be stopped by a super admin');
     }
+    // A fresh admin session is issued only while the admin session this was
+    // started from is still live. Otherwise a support session that outlived a
+    // forced logout of the admin could be traded for a new admin login. One
+    // with no recorded origin cannot show that, so it is refused too. Checked
+    // before that session is retired below.
+    const impersonatorSid = impersonation?.impersonatorSid;
+    const adminStillAuthorized =
+      !!impersonatorSid && (await this.isImpersonationStillAuthorized(superAdmin.id, impersonatorSid));
 
     // End the impersonation session itself, so its tokens stop working now
     // rather than lingering after the super admin has "exited".
@@ -934,8 +971,8 @@ export class AuthService {
     // The admin gets a fresh session below. Retire the one this was started
     // from: nothing uses it any more, and any other support session started
     // from it ends with it.
-    if (impersonation?.impersonatorSid) {
-      await this.redis.deleteAuthSession(impersonation.impersonatorSid, superAdmin.id);
+    if (impersonatorSid) {
+      await this.redis.deleteAuthSession(impersonatorSid, superAdmin.id);
     }
 
     // Close any open log rows for this super admin (there should be exactly one).
@@ -943,6 +980,8 @@ export class AuthService {
       where: { superAdminId: superAdmin.id, endedAt: null },
       data: { endedAt: new Date() },
     });
+
+    if (!adminStillAuthorized) throw new UnauthorizedException('Impersonation session has ended');
 
     const membership = superAdmin.memberships[0];
     const payload: JwtPayload = {

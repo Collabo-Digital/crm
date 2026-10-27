@@ -273,7 +273,7 @@ export class EmailService implements OnModuleInit {
                 subject: `You're invited to join ${orgName}`,
                 html: this.layout(`
                     <h2 style="margin: 0 0 12px 0; font-size: 22px;">You've been invited!</h2>
-                    <p>You've been invited to join <strong>${orgName}</strong>.</p>
+                    <p>You've been invited to join <strong>${this.escape(orgName)}</strong>.</p>
                     ${this.button(inviteLink, 'Accept Invite')}
                     <p>This invite expires in 7 days.</p>
                     <p>If you don't recognize this organization, you can safely ignore this email.</p>

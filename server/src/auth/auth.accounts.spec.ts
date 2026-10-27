@@ -1,5 +1,6 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import { createHash } from 'crypto';
 import { AuthService } from './auth.service';
 import { UserController } from '../user/user.controller';
 
@@ -108,6 +109,18 @@ describe('AuthService — accounts', () => {
       await expect(service.login({ email: 'priya@shop.com', password: 'wrong-password' }, 'ua', '1.2.3.4')).rejects.toBeInstanceOf(UnauthorizedException);
       expect(redis.resetLoginAttempts).not.toHaveBeenCalled();
     });
+
+    // No second-factor check exists yet; accepting any code would make the flag meaningless.
+    it.each([undefined, '123456'])('refuses an account with two-factor turned on (code %s) and issues no session', async (totpCode) => {
+      const { service, redis, account } = build();
+      account.twoFactorEnabled = true;
+
+      const attempt = service.login({ email: 'priya@shop.com', password, totpCode }, 'ua', '1.2.3.4');
+
+      await expect(attempt).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(attempt).rejects.toThrow('Two-factor sign-in is not available yet');
+      expect(redis.setAuthSession).not.toHaveBeenCalled();
+    });
   });
 
   describe('forgotPassword', () => {
@@ -117,6 +130,16 @@ describe('AuthService — accounts', () => {
       await service.forgotPassword('priya@shop.com');
 
       expect(email.sendPasswordResetLink).toHaveBeenCalledWith('Priya@Shop.com', expect.any(String));
+    });
+
+    it('stores only a hash of the emailed token', async () => {
+      const { service, email, prisma } = build();
+
+      await service.forgotPassword('priya@shop.com');
+
+      const [, emailed] = email.sendPasswordResetLink.mock.calls[0] as [string, string];
+      const [{ data }] = prisma.passwordResetToken.create.mock.calls[0] as [{ data: { token: string } }];
+      expect(data.token).toBe('sha256:' + createHash('sha256').update(emailed).digest('hex'));
     });
 
     it('sends nothing over the per-address limit, and answers the same', async () => {
@@ -140,6 +163,15 @@ describe('AuthService — accounts', () => {
 
     expect(users.regenerateVerifyCode).not.toHaveBeenCalled();
     expect(email.sendVerificationCode).not.toHaveBeenCalled();
+  });
+
+  it('refuses to sign in a two-factor account through an invitation, even with its password', async () => {
+    const { service, prisma, redis, account } = build();
+    account.twoFactorEnabled = true;
+
+    await expect(service.acceptInvite({ token: 'tok', password })).rejects.toThrow('Two-factor sign-in is not available yet');
+    expect(prisma.organizationMember.upsert).not.toHaveBeenCalled();
+    expect(redis.setAuthSession).not.toHaveBeenCalled();
   });
 
   it('accepts an invitation to the lower-cased address while signed in as the capitalised account', async () => {

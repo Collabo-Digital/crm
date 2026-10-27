@@ -44,4 +44,42 @@ describe('config validation', () => {
     it('leaves them optional, and blank, in development', () => {
         expect(errors({ ...base, NODE_ENV: 'development', SMTP_HOST: '', SMTP_USER: '', APP_URL: 'http://localhost:5000' })).toEqual([]);
     });
+
+    describe('JWT secrets', () => {
+        // The first four are the values shipped in the two .env.example files.
+        const placeholders = [
+            'replace_with_random_32_char_or_longer_string',
+            'replace_with_different_random_32_char_string',
+            'replace_with_random_32_char_or_longer_string_aaaa',
+            'replace_with_different_random_32_char_string_bbbb',
+            'random-string-here-random-string-here',
+            'change-me-change-me-change-me-change-me',
+            'CHANGEME_0123456789abcdef0123456789',
+            'your-secret-key-at-least-32-characters',
+        ];
+
+        it.each(placeholders)('refuses the placeholder %s in production', (value) => {
+            expect(errors({ ...production, JWT_ACCESS_SECRET: value })).toEqual(['JWT_ACCESS_SECRET']);
+            expect(errors({ ...production, JWT_REFRESH_SECRET: value })).toEqual(['JWT_REFRESH_SECRET']);
+        });
+
+        it('refuses a refresh secret that repeats the access secret in production', () => {
+            expect(errors({ ...production, JWT_REFRESH_SECRET: production.JWT_ACCESS_SECRET })).toEqual(['JWT_REFRESH_SECRET']);
+        });
+
+        it('accepts random secrets in production', () => {
+            const random = (seed: string) => Buffer.from(seed.repeat(32)).toString('hex');
+            expect(errors({ ...production, JWT_ACCESS_SECRET: random('x'), JWT_REFRESH_SECRET: random('y') })).toEqual([]);
+        });
+
+        it('still requires 32 characters in production', () => {
+            expect(errors({ ...production, JWT_ACCESS_SECRET: 'too-short' })).toEqual(['JWT_ACCESS_SECRET']);
+        });
+
+        it('leaves placeholders and a shared secret alone outside production, so local setups keep working', () => {
+            const local = { ...base, JWT_ACCESS_SECRET: placeholders[0], JWT_REFRESH_SECRET: placeholders[0] };
+            expect(errors({ ...local, NODE_ENV: 'development' })).toEqual([]);
+            expect(errors({ ...local, NODE_ENV: 'test' })).toEqual([]);
+        });
+    });
 });

@@ -3,6 +3,15 @@ import * as Joi from 'joi';
 /** Optional elsewhere, but production boots "healthy" without it and then quietly breaks. */
 const requiredInProduction = (schema: Joi.Schema) => Joi.any().when('NODE_ENV', { is: 'production', then: schema.required() });
 
+// Example values from .env.example and similar. They are long enough to pass
+// min(32), and anyone who has seen them could sign tokens.
+const PLACEHOLDER_SECRET = /replace[-_ ]?with|random[-_ ]?string[-_ ]?here|change[-_ ]?me|your[-_ ]?secret/i;
+
+const signingSecret = Joi.string().min(32).required().when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().pattern(PLACEHOLDER_SECRET, { name: 'placeholder', invert: true }),
+});
+
 export const validationSchema = Joi.object({
     NODE_ENV: Joi.string().valid('development', 'production', 'test').required(),
     PORT: Joi.number().default(5000),
@@ -19,8 +28,11 @@ export const validationSchema = Joi.object({
     // OAuth callbacks, Shopify webhook registration and product image links;
     // Shopify registers webhooks only on https.
     APP_URL: requiredInProduction(Joi.string().uri({ scheme: ['https'] })),
-    JWT_ACCESS_SECRET: Joi.string().min(32).required(),
-    JWT_REFRESH_SECRET: Joi.string().min(32).required(),
+    JWT_ACCESS_SECRET: signingSecret,
+    JWT_REFRESH_SECRET: signingSecret.when('NODE_ENV', {
+        is: 'production',
+        then: Joi.invalid(Joi.ref('JWT_ACCESS_SECRET')),
+    }),
     // Sign-up verification codes, password resets and invites. Without SMTP
     // they are dropped and new users can never sign in.
     SMTP_HOST: requiredInProduction(Joi.string()),
