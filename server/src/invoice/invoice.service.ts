@@ -1167,12 +1167,14 @@ export class InvoiceService {
     };
   }
 
-  /** Why a document that needs an IRN is not issued here. */
-  private eInvoicingRefusal(documents: string): BadRequestException {
+  /** Why a document that needs an IRN is not issued here, and what to do instead. */
+  private eInvoicingRefusal(
+    documents: string,
+    instead = 'Issue this one on the e-invoice portal or in your accounting software.',
+  ): BadRequestException {
     return new BadRequestException(
       `E-invoicing is on for your business, so ${documents} need an IRN from the government's ` +
-        "e-invoice portal, which Collabo can't get yet. Issue this one on the e-invoice portal " +
-        'or in your accounting software.',
+        `e-invoice portal, which Collabo can't get yet. ${instead}`,
     );
   }
 
@@ -1479,9 +1481,10 @@ export class InvoiceService {
       );
     }
 
+    // The tax settings come along for the e-invoicing switch, checked below.
     const org = await this.prisma.organization.findUnique({
       where: { id: orgId },
-      select: { timezone: true, gstEnabled: true },
+      select: { timezone: true, gstEnabled: true, settings: { select: { taxSettings: true } } },
     });
     await this.assertPeriodOpen(
       this.prisma,
@@ -1518,6 +1521,15 @@ export class InvoiceService {
         }
       }
       if (gstin !== target.buyerGstin) {
+        // A GSTIN makes this a B2B invoice, which with e-invoicing on needs an
+        // IRN (Rule 48(4)) it was never given. Clearing one is still allowed.
+        if (gstin && parseTaxSettings(org?.settings?.taxSettings ?? null).eInvoicing) {
+          throw this.eInvoicingRefusal(
+            'invoices to GST-registered buyers',
+            "To put the buyer's GSTIN on it, cancel this invoice and issue the corrected one " +
+              'on the e-invoice portal or in your accounting software.',
+          );
+        }
         data.buyerGstin = gstin;
         changed.push('buyer GSTIN');
         if (gstin) {
@@ -1934,10 +1946,14 @@ export class InvoiceService {
     const timeZone = this.gstTimeZone(orgId, org);
     const taxSettings = parseTaxSettings(org?.settings?.taxSettings ?? null);
 
-    // A credit note to a GST-registered buyer needs an IRN as its invoice did
-    // (Rule 48(4)); refused before a number is drawn, like the invoice.
-    if (taxSettings.eInvoicing && original.buyerGstin) {
-      throw this.eInvoicingRefusal('credit notes to GST-registered buyers');
+    // A credit note to a GST-registered buyer, or against an export, needs an
+    // IRN as its invoice did (Rule 48(4)); refused before a number is drawn,
+    // like the invoice.
+    if (
+      taxSettings.eInvoicing &&
+      (original.buyerGstin || original.placeOfSupply === EXPORT_PLACE_OF_SUPPLY)
+    ) {
+      throw this.eInvoicingRefusal('credit notes to GST-registered buyers and exports');
     }
 
     // The credit note itself is dated TODAY and lands in today's period, so the

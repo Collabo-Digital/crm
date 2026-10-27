@@ -24,9 +24,13 @@ const INVOICE_REFUSAL =
   "the government's e-invoice portal, which Collabo can't get yet. Issue this one on the e-invoice portal or " +
   'in your accounting software.';
 const CREDIT_NOTE_REFUSAL =
-  "E-invoicing is on for your business, so credit notes to GST-registered buyers need an IRN from " +
+  "E-invoicing is on for your business, so credit notes to GST-registered buyers and exports need an IRN from " +
   "the government's e-invoice portal, which Collabo can't get yet. Issue this one on the e-invoice portal or " +
   'in your accounting software.';
+const EDIT_REFUSAL =
+  "E-invoicing is on for your business, so invoices to GST-registered buyers need an IRN from " +
+  "the government's e-invoice portal, which Collabo can't get yet. To put the buyer's GSTIN on it, cancel this " +
+  'invoice and issue the corrected one on the e-invoice portal or in your accounting software.';
 
 const SETTINGS = {
   invoiceSettings: { theme: 'classic', brandColor: '#1F6F5C', terms: 'Goods once sold are exchanged within 7 days.' },
@@ -275,6 +279,7 @@ describe('InvoiceService credit notes, compliance', () => {
   function build(opts: {
     tax?: Record<string, unknown>;
     buyerGstin?: string | null;
+    placeOfSupply?: string;
     originalMetadata?: unknown;
   } = {}) {
     const original = {
@@ -296,6 +301,7 @@ describe('InvoiceService credit notes, compliance', () => {
       gstType: 'CGST_SGST',
       reverseCharge: false,
       buyerGstin: opts.buyerGstin ?? null,
+      placeOfSupply: opts.placeOfSupply ?? '29',
       metadata: opts.originalMetadata ?? null,
       lineItems: [
         {
@@ -401,6 +407,21 @@ describe('InvoiceService credit notes, compliance', () => {
     expect(tx.invoice.create).not.toHaveBeenCalled();
   });
 
+  it('refuses a credit note against an export with e-invoicing on, before drawing a number', async () => {
+    const { raise, tx, invoiceNumber } = build({ tax: { eInvoicing: true }, placeOfSupply: '96' });
+
+    await expect(raise()).rejects.toThrow(CREDIT_NOTE_REFUSAL);
+    expect(invoiceNumber.getNextCreditNoteNumber).not.toHaveBeenCalled();
+    expect(tx.invoice.create).not.toHaveBeenCalled();
+  });
+
+  it('raises a credit note against an export while e-invoicing is off', async () => {
+    const data = await build({ placeOfSupply: '96' }).raise();
+
+    expect(data.placeOfSupply).toBe('96');
+    expect(readRenderSnapshot(data.metadata)?.eInvoiceDeclaration).toBe(false);
+  });
+
   it('raises a B2C credit note with e-invoicing on, carrying the declaration', async () => {
     const data = await build({ tax: { eInvoicing: true } }).raise();
 
@@ -412,5 +433,105 @@ describe('InvoiceService credit notes, compliance', () => {
 
     expect(data.buyerGstin).toBe(BUYER_GSTIN);
     expect(readRenderSnapshot(data.metadata)?.eInvoiceDeclaration).toBe(false);
+  });
+});
+
+/**
+ * Editing an issued invoice must not turn it into one Collabo could not have
+ * issued: with e-invoicing on, a buyer GSTIN makes it a B2B invoice that
+ * needs an IRN. Clearing a GSTIN, and every edit with the switch off, work as
+ * before.
+ */
+describe('InvoiceService.update under e-invoicing', () => {
+  const ID = 'inv_1';
+  const OTHER_GSTIN = '27AAPFU0939F1ZV';
+
+  function build(opts: { eInvoicing: boolean; buyerGstin?: string | null }) {
+    const tx = {
+      invoice: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      orderTimelineEvent: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: ID,
+          status: 'ISSUED',
+          invoiceDate: new Date('2026-10-20T10:00:00.000Z'),
+          sellerGstinId: 'gstin_1',
+          orderId: 'order_1',
+          invoiceNumber: 'INV-26-27/000036',
+          buyerName: 'Meera Traders',
+          buyerGstin: opts.buyerGstin ?? null,
+          buyerAddress: null,
+          notes: null,
+        }),
+      },
+      organization: {
+        findUnique: jest.fn().mockResolvedValue({
+          timezone: 'Asia/Kolkata',
+          gstEnabled: true,
+          settings: { taxSettings: { eInvoicing: opts.eInvoicing } },
+        }),
+      },
+      gstFiling: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
+    };
+    const service = new InvoiceService(
+      prisma as never,
+      {} as never,
+      new GstCalculatorService(),
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const written = () => tx.invoice.updateMany.mock.calls as Array<[{ data: Record<string, unknown> }]>;
+    return { service, tx, written };
+  }
+
+  it('refuses adding a GSTIN to a B2C invoice, writing nothing', async () => {
+    const { service, tx } = build({ eInvoicing: true });
+
+    const refusal = service.update(ID, ORG, { buyerGstin: BUYER_GSTIN }, 'user_1');
+    await expect(refusal).rejects.toBeInstanceOf(BadRequestException);
+    await expect(refusal).rejects.toThrow(EDIT_REFUSAL);
+    expect(tx.invoice.updateMany).not.toHaveBeenCalled();
+    expect(tx.orderTimelineEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses changing the GSTIN on an invoice issued before the switch was turned on', async () => {
+    const { service, tx } = build({ eInvoicing: true, buyerGstin: OTHER_GSTIN });
+
+    await expect(service.update(ID, ORG, { buyerGstin: BUYER_GSTIN }, 'user_1')).rejects.toThrow(EDIT_REFUSAL);
+    expect(tx.invoice.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('still clears a GSTIN', async () => {
+    const { service, written } = build({ eInvoicing: true, buyerGstin: BUYER_GSTIN });
+
+    await service.update(ID, ORG, { buyerGstin: '' }, 'user_1');
+
+    expect(written()[0][0].data).toEqual({ buyerGstin: null });
+  });
+
+  it('still takes the other edits, and the same GSTIN sent back with them', async () => {
+    const { service, written } = build({ eInvoicing: true, buyerGstin: BUYER_GSTIN });
+
+    await service.update(ID, ORG, { buyerName: 'Meera Traders LLP', buyerGstin: BUYER_GSTIN.toLowerCase(), notes: 'PO 4471' }, 'user_1');
+
+    expect(written()[0][0].data).toEqual({ buyerName: 'Meera Traders LLP', notes: 'PO 4471' });
+  });
+
+  it('adds or changes a GSTIN as before while e-invoicing is off', async () => {
+    const added = build({ eInvoicing: false });
+    await added.service.update(ID, ORG, { buyerGstin: BUYER_GSTIN }, 'user_1');
+    expect(added.written()[0][0].data).toEqual({
+      buyerGstin: BUYER_GSTIN,
+      buyerStateCode: '29',
+      buyerStateName: 'Karnataka',
+    });
+
+    const changed = build({ eInvoicing: false, buyerGstin: OTHER_GSTIN });
+    await changed.service.update(ID, ORG, { buyerGstin: BUYER_GSTIN }, 'user_1');
+    expect(changed.written()[0][0].data).toMatchObject({ buyerGstin: BUYER_GSTIN });
   });
 });
