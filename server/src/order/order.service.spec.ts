@@ -188,6 +188,8 @@ describe('OrderService.setVendorItemsStatus (released)', () => {
       },
       order: { findUnique: jest.fn().mockResolvedValue({ lineItems: lines }), update: jest.fn() },
       orderTimelineEvent: { create: jest.fn().mockResolvedValue({}) },
+      // The order-row lock taken before any line is written.
+      $queryRaw: jest.fn().mockResolvedValue([{ id: ORDER, cancelledAt: null }]),
     };
     const prisma = {
       order: {

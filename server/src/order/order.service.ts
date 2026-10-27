@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   HttpException,
   Injectable,
@@ -157,6 +158,18 @@ export function selectFulfillableFos<T extends { status: string }>(fos: T[]): T[
 
 /** Matches `fulfillmentOrders(first: 25)` in both FO queries — neither paginates. */
 const FULFILLMENT_ORDER_PAGE_SIZE = 25;
+
+/**
+ * A line that has shipped at least one unit. Shopify-synced lines can carry a
+ * shipped status with a zero count, so the status counts as well as the number.
+ */
+const SHIPPED_LINE_STATUSES = ['fulfilled', 'partial', 'delivered'];
+const SHIPPED_LINE_WHERE = {
+  OR: [
+    { fulfilledQuantity: { gt: 0 } },
+    { fulfillmentStatus: { in: SHIPPED_LINE_STATUSES } },
+  ],
+} satisfies Prisma.OrderLineItemWhereInput;
 
 /**
  * Ceiling on one batch package-slip print job. Lower than the label route's
@@ -3133,6 +3146,9 @@ export class OrderService {
       released: 'Hold released on items',
     };
     await this.prisma.$transaction(async (tx) => {
+      // Same lock order as the shipment paths (order row, then lines), so the
+      // two cannot deadlock on one order.
+      await this.lockOrderForFulfillment(tx, orderId, orgId);
       if (status === 'released') {
         // Releasing a hold returns the line to whatever its shipped quantity
         // says it is — NOT unconditionally to unfulfilled. A line that was
@@ -3452,6 +3468,9 @@ export class OrderService {
       where: { id: fulfillmentId, orderId },
     });
     if (!fulfillment) throw new NotFoundException('Fulfillment not found');
+    if (fulfillment.status === 'cancelled') {
+      throw new ConflictException('This shipment was cancelled, so it cannot be marked delivered.');
+    }
     if (vendorScope) {
       await this.assertFulfillmentOwnedByVendor(orderId, fulfillmentId, vendorScope);
     }
@@ -3463,14 +3482,22 @@ export class OrderService {
     // three independent commits, so a failure between them left a delivered
     // shipment whose lines still read "fulfilled" and no record of who did it.
     await this.prisma.$transaction(async (tx) => {
-      await tx.orderFulfillment.update({
-        where: { id: fulfillmentId },
+      await this.lockOrderForFulfillment(tx, orderId, orgId);
+      // Conditional: a cancel that lands after the read above must win.
+      const delivered = await tx.orderFulfillment.updateMany({
+        where: { id: fulfillmentId, orderId, status: { not: 'cancelled' } },
         data: { status: 'delivered', deliveredAt: new Date() },
       });
+      if (delivered.count === 0) {
+        throw new ConflictException('This shipment was cancelled, so it cannot be marked delivered.');
+      }
 
       if (deliveredLineIds.length > 0) {
+        // Only lines that actually shipped. A delivered line with no shipped
+        // count reads as fully shipped, so marking an unshipped one delivered
+        // would flip the order to FULFILLED.
         await tx.orderLineItem.updateMany({
-          where: { id: { in: deliveredLineIds }, orderId },
+          where: { id: { in: deliveredLineIds }, orderId, ...SHIPPED_LINE_WHERE },
           data: { fulfillmentStatus: 'delivered' },
         });
         await this.refreshOrderFulfillmentStatus(tx, orderId);
@@ -3620,7 +3647,10 @@ export class OrderService {
     return resolved;
   }
 
-  /** Best-effort: cancel a fulfilment on Shopify. */
+  /**
+   * Cancel a fulfilment on Shopify. A refusal is the merchant's to act on, so
+   * it comes back as a 400 carrying Shopify's reason rather than a bare 500.
+   */
   private async cancelFulfillmentOnShopify(
     order: { channel: { id: string } },
     fulfillmentExternalId: string,
@@ -3631,7 +3661,12 @@ export class OrderService {
       FULFILLMENT_CANCEL_MUTATION,
       { id: ShopifyGraphqlClient.toGid('Fulfillment', fulfillmentExternalId) },
     );
-    ShopifyGraphqlClient.throwIfUserErrors(result.fulfillmentCancel.userErrors, 'fulfillmentCancel');
+    const errors = result.fulfillmentCancel.userErrors;
+    if (errors.length > 0) {
+      throw new BadRequestException(
+        `Shopify refused to cancel this shipment: ${errors.map((e) => e.message).join('; ')}`,
+      );
+    }
   }
 
   /**
@@ -3649,25 +3684,42 @@ export class OrderService {
     const order = await this.loadOrderWithChannel(orderId, orgId);
     const line = await this.prisma.orderLineItem.findFirst({
       where: { id: lineId, orderId },
-      select: { id: true, externalId: true, vendor: true, fulfillmentStatus: true },
+      select: {
+        id: true, externalId: true, vendor: true,
+        fulfillmentStatus: true, fulfilledQuantity: true,
+      },
     });
     if (!line) throw new NotFoundException('Line item not found');
     if (vendorScope && line.vendor !== vendorScope) {
       throw new ForbiddenException('You can only update your own items.');
     }
+    // A delivered line with no shipped count reads as fully shipped, so an
+    // unshipped line marked delivered flipped the whole order to FULFILLED.
+    if (line.fulfilledQuantity <= 0 && !SHIPPED_LINE_STATUSES.includes(line.fulfillmentStatus ?? '')) {
+      throw new BadRequestException('Fulfil this item before marking it delivered.');
+    }
 
     const fulfillment = await this.resolveFulfillmentForLine(order, line);
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.orderLineItem.update({
-        where: { id: lineId },
+      await this.lockOrderForFulfillment(tx, orderId, orgId);
+      // Both writes are conditional, so an unfulfil or cancel that lands after
+      // the reads above wins instead of being overwritten.
+      const marked = await tx.orderLineItem.updateMany({
+        where: { id: lineId, orderId, ...SHIPPED_LINE_WHERE },
         data: { fulfillmentStatus: 'delivered' },
       });
+      if (marked.count === 0) {
+        throw new ConflictException('This item was unfulfilled before delivery could be recorded.');
+      }
       if (fulfillment) {
-        await tx.orderFulfillment.update({
-          where: { id: fulfillment.id },
+        const delivered = await tx.orderFulfillment.updateMany({
+          where: { id: fulfillment.id, orderId, status: { not: 'cancelled' } },
           data: { status: 'delivered', deliveredAt: new Date() },
         });
+        if (delivered.count === 0) {
+          throw new ConflictException('This shipment was cancelled, so it cannot be marked delivered.');
+        }
       }
       await this.refreshOrderFulfillmentStatus(tx, orderId);
       await tx.orderTimelineEvent.create({
@@ -3724,14 +3776,6 @@ export class OrderService {
 
     const fulfillment = await this.resolveFulfillmentForLine(order, line);
 
-    if (order.channel.platform === ChannelPlatform.SHOPIFY && fulfillment?.externalId) {
-      await this.cancelFulfillmentOnShopify(order, fulfillment.externalId).catch((e) =>
-        this.logger.warn(
-          `Shopify fulfillment cancel failed for order ${orderId}: ${e instanceof Error ? e.message : e}`,
-        ),
-      );
-    }
-
     // Cancelling a fulfilment reverts ALL of its lines to unfulfilled.
     const revertIds = fulfillment ? this.fulfillmentLineItemIds(fulfillment.metadata) : [];
     const ids = revertIds.length ? revertIds : [lineId];
@@ -3741,6 +3785,7 @@ export class OrderService {
     // one did not, so a vendor could wipe a co-vendor's lines by unfulfilling
     // their own. Refuse rather than silently reverting a subset, which would
     // leave the shipment cancelled while its other lines still read fulfilled.
+    // Checked before Shopify is touched: the cancel there cannot be undone.
     if (vendorScope && ids.length > 1) {
       const foreign = await this.prisma.orderLineItem.count({
         where: { id: { in: ids }, orderId, vendor: { not: vendorScope } },
@@ -3752,10 +3797,35 @@ export class OrderService {
         );
       }
     }
+
+    const shopifyFulfillmentId =
+      order.channel.platform === ChannelPlatform.SHOPIFY &&
+      fulfillment?.externalId &&
+      !fulfillment.externalId.startsWith('manual_')
+        ? fulfillment.externalId
+        : null;
+
+    // A local shipment takes back only its own units, under the order lock.
+    if (fulfillment && !shopifyFulfillmentId) {
+      await this.cancelFulfillment(orderId, fulfillment.id, orgId, userId, vendorScope);
+      const current = await this.prisma.orderLineItem.findFirst({
+        where: { id: lineId, orderId },
+        select: { fulfillmentStatus: true },
+      });
+      return { id: lineId, status: current?.fulfillmentStatus ?? 'unfulfilled' };
+    }
+
+    // No catch: if Shopify refuses, the shipment is still live there, and
+    // reverting it here would show the vendor a state that is not true.
+    if (shopifyFulfillmentId) {
+      await this.cancelFulfillmentOnShopify(order, shopifyFulfillmentId);
+    }
+
     // One transaction: reverting the lines, cancelling the shipment and
     // recomputing the order's status are a single logical change, and a partial
     // apply leaves the order header disagreeing with its own line items.
     await this.prisma.$transaction(async (tx) => {
+      await this.lockOrderForFulfillment(tx, orderId, orgId);
       // Cancelling the shipment un-ships its units, so the count has to go back
       // to zero as well — leaving it set would keep the order reading PARTIAL
       // (or FULFILLED) for a shipment that no longer exists.
@@ -4035,6 +4105,10 @@ export class OrderService {
       const requestedIds = dto.lineItems.map((li) => li.lineItemId);
 
       await this.prisma.$transaction(async (tx) => {
+        // Serialises the read-then-write of shipped counts below with any
+        // other shipment on this order. Shopify has already shipped by now, so
+        // a cancelled order is not refused here.
+        await this.lockOrderForFulfillment(tx, orderId, orgId);
         await tx.orderTimelineEvent.create({
           data: {
             orderId,
@@ -4139,6 +4213,12 @@ export class OrderService {
 
     // ── Manual branch ──────────────────────────────────────────────────────
     const recorded = await this.prisma.$transaction(async (tx) => {
+      // Two packers finishing the same order at once used to both read the
+      // same shipped count and both write it back, losing a shipment's units.
+      const locked = await this.lockOrderForFulfillment(tx, orderId, orgId);
+      if (locked.cancelledAt) {
+        throw new BadRequestException('Cannot fulfil a cancelled order.');
+      }
       const requestedIds = dto.lineItems.map((li) => li.lineItemId);
       const lineItems = await tx.orderLineItem.findMany({
         where: { orderId, id: { in: requestedIds } },
@@ -4176,6 +4256,14 @@ export class OrderService {
           shippedAt: new Date(),
           metadata: {
             lineItemIds: lineItems.map((li) => li.id),
+            // Units this shipment carries, per line, so cancelling it takes
+            // back only these and not every unit shipped on the line.
+            lineItemQuantities: Object.fromEntries(
+              lineItems.map((li) => [
+                li.id,
+                requestedQty.get(li.id) ?? li.quantity - li.fulfilledQuantity,
+              ]),
+            ),
           } as Prisma.InputJsonValue,
         },
       });
@@ -4352,8 +4440,8 @@ export class OrderService {
 
   /**
    * Cancel a fulfillment. SHOPIFY fulfillments round-trip via
-   * `fulfillmentCancel`. MANUAL fulfillments reverse the local state:
-   * line items un-fulfilled, order status recomputed.
+   * `fulfillmentCancel`. MANUAL fulfillments reverse the local state: the
+   * shipment's own units come back off its lines, order status recomputed.
    */
   async cancelFulfillment(
     orderId: string,
@@ -4381,35 +4469,25 @@ export class OrderService {
       !fulfillment.externalId.startsWith('manual_');
 
     if (isShopifyFulfillment) {
-      const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(order.channel.id);
-      const result = await this.graphql.request<
-        FulfillmentCancelResponse,
-        FulfillmentCancelVariables
-      >(
-        { shopDomain, accessToken: token },
-        FULFILLMENT_CANCEL_MUTATION,
-        { id: ShopifyGraphqlClient.toGid('Fulfillment', fulfillment.externalId!) },
-      );
-      ShopifyGraphqlClient.throwIfUserErrors(
-        result.fulfillmentCancel.userErrors,
-        'fulfillmentCancel',
-      );
+      await this.cancelFulfillmentOnShopify(order, fulfillment.externalId!);
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await this.lockOrderForFulfillment(tx, orderId, orgId);
+      // A local shipment is the only record of its units, so it is reversed
+      // from a fresh read under the lock; see `reverseLocalShipment`.
+      if (!isShopifyFulfillment) {
+        await this.reverseLocalShipment(tx, orderId, fulfillmentId);
+      }
       const updated = await tx.orderFulfillment.update({
         where: { id: fulfillmentId },
         data: { status: 'cancelled' },
       });
 
-      // Reverse the line-item status flips done at create-time so the items
-      // return to "unfulfilled". Owner-driven Shopify cancels defer to the
-      // webhook, but a vendor unfulfil needs immediate local feedback.
-      if (!isShopifyFulfillment || vendorScope) {
-        const meta = (fulfillment.metadata ?? {}) as Record<string, unknown>;
-        const lineItemIds = Array.isArray(meta.lineItemIds)
-          ? (meta.lineItemIds as string[])
-          : [];
+      // Owner-driven Shopify cancels defer to the webhook, but a vendor
+      // unfulfil needs immediate local feedback.
+      if (isShopifyFulfillment && vendorScope) {
+        const lineItemIds = this.fulfillmentLineItemIds(fulfillment.metadata);
         if (lineItemIds.length > 0) {
           await tx.orderLineItem.updateMany({
             // `orderId` was missing here: the ids come from a JSON blob, so
@@ -4419,6 +4497,8 @@ export class OrderService {
             data: { fulfillmentStatus: null, fulfilledQuantity: 0 },
           });
         }
+      }
+      if (!isShopifyFulfillment || vendorScope) {
         await this.refreshOrderFulfillmentStatus(tx, orderId);
       }
 
@@ -4517,6 +4597,101 @@ export class OrderService {
   }
 
   // ─── PHASE 1 HELPERS ──────────────────────────────────────────────────────
+
+  /**
+   * Lock the order row for the rest of the transaction, so shipments on one
+   * order are created and cancelled one at a time. Order cancellation updates
+   * the same row, so it serialises with these too. Every transaction here that
+   * writes a line's shipped state takes this lock before touching any line,
+   * so they all lock in the same order and cannot deadlock each other.
+   */
+  private async lockOrderForFulfillment(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    orgId: string,
+  ) {
+    const rows = await tx.$queryRaw<Array<{ id: string; cancelledAt: Date | null }>>`
+      SELECT "id", "cancelled_at" AS "cancelledAt"
+      FROM "orders"
+      WHERE "id" = ${orderId} AND "organization_id" = ${orgId} AND "deleted_at" IS NULL
+      FOR UPDATE
+    `;
+    if (!rows[0]) throw new NotFoundException('Order not found');
+    return rows[0];
+  }
+
+  /**
+   * Take a local shipment's units back off its lines. Call with the order
+   * locked. Writes the lines only; the caller marks the shipment cancelled.
+   *
+   * Shipments recorded before per-shipment quantities existed carry only line
+   * ids. Such a shipment can still be reversed in full when no other live
+   * shipment shares its lines; when one does, there is no way to tell whose
+   * units are whose, so it is refused rather than guessed.
+   */
+  private async reverseLocalShipment(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    fulfillmentId: string,
+  ) {
+    // Re-read under the lock: a cancel that committed while this one waited
+    // has already taken the units back.
+    const shipment = await tx.orderFulfillment.findFirst({
+      where: { id: fulfillmentId, orderId },
+      select: { status: true, metadata: true },
+    });
+    if (!shipment) throw new NotFoundException('Fulfillment not found');
+    if (shipment.status === 'cancelled') {
+      throw new BadRequestException('Fulfillment is already cancelled');
+    }
+
+    const lineItemIds = this.fulfillmentLineItemIds(shipment.metadata);
+    if (lineItemIds.length === 0) return;
+    const meta = shipment.metadata as Record<string, unknown>;
+    const recorded =
+      meta.lineItemQuantities && typeof meta.lineItemQuantities === 'object'
+        ? (meta.lineItemQuantities as Record<string, unknown>)
+        : {};
+    const unitsOf = (lineId: string) => {
+      const n = recorded[lineId];
+      return typeof n === 'number' && Number.isInteger(n) && n > 0 ? n : null;
+    };
+
+    const lines = await tx.orderLineItem.findMany({
+      where: { orderId, id: { in: lineItemIds } },
+      select: { id: true, quantity: true, fulfilledQuantity: true, fulfillmentStatus: true },
+    });
+    if (lines.some((li) => unitsOf(li.id) === null)) {
+      const others = await tx.orderFulfillment.findMany({
+        where: { orderId, id: { not: fulfillmentId }, status: { not: 'cancelled' } },
+        select: { metadata: true },
+      });
+      const shared = new Set(others.flatMap((f) => this.fulfillmentLineItemIds(f.metadata)));
+      if (lines.some((li) => unitsOf(li.id) === null && shared.has(li.id))) {
+        throw new ConflictException(
+          'This shipment was recorded before per-shipment quantities were kept, and another ' +
+          'active shipment shares its items, so the units to take back cannot be worked out. ' +
+          'Cancel the other shipment on these items first.',
+        );
+      }
+    }
+
+    for (const li of lines) {
+      const units = unitsOf(li.id);
+      const remaining = units === null ? 0 : Math.max(0, li.fulfilledQuantity - units);
+      await tx.orderLineItem.update({
+        where: { id: li.id },
+        data: {
+          fulfilledQuantity: remaining,
+          fulfillmentStatus: this.statusForFulfilledQuantity(
+            remaining,
+            li.quantity,
+            li.fulfillmentStatus,
+          ),
+        },
+      });
+    }
+  }
 
   private async loadOrderWithChannel(id: string, orgId: string) {
     const order = await this.prisma.order.findFirst({
