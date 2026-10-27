@@ -27,6 +27,7 @@ const EVENT_CATEGORY: Record<string, EventCategory> = {
   invoice_edited: "order",
   paid: "payment",
   captured: "payment",
+  capture_pending: "payment",
   payment_status_changed: "payment",
   refunded: "payment",
   fulfilled: "fulfilment",
