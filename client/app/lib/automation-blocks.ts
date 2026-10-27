@@ -419,6 +419,12 @@ export const SKIP_REASON_LABEL: Record<string, string> = {
   once_per_contact: "Already went through it",
   once_per_day: "Already went through it today",
   template_unavailable: "Its template was not approved",
+  opted_out: "They opted out of these messages",
+  invoice_missing: "The order has no invoice yet",
+  value_missing: "A value for the template was missing",
+  paused_after_failures: "Paused for a day: messages to them kept failing",
+  daily_cap: "They already got 10 automated messages in 24 hours",
+  comment_too_old: "The comment is over 7 days old, too late for a private reply",
 };
 
 // ─── Playbooks ──────────────────────────────────────────────────────────────

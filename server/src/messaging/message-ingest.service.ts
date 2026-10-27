@@ -14,6 +14,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { UsageMeter } from '../billing/usage-meter';
 import { describeSendFailure } from './send/platform-sender.service';
+import { clearRecipientFailures, isRecipientFailure, noteRecipientFailure } from './recipient-failures';
 import { ContactIdentityService, ContactRef, ContactTouch } from './contact-identity.service';
 import { ConsentService, isOptInText, isOptOutText } from './consent.service';
 import { AutomationEventService, InboundEventType } from './automation-event.service';
@@ -181,6 +182,8 @@ export class MessageIngestService {
 
                 if (live) {
                     await this.bumpDailyStat(tx, channel.organizationId, contact.id, input.occurredAt, 'inboundCount');
+                    // They wrote in, so they can be reached again.
+                    if (contact.consecutiveFailures > 0 || contact.mutedUntil) await clearRecipientFailures(tx, contact.id);
                     if (isOptOutText(input.content.text) || isOptOutText(input.consentPayload)) {
                         await this.consent.record(tx, contact, ConsentType.OPT_OUT, 'keyword', {
                             messageId: message.id,
@@ -472,15 +475,12 @@ export class MessageIngestService {
                         : null;
             if (field) await this.bumpDailyStat(this.prisma, message.organizationId, message.contactId, update.at, field);
             if (update.status === MessageStatus.FAILED) {
-                await this.prisma.channelContact.update({
-                    where: { id: message.contactId },
-                    data: { outboundFailedCount: { increment: 1 }, consecutiveFailures: { increment: 1 } },
-                });
-            } else if (update.status === MessageStatus.DELIVERED) {
-                await this.prisma.channelContact.update({
-                    where: { id: message.contactId },
-                    data: { consecutiveFailures: 0 },
-                });
+                await this.prisma.channelContact.update({ where: { id: message.contactId }, data: { outboundFailedCount: { increment: 1 } } });
+                const code = update.error?.code ? Number(update.error.code) : undefined;
+                if (isRecipientFailure(code)) await noteRecipientFailure(this.prisma, message.contactId, update.at);
+            } else if (STATUS_RANK[update.status] >= STATUS_RANK.DELIVERED) {
+                // Read or played without a "delivered" first was delivered too.
+                await clearRecipientFailures(this.prisma, message.contactId);
             }
         }
         if (advance) await this.broadcastTracker.onStatus(message.id, update.status, update.at, update.error);

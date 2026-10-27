@@ -63,11 +63,18 @@ function RunRow({ run, steps }: { run: AutomationRunRow; steps: AutomationStep[]
           {run.steps.length === 0 && <p className="text-caption text-muted-foreground">{run.status === "SKIPPED" ? "Nothing ran." : "No steps yet."}</p>}
           {run.steps.map((s) => {
             const branch = typeof s.output?.branch === "string" ? s.output.branch : null;
+            const skipped = s.status === "SKIPPED" && typeof s.output?.skipped === "string" ? s.output.skipped : null;
             return (
               <div key={s.stepKey} className="flex flex-wrap items-baseline gap-x-2 text-caption">
-                <span className={cn("size-1.5 shrink-0 translate-y-[-1px] rounded-full", s.status === "FAILED" ? "bg-danger" : s.status === "WAITING" ? "bg-brand" : "bg-success")} />
+                <span
+                  className={cn(
+                    "size-1.5 shrink-0 translate-y-[-1px] rounded-full",
+                    s.status === "FAILED" ? "bg-danger" : s.status === "WAITING" ? "bg-brand" : s.status === "SKIPPED" ? "bg-muted-foreground" : "bg-success",
+                  )}
+                />
                 <span className="font-medium">{BLOCKS[s.blockType]?.label ?? s.blockType}</span>
                 {branch && <span className="text-muted-foreground">→ {branch.replace("_", " ")}</span>}
+                {skipped && <span className="text-muted-foreground">Skipped: {SKIP_REASON_LABEL[skipped] ?? skipped.replace(/_/g, " ")}</span>}
                 {s.error && <span className="text-danger">{s.error}</span>}
                 <span className="ml-auto text-micro text-muted-foreground">{formatDateTime(s.finishedAt ?? s.startedAt)}</span>
               </div>

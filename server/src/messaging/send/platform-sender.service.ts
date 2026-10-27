@@ -12,6 +12,7 @@ import { MessagingMediaStorage } from '../media/messaging-media.storage';
 import { VoiceNoteConverter, VoiceNoteError } from '../media/voice-note.converter';
 import { OutboundPayload, buildMessengerBody, buildWhatsAppBody } from '../outbound';
 import { groupIdOfContact } from '../group-contact';
+import { clearRecipientFailures, isRecipientFailure, noteRecipientFailure } from '../recipient-failures';
 import { patchChannelMetadataSql } from '../../channel/channel-metadata.util';
 
 /**
@@ -224,7 +225,7 @@ export class PlatformSenderService {
                     return this.fail(message, err.metaCode, 'The account’s access was revoked or expired. Reconnect it.');
                 }
                 if (err.code === 'API_ERROR' && (err.metaCode === undefined || PERMANENT_META_CODES.has(err.metaCode) || (err.httpStatus ?? 0) < 500)) {
-                    return this.fail(message, err.metaCode, describeSendFailure(err.metaCode, err.message, metaErrorDetails(err.details)));
+                    return this.fail(message, err.metaCode, describeSendFailure(err.metaCode, err.message, metaErrorDetails(err.details)), err.subcode);
                 }
             }
             if (err instanceof UnsupportedSend) return this.fail(message, undefined, err.message);
@@ -237,6 +238,10 @@ export class PlatformSenderService {
         }
 
         await this.recordSent(message.id, message.channelId, sent.externalId);
+        // Messenger and Instagram took it, so it reached the person; WhatsApp says so later, with "delivered".
+        if (channel.platform !== ChannelPlatform.WHATSAPP && (contact.consecutiveFailures > 0 || contact.mutedUntil)) {
+            await clearRecipientFailures(this.prisma, contact.id);
+        }
         if (sent.waId && sent.waId !== contact.waId) {
             await this.prisma.channelContact
                 .update({ where: { id: contact.id }, data: { waId: sent.waId, phone: `+${sent.waId}` } })
@@ -583,6 +588,7 @@ export class PlatformSenderService {
         message: { id: string; organizationId: string; conversationId: string | null; contactId: string | null },
         code: number | undefined,
         reason: string,
+        subcode?: number,
     ): Promise<'failed'> {
         const { count } = await this.prisma.message.updateMany({
             where: { id: message.id, status: MessageStatus.QUEUED },
@@ -595,10 +601,8 @@ export class PlatformSenderService {
         });
         if (!count) return 'failed';
         if (message.contactId) {
-            await this.prisma.channelContact.update({
-                where: { id: message.contactId },
-                data: { outboundFailedCount: { increment: 1 }, consecutiveFailures: { increment: 1 } },
-            });
+            await this.prisma.channelContact.update({ where: { id: message.contactId }, data: { outboundFailedCount: { increment: 1 } } });
+            if (isRecipientFailure(code, subcode)) await noteRecipientFailure(this.prisma, message.contactId, new Date());
         }
         await this.broadcasts.onStatus(message.id, MessageStatus.FAILED, new Date(), {
             code: code !== undefined ? String(code) : null,

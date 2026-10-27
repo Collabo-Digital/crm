@@ -45,6 +45,37 @@ describe('MessageIngestService.applyStatus', () => {
     });
 });
 
+describe('MessageIngestService.applyStatus, failures that pause automations to a person', () => {
+    const sent = { id: 'm1', status: MessageStatus.SENT, conversationId: 'c1', contactId: 'ct1', organizationId: 'org1', sentAt: new Date() };
+    function withContact() {
+        const built = build(sent, null);
+        const prisma = built.prisma as typeof built.prisma & Record<string, unknown>;
+        prisma.contactDailyStat = { upsert: jest.fn().mockResolvedValue({}) };
+        const channelContact = { update: jest.fn().mockResolvedValue({ consecutiveFailures: 1 }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) };
+        prisma.channelContact = channelContact;
+        return { ...built, channelContact };
+    }
+
+    it('counts a number that cannot receive WhatsApp against the person', async () => {
+        const { service, channelContact } = withContact();
+        await service.applyStatus(channel, 'wamid.1', { status: MessageStatus.FAILED, at: secondsAgo(3), error: { code: '131026', message: 'Message undeliverable' } });
+        expect(channelContact.update.mock.calls.map((c) => c[0].data)).toEqual([{ outboundFailedCount: { increment: 1 } }, { consecutiveFailures: { increment: 1 } }]);
+    });
+
+    it('does not count a failure that is the account’s, such as its payment method', async () => {
+        const { service, channelContact } = withContact();
+        await service.applyStatus(channel, 'wamid.1', { status: MessageStatus.FAILED, at: secondsAgo(3), error: { code: '131042', message: 'Payment issue' } });
+        expect(channelContact.update.mock.calls.map((c) => c[0].data)).toEqual([{ outboundFailedCount: { increment: 1 } }]);
+    });
+
+    it.each([MessageStatus.DELIVERED, MessageStatus.READ])('clears earlier failures when a message is %s', async (status) => {
+        const { service, channelContact } = withContact();
+        await service.applyStatus(channel, 'wamid.1', { status, at: secondsAgo(3) });
+        expect(channelContact.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: 'ct1' }), data: { consecutiveFailures: 0, mutedUntil: null } }));
+        expect(channelContact.update).not.toHaveBeenCalled();
+    });
+});
+
 describe('a played voice message', () => {
     const { QUEUED, SENT, DELIVERED, READ, PLAYED, FAILED } = MessageStatus;
 

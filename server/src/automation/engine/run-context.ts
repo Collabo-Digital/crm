@@ -14,6 +14,8 @@ export interface RunContext {
         /** The comment the run started from, for comment replies. */
         commentId: string | null;
         postId: string | null;
+        /** When that comment was made (ISO): Meta allows a private reply for 7 days. Absent on runs started before it was kept. */
+        commentAt?: string | null;
     };
     /** How many tag_added hops led to this run. */
     depth: number;
@@ -35,7 +37,12 @@ export function parseRunContext(raw: unknown): RunContext {
     const c = (raw ?? {}) as Partial<RunContext>;
     return {
         vars: { ...(c.vars ?? {}) },
-        trigger: { eventType: c.trigger?.eventType ?? '', commentId: c.trigger?.commentId ?? null, postId: c.trigger?.postId ?? null },
+        trigger: {
+            eventType: c.trigger?.eventType ?? '',
+            commentId: c.trigger?.commentId ?? null,
+            postId: c.trigger?.postId ?? null,
+            ...(typeof c.trigger?.commentAt === 'string' ? { commentAt: c.trigger.commentAt } : {}),
+        },
         depth: c.depth ?? 0,
         ...(c.replied ? { replied: true } : {}),
         ...(Array.isArray(c.replyEventIds) && c.replyEventIds.length ? { replyEventIds: c.replyEventIds } : {}),

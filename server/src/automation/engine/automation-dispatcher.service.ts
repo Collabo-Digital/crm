@@ -400,6 +400,7 @@ export class AutomationDispatcher {
                 eventType: event.eventType,
                 commentId: isComment ? event.externalId : null,
                 postId: payload.raw?.postId ?? payload.mediaExternalId ?? null,
+                ...(isComment ? { commentAt: event.occurredAt.toISOString() } : {}),
             },
             depth: payload.raw?.depth ?? 0,
             ...(event.eventType === 'whatsapp.cart'

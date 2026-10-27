@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AutomationRunStatus, AutomationStatus, ChannelPlatform, ChannelStatus, ConversationStatus, MessageDirection, MessageTemplate, Prisma } from '@prisma/client';
+import { AutomationRunStatus, AutomationStatus, ChannelPlatform, ChannelStatus, ConversationStatus, MessageDirection, MessageKind, MessageSource, MessageStatus, MessageTemplate, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AutomationEventService } from '../../messaging/automation-event.service';
 import { AutomationJobs } from '../../messaging/automation-jobs';
@@ -57,6 +57,11 @@ const MAX_HOPS = 60;
 /** A pack template Meta paused is tried again this often, until this long after the run started; then the step is skipped. */
 const PAUSED_RETRY_MS = 30 * 60_000;
 const PAUSED_HOLD_MS = 12 * 3600_000;
+/** Automated messages one person gets on Instagram or Messenger in 24 hours, from every automation together. */
+export const DAILY_MESSAGE_CAP = 10;
+const DAY_MS = 24 * 3600_000;
+/** Meta takes a private reply to a comment this long after it was made. */
+const PRIVATE_REPLY_WINDOW_MS = 7 * DAY_MS;
 
 /** Why a run's stop conditions ended it. */
 type StopReason = 'order_placed' | 'replied' | 'opted_out';
@@ -595,6 +600,9 @@ export class AutomationRunner {
      */
     private async sendPaymentLink(s: StepState, step: FlowStep): Promise<Outcome> {
         const c = step.config as { method?: string; kind?: string; message?: string; templateId?: string; templateValues?: Record<string, string>; templateSlot?: string; expiresInHours?: number; tagOnPaid?: string };
+        // Before a link or a WhatsApp Pay request is made for a message that will not go.
+        const gated = await this.sendGate(s, null);
+        if (gated) return gated;
         if (c.method === 'whatsapp_pay') return this.sendWhatsAppPay(s, step, c);
         // Before the link is made: nothing is sent without a template, and a held link's expiry would run through the night.
         let slot: ResolvedSlot | null = null;
@@ -661,7 +669,40 @@ export class AutomationRunner {
         }
     }
 
+    /**
+     * Whether this person gets an automated message now. Not while they are
+     * paused after sends that failed on their side; not a private reply Meta
+     * would refuse for the comment's age; on Instagram and Messenger, not past
+     * the day's cap. A public reply sits under the post, not in their messages,
+     * so none of this applies to it.
+     */
+    private async sendGate(s: StepState, payload: OutboundPayload | null): Promise<Halt | null> {
+        if (payload?.type === 'comment_reply') return null;
+        const skip = (reason: string, extra: Record<string, unknown>): Halt => ({ kind: 'skip', reason, output: { skipped: reason, ...extra } });
+        const now = Date.now();
+        const paused = s.contact.mutedUntil;
+        if (paused && paused.getTime() > now) return skip('paused_after_failures', { until: paused.toISOString() });
+        const commentAt = s.ctx.trigger.commentAt ? Date.parse(s.ctx.trigger.commentAt) : null;
+        if (payload?.type === 'private_reply' && commentAt !== null && now - commentAt > PRIVATE_REPLY_WINDOW_MS) {
+            return skip('comment_too_old', { commentAt: s.ctx.trigger.commentAt });
+        }
+        if (s.contact.platform === ChannelPlatform.WHATSAPP) return null;
+        const sent = await this.prisma.message.count({
+            where: {
+                contactId: s.contact.id,
+                direction: MessageDirection.OUTBOUND,
+                source: MessageSource.AUTOMATION,
+                kind: { not: MessageKind.COMMENT },
+                status: { not: MessageStatus.FAILED },
+                createdAt: { gte: new Date(now - DAY_MS) },
+            },
+        });
+        return sent >= DAILY_MESSAGE_CAP ? skip('daily_cap', { cap: DAILY_MESSAGE_CAP }) : null;
+    }
+
     private async deliver(s: StepState, step: FlowStep, payload: OutboundPayload): Promise<Outcome> {
+        const gated = await this.sendGate(s, payload);
+        if (gated) return gated;
         const conversationId = await this.conversationId(s);
         const outcome = await this.sender.send({
             organizationId: s.run.organizationId,

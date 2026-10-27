@@ -49,7 +49,7 @@ function build(message = row(), deps: { channel?: object; storage?: object; voic
             }),
             deleteMany: jest.fn(),
         },
-        channelContact: { update: jest.fn().mockResolvedValue({}) },
+        channelContact: { update: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
     const metaGraph = { request: jest.fn() };
     const broadcasts = {
@@ -198,6 +198,52 @@ describe('PlatformSenderService.deliver, voice notes', () => {
         expect(prisma.message.updateMany).toHaveBeenCalledWith(
             expect.objectContaining({ data: expect.objectContaining({ status: MessageStatus.FAILED, errorMessage: expect.stringContaining('could not be converted') }) }),
         );
+    });
+});
+
+describe('PlatformSenderService.deliver, failures that pause automations to a person', () => {
+    const instagram = { ...channel, platform: ChannelPlatform.INSTAGRAM, address: 'IG1', sendPath: '/P1/messages', pageId: 'P1' };
+    const person = (over: Record<string, unknown> = {}) => ({ id: 'ct1', externalId: 'IGSID1', waId: null, consecutiveFailures: 0, mutedUntil: null, ...over });
+
+    it('counts a person who blocked the account against them, and pauses them at the third failure in a row', async () => {
+        const { sender, metaGraph, prisma } = build(row({ contact: person({ consecutiveFailures: 2 }) }), { channel: instagram });
+        prisma.channelContact.update.mockResolvedValueOnce({}).mockResolvedValueOnce({ consecutiveFailures: 3 });
+        metaGraph.request.mockRejectedValueOnce(new MetaGraphError('This person isn’t available right now.', 'API_ERROR', 551, 1545041, 400));
+
+        expect(await sender.deliver('m1', false)).toBe('failed');
+        const updates = prisma.channelContact.update.mock.calls.map((c) => c[0]);
+        expect(updates).toEqual([
+            { where: { id: 'ct1' }, data: { outboundFailedCount: { increment: 1 } } },
+            { where: { id: 'ct1' }, data: { consecutiveFailures: { increment: 1 } }, select: { consecutiveFailures: true } },
+            { where: { id: 'ct1' }, data: { mutedUntil: expect.any(Date) } },
+        ]);
+        const pausedFor = updates[2].data.mutedUntil.getTime() - Date.now();
+        expect(pausedFor).toBeGreaterThan(23.9 * 3600_000);
+        expect(pausedFor).toBeLessThanOrEqual(24 * 3600_000);
+    });
+
+    it('never counts the account’s own problems against the person', async () => {
+        const { sender, metaGraph, prisma } = build(row({ contact: { ...person(), externalId: '919800000000', waId: '919800000000' } }));
+        metaGraph.request.mockRejectedValueOnce(new MetaGraphError('Payment issue', 'API_ERROR', 131042, undefined, 400));
+
+        expect(await sender.deliver('m1', false)).toBe('failed');
+        expect(prisma.channelContact.update.mock.calls.map((c) => c[0])).toEqual([{ where: { id: 'ct1' }, data: { outboundFailedCount: { increment: 1 } } }]);
+    });
+
+    it('clears earlier failures once Instagram takes a message', async () => {
+        const { sender, metaGraph, prisma } = build(row({ contact: person({ consecutiveFailures: 2 }) }), { channel: instagram });
+        metaGraph.request.mockResolvedValueOnce({ data: { message_id: 'mid.1' } });
+
+        expect(await sender.deliver('m1', false)).toBe('sent');
+        expect(prisma.channelContact.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { consecutiveFailures: 0, mutedUntil: null } }));
+    });
+
+    it('waits for WhatsApp’s "delivered" before clearing them: an accepted send can still fail', async () => {
+        const { sender, metaGraph, prisma } = build(row({ contact: { ...person({ consecutiveFailures: 2 }), externalId: '919800000000', waId: '919800000000' } }));
+        metaGraph.request.mockResolvedValueOnce({ data: { messages: [{ id: 'wamid.1' }] } });
+
+        expect(await sender.deliver('m1', false)).toBe('sent');
+        expect(prisma.channelContact.updateMany).not.toHaveBeenCalled();
     });
 });
 
