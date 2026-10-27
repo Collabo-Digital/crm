@@ -18,7 +18,7 @@ function variant(id: string, over: Record<string, unknown> = {}) {
     };
 }
 
-function build(opts: { warehousing?: boolean; warehouses?: any[]; variants?: any[]; rate?: number | null; posSettings?: unknown } = {}) {
+function build(opts: { warehousing?: boolean; warehouses?: any[]; variants?: any[]; rate?: number | null; posSettings?: unknown; composition?: boolean } = {}) {
     const warehouses = opts.warehouses ?? [
         { id: 'wh_mg', name: 'MG Road', code: 'MG', kind: 'STORE', isDefault: true, isActive: true, address: { stateCode: '29' }, gstin: { stateCode: '29', isActive: true } },
         { id: 'wh_ko', name: 'Kochi', code: 'KO', kind: 'STORE', isDefault: false, isActive: true, address: { stateCode: '32' }, gstin: null },
@@ -50,6 +50,7 @@ function build(opts: { warehousing?: boolean; warehouses?: any[]; variants?: any
         {
             getStoreProfileSettings: jest.fn().mockResolvedValue({ storeName: '', logoUrl: '' }),
             getProductSettings: jest.fn().mockResolvedValue({ trackQuantityGlobally: false, allowOversellGlobally: false }),
+            getTaxSettings: jest.fn().mockResolvedValue({ composition: opts.composition ?? false }),
         } as any,
         { isWarehousingEnabled: jest.fn().mockResolvedValue(opts.warehousing ?? true) } as any,
         { getRate: jest.fn().mockResolvedValue(opts.rate ?? null) } as any,
@@ -72,6 +73,11 @@ describe('PosCatalogService stores', () => {
         expect(await service.resolveStore(ORG)).toEqual({ id: 'wh_mg', warehouseId: 'wh_mg', name: 'MG Road', stateCode: '29' });
         expect((await service.resolveStore(ORG, 'wh_ko')).stateCode).toBe('32');
         await expect(service.resolveStore(ORG, 'wh_other_org')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('tells the till when the seller is under the composition scheme, so it shows no GST estimate', async () => {
+        expect((await build().service.setup(ORG)).composition).toBe(false);
+        expect((await build({ composition: true }).service.setup(ORG)).composition).toBe(true);
     });
 
     it('with no default warehouse the till still opens, on the first store', async () => {

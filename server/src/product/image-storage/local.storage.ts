@@ -1,6 +1,6 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { promises as fs } from 'fs';
-import { join } from 'path';
+import { join, resolve, sep } from 'path';
 import { randomUUID } from 'crypto';
 import {
   IImageStorage,
@@ -58,5 +58,15 @@ export class LocalImageStorage implements IImageStorage {
       // Missing files aren't fatal — DB row removal is the source of truth.
       this.logger.warn(`Failed to delete image ${storageKey}: ${err}`);
     }
+  }
+
+  async read(storageKey: string): Promise<Buffer> {
+    const fullPath = resolve(this.rootDir, storageKey);
+    // Keys are ours, written by `upload`, but this reads whatever path it is
+    // handed: one must never reach outside the uploads folder.
+    if (!fullPath.startsWith(this.rootDir + sep)) {
+      throw new NotFoundException('Image not found');
+    }
+    return fs.readFile(fullPath);
   }
 }

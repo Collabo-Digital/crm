@@ -35,6 +35,11 @@ import { catalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util'
 import { CRM_SOURCE_NAME } from '../channel/order-rebadge.util';
 import { parseTaxSettings } from '../organization-settings/schemas/tax-settings.schema';
 import { parseOrderSettings } from '../organization-settings/schemas/order-settings.schema';
+import { parseInvoiceSettings } from '../organization-settings/schemas/invoice-settings.schema';
+import { parseStoreProfileSettings } from '../organization-settings/schemas/store-profile-settings.schema';
+import { parsePosSettings } from '../pos/pos-settings.schema';
+import { compositionInterStateError } from '../gst/composition.util';
+import { readRenderSnapshot, type RenderSnapshot } from './render/render-snapshot';
 import { compareTax } from '../gst/tax-reconciliation.util';
 import {
   EXPORT_PLACE_OF_SUPPLY,
@@ -548,17 +553,24 @@ export class InvoiceService {
     //    financial-year stamp below — servers run UTC, so deriving the FY in
     //    server-local time files a 00:30 IST sale on 1 April into the PREVIOUS
     //    financial year and burns a serial from that (possibly filed) year.
+    //    `name` and `website` are for the render snapshot.
     const org = await tx.organization.findUnique({
       where: { id: orgId },
-      select: { gstEnabled: true, timezone: true },
+      select: { gstEnabled: true, timezone: true, name: true, website: true },
     });
 
-    // B2CL threshold and the default UQC. Read in-transaction rather than via
-    // OrganizationSettingsService so this needs no new injection and cannot see
-    // a settings value the surrounding transaction did not.
+    // B2CL threshold, the default UQC, and the composition and e-invoicing
+    // switches; the rest is the render snapshot. Read in-transaction rather
+    // than via OrganizationSettingsService so this needs no new injection and
+    // cannot see a settings value the surrounding transaction did not.
     const settingsRow = await tx.organizationSettings.findUnique({
       where: { organizationId: orgId },
-      select: { taxSettings: true },
+      select: {
+        taxSettings: true,
+        invoiceSettings: true,
+        storeProfileSettings: true,
+        posSettings: true,
+      },
     });
     const taxSettings = parseTaxSettings(settingsRow?.taxSettings ?? null);
 
@@ -572,7 +584,7 @@ export class InvoiceService {
     //    registration of the location the goods leave from comes first: a
     //    place of business supplies under its own GSTIN, and picking another
     //    one here is exactly what `resolveDispatchWarehouse` refuses.
-    let sellerGstin;
+    let sellerGstin: Prisma.OrganizationGstinGetPayload<true> | null;
     const dispatchGstin = dto.sellerGstinId
       ? null
       : await this.dispatchLocationGstin(
@@ -634,6 +646,44 @@ export class InvoiceService {
       placeOfSupplyCode,
     );
     const gstType = isIntraState ? GstType.CGST_SGST : GstType.IGST;
+
+    // 5b. Resolve the buyer's GSTIN.
+    //
+    // NORMALISED AT WRITE TIME, not validated at read time. B2B/B2C is decided
+    // by whether this column is null — and `buildInvoiceWhere` makes the same
+    // decision in Prisma with `buyerGstin: { not: null }`, which cannot run a
+    // regex. Validating only when generating the return would therefore make
+    // the invoice LIST and the RETURN classify the same invoice differently.
+    // Storing "a valid GSTIN or null" keeps both predicates equivalent.
+    //
+    // An explicit `dto.buyerGstin` is already @Matches(GSTIN_REGEX) in the DTO,
+    // so it is rejected rather than silently dropped. A junk GSTIN on the
+    // CUSTOMER record is different: it arrives from Shopify customer sync and
+    // CSV import, neither of which validates, and must not block a legitimate
+    // invoice — it just must not make the sale B2B.
+    const customerGstin = normalizeGstin(order.customer?.gstin);
+    if (order.customer?.gstin && !customerGstin) {
+      this.logger.warn(
+        `Customer ${order.customer.id} has an invalid GSTIN; invoicing order ` +
+          `${order.id} as B2C. Correct it on the customer record to file this as B2B.`,
+      );
+    }
+
+    const buyerGstin = normalizeGstin(dto.buyerGstin) || customerGstin || null;
+
+    // 5c. Documents Collabo must not issue, refused before anything is priced
+    //     or a number is drawn. A composition seller cannot supply to another
+    //     state (an export is one). With e-invoicing on, an invoice to a
+    //     GST-registered buyer or for an export needs an IRN (Rule 48(4)),
+    //     which Collabo cannot get yet, and one issued without "shall not be
+    //     treated as an invoice" (Rule 48(5)). Auto-invoicing records the
+    //     refusal on the order like any other failure to issue.
+    if (taxSettings.composition && !isIntraState) {
+      throw compositionInterStateError(placeOfSupplyCode, sellerGstin.stateCode);
+    }
+    if (taxSettings.eInvoicing && (buyerGstin || isExportSupply)) {
+      throw this.eInvoicingRefusal('invoices to GST-registered buyers and exports');
+    }
 
     // 6. Calculate tax for each line item
     const lineItemResults: Array<{
@@ -936,29 +986,8 @@ export class InvoiceService {
       tx,
     );
 
-    // 9. Resolve buyer info.
+    // 9. Resolve buyer info (the GSTIN was resolved at 5b).
     //
-    // NORMALISED AT WRITE TIME, not validated at read time. B2B/B2C is decided
-    // by whether this column is null — and `buildInvoiceWhere` makes the same
-    // decision in Prisma with `buyerGstin: { not: null }`, which cannot run a
-    // regex. Validating only when generating the return would therefore make
-    // the invoice LIST and the RETURN classify the same invoice differently.
-    // Storing "a valid GSTIN or null" keeps both predicates equivalent.
-    //
-    // An explicit `dto.buyerGstin` is already @Matches(GSTIN_REGEX) in the DTO,
-    // so it is rejected rather than silently dropped. A junk GSTIN on the
-    // CUSTOMER record is different: it arrives from Shopify customer sync and
-    // CSV import, neither of which validates, and must not block a legitimate
-    // invoice — it just must not make the sale B2B.
-    const customerGstin = normalizeGstin(order.customer?.gstin);
-    if (order.customer?.gstin && !customerGstin) {
-      this.logger.warn(
-        `Customer ${order.customer.id} has an invalid GSTIN; invoicing order ` +
-          `${order.id} as B2C. Correct it on the customer record to file this as B2B.`,
-      );
-    }
-
-    const buyerGstin = normalizeGstin(dto.buyerGstin) || customerGstin || null;
     // A customer synced with only an email (common for Shopify checkouts) has
     // no first or last name, and this used to store "" — a tax invoice with a
     // blank buyer. Fall through to what identifies them, then to the guest
@@ -972,6 +1001,18 @@ export class InvoiceService {
       order.customer?.billingStateCode ||
       placeOfSupplyCode;
     const buyerStateName = getStateName(buyerStateCode) || buyerStateCode;
+
+    // Rule 49: a composition seller, or a sale made up only of exempt,
+    // nil-rated or non-GST goods, issues a bill of supply, not a tax invoice.
+    const billOfSupply =
+      taxSettings.composition ||
+      (lineItemResults.length > 0 &&
+        lineItemResults.every(
+          (r) =>
+            r.supplyType === GstSupplyType.EXEMPT ||
+            r.supplyType === GstSupplyType.NIL_RATED ||
+            r.supplyType === GstSupplyType.NON_GST,
+        ));
 
     // 10. Create the invoice with line items
     const invoice = await tx.invoice.create({
@@ -1036,6 +1077,16 @@ export class InvoiceService {
         // required answer for an ordinary forward-charge supply — the point is
         // that it can now also be true.
         reverseCharge: dto.reverseCharge ?? false,
+        // Everything else the PDF prints that the merchant can change later.
+        // With e-invoicing on, a document issued without an IRN carries the
+        // Rule 46(s) declaration.
+        metadata: {
+          render: this.renderSnapshot(org, settingsRow, {
+            documentType: billOfSupply ? 'BILL_OF_SUPPLY' : 'TAX_INVOICE',
+            composition: taxSettings.composition,
+            eInvoiceDeclaration: taxSettings.eInvoicing && !buyerGstin,
+          }),
+        } as Prisma.InputJsonObject,
         // Line items
         lineItems: {
           create: lineItemResults.map((r) => ({
@@ -1082,6 +1133,47 @@ export class InvoiceService {
     });
 
     return invoice;
+  }
+
+  /**
+   * What an invoice or credit note keeps at `metadata.render` (see
+   * render/render-snapshot.ts): the design, trading name, logo, contacts and
+   * UPI id as they are when it is issued, from the rows the issuing
+   * transaction read, so a later settings change never alters it.
+   */
+  private renderSnapshot(
+    org: { name: string; website: string | null } | null,
+    settings: {
+      invoiceSettings: Prisma.JsonValue;
+      storeProfileSettings: Prisma.JsonValue;
+      posSettings: Prisma.JsonValue;
+    } | null,
+    treatment: Pick<RenderSnapshot, 'documentType' | 'composition' | 'eInvoiceDeclaration'>,
+  ): RenderSnapshot {
+    const profile = parseStoreProfileSettings(settings?.storeProfileSettings ?? null);
+    return {
+      v: 1,
+      ...treatment,
+      design: parseInvoiceSettings(settings?.invoiceSettings ?? null),
+      brand: {
+        tradeName: profile.storeName.trim() || org?.name || '',
+        logoStorageKey: profile.logoStorageKey || null,
+        supportPhone: profile.supportPhone,
+        whatsappPhone: profile.whatsappPhone,
+        supportEmail: profile.supportEmail,
+        website: profile.website || org?.website || '',
+        upiId: parsePosSettings(settings?.posSettings ?? null).upiId,
+      },
+    };
+  }
+
+  /** Why a document that needs an IRN is not issued here. */
+  private eInvoicingRefusal(documents: string): BadRequestException {
+    return new BadRequestException(
+      `E-invoicing is on for your business, so ${documents} need an IRN from the government's ` +
+        "e-invoice portal, which Collabo can't get yet. Issue this one on the e-invoice portal " +
+        'or in your accounting software.',
+    );
   }
 
   /**
@@ -1820,11 +1912,33 @@ export class InvoiceService {
       );
     }
 
+    // The settings come along for the e-invoicing switch and the note's render
+    // snapshot, read in this transaction like the issuing path's.
     const org = await tx.organization.findUnique({
       where: { id: orgId },
-      select: { timezone: true, gstEnabled: true },
+      select: {
+        timezone: true,
+        gstEnabled: true,
+        name: true,
+        website: true,
+        settings: {
+          select: {
+            taxSettings: true,
+            invoiceSettings: true,
+            storeProfileSettings: true,
+            posSettings: true,
+          },
+        },
+      },
     });
     const timeZone = this.gstTimeZone(orgId, org);
+    const taxSettings = parseTaxSettings(org?.settings?.taxSettings ?? null);
+
+    // A credit note to a GST-registered buyer needs an IRN as its invoice did
+    // (Rule 48(4)); refused before a number is drawn, like the invoice.
+    if (taxSettings.eInvoicing && original.buyerGstin) {
+      throw this.eInvoicingRefusal('credit notes to GST-registered buyers');
+    }
 
     // The credit note itself is dated TODAY and lands in today's period, so the
     // period being locked is the one it is issued into — not the one the
@@ -1990,6 +2104,7 @@ export class InvoiceService {
     }
     const noteSubtotal = sum((l) => l.taxableValue);
     const noteTax = sum((l) => l.totalTax);
+    const originalRender = readRenderSnapshot(original.metadata);
 
     const note = await tx.invoice.create({
       data: {
@@ -2037,6 +2152,17 @@ export class InvoiceService {
         currency: original.currency,
         reverseCharge: original.reverseCharge,
         notes: dto.notes,
+        // The note keeps its invoice's tax treatment: one against a bill of
+        // supply is not a tax document either, even after the merchant has
+        // left the scheme. The design and brand are today's, as on any new
+        // document. Invoices issued before snapshots were tax invoices.
+        metadata: {
+          render: this.renderSnapshot(org, org?.settings ?? null, {
+            documentType: originalRender?.documentType ?? 'TAX_INVOICE',
+            composition: originalRender?.composition ?? false,
+            eInvoiceDeclaration: taxSettings.eInvoicing && !original.buyerGstin,
+          }),
+        } as Prisma.InputJsonObject,
         lineItems: { create: lines },
       },
       include: { lineItems: true },

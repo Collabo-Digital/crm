@@ -19,6 +19,7 @@ import {
 } from '@prisma/client';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
 import { catalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util';
+import { compositionInterStateError, isCompositionSeller } from '../gst/composition.util';
 import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { singleDistinct } from '../channel/single-distinct.util';
 import {
@@ -1439,6 +1440,13 @@ export class OrderService {
         const resolvedGstType = isIntraState
           ? GstType.CGST_SGST
           : GstType.IGST;
+
+        // A composition seller cannot supply to another state, so the sale is
+        // refused outright rather than made and left uninvoiced. Asked only of
+        // a taxed inter-state sale, the one case it can refuse.
+        if (sellerGstin && !isIntraState && (await isCompositionSeller(tx, orgId))) {
+          throw compositionInterStateError(placeOfSupplyCode, sellerGstin.stateCode);
+        }
 
         // A completing draft passes the basis it was quoted on. Otherwise the
         // org's, for a typed price as much as a catalogue one, when the sale
