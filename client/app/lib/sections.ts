@@ -210,6 +210,8 @@ export function canAccessPath(access: SectionAccess, pathname: string): boolean 
 export function firstAllowedPath(access: SectionAccess): string {
   // An influencer has no dashboard; their work starts at their own channels.
   if (access.role === "INFLUENCER") return "/settings/channels";
+  // A Packer's work is the packing list, whichever section comes first in the nav.
+  if (canAccessPath(access, "/orders/packing") && !canAccessPath(access, "/orders")) return "/orders/packing";
   return (
     AVAILABLE_SECTIONS.find((s) => canAccessPath(access, s.prefix))?.prefix ??
     "/profile"
