@@ -61,6 +61,7 @@ import { ReviewsModule } from './reviews/reviews.module';
 import { GoogleModule } from './integrations/google/google.module';
 import { DeveloperModule } from './developer/developer.module';
 import { PosModule } from './pos/pos.module';
+import { PackingModule } from './packing/packing.module';
 
 @Module({
   imports: [
@@ -141,6 +142,7 @@ import { PosModule } from './pos/pos.module';
     GoogleModule,
     DeveloperModule,
     PosModule,
+    PackingModule,
   ],
   controllers: [AppController],
   providers: [
