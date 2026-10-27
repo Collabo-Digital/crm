@@ -520,31 +520,40 @@ export class InventoryService {
 
     const warehouse = await this.resolveWarehouse(orgId, dto.warehouseId);
 
-    let delta = dto.delta ?? 0;
-    if (dto.setTo !== undefined) {
-      const level = await this.prisma.stockLevel.findFirst({
-        where: { variantId: dto.variantId, warehouseId: warehouse.id, locationId: null },
-      });
-      const current = level ? level[dto.bucket.toLowerCase() as 'available'] : 0;
-      delta = dto.setTo - current;
-      if (delta === 0) {
-        return { ok: true, changed: false, inventoryQuantity: undefined };
-      }
-    }
-
     const reason = dto.reason ?? 'adjustment';
-    const result = await this.ledger.applyMovement({
-      orgId,
-      variantId: dto.variantId,
-      warehouseId: warehouse.id,
-      fromBucket: delta < 0 ? dto.bucket : null,
-      toBucket: delta > 0 ? dto.bucket : null,
-      quantity: Math.abs(delta),
-      reason,
-      referenceType: 'manual_adjustment',
-      referenceId: dto.note ?? undefined,
-      actorId: userId,
+    const result = await this.prisma.$transaction(async (tx) => {
+      // A "set to" is counted from the level read under the movement's own
+      // lock. Read before it, a sale or Shopify update landing in between
+      // leaves a "set to 10" at 9 or 11.
+      await tx.$queryRaw`SELECT 1 FROM "product_variants" WHERE "id" = ${dto.variantId} FOR UPDATE`;
+      let delta = dto.delta ?? 0;
+      if (dto.setTo !== undefined) {
+        const level = await tx.stockLevel.findFirst({
+          where: { variantId: dto.variantId, warehouseId: warehouse.id, locationId: null },
+        });
+        const current = level ? level[dto.bucket.toLowerCase() as 'available'] : 0;
+        delta = dto.setTo - current;
+        if (delta === 0) return null;
+      }
+      return this.ledger.applyMovement(
+        {
+          orgId,
+          variantId: dto.variantId,
+          warehouseId: warehouse.id,
+          fromBucket: delta < 0 ? dto.bucket : null,
+          toBucket: delta > 0 ? dto.bucket : null,
+          quantity: Math.abs(delta),
+          reason,
+          referenceType: 'manual_adjustment',
+          referenceId: dto.note ?? undefined,
+          actorId: userId,
+        },
+        tx,
+      );
     });
+    if (!result) {
+      return { ok: true, changed: false, inventoryQuantity: undefined };
+    }
 
     // CRM-origin stock op touching the sellable bucket → push to Shopify.
     if (dto.bucket === StockBucket.AVAILABLE) {
@@ -601,42 +610,41 @@ export class InventoryService {
       throw new NotFoundException('Variant not found: ' + missing.join(', '));
     }
 
-    // Current quantities for every line in one read, so the `setTo` deltas are
-    // all computed against the same snapshot.
-    const levels = await this.prisma.stockLevel.findMany({
-      where: {
-        variantId: { in: variantIds },
-        warehouseId: warehouse.id,
-        locationId: null,
-      },
-    });
-    const levelByVariant = new Map(levels.map((l) => [l.variantId, l]));
-
-    const planned = dto.items
-      .map((item) => {
-        let delta = item.delta ?? 0;
-        if (item.setTo !== undefined) {
-          const level = levelByVariant.get(item.variantId);
-          const current = level
-            ? level[item.bucket.toLowerCase() as 'available']
-            : 0;
-          delta = item.setTo - current;
-        }
-        return { ...item, delta };
-      })
-      // A no-op line is dropped rather than rejected: the UI sends whatever is
-      // dirty, and typing a value back to its original is not an error.
-      .filter((p) => p.delta !== 0)
-      // applyMovement requires multi-variant transactions to take their locks
-      // in a stable order, or two concurrent batches sharing a variant deadlock.
-      .sort((a, b) => a.variantId.localeCompare(b.variantId));
-
-    if (planned.length === 0) {
-      return { ok: true, applied: 0, results: [] };
-    }
-
     const reason = dto.reason ?? 'correction';
     const results = await this.prisma.$transaction(async (tx) => {
+      // Every variant is locked before any level is read, so the whole batch
+      // counts from one snapshot that no sale can move until it commits. In id
+      // order, the order applyMovement's callers lock in, or two batches
+      // sharing variants deadlock.
+      for (const variantId of [...variantIds].sort((a, b) => a.localeCompare(b))) {
+        await tx.$queryRaw`SELECT 1 FROM "product_variants" WHERE "id" = ${variantId} FOR UPDATE`;
+      }
+      const levels = await tx.stockLevel.findMany({
+        where: {
+          variantId: { in: variantIds },
+          warehouseId: warehouse.id,
+          locationId: null,
+        },
+      });
+      const levelByVariant = new Map(levels.map((l) => [l.variantId, l]));
+
+      const planned = dto.items
+        .map((item) => {
+          let delta = item.delta ?? 0;
+          if (item.setTo !== undefined) {
+            const level = levelByVariant.get(item.variantId);
+            const current = level
+              ? level[item.bucket.toLowerCase() as 'available']
+              : 0;
+            delta = item.setTo - current;
+          }
+          return { ...item, delta };
+        })
+        // A no-op line is dropped rather than rejected: the UI sends whatever is
+        // dirty, and typing a value back to its original is not an error.
+        .filter((p) => p.delta !== 0)
+        .sort((a, b) => a.variantId.localeCompare(b.variantId));
+
       const out: {
         variantId: string;
         bucket: StockBucket;

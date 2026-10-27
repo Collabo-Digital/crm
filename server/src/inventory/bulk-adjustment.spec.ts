@@ -41,9 +41,12 @@ describe('InventoryService.createAdjustmentsBulk', () => {
       warehouse: { findFirst: jest.fn().mockResolvedValue(WH) },
       productVariant: { findMany: jest.fn() },
       stockLevel: { findMany: jest.fn().mockResolvedValue([]) },
-      // Run the callback inline; the tx client is never touched by these tests
-      // because applyMovement is mocked.
-      $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb({})),
+      // Run the callback inline. The batch locks and reads its levels on the
+      // transaction; reading through the same mock keeps these tests about
+      // the plan, and stock-count-locking.spec.ts covers the lock itself.
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) =>
+        cb({ $queryRaw: jest.fn().mockResolvedValue([]), stockLevel: prisma.stockLevel }),
+      ),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -177,7 +180,7 @@ describe('InventoryService.createAdjustmentsBulk', () => {
     });
 
     expect(out).toEqual({ ok: true, applied: 0, results: [] });
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(applyMovement).not.toHaveBeenCalled();
   });
 
   it('rejects a location belonging to another org', async () => {
