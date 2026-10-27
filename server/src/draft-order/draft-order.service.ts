@@ -68,6 +68,25 @@ function draftPricesIncludeTax(metadata: Prisma.JsonValue | null): boolean {
 }
 
 /**
+ * A product deleted after it was picked must not be drafted: the draft would
+ * complete into a sale of it. Named, so the merchant knows which line to remove.
+ */
+function refuseDeletedProducts(
+  variants: Array<{ title: string; product: { title: string; deletedAt: Date | null } }>,
+) {
+  const deleted = variants.find((v) => v.product.deletedAt);
+  if (!deleted) return;
+  const vt = displayVariantTitle(deleted.title);
+  throw new BadRequestException(
+    `"${deleted.product.title}${vt ? ` — ${vt}` : ''}" has been deleted from your products. Remove it from this draft and try again.`,
+  );
+}
+
+/** Thrown when a draft stopped being editable between the check and the write. */
+const DRAFT_NO_LONGER_OPEN =
+  'This draft was completed or deleted while you were editing it. Reload it to see where it stands.';
+
+/**
  * Draft orders — in-progress / quote-style orders that haven't been
  * finalized. Sits beside `OrderService` (which handles finalized Orders);
  * they share the offline-order completion path so the same GST math,
@@ -386,6 +405,7 @@ export class DraftOrderService {
           `Product variants not found: ${missing.join(', ')}`,
         );
       }
+      refuseDeletedProducts(variants);
 
       const org = await tx.organization.findUnique({
         where: { id: orgId },
@@ -532,7 +552,7 @@ export class DraftOrderService {
           subtotalPrice: subtotal,
           totalPrice: grandTotal,
           totalTax,
-          totalDiscounts: 0,
+          totalDiscounts: round(lineRows.reduce((sum, r) => sum + r.totalDiscount, 0)),
           totalShippingPrice: 0,
           note: dto.note,
           tags: dto.tags ?? [],
@@ -630,12 +650,7 @@ export class DraftOrderService {
       // discount exceeding its line total, any serialization abort — the delete
       // was already committed and the draft was left with ZERO line items and
       // stale subtotal and tax. Deleting and recreating are one atomic step.
-      const reCreated = await this.recomputeLineItemsAndTotals(
-        id,
-        orgId,
-        userId,
-        dto,
-      );
+      await this.recomputeLineItemsAndTotals(id, orgId, userId, dto);
       if (await this.autoMirrorEnabled(orgId)) {
         await this.mirrorEnqueuer.enqueueUpdate({
           type: 'draft-update',
@@ -646,7 +661,7 @@ export class DraftOrderService {
       return this.findOne(id, orgId);
     }
 
-    const data: Prisma.DraftOrderUpdateInput = {};
+    const data: Prisma.DraftOrderUncheckedUpdateManyInput = {};
     if (dto.note !== undefined) data.note = dto.note;
     if (dto.tags !== undefined) data.tags = dto.tags;
     if (dto.shippingAddress !== undefined) {
@@ -667,29 +682,26 @@ export class DraftOrderService {
         channel!.channelId,
         dto.customer,
       );
-      data.customer = { connect: { id: resolved.id } };
+      data.customerId = resolved.id;
       data.customerEmail = resolved.email ?? dto.customer.email ?? null;
     }
 
-    const updated = await this.prisma.draftOrder.update({
-      where: { id },
+    // The OPEN check above is a read; completion can land between it and here.
+    const updated = await this.prisma.draftOrder.updateMany({
+      where: { id, organizationId: orgId, deletedAt: null, status: DraftOrderStatus.OPEN },
       data,
-      include: {
-        customer: true,
-        channel: { select: { id: true, name: true, platform: true } },
-        lineItems: true,
-      },
     });
+    if (updated.count === 0) throw new ConflictException(DRAFT_NO_LONGER_OPEN);
 
     if (await this.autoMirrorEnabled(orgId)) {
       await this.mirrorEnqueuer.enqueueUpdate({
         type: 'draft-update',
-        draftId: updated.id,
+        draftId: id,
         organizationId: orgId,
       });
     }
 
-    return this.findOne(updated.id, orgId);
+    return this.findOne(id, orgId);
   }
 
   /**
@@ -742,6 +754,7 @@ export class DraftOrderService {
           `Product variants not found: ${missing.join(', ')}`,
         );
       }
+      refuseDeletedProducts(variants);
 
       const org = await tx.organization.findUniqueOrThrow({
         where: { id: orgId },
@@ -881,11 +894,11 @@ export class DraftOrderService {
         })),
       });
 
-      const topLevel: Prisma.DraftOrderUpdateInput = {
+      const topLevel: Prisma.DraftOrderUncheckedUpdateManyInput = {
         subtotalPrice: subtotal,
         totalPrice: grandTotal,
         totalTax,
-        totalDiscounts: 0,
+        totalDiscounts: round(lineRows.reduce((sum, r) => sum + r.totalDiscount, 0)),
       };
       if (dto.note !== undefined) topLevel.note = dto.note;
       if (dto.tags !== undefined) topLevel.tags = dto.tags;
@@ -902,19 +915,17 @@ export class DraftOrderService {
           draftMeta.channelId,
           dto.customer,
         );
-        topLevel.customer = { connect: { id: resolved.id } };
+        topLevel.customerId = resolved.id;
         topLevel.customerEmail = resolved.email ?? dto.customer.email ?? null;
       }
 
-      return tx.draftOrder.update({
-        where: { id },
+      // Completion can land after update()'s OPEN check; the throw rolls the
+      // rewritten lines back with it.
+      const updated = await tx.draftOrder.updateMany({
+        where: { id, organizationId: orgId, deletedAt: null, status: DraftOrderStatus.OPEN },
         data: topLevel,
-        include: {
-          customer: true,
-          channel: { select: { id: true, name: true, platform: true } },
-          lineItems: true,
-        },
       });
+      if (updated.count === 0) throw new ConflictException(DRAFT_NO_LONGER_OPEN);
     });
   }
 
@@ -933,11 +944,22 @@ export class DraftOrderService {
 
     // Local soft-delete commits immediately. Shopify-side delete is
     // queued — BullMQ retries handle transient failures so we don't need
-    // a synchronous best-effort attempt here.
-    await this.prisma.draftOrder.update({
-      where: { id },
+    // a synchronous best-effort attempt here. The status is checked again in
+    // the write: the draft may have been completed since it was read.
+    const deleted = await this.prisma.draftOrder.updateMany({
+      where: {
+        id,
+        organizationId: orgId,
+        deletedAt: null,
+        status: { not: DraftOrderStatus.COMPLETED },
+      },
       data: { deletedAt: new Date() },
     });
+    if (deleted.count === 0) {
+      throw new ConflictException(
+        'This draft was completed or deleted in the meantime. Reload it to see where it stands.',
+      );
+    }
 
     if (existing.externalId) {
       await this.mirrorEnqueuer.enqueueDelete({
@@ -996,11 +1018,13 @@ export class DraftOrderService {
 
   // ─── COMPLETE → real Order ───
   //
-  // Atomic claim-then-act: flip OPEN/INVOICE_SENT → COMPLETED in one
-  // updateMany before any order/stock/invoice work. A concurrent second
-  // completer gets count === 0 → 409, so double-click / two tabs cannot
-  // create two sales. If the sale then fails, revertDraftClaim restores
-  // the prior status (only when no order was linked).
+  // Local completion claims the draft (OPEN/INVOICE_SENT → COMPLETED) and
+  // links the order inside the sale's own transaction, so the draft, the
+  // order and the stock commit together or not at all. A second completer,
+  // or a draft edited since it was read, finds nothing to claim → 409.
+  //
+  // Shopify completion happens remotely and cannot share that transaction:
+  // it claims first, and revertDraftClaim gives the claim back if it fails.
   async complete(
     id: string,
     orgId: string,
@@ -1040,6 +1064,80 @@ export class DraftOrderService {
           `This draft has ${customCount} custom line item(s) without a linked product; complete it in Shopify or remove the custom lines first.`,
         );
       }
+      if (draft.status === DraftOrderStatus.COMPLETED) {
+        throw new ConflictException(
+          'Draft is already completed. See the linked order.',
+        );
+      }
+
+      const shippingAddress =
+        (draft.shippingAddress as Record<string, unknown> | null) ?? undefined;
+      const billingAddress =
+        (draft.billingAddress as Record<string, unknown> | null) ?? undefined;
+
+      const result = await this.orderService.createOfflineOrder(
+        orgId,
+        userId,
+        {
+          customer: {
+            customerId: draft.customerId ?? undefined,
+            email: draft.customer?.email ?? draft.customerEmail ?? undefined,
+            phone: draft.customer?.phone ?? undefined,
+            firstName: draft.customer?.firstName ?? undefined,
+            lastName: draft.customer?.lastName ?? undefined,
+            gstin: draft.customer?.gstin ?? undefined,
+            billingStateCode: draft.customer?.billingStateCode ?? undefined,
+          },
+          lineItems: draft.lineItems.map((li) => ({
+            productVariantId: li.variantId as string,
+            quantity: li.quantity,
+            unitPriceOverride: this.calculator.toNumber(li.price),
+            discount: this.calculator.toNumber(li.totalDiscount),
+          })),
+          paymentMethod: dto.paymentMethod,
+          // The order is charged what the draft quoted.
+          pricesIncludeTax: draftPricesIncludeTax(draft.metadata),
+          note: draft.note ?? undefined,
+          generateInvoice: dto.generateInvoice ?? true,
+          sellerGstinId: dto.sellerGstinId,
+          shippingAddress,
+          billingAddress,
+        },
+        {
+          inTransaction: async (tx, order) => {
+            // The sale above was priced from the lines read at the top of this
+            // method. An unchanged updatedAt is what proves no edit came after.
+            const claimed = await tx.draftOrder.updateMany({
+              where: {
+                id,
+                organizationId: orgId,
+                deletedAt: null,
+                status: {
+                  in: [DraftOrderStatus.OPEN, DraftOrderStatus.INVOICE_SENT],
+                },
+                updatedAt: draft.updatedAt,
+              },
+              data: {
+                status: DraftOrderStatus.COMPLETED,
+                completedAt: new Date(),
+                completedOrderId: order.id,
+              },
+            });
+            if (claimed.count === 0) {
+              throw new ConflictException(
+                'This draft was changed, deleted or completed while it was being completed. Reload it and try again.',
+              );
+            }
+          },
+        },
+      );
+
+      return {
+        draftId: draft.id,
+        order: result.order,
+        invoice: result.invoice,
+        invoiceError: result.invoiceError,
+      };
     }
 
     const previousStatus = draft.status;
@@ -1063,78 +1161,15 @@ export class DraftOrderService {
       );
     }
 
-    if (shopifyChannelId) {
-      try {
-        return await this.completeViaShopify(
-          draft.id,
-          orgId,
-          shopifyChannelId,
-          dto,
-        );
-      } catch (err) {
-        await this.revertDraftClaim(id, orgId, previousStatus);
-        throw err;
-      }
-    }
-
-    let createdOrderId: string | null = null;
     try {
-      const shippingAddress =
-        (draft.shippingAddress as Record<string, unknown> | null) ?? undefined;
-      const billingAddress =
-        (draft.billingAddress as Record<string, unknown> | null) ?? undefined;
-
-      const result = await this.orderService.createOfflineOrder(orgId, userId, {
-        customer: {
-          customerId: draft.customerId ?? undefined,
-          email: draft.customer?.email ?? draft.customerEmail ?? undefined,
-          phone: draft.customer?.phone ?? undefined,
-          firstName: draft.customer?.firstName ?? undefined,
-          lastName: draft.customer?.lastName ?? undefined,
-          gstin: draft.customer?.gstin ?? undefined,
-          billingStateCode: draft.customer?.billingStateCode ?? undefined,
-        },
-        lineItems: draft.lineItems.map((li) => ({
-          productVariantId: li.variantId as string,
-          quantity: li.quantity,
-          unitPriceOverride: this.calculator.toNumber(li.price),
-          discount: this.calculator.toNumber(li.totalDiscount),
-        })),
-        paymentMethod: dto.paymentMethod!,
-        // The order is charged what the draft quoted.
-        pricesIncludeTax: draftPricesIncludeTax(draft.metadata),
-        note: draft.note ?? undefined,
-        generateInvoice: dto.generateInvoice ?? true,
-        sellerGstinId: dto.sellerGstinId,
-        shippingAddress,
-        billingAddress,
-      });
-
-      createdOrderId = result.order.id;
-      await this.prisma.draftOrder.update({
-        where: { id: draft.id },
-        data: { completedOrderId: result.order.id },
-      });
-
-      return {
-        draftId: draft.id,
-        order: result.order,
-        invoice: result.invoice,
-        invoiceError: result.invoiceError,
-      };
+      return await this.completeViaShopify(
+        draft.id,
+        orgId,
+        shopifyChannelId,
+        dto,
+      );
     } catch (err) {
-      if (createdOrderId) {
-        // Sale already committed — keep COMPLETED and best-effort link so a
-        // failed completedOrderId write cannot reopen the draft for a second sale.
-        await this.prisma.draftOrder
-          .updateMany({
-            where: { id, organizationId: orgId, completedOrderId: null },
-            data: { completedOrderId: createdOrderId },
-          })
-          .catch(() => undefined);
-      } else {
-        await this.revertDraftClaim(id, orgId, previousStatus);
-      }
+      await this.revertDraftClaim(id, orgId, previousStatus);
       throw err;
     }
   }

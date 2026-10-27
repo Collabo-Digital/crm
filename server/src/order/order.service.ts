@@ -188,7 +188,7 @@ export interface CounterSaleOptions {
     financialStatus: OrderFinancialStatus;
     metadata: Record<string, unknown>;
   };
-  /** Runs inside the sale's transaction once the order row exists. */
+  /** Runs inside the sale's transaction once the order row exists. A throw undoes the sale. */
   inTransaction?: (tx: Prisma.TransactionClient, order: { id: string; customerId: string | null }) => Promise<void>;
 }
 
@@ -1223,6 +1223,19 @@ export class OrderService {
           throw new NotFoundException(
             `Product variants not found: ${missing.join(', ')}`,
           );
+        }
+        // A product deleted after it was picked (an open form, an old draft)
+        // must not sell. Custom lines ride on a hidden product that is deleted
+        // on purpose, so they are exempt.
+        for (const [lineIndex, li] of dto.lineItems.entries()) {
+          if (customTitleAt(lineIndex) !== null) continue;
+          const v = variantById.get(li.productVariantId)!;
+          if (v.product.deletedAt) {
+            const vt = displayVariantTitle(v.title);
+            throw new BadRequestException(
+              `"${v.product.title}${vt ? ` — ${vt}` : ''}" has been deleted from your products, so it can't be sold. Remove it and try again.`,
+            );
+          }
         }
 
         // 3a. Where the goods leave from — ONLY when the operator said so.
