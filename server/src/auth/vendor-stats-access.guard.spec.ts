@@ -80,7 +80,7 @@ describe('stats controllers route by role', () => {
       getComparison: jest.fn(),
       getVendorComparison: jest.fn().mockReturnValue('vendor-stats'),
     };
-    const c = new OrderController(orderService as any);
+    const c = new OrderController(orderService as any, {} as never);
 
     const out = c.getStats(vendor as any, {} as any);
 
@@ -98,7 +98,7 @@ describe('stats controllers route by role', () => {
       getComparison: jest.fn().mockReturnValue('org-stats'),
       getVendorComparison: jest.fn(),
     };
-    const c = new OrderController(orderService as any);
+    const c = new OrderController(orderService as any, {} as never);
 
     const out = c.getStats({ role: UserRole.OWNER, orgId: 'o1' } as any, {} as any);
 

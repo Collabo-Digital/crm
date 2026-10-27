@@ -138,9 +138,9 @@ enum ShopifyLocationAction {
   IGNORE
 }
 
-// Physical stock buckets on StockLevel. Closed set for V1 — Picked/Packed/
-// Dispatched are PickTask statuses (stock stays RESERVED until dispatch),
-// transfers are paired ledger events, returns end in AVAILABLE or DAMAGED.
+// Physical stock buckets on StockLevel. Closed set for V1 — packing
+// (PickTask) never moves stock; it leaves with the shipment as before.
+// Transfers are paired ledger events, returns end in AVAILABLE or DAMAGED.
 // INCOMING / IN_TRANSIT are planned V2 additions.
 enum StockBucket {
   AVAILABLE
@@ -370,6 +370,7 @@ model Organization {
   stockReservations      StockReservation[]
   stockReceipts          StockReceipt[]
   pickTasks              PickTask[]
+  pickTaskEvents         PickTaskEvent[]
   gstFilings             GstFiling[]
   inwardSupplies         InwardSupply[]
   channelContacts        ChannelContact[]
@@ -1564,46 +1565,101 @@ model StockReceiptLine {
   @@map("stock_receipt_lines")
 }
 
-// One fulfillment task per order (SQL partial unique allows a new task once the
-// prior one is DISPATCHED/CANCELLED — partial-pick remainders). Stock stays
-// RESERVED through PICKED and PACKED; it exits (RESERVED→NULL) at dispatch.
+// An order's packing job: the packer checks the right items and quantities
+// go into the parcel. It never moves stock, creates a shipment or calls
+// Shopify; shipping stays with fulfilment. A SQL partial unique allows one
+// PACKING or ON_HOLD task per order; PACKED and CANCELLED tasks stay as the
+// record, and the rest of a partly packed order gets a new task once the
+// packed part has shipped.
 model PickTask {
   id             String    @id @default(cuid())
   organizationId String    @map("organization_id")
   orderId        String    @map("order_id") // plain string; partial unique in SQL
-  warehouseId    String    @map("warehouse_id")
-  status         String // PENDING | PICKING | PICKED | PACKED | DISPATCHED | CANCELLED
-  assigneeId     String?   @map("assignee_id")
+  warehouseId    String?   @map("warehouse_id") // the order's dispatch location, when it has one
+  status         String // PACKING | ON_HOLD | PACKED | CANCELLED (PENDING/PICKING/PICKED/DISPATCHED are never written)
+  assigneeId     String?   @map("assignee_id") // who started it
   startedAt      DateTime? @map("started_at")
   packedAt       DateTime? @map("packed_at")
+  packedBy       String?   @map("packed_by")
   dispatchedAt   DateTime? @map("dispatched_at")
+  holdReason     String?   @map("hold_reason") // items_short | damaged | customer_request | other
+  holdNote       String?   @map("hold_note")
+  heldAt         DateTime? @map("held_at")
+  heldBy         String?   @map("held_by")
+  // Packed with items left over (prepaid orders only: a split COD order
+  // would mean two cash collections).
+  partial        Boolean   @default(false)
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  warehouse    Warehouse      @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  warehouse    Warehouse?      @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
   lines        PickTaskLine[]
+  events       PickTaskEvent[]
 
-  // SQL-only partial unique: (order_id) WHERE status NOT IN ('DISPATCHED','CANCELLED')
+  // SQL-only partial unique: (order_id) WHERE status IN ('PACKING','ON_HOLD')
   @@index([organizationId, status])
   @@index([orderId])
   @@map("pick_tasks")
 }
 
+// One order line still to ship. Reconciled with the order each time the task
+// is opened. SQL checks keep qty_picked <= qty_required and
+// qty_hand_confirmed + qty_counted <= qty_picked (the rest were scanned).
 model PickTaskLine {
-  id              String  @id @default(cuid())
-  pickTaskId      String  @map("pick_task_id")
-  orderLineItemId String  @map("order_line_item_id")
-  variantId       String  @map("variant_id")
-  qtyRequired     Int     @map("qty_required")
-  qtyPicked       Int     @default(0) @map("qty_picked") // persisted per scan — station crash loses nothing
-  locationCode    String? @map("location_code") // snapshot of defaultLocation.fullCode at task creation
+  id               String  @id @default(cuid())
+  pickTaskId       String  @map("pick_task_id")
+  orderLineItemId  String  @map("order_line_item_id")
+  variantId        String? @map("variant_id") // null for a custom line: confirmed by hand only
+  // Snapshots: title/variantTitle for display, sku/barcode for matching scans
+  // (variant codes are not unique per organization, so scans only ever match
+  // this task's own lines).
+  title            String  @default("")
+  variantTitle     String? @map("variant_title")
+  sku              String?
+  barcode          String?
+  qtyRequired      Int     @map("qty_required")
+  qtyPicked        Int     @default(0) @map("qty_picked") // packed in total: scanned + hand-confirmed + counted
+  qtyHandConfirmed Int     @default(0) @map("qty_hand_confirmed")
+  qtyCounted       Int     @default(0) @map("qty_counted")
+  problemReason    String? @map("problem_reason") // missing | damaged | wrong_item_on_shelf
+  problemQty       Int     @default(0) @map("problem_qty")
+  locationCode     String? @map("location_code") // snapshot of defaultLocation.fullCode at task creation
 
-  pickTask PickTask @relation(fields: [pickTaskId], references: [id], onDelete: Cascade)
+  pickTask PickTask        @relation(fields: [pickTaskId], references: [id], onDelete: Cascade)
+  events   PickTaskEvent[]
 
+  @@unique([pickTaskId, orderLineItemId])
   @@index([pickTaskId])
   @@index([variantId])
   @@map("pick_task_lines")
+}
+
+// The packing diary, and the source of the accuracy figures: every scan
+// (wrong ones too), hand confirmation, count, undo, problem and status change.
+// A retried request carries the same clientScanId and changes nothing.
+model PickTaskEvent {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  pickTaskId     String   @map("pick_task_id")
+  pickTaskLineId String?  @map("pick_task_line_id")
+  actorId        String   @map("actor_id")
+  // SCAN_MATCH | SCAN_NOT_IN_ORDER | SCAN_OVER | SCAN_UNKNOWN | HAND_CONFIRM | COUNT | UNDO
+  // | PROBLEM | PROBLEM_CLEARED | HOLD | RESUME | PACKED | CANCELLED
+  kind           String
+  code           String? // what was scanned
+  qty            Int      @default(0)
+  reason         String?
+  clientScanId   String?  @map("client_scan_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pickTask     PickTask      @relation(fields: [pickTaskId], references: [id], onDelete: Cascade)
+  line         PickTaskLine? @relation(fields: [pickTaskLineId], references: [id], onDelete: SetNull)
+
+  @@unique([pickTaskId, clientScanId])
+  @@index([organizationId, createdAt])
+  @@map("pick_task_events")
 }
 
 // Tracks Shopify-format CSV import jobs through their preview → run lifecycle.

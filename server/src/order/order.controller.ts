@@ -12,6 +12,7 @@ import {
 } from '../auth/decorators/roles.decorator';
 import { vendorScopeFor } from '../auth/vendor-scope.util';
 import { OrderService } from './order.service';
+import { PackingService } from '../packing/packing.service';
 import { QueryDashboardDto } from '../dashboard/dto/query-dashboard.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { CreateOfflineOrderDto } from './dto/create-offline-order.dto';
@@ -30,7 +31,10 @@ import {
 @RequireSection('orders')
 @Controller('orders')
 export class OrderController {
-  constructor(private readonly orderService: OrderService) { }
+  constructor(
+    private readonly orderService: OrderService,
+    private readonly packing: PackingService,
+  ) { }
 
   // GET /api/v1/orders?page=1&limit=20&financialStatus=PAID&search=1001
   // Also read by customer detail, product detail and the logistics queue.
@@ -141,11 +145,12 @@ export class OrderController {
   @Get(':id')
   @RequireSection('orders', 'customers', 'products', 'logistics')
   @AllowVendor()
-  findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+  async findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const scope = vendorScopeFor(user);
-    return scope
-      ? this.orderService.findOneForVendor(id, user.orgId!, scope)
-      : this.orderService.findOne(id, user.orgId!);
+    if (scope) return this.orderService.findOneForVendor(id, user.orgId!, scope);
+    const order = await this.orderService.findOne(id, user.orgId!);
+    // The packing status line on the order page.
+    return { ...order, packing: await this.packing.orderPacking(user.orgId!, id) };
   }
 
   // PATCH /api/v1/orders/:id — edit tags / note / email / phone /
