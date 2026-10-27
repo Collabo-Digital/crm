@@ -95,10 +95,11 @@ export class PosCatalogService {
     }
 
     async setup(orgId: string, storeId?: string) {
-        const [settings, org, profile, warehousing, staff] = await Promise.all([
+        const [settings, org, profile, tax, warehousing, staff] = await Promise.all([
             this.settings(orgId),
             this.prisma.organization.findUnique({ where: { id: orgId }, select: { name: true, gstEnabled: true, currency: true } }),
             this.orgSettings.getStoreProfileSettings(orgId),
+            this.orgSettings.getTaxSettings(orgId),
             this.ledger.isWarehousingEnabled(orgId),
             this.staff.list(orgId, false),
         ]);
@@ -127,6 +128,8 @@ export class PosCatalogService {
             staff,
             tiles,
             gstEnabled: org.gstEnabled,
+            // A composition seller charges no GST, so the till shows no estimate of it.
+            composition: tax.composition,
             storeName,
             currency: (org.currency || 'INR').toUpperCase(),
         };

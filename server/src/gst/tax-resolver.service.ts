@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GstSupplyType, Prisma } from '@prisma/client';
 import { isLineTaxable } from './taxability.util';
+import { isCompositionSeller } from './composition.util';
 
 /** One sale line, as the batch resolver needs to see it. */
 export interface BatchLineInput {
@@ -63,6 +64,10 @@ export class TaxResolverService {
    *
    * The priority chain and its null-vs-zero semantics are unchanged; only the
    * fetching is. `resolveGstRate` remains for the settings-side single lookup.
+   *
+   * A seller under the composition scheme collects no tax at all, so every
+   * line is 0% before the chain is consulted. That is one more query, also
+   * on `client`.
    */
   async resolveLineGstRates(
     orgId: string,
@@ -71,6 +76,8 @@ export class TaxResolverService {
     client: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<number[]> {
     const rates = new Array<number>(lines.length).fill(0);
+
+    if (await isCompositionSeller(client, orgId)) return rates;
 
     // Lines still needing a lookup after the decisions that need no query:
     // a non-taxable line is 0%, and an explicit variant or product rate wins

@@ -5,30 +5,17 @@ import { ProductPublishScheduler } from './product-publish.scheduler';
 import { ChannelModule } from '../channel/channel.module';
 import { OrganizationSettingsModule } from '../organization-settings/organization-settings.module';
 import { InventoryModule } from '../inventory/inventory.module';
-import { IMAGE_STORAGE } from './image-storage/image-storage.interface';
-import { LocalImageStorage } from './image-storage/local.storage';
-import { S3ImageStorage } from './image-storage/s3.storage';
+import { ImageStorageModule } from './image-storage/image-storage.module';
 
 // WHY these imports?
 //   ChannelModule              — ShopifyPushEnqueuer for fire-and-forget push.
 //   OrganizationSettingsModule — gating auto-push on productSettings.autoSyncToShopify.
 //   InventoryModule            — InventoryLedgerService: every quantity write is audited.
-//   IMAGE_STORAGE              — pluggable image storage; swap impl via UPLOAD_STORAGE env.
+//   ImageStorageModule         — pluggable image storage; swap impl via UPLOAD_STORAGE env.
 @Module({
-  imports: [ChannelModule, OrganizationSettingsModule, InventoryModule],
+  imports: [ChannelModule, OrganizationSettingsModule, InventoryModule, ImageStorageModule],
   controllers: [ProductController],
-  providers: [
-    ProductService,
-    ProductPublishScheduler,
-    LocalImageStorage,
-    S3ImageStorage,
-    {
-      provide: IMAGE_STORAGE,
-      useFactory: (local: LocalImageStorage, s3: S3ImageStorage) =>
-        process.env.UPLOAD_STORAGE === 's3' ? s3 : local,
-      inject: [LocalImageStorage, S3ImageStorage],
-    },
-  ],
+  providers: [ProductService, ProductPublishScheduler],
   exports: [ProductService],
 })
 export class ProductModule {}

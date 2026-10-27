@@ -153,3 +153,114 @@ describe('DraftOrderService.create pricing', () => {
     );
   });
 });
+
+/**
+ * A seller under the composition scheme cannot supply to another state. A
+ * draft to one is refused when it is created or edited, before it is quoted,
+ * rather than when it completes.
+ */
+describe('DraftOrderService under the composition scheme', () => {
+  const REFUSAL =
+    "You're registered under the GST composition scheme, which doesn't allow sales to another state. " +
+    "This sale's place of supply is Kerala (32); your registration is in Karnataka (29).";
+  const lineItems = [{ productVariantId: 'v_1', quantity: 1 }];
+
+  function build(composition: boolean) {
+    const tx = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch_manual' }) },
+      productVariant: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'v_1',
+            title: 'Default Title',
+            sku: 'SHIRT',
+            price: 1000,
+            gstRate: null,
+            taxable: true,
+            product: { id: 'p_1', title: 'Shirt', gstRate: 18 },
+          },
+        ]),
+      },
+      organization: {
+        findUnique: jest.fn().mockResolvedValue({ gstEnabled: true, currency: 'INR' }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ gstEnabled: true, currency: 'INR' }),
+      },
+      organizationGstin: { findFirst: jest.fn().mockResolvedValue({ stateCode: '29' }) },
+      organizationSettings: {
+        findUnique: jest.fn().mockResolvedValue({ taxSettings: { composition, pricesIncludeTax: false } }),
+      },
+      order: { findFirst: jest.fn().mockResolvedValue(null) },
+      draftOrder: {
+        create: jest.fn(({ data }: { data: object }) => Promise.resolve({ id: 'd_1', ...data })),
+        update: jest.fn(({ data }: { data: object }) => Promise.resolve({ id: 'd_1', ...data })),
+      },
+      draftOrderLineItem: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
+      draftOrder: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'd_1', status: 'OPEN' }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          channelId: 'ch_manual',
+          customerId: null,
+          shippingAddress: null,
+          billingAddress: null,
+          metadata: {},
+          customer: null,
+        }),
+      },
+    };
+    const service = new DraftOrderService(
+      prisma as never,
+      new GstCalculatorService(),
+      { resolveLineGstRates: jest.fn().mockResolvedValue([0]) } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { enqueueUpdate: jest.fn() } as never,
+      { getOrderSettings: jest.fn().mockResolvedValue({ autoSyncToShopify: false }) } as never,
+    );
+    jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
+    return { service, tx };
+  }
+
+  it('refuses a draft to another state, and saves nothing', async () => {
+    const { service, tx } = build(true);
+
+    await expect(
+      service.create('org_1', 'u_1', { lineItems, placeOfSupplyCode: '32' } as never),
+    ).rejects.toThrow(REFUSAL);
+    expect(tx.draftOrder.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an edit that moves a draft to another state, keeping its lines', async () => {
+    const { service, tx } = build(true);
+
+    await expect(
+      service.update('d_1', 'org_1', 'u_1', { lineItems, placeOfSupplyCode: '32' } as never),
+    ).rejects.toThrow(REFUSAL);
+    expect(tx.draftOrderLineItem.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('saves a draft within the state', async () => {
+    const { service, tx } = build(true);
+
+    await service.create('org_1', 'u_1', { lineItems } as never);
+
+    expect(tx.draftOrder.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('still saves a draft to another state for a regular seller', async () => {
+    const { service, tx } = build(false);
+
+    await service.create('org_1', 'u_1', { lineItems, placeOfSupplyCode: '32' } as never);
+    await service.update('d_1', 'org_1', 'u_1', { lineItems, placeOfSupplyCode: '32' } as never);
+
+    expect(tx.draftOrder.create).toHaveBeenCalledTimes(1);
+    expect(tx.draftOrderLineItem.createMany).toHaveBeenCalledTimes(1);
+  });
+});

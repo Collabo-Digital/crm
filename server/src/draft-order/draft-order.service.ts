@@ -14,6 +14,7 @@ import {
 } from '@prisma/client';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
 import { catalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util';
+import { compositionInterStateError, isCompositionSeller } from '../gst/composition.util';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -424,6 +425,12 @@ export class DraftOrderService {
         ? this.calculator.isIntraState(sellerState, placeOfSupplyCode)
         : true;
 
+      // A composition seller cannot supply to another state: refused here,
+      // before it is quoted, rather than when the draft completes.
+      if (sellerState && !isIntraState && (await isCompositionSeller(tx, orgId))) {
+        throw compositionInterStateError(placeOfSupplyCode, sellerState);
+      }
+
       // A draft charges the price it was given, catalogue (a WhatsApp cart) or
       // typed (the order form, which previews it on the same basis). In a
       // store whose prices include GST, adding GST on top asked the customer
@@ -769,6 +776,10 @@ export class DraftOrderService {
       const isIntraState = sellerState
         ? this.calculator.isIntraState(sellerState, placeOfSupplyCode)
         : true;
+      // Same refusal as create(): an edit can move the draft to another state.
+      if (sellerState && !isIntraState && (await isCompositionSeller(tx, orgId))) {
+        throw compositionInterStateError(placeOfSupplyCode, sellerState);
+      }
 
       let subtotal = 0;
       let totalTax = 0;
