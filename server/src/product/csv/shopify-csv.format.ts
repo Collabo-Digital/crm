@@ -11,6 +11,8 @@
 // images via repeated rows. Cost-per-item rides on the variant. Out of scope:
 // per-variant tax overrides, gift-card flag.
 
+import { sanitizeProductHtml } from '../../common/utils/sanitize-product-html.util';
+
 export const SHOPIFY_CSV_HEADERS = [
   'Handle',
   'Title',
@@ -144,7 +146,7 @@ export function buildShopifyCsv(
 
       if (isFirstRow) {
         row['Title'] = p.title;
-        row['Body (HTML)'] = p.bodyHtml ?? '';
+        row['Body (HTML)'] = sanitizeProductHtml(p.bodyHtml ?? '');
         row['Vendor'] = p.vendor ?? '';
         row['Type'] = p.productType ?? '';
         row['Tags'] = (p.tags ?? []).join(', ');
@@ -356,7 +358,7 @@ export function groupRowsIntoProducts(
       p = {
         handle,
         title: (r['Title'] ?? handle).trim(),
-        bodyHtml: r['Body (HTML)'] || undefined,
+        bodyHtml: sanitizeProductHtml(r['Body (HTML)'] ?? '') || undefined,
         vendor: r['Vendor'] || undefined,
         productType: r['Type'] || undefined,
         tags: (r['Tags'] ?? '')

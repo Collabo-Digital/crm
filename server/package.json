@@ -77,6 +77,7 @@
     "react": "^19.2.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "sanitize-html": "^2.18.1",
     "slugify": "^1.6.8",
     "zod": "^4.4.3"
   },
@@ -99,6 +100,7 @@
     "@types/passport-jwt": "^4.0.1",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.3.0",
+    "@types/sanitize-html": "^2.16.2",
     "@types/supertest": "^6.0.2",
     "dotenv": "^17.3.1",
     "eslint": "^9.18.0",
@@ -128,8 +130,23 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
+      "/node_modules/.+\\.js$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "allowJs": true,
+            "isolatedModules": true,
+            "module": "CommonJS",
+            "moduleResolution": "Node",
+            "resolvePackageJsonExports": false
+          }
+        }
+      ],
       "^.+\\.(t|j)sx?$": "ts-jest"
     },
+    "transformIgnorePatterns": [
+      "/node_modules/(?!(?:htmlparser2|domhandler|domutils|domelementtype|dom-serializer|entities)/)"
+    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],
