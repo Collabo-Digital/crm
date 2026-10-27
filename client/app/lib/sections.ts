@@ -1,4 +1,5 @@
 import { useAuthStore } from "~/stores/auth.store";
+import { hasPermission } from "~/lib/permissions";
 import type { UserRole } from "~/types/api";
 
 /**
@@ -150,6 +151,13 @@ export function canAccessPath(access: SectionAccess, pathname: string): boolean 
     !MANAGER_ROLES.includes(access.role)
   ) {
     return false;
+  }
+  // Packing is opened by its permission, not by the Orders section: a
+  // "Packer" holds inventory.pack without section.orders. Vendors never.
+  if (isUnder(pathname, "/orders/packing")) {
+    const can = (key: "inventory.pack" | "inventory.reports") =>
+      hasPermission(access.role, access.grants, key);
+    return can("inventory.pack") && (!isUnder(pathname, "/orders/packing/accuracy") || can("inventory.reports"));
   }
   if (access.role === "VENDOR") {
     return (

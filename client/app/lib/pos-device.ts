@@ -57,6 +57,19 @@ export function saveStaffSession(orgId: string | null, session: PosStaffSession 
 
 let audio: AudioContext | null = null;
 
+/**
+ * Browsers (iPhones above all) keep sound off until a tap. Call this from the
+ * tap that starts scanning, so beeps for codes read later by the camera play.
+ */
+export function wakeSound() {
+  try {
+    audio ??= new AudioContext();
+    void audio.resume();
+  } catch {
+    /* no sound on this device */
+  }
+}
+
 /** A scanner's beep: one high note when an item is added, two low ones when not. */
 export function beep(ok: boolean) {
   try {

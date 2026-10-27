@@ -52,6 +52,11 @@ export default [
     route("orders/slips/print", "routes/app/orders/slips-print.tsx"),
     // Point-of-sale store reports. Managers only — see lib/sections.ts.
     route("orders/pos/reports", "routes/app/orders/pos/reports.tsx"),
+    // Packing. Opened by the inventory.pack permission rather than the Orders
+    // section, so a Packer reaches it — see lib/sections.ts.
+    route("orders/packing", "routes/app/orders/packing.tsx"),
+    route("orders/packing/accuracy", "routes/app/orders/packing/accuracy.tsx"),
+    route("orders/packing/:orderId", "routes/app/orders/packing/$orderId.tsx"),
     route("orders/:id", "routes/app/orders/$id.tsx"),
     route("orders/:id/packing-slip", "routes/app/orders/packing-slip.tsx"),
     route("orders/:id/pick-slip", "routes/app/orders/pick-slip.tsx"),

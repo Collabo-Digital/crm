@@ -31,6 +31,7 @@ import {
   Star,
   Target,
   Store,
+  PackageCheck,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
@@ -69,6 +70,9 @@ type NavItem = {
 /** Sub-nav for the Orders section — these used to be four separate top-level pills. */
 const ORDERS_CHILDREN: NavChild[] = [
   { label: "All orders", href: "/orders", icon: ShoppingCart },
+  // Gated on inventory.pack, not the Orders section (see lib/sections.ts), so
+  // a Packer's Orders pill opens straight onto it.
+  { label: "Packing", href: "/orders/packing", icon: PackageCheck },
   { label: "Point of sale", href: "/orders/pos", icon: Store },
   { label: "Drafts", href: "/orders/drafts", icon: FileText },
   { label: "Customers", href: "/orders/customers", icon: Users },

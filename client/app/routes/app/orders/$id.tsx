@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
+  PackageCheck,
   Plus,
   Printer,
   Receipt,
@@ -49,6 +50,7 @@ import {
   isShipmentShipped,
   remainingUnits,
 } from "~/lib/order-status";
+import { canStartPacking, packingStatusLine } from "~/lib/packing";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import type {
   ChannelPlatform,
@@ -110,6 +112,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
   // the menu deliberately hides.
   const { canManage, canCapture, canCancel, canFulfill, canActOnItems, canEdit } =
     useOrderActionGates(order);
+  const { can } = useCurrentRole();
 
   const currency = order?.currency ?? org?.currency ?? "INR";
   const gstEnabled = org?.gstEnabled ?? false;
@@ -600,6 +603,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
                 Packing slip
               </Link>
             </Button>
+            <PackingStatus order={order} canPack={can("inventory.pack")} />
             {canCancel && (
               <Button
                 variant="ghost"
@@ -785,6 +789,40 @@ function balanceCaptionFor(
       // No captured amount is stored anywhere, so any figure here is invented.
       return "Partially paid · balance not tracked";
   }
+}
+
+/**
+ * Where packing stands, with a way into the pack screen for anyone who may
+ * pack. A packed order opens on its own task (`?task=`), which stays viewable
+ * after the order ships.
+ */
+function PackingStatus({ order, canPack }: { order: OrderDetail; canPack: boolean }) {
+  const packing = order.packing && order.packing.status !== "CANCELLED" ? order.packing : null;
+  const packable = canStartPacking(order, order.lineItems.some((li) => remainingUnits(li) > 0));
+  if (!packing && !(packable && canPack)) return null;
+
+  const link =
+    !canPack
+      ? null
+      : packing?.status === "PACKED"
+        ? { to: `/orders/packing/${order.id}?task=${packing.taskId}`, label: "View" }
+        : packable
+          ? { to: `/orders/packing/${order.id}`, label: packing ? "Continue packing" : "Pack order" }
+          : null;
+
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-lg bg-muted/60 px-3 py-2">
+      <p className="flex min-w-0 items-center gap-1.5 text-caption text-foreground">
+        <PackageCheck className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0">{packing ? packingStatusLine(packing) : "Not packed yet"}</span>
+      </p>
+      {link && (
+        <Link to={link.to} className="flex min-h-11 shrink-0 items-center text-caption font-medium text-brand-strong underline-offset-3 hover:underline md:min-h-0">
+          {link.label}
+        </Link>
+      )}
+    </div>
+  );
 }
 
 /** A label/pill row in the left rail's status block. */
