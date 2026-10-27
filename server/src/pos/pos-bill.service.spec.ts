@@ -3,12 +3,20 @@ import { InvoiceStatus, MessageStatus } from '@prisma/client';
 import { AUTO_SEND_OFF, BILL_FAILED, BILL_PDF_FAILED, BillAttempt, NOT_ON_WHATSAPP, PosBillService, deliveryOf, readBillAttempts } from './pos-bill.service';
 import { BILL_NOT_SENT } from './pos-whatsapp.service';
 import { billLinkKey, billToken } from './pos-bill-link';
-import { renderBillPdf } from './pos-bill-pdf';
+import { buildBillDocument } from '../invoice/render/build-bill-document';
+import { loadBillContext } from '../invoice/render/build-loader';
+import { renderDocumentPdf } from '../invoice/render/document-pdf';
 import { toMetaComponents } from '../campaigns/templates/template-components';
 import { CollaboVariant, packSlot } from '../campaigns/templates/pack/template-pack';
 
-// The PDF engine is an ES module Jest cannot load; pos-bill-pdf.spec.ts renders real bills.
-jest.mock('./pos-bill-pdf', () => ({ ...jest.requireActual('./pos-bill-pdf'), renderBillPdf: jest.fn() }));
+// The bill's wiring only: build-bill-document.spec.ts covers what the bill
+// says, and the renderer draws it (its own specs, on the renderer's branch).
+jest.mock('../invoice/render/document-pdf', () => ({ renderDocumentPdf: jest.fn() }));
+jest.mock('../invoice/render/build-loader', () => ({ loadBillContext: jest.fn() }));
+jest.mock('../invoice/render/build-bill-document', () => ({
+    ...jest.requireActual<Record<string, unknown>>('../invoice/render/build-bill-document'),
+    buildBillDocument: jest.fn(),
+}));
 
 /**
  * The bill after a sale: every way it is not sent, how its message's status
@@ -66,7 +74,7 @@ function build(opts: { customer?: Record<string, unknown> | null; plan?: unknown
         sendBill: jest.fn().mockResolvedValue(opts.sent ?? { ok: true, messageId: 'msg_1' }),
     };
     const receipts = {
-        receipt: jest.fn().mockResolvedValue({ order: { id: ORDER, name: '#M1042' }, customer: { name: 'Asha', phone: '+919800000210', gstin: null }, totals: { payable: 1050 } }),
+        receipt: jest.fn().mockResolvedValue({ order: { id: ORDER, name: '#M1042' }, customer: { name: 'Asha', phone: '+919800000210', gstin: null, phoneShown: null }, totals: { payable: 1050 } }),
     };
     const staff = { staffFromToken: jest.fn(async (_o: string, _u: string, token: string) => (token === 'good' ? { id: 'st_ravi' } : null)) };
     const loyalty = { recomputeForCustomer: jest.fn().mockResolvedValue(null) };
@@ -220,16 +228,24 @@ describe('PosBillService.afterSale — the bill after a sale', () => {
 });
 
 describe('PosBillService — the bill’s PDF', () => {
-    const render = renderBillPdf as jest.Mock;
+    const render = renderDocumentPdf as jest.Mock;
+    const model = { kind: 'BILL', documentNumber: '#M1042' };
+    const context = { currency: 'INR', timeZone: 'Asia/Kolkata' };
     const pdfPlan = (linkOnly: unknown = LINK_ONLY) => ({ ok: true, channelId: 'ch_wa', template: WITH_PDF, linkOnly });
-    beforeEach(() => render.mockReset().mockResolvedValue(Buffer.from('%PDF-1.3 bill')));
+    beforeEach(() => {
+        render.mockReset().mockResolvedValue(Buffer.from('%PDF-1.3 bill'));
+        (buildBillDocument as jest.Mock).mockReset().mockReturnValue(model);
+        (loadBillContext as jest.Mock).mockReset().mockResolvedValue(context);
+    });
 
     it('a template with a document header goes with the bill’s PDF, made from its receipt and kept in the org’s chat media', async () => {
-        const { service, whatsapp, receipts, media, invoices, latest } = build({ plan: pdfPlan() });
+        const { service, whatsapp, receipts, media, invoices, latest, prisma } = build({ plan: pdfPlan() });
         await service.afterSale(ORG, USER, sale());
         await flush();
         expect(receipts.receipt).toHaveBeenCalledWith(ORG, ORDER);
-        expect(render).toHaveBeenCalledWith(await receipts.receipt.mock.results[0].value);
+        expect(loadBillContext).toHaveBeenCalledWith(prisma, ORG);
+        expect(buildBillDocument).toHaveBeenCalledWith(await receipts.receipt.mock.results[0].value, context);
+        expect(render).toHaveBeenCalledWith(model);
         expect(media.save).toHaveBeenCalledWith(ORG, Buffer.from('%PDF-1.3 bill'), 'application/pdf');
         expect(invoices.pdf).not.toHaveBeenCalled();
         const [, , plan, bill] = whatsapp.sendBill.mock.calls[0];
@@ -391,7 +407,15 @@ describe('PosBillService — the public bill', () => {
         const { service, receipts } = build();
         const bill = await service.publicBill(billToken(billLinkKey(SECRET), ORDER));
         expect(receipts.receipt).toHaveBeenCalledWith(ORG, ORDER);
-        expect(bill.customer).toEqual({ name: 'Asha', phone: '+91 98••• ••210', gstin: null });
+        expect(bill.customer).toEqual({ name: 'Asha', phone: '+91 98••• ••210', gstin: null, phoneShown: null });
+        expect(JSON.stringify(bill)).not.toContain('9800000210');
+    });
+
+    it('masks the number even where the store shows it on its own receipts', async () => {
+        const { service, receipts } = build();
+        receipts.receipt.mockResolvedValueOnce({ order: { id: ORDER, name: '#M1042' }, customer: { name: 'Asha', phone: '+919800000210', gstin: null, phoneShown: '+919800000210' } });
+        const bill = await service.publicBill(billToken(billLinkKey(SECRET), ORDER));
+        expect(bill.customer).toEqual({ name: 'Asha', phone: '+91 98••• ••210', gstin: null, phoneShown: '+91 98••• ••210' });
         expect(JSON.stringify(bill)).not.toContain('9800000210');
     });
 

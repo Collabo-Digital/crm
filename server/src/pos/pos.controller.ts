@@ -138,4 +138,12 @@ export class PosController {
     receipt(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
         return this.receipts.receipt(user.orgId!, orderId);
     }
+
+    // After the receipt prints: the first print is recorded, so a reprint says DUPLICATE.
+    @Post('receipts/:orderId/printed')
+    @HttpCode(200)
+    @Roles(...ORG_OPERATORS)
+    receiptPrinted(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
+        return this.receipts.markPrinted(user.orgId!, orderId);
+    }
 }

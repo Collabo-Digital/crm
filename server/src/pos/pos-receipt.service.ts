@@ -1,9 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { GstType, InvoiceStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
+import { parseInvoiceSettings } from '../organization-settings/schemas/invoice-settings.schema';
 import { readStoredTaxLines } from '../channel/shopify-push.service';
+import { billLinkPrefix } from '../campaigns/templates/template-starters';
+import { COMPOSITION_LINE, addressLine, businessIds, returnsOf, upiPayUri } from '../invoice/render/build-parts';
+import { readRenderSnapshot } from '../invoice/render/render-snapshot';
 import { PosCatalogService } from './pos-catalog.service';
+import { billLinkKey, billToken, maskPhone } from './pos-bill-link';
 import { readPosMeta } from './pos-order-meta';
 import { round2 } from './pos-pricing';
 
@@ -25,18 +31,19 @@ type ReceiptLine = {
 const num = (v: Prisma.Decimal | number | null | undefined) => (v == null ? 0 : Number(v));
 const sum = (values: number[]) => round2(values.reduce((s, v) => s + v, 0));
 
-/** "12 MG Road, Kochi, Kerala 682016" from an address blob in the app's canonical keys. */
-function addressLine(a: unknown): string | null {
-    if (!a || typeof a !== 'object') return null;
-    const r = a as Record<string, unknown>;
-    const part = (k: string) => {
-        const v = r[k];
-        return typeof v === 'string' ? v.trim() : '';
+/** The key bill links are signed with and the address they open, as both the receipt and the bill service make them. */
+export function billLinks(config: ConfigService): { key: Buffer; prefix: string } {
+    return {
+        key: billLinkKey(config.get<string>('encryptionKey') || config.get<string>('jwt.accessSecret')!),
+        prefix: billLinkPrefix(config.get<string>('frontendUrl') ?? ''),
     };
-    const text = [part('address1'), part('address2'), part('city'), [part('province'), part('zip')].filter(Boolean).join(' ')]
-        .filter(Boolean)
-        .join(', ');
-    return text || null;
+}
+
+/** When the receipt was first printed, kept at `metadata.pos.printedAt`. */
+function printedAt(metadata: Prisma.JsonValue | null): string | null {
+    const pos = metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? (metadata as Record<string, unknown>).pos : null;
+    const at = pos && typeof pos === 'object' && !Array.isArray(pos) ? (pos as Record<string, unknown>).printedAt : null;
+    return typeof at === 'string' ? at : null;
 }
 
 /**
@@ -47,11 +54,16 @@ function addressLine(a: unknown): string | null {
  */
 @Injectable()
 export class PosReceiptService {
+    private readonly links: { key: Buffer; prefix: string };
+
     constructor(
         private readonly prisma: PrismaService,
         private readonly orgSettings: OrganizationSettingsService,
         private readonly catalog: PosCatalogService,
-    ) { }
+        config: ConfigService,
+    ) {
+        this.links = billLinks(config);
+    }
 
     async receipt(orgId: string, orderId: string) {
         const order = await this.prisma.order.findFirst({
@@ -75,18 +87,23 @@ export class PosReceiptService {
         });
         if (!order) throw new NotFoundException('That bill was not found.');
 
-        const [settings, profile, org, defaultGstin] = await Promise.all([
+        const [settings, profile, org, defaultGstin, settingsRow] = await Promise.all([
             this.catalog.settings(orgId),
             this.orgSettings.getStoreProfileSettings(orgId),
             this.prisma.organization.findUnique({ where: { id: orgId }, select: { name: true, logo: true, gstEnabled: true } }),
             this.prisma.organizationGstin.findFirst({
                 where: { organizationId: orgId, isActive: true },
                 orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
-                select: { gstin: true, address: true },
+                select: { gstin: true, legalName: true, address: true },
             }),
+            this.prisma.organizationSettings.findUnique({ where: { organizationId: orgId }, select: { invoiceSettings: true } }),
         ]);
         const invoice = order.invoices[0] ?? null;
         const storeName = profile.storeName.trim() || org?.name || '';
+        // How the receipt looks follows the current settings; what kind of
+        // document it is follows the invoice, which keeps the type it was issued as.
+        const design = parseInvoiceSettings(settingsRow?.invoiceSettings ?? null);
+        const snapshot = invoice ? readRenderSnapshot(invoice.metadata) : null;
 
         const lines: ReceiptLine[] = order.lineItems.map((li) => {
             const quantity = li.quantity;
@@ -138,12 +155,30 @@ export class PosReceiptService {
             row.igst = round2(row.igst + l.igst);
             byRate.set(l.gstRate, row);
         }
+        // A, B… by ascending rate: each item line carries its letter instead of its tax.
+        const gstSummary = [...byRate.values()].sort((a, b) => a.rate - b.rate).map((row, i) => ({ ...row, code: String.fromCharCode(65 + i) }));
+        const codes = new Map(gstSummary.map((row) => [row.rate, row.code]));
 
         const total = num(order.totalPrice);
         const roundOff = readPosMeta(order.metadata)?.roundOff ?? 0;
         const payable = round2(total + roundOff);
         const paid = sum(order.payments.map((p) => num(p.amount)));
+        const balanceDue = Math.max(0, round2(payable - paid));
         const posMeta = readPosMeta(order.metadata);
+        const gstin = invoice?.sellerGstin ?? (org?.gstEnabled ? (defaultGstin?.gstin ?? null) : null);
+        const legalName = invoice?.sellerLegalName ?? (org?.gstEnabled ? (defaultGstin?.legalName ?? null) : null);
+
+        // The public bill link opens only a till's bills.
+        const ebill = order.posSale ? { kind: 'ebill' as const, url: `${this.links.prefix}${billToken(this.links.key, order.id)}` } : null;
+        const upi =
+            design.receiptQr === 'upi-when-due' && balanceDue > 0 && settings.upiId
+                ? {
+                    kind: 'upi' as const,
+                    uri: upiPayUri(settings.upiId, settings.upiPayeeName || storeName, balanceDue, invoice?.invoiceNumber ?? order.name),
+                    amount: balanceDue,
+                }
+                : null;
+        const phone = order.customer?.phone ?? null;
 
         return {
             width: settings.receiptWidth,
@@ -155,9 +190,19 @@ export class PosReceiptService {
                     addressLine(invoice?.sellerAddress) ??
                     (org?.gstEnabled ? addressLine(defaultGstin?.address) : null),
                 phone: profile.supportPhone.trim() || null,
-                gstin: invoice?.sellerGstin ?? (org?.gstEnabled ? (defaultGstin?.gstin ?? null) : null),
+                gstin,
                 logoUrl: profile.logoUrl.trim() || org?.logo || null,
+                /** Printed under the store name, so null when it is the same name. */
+                legalName: legalName && legalName.trim().toLowerCase() !== storeName.trim().toLowerCase() ? legalName : null,
+                whatsapp: profile.whatsappPhone.trim() || null,
+                ids: businessIds(design, gstin, 'onReceipt'),
             },
+            document: invoice
+                ? {
+                    title: snapshot?.documentType === 'BILL_OF_SUPPLY' ? ('BILL OF SUPPLY' as const) : ('TAX INVOICE' as const),
+                    subtitle: snapshot?.composition ? COMPOSITION_LINE : null,
+                }
+                : { title: 'BILL' as const, subtitle: null },
             order: {
                 id: order.id,
                 name: order.name,
@@ -176,11 +221,12 @@ export class PosReceiptService {
             customer: order.customer
                 ? {
                     name: [order.customer.firstName, order.customer.lastName].filter(Boolean).join(' ') || null,
-                    phone: order.customer.phone,
+                    phone,
                     gstin: order.customer.gstin,
+                    phoneShown: design.receiptCustomerContact === 'hide' ? null : design.receiptCustomerContact === 'mask' ? maskPhone(phone) : phone,
                 }
                 : null,
-            lines,
+            lines: lines.map((l) => ({ ...l, taxCode: l.gstRate === null ? null : (codes.get(l.gstRate) ?? null) })),
             totals: {
                 subtotal: sum(lines.map((l) => l.unitPrice * l.quantity)),
                 discount: sum(lines.map((l) => l.discount)),
@@ -192,17 +238,43 @@ export class PosReceiptService {
                 total,
                 payable,
             },
-            gstSummary: [...byRate.values()].sort((a, b) => a.rate - b.rate),
+            gstSummary,
             payments: order.payments.map((p) => ({
                 method: p.method,
                 amount: num(p.amount),
                 tendered: p.tendered != null ? num(p.tendered) : null,
                 change: p.tendered != null ? round2(num(p.tendered) - num(p.amount)) : null,
                 reference: p.reference,
+                at: p.createdAt.toISOString(),
             })),
             paid,
-            balanceDue: Math.max(0, round2(payable - paid)),
+            balanceDue,
+            returnPolicy: returnsOf(design),
+            qr: design.receiptQr === 'off' ? null : (upi ?? ebill),
+            printedBefore: printedAt(order.metadata) !== null,
         };
+    }
+
+    /**
+     * Records a receipt's first print, so every later one says DUPLICATE, and
+     * answers whether it had been printed before this call. One statement, so
+     * two tills printing at once get one original between them.
+     */
+    async markPrinted(orgId: string, orderId: string): Promise<{ printedBefore: boolean }> {
+        const first = await this.prisma.$executeRaw`
+            UPDATE "orders"
+            SET "metadata" = jsonb_set(
+                coalesce("metadata", '{}'::jsonb),
+                '{pos}',
+                coalesce("metadata"->'pos', '{}'::jsonb) || jsonb_build_object('printedAt', ${new Date().toISOString()}::text)
+            )
+            WHERE "id" = ${orderId} AND "organization_id" = ${orgId} AND "deleted_at" IS NULL
+                AND "metadata"->'pos'->>'printedAt' IS NULL
+        `;
+        if (first > 0) return { printedBefore: false };
+        const order = await this.prisma.order.findFirst({ where: { id: orderId, organizationId: orgId, deletedAt: null }, select: { id: true } });
+        if (!order) throw new NotFoundException('That bill was not found.');
+        return { printedBefore: true };
     }
 }
 

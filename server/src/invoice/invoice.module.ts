@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { GstModule } from '../gst/gst.module';
 import { CommerceEventsModule } from '../commerce/commerce-events.module';
 import { InvoiceController } from './invoice.controller';
+import { InvoiceDesignController } from './invoice-design.controller';
 import { InvoiceService } from './invoice.service';
 import { InvoiceNumberService } from './invoice-number.service';
 
@@ -10,7 +11,7 @@ import { InvoiceNumberService } from './invoice-number.service';
 // and GstCalculatorService for tax calculations.
 @Module({
   imports: [GstModule, CommerceEventsModule],
-  controllers: [InvoiceController],
+  controllers: [InvoiceController, InvoiceDesignController],
   providers: [InvoiceService, InvoiceNumberService],
   exports: [InvoiceService],
 })
