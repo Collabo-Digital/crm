@@ -48,7 +48,8 @@ export function SectionAccessPicker({
 
 interface Capability {
   key: PermissionKey;
-  section: SectionId;
+  /** The section it sits under, or null for one offered whatever the sections (shown under "Warehouse"). */
+  section: SectionId | null;
   label: string;
   /** Viewers only read: the server refuses them these actions whatever they hold. */
   agentOnly?: boolean;
@@ -66,19 +67,21 @@ const CAPABILITIES: Capability[] = [
   { key: "campaigns.manage", section: "campaigns", label: "Create and edit broadcasts and segments", agentOnly: true },
   { key: "broadcasts.send", section: "campaigns", label: "Send broadcasts to customers", agentOnly: true },
   { key: "templates.manage", section: "campaigns", label: "Submit message templates to Meta", agentOnly: true },
+  // Not under Orders: a packer works from the Packing list and need not see every order.
+  { key: "inventory.pack", section: null, label: "Pack orders, with the Packing list and scanner", agentOnly: true },
 ];
 
 /** What a new Agent / Viewer starts with: they can pick up new chats. */
 export const DEFAULT_CAPABILITIES: PermissionKey[] = ["chat.view_unassigned"];
 
 /**
- * Every grant the access editor writes. Anything else on a member (inventory.*,
- * reports.finance) is left as it was when the editor saves.
+ * Every grant the access editor writes. Anything else on a member (the other
+ * inventory.* keys, reports.finance) is left as it was when the editor saves.
  */
 export const MANAGED_CAPABILITY_KEYS = new Set<string>(["campaigns.view", ...CAPABILITIES.map((c) => c.key)]);
 
 function capabilitiesFor(role: UserRole, sections: SectionId[]) {
-  return CAPABILITIES.filter((c) => sections.includes(c.section) && (role === "AGENT" || !c.agentOnly));
+  return CAPABILITIES.filter((c) => (c.section === null || sections.includes(c.section)) && (role === "AGENT" || !c.agentOnly));
 }
 
 /**
@@ -110,13 +113,16 @@ export function CapabilityPicker({
   disabled?: boolean;
 }) {
   const offered = capabilitiesFor(role, sections);
-  const groups = AVAILABLE_SECTIONS.filter((s) => offered.some((c) => c.section === s.id));
+  const groups: Array<{ id: SectionId | null; heading: string }> = [
+    ...AVAILABLE_SECTIONS.filter((s) => offered.some((c) => c.section === s.id)).map((s) => ({ id: s.id, heading: `In ${s.label}` })),
+    ...(offered.some((c) => c.section === null) ? [{ id: null, heading: "Warehouse" }] : []),
+  ];
   if (groups.length === 0) return null;
   return (
     <div className="space-y-2">
       {groups.map((group) => (
-        <div key={group.id} className="space-y-1.5">
-          <p className="text-[10px] font-medium text-muted-foreground">In {group.label}</p>
+        <div key={group.id ?? "warehouse"} className="space-y-1.5">
+          <p className="text-[10px] font-medium text-muted-foreground">{group.heading}</p>
           <div className="grid grid-cols-1 gap-y-2 sm:grid-cols-2 sm:gap-x-4">
             {offered
               .filter((c) => c.section === group.id)
