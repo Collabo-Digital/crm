@@ -1665,6 +1665,10 @@ export interface OrderDetail extends Order {
     Invoice,
     "id" | "invoiceNumber" | "invoiceDate" | "status" | "grandTotal"
   >[];
+  /** Raw column: true for a point-of-sale counter sale, which is never packed. */
+  posSale?: boolean;
+  /** The order's packing task, when one was started. */
+  packing?: OrderPacking | null;
 }
 
 /**
@@ -5725,4 +5729,142 @@ export interface PublicCartLink {
   /** The checkout's recovery URL; null unless it is https. */
   url: string | null;
   completed: boolean;
+}
+
+// ─── Packing (Orders → Packing) ─────────────────────────────────────────────
+// Packing checks that the right items go into the parcel. It never ships,
+// never moves stock and never calls Shopify.
+
+export type PackingBucket = "to_pack" | "packing" | "on_hold" | "packed";
+export type PackTaskStatus = "PACKING" | "ON_HOLD" | "PACKED" | "CANCELLED";
+/** `prepaid` is not COD and PAID; anything else that is not COD is `unpaid`. */
+export type PackingPayment = "cod" | "prepaid" | "unpaid";
+export type PackHoldReason = "items_short" | "damaged" | "customer_request" | "other";
+export type PackProblemReason = "missing" | "damaged" | "wrong_item_on_shelf";
+export type PackConfirmReason = "no_barcode" | "barcode_damaged" | "other";
+export type PackScanResult = "matched" | "over" | "not_in_order" | "unknown";
+
+/** GET /packing/queue */
+export interface PackingQueueParams {
+  bucket?: PackingBucket;
+  /** An order's dispatch location; `none` for orders without one. */
+  warehouseId?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface PackingQueueTask {
+  id: string;
+  status: PackTaskStatus;
+  packedUnits: number;
+  requiredUnits: number;
+  holdReason: PackHoldReason | null;
+  holdNote: string | null;
+  updatedAt: string;
+  lastPackerName: string | null;
+}
+
+export interface PackingQueueRow {
+  orderId: string;
+  orderName: string;
+  createdAt: string;
+  customerName: string | null;
+  city: string | null;
+  units: number;
+  lines: number;
+  payment: PackingPayment;
+  /** COD orders only: tagged `cod-confirmed`. Null for other orders. */
+  codConfirmed: boolean | null;
+  warehouse: { id: string; name: string } | null;
+  task: PackingQueueTask | null;
+}
+
+export interface PackingQueueResponse {
+  data: PackingQueueRow[];
+  meta: { total: number; page: number; limit: number };
+  counts: Record<PackingBucket, number>;
+}
+
+export interface PackTaskLine {
+  id: string;
+  orderLineItemId: string;
+  title: string;
+  variantTitle: string | null;
+  sku: string | null;
+  barcode: string | null;
+  imageUrl: string | null;
+  required: number;
+  /** Scanned + hand-confirmed + counted. Never above `required`. */
+  packed: number;
+  handConfirmed: number;
+  counted: number;
+  problem: { reason: PackProblemReason; qty: number } | null;
+  /** The line has a variant with a barcode or a SKU. */
+  scannable: boolean;
+}
+
+export interface PackTask {
+  id: string;
+  orderId: string;
+  orderName: string;
+  status: PackTaskStatus;
+  customerName: string | null;
+  city: string | null;
+  payment: PackingPayment;
+  codConfirmed: boolean | null;
+  /** Prepaid only: a COD order split in two means two cash collections. */
+  partialAllowed: boolean;
+  partial: boolean;
+  holdReason: PackHoldReason | null;
+  holdNote: string | null;
+  heldAt: string | null;
+  warehouse: { id: string; name: string } | null;
+  updatedAt: string;
+  packedAt: string | null;
+  lines: PackTaskLine[];
+}
+
+/** POST /packing/tasks/:id/scan */
+export interface PackScanResponse {
+  result: PackScanResult;
+  lineId?: string;
+  /** `not_in_order` only: the organization's product the code belongs to. */
+  product?: { title: string; variantTitle: string | null };
+  task: PackTask;
+}
+
+/** GET /packing/accuracy */
+export interface PackingAccuracyCounts {
+  ordersPacked: number;
+  unitsScanned: number;
+  unitsHandConfirmed: number;
+  unitsCounted: number;
+  wrongScans: number;
+  overScans: number;
+  problems: number;
+}
+
+export interface PackingAccuracyRow extends PackingAccuracyCounts {
+  userId: string;
+  name: string;
+}
+
+export interface PackingAccuracyResponse {
+  rows: PackingAccuracyRow[];
+  totals: PackingAccuracyCounts;
+  /** The instants the range resolved to (days in the organization's reporting zone). */
+  from: string;
+  to: string;
+}
+
+/** `OrderDetail.packing` */
+export interface OrderPacking {
+  taskId: string;
+  status: PackTaskStatus;
+  packedUnits: number;
+  requiredUnits: number;
+  holdReason: PackHoldReason | null;
+  packedAt: string | null;
+  packedByName: string | null;
 }

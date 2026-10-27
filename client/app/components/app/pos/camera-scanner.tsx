@@ -28,6 +28,8 @@ export interface ScanFeedback {
   ok: boolean;
   text: string;
   at: number;
+  /** A not-ok result that is only a warning: amber rather than red. */
+  warning?: boolean;
 }
 
 /**
@@ -37,7 +39,8 @@ export interface ScanFeedback {
  *
  * On a phone it is a panel over the top half of the till that keeps scanning,
  * so the list and the bottom bar stay in view; elsewhere a dialog that closes
- * after one code.
+ * after one code. `inline` keeps scanning inside the page's own column, for a
+ * desk where one order takes many scans.
  */
 export function CameraScanner({
   open,
@@ -49,10 +52,40 @@ export function CameraScanner({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCode: (code: string) => void;
-  variant: "dialog" | "panel";
+  variant: "dialog" | "panel" | "inline";
   /** The last scan's result, shown on the panel. */
   feedback: ScanFeedback | null;
 }) {
+  const overlay = (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label="Close the camera"
+        onClick={() => onOpenChange(false)}
+        className="absolute top-2 right-2 size-11 rounded-full bg-black/50 text-white hover:bg-black/70 hover:text-white"
+      >
+        <X />
+      </Button>
+      <p
+        key={feedback?.at ?? 0}
+        role="status"
+        className={cn(
+          "absolute inset-x-3 bottom-3 mx-auto w-fit max-w-full truncate rounded-full px-3 py-1.5 text-caption font-medium animate-in fade-in-0",
+          !feedback
+            ? "bg-black/60 text-white"
+            : feedback.ok
+              ? "bg-success text-white"
+              : feedback.warning
+                ? "bg-warning text-ink"
+                : "bg-danger text-white",
+        )}
+      >
+        {feedback?.text ?? "Point the camera at a barcode. Each one is added as it is read."}
+      </p>
+    </>
+  );
   if (variant === "panel") {
     if (!open) return null;
     return (
@@ -61,30 +94,15 @@ export function CameraScanner({
         aria-label="Camera scanner"
         className="fixed inset-x-0 top-0 z-40 flex h-[50dvh] flex-col bg-black pt-[env(safe-area-inset-top)] shadow-2xl animate-in slide-in-from-top-4 fade-in-0"
       >
-        <CameraView continuous onCode={onCode} className="min-h-0 flex-1" overlay={
-          <>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label="Close the camera"
-              onClick={() => onOpenChange(false)}
-              className="absolute top-2 right-2 size-11 rounded-full bg-black/50 text-white hover:bg-black/70 hover:text-white"
-            >
-              <X />
-            </Button>
-            <p
-              key={feedback?.at ?? 0}
-              role="status"
-              className={cn(
-                "absolute inset-x-3 bottom-3 mx-auto w-fit max-w-full truncate rounded-full px-3 py-1.5 text-caption font-medium animate-in fade-in-0",
-                !feedback ? "bg-black/60 text-white" : feedback.ok ? "bg-success text-white" : "bg-danger text-white",
-              )}
-            >
-              {feedback?.text ?? "Point the camera at a barcode. Each one is added as it is read."}
-            </p>
-          </>
-        } />
+        <CameraView continuous onCode={onCode} className="min-h-0 flex-1" overlay={overlay} />
+      </div>
+    );
+  }
+  if (variant === "inline") {
+    if (!open) return null;
+    return (
+      <div role="region" aria-label="Camera scanner" className="overflow-hidden rounded-xl ring-1 ring-border">
+        <CameraView continuous onCode={onCode} className="aspect-[4/3]" overlay={overlay} />
       </div>
     );
   }

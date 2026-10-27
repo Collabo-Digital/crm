@@ -38,6 +38,12 @@ const EVENT_CATEGORY: Record<string, EventCategory> = {
   fulfillment_status_changed: "fulfilment",
   tracking_updated: "fulfilment",
   fulfillment_cancelled: "fulfilment",
+  // Packing checks the parcel; it is not a shipment.
+  packing_started: "fulfilment",
+  packing_held: "fulfilment",
+  packing_resumed: "fulfilment",
+  packed: "fulfilment",
+  packing_cancelled: "fulfilment",
 };
 
 const CATEGORY_LABEL: Record<EventCategory, string> = {
