@@ -14,6 +14,7 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
+import { sanitizeProductHtml } from '../common/utils/sanitize-product-html.util';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
 import {
     extractShippingTax,
@@ -1518,6 +1519,14 @@ export class ShopifySyncService {
         const normalizedOptions =
             normalizeShopifyOptions(sp.options) ?? Prisma.DbNull;
 
+        // Stored sanitised like every other description. This alone never
+        // queues a push: only local edits mark a product OUT_OF_SYNC, and the
+        // push leaves Shopify's description alone when sanitising is the only
+        // difference (see ShopifyPushService.descriptionUpdate).
+        const rawBody: unknown = sp.body_html;
+        const bodyHtml =
+            typeof rawBody === 'string' ? sanitizeProductHtml(rawBody) : (rawBody as null | undefined);
+
         // Shopify does not order webhooks, so a retried or late products/update
         // can carry an older title, price, status or stock than what is stored.
         // Same rule as upsertOrder's compare-and-set: strictly older is
@@ -1533,7 +1542,7 @@ export class ShopifySyncService {
             where: { channelId_externalId: { channelId, externalId } },
             create: {
                 organizationId: orgId, channelId, externalId,
-                title: sp.title, handle: sp.handle ?? null, bodyHtml: sp.body_html, vendor: sp.vendor, vendorKey: vendorKey ?? null,
+                title: sp.title, handle: sp.handle ?? null, bodyHtml, vendor: sp.vendor, vendorKey: vendorKey ?? null,
                 productType: sp.product_type, status: this.mapProductStatus(sp.status),
                 tags, options: normalizedOptions,
                 publishedAt: sp.published_at ? new Date(sp.published_at) : null,
@@ -1541,7 +1550,7 @@ export class ShopifySyncService {
                 externalUpdatedAt: sp.updated_at ? new Date(sp.updated_at) : null,
             },
             update: {
-                title: sp.title, ...(sp.handle ? { handle: sp.handle } : {}), bodyHtml: sp.body_html, vendor: sp.vendor, ...vendorKeyUpdate,
+                title: sp.title, ...(sp.handle ? { handle: sp.handle } : {}), bodyHtml, vendor: sp.vendor, ...vendorKeyUpdate,
                 productType: sp.product_type, status: this.mapProductStatus(sp.status),
                 tags, options: normalizedOptions,
                 publishedAt: sp.published_at ? new Date(sp.published_at) : null,

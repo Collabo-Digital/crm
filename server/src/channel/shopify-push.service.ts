@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { mergeJsonMetadata } from '../common/utils/jsonb-merge.util';
+import { sanitizeProductHtml } from '../common/utils/sanitize-product-html.util';
 import { countryCodeOf, normalizePhone } from '../common/phone.util';
 import { defaultCountryFor, toShopifyAddress } from './shopify-address.util';
 import { ShopifyOAuthService } from './shopify-oauth.service';
@@ -29,6 +30,8 @@ import {
   ProductSetResponse,
   PRODUCT_UPDATE_MUTATION,
   ProductUpdatePushResponse,
+  PRODUCT_DESCRIPTION_QUERY,
+  ProductDescriptionResponse,
   PRODUCT_VARIANTS_BULK_UPDATE_MUTATION,
   ProductVariantsBulkUpdateResponse,
   PRODUCT_VARIANTS_BULK_CREATE_MUTATION,
@@ -1225,7 +1228,7 @@ export class ShopifyPushService {
 
     return {
       title: product.title,
-      ...(product.bodyHtml ? { descriptionHtml: product.bodyHtml } : {}),
+      ...(product.bodyHtml ? { descriptionHtml: sanitizeProductHtml(product.bodyHtml) } : {}),
       ...(product.vendor ? { vendor: product.vendor } : {}),
       ...(product.productType ? { productType: product.productType } : {}),
       status: product.status,
@@ -1316,6 +1319,7 @@ export class ShopifyPushService {
     const productGid = ShopifyGraphqlClient.toGid('Product', product.externalId);
 
     // Top-level product fields.
+    const description = await this.descriptionUpdate(auth, productGid, product.bodyHtml);
     const updateRes = await this.graphql.request<ProductUpdatePushResponse>(
       auth,
       PRODUCT_UPDATE_MUTATION,
@@ -1323,7 +1327,7 @@ export class ShopifyPushService {
         input: {
           id: productGid,
           title: product.title,
-          descriptionHtml: product.bodyHtml ?? null,
+          ...description,
           vendor: product.vendor ?? null,
           productType: product.productType ?? null,
           status: product.status,
@@ -2197,6 +2201,31 @@ export class ShopifyPushService {
       );
       return null;
     }
+  }
+
+  /**
+   * The `descriptionHtml` part of a productUpdate: the stored description,
+   * sanitised, or nothing when that is only the sanitised form of what
+   * Shopify already holds.
+   *
+   * Descriptions pulled from Shopify are stored sanitised, so a push for an
+   * unrelated edit (a price, say) would otherwise strip whatever markup the
+   * merchant added in Shopify Admin, such as an embedded video.
+   */
+  private async descriptionUpdate(
+    auth: ShopifyAuthContext,
+    productGid: string,
+    bodyHtml: string | null,
+  ): Promise<{ descriptionHtml?: string | null }> {
+    const local = bodyHtml == null ? null : sanitizeProductHtml(bodyHtml);
+    const res = await this.graphql.request<ProductDescriptionResponse>(
+      auth,
+      PRODUCT_DESCRIPTION_QUERY,
+      { id: productGid },
+    );
+    const remote = res.product?.descriptionHtml ?? '';
+    if (sanitizeProductHtml(remote) === (local ?? '')) return {};
+    return { descriptionHtml: local };
   }
 
   /**

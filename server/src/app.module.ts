@@ -14,6 +14,7 @@ import { AppService } from './app.service';
 import configuration from './config/configuration';
 import { validationSchema } from './config/validation.schema';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
+import { SPA_FALLBACK_EXCLUDE } from './common/utils/spa-fallback.util';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { PrismaModule } from './prisma/prisma.module';
@@ -80,7 +81,7 @@ import { PosModule } from './pos/pos.module';
       ? [
         ServeStaticModule.forRoot({
           rootPath: join(__dirname, '..', '..', '..', 'client', 'build', 'client'),
-          exclude: ['/api/(.*)', '/uploads/(.*)'],
+          exclude: SPA_FALLBACK_EXCLUDE,
         }),
       ]
       : []),

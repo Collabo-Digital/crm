@@ -17,6 +17,7 @@ import {
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { sanitizeProductHtml } from '../common/utils/sanitize-product-html.util';
 import { QueryProductsDto } from './dto/query-products.dto';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -598,7 +599,7 @@ export class ProductService {
           productType: dto.productType ?? null,
           status: dto.status ?? ProductStatus.ACTIVE,
           tags: dto.tags ?? [],
-          bodyHtml: dto.bodyHtml ?? null,
+          bodyHtml: dto.bodyHtml == null ? null : sanitizeProductHtml(dto.bodyHtml),
           hsnCode: dto.hsnCode ?? null,
           gstRate: dto.gstRate ?? null,
           // Canonicalised, like variantGstOverride: a lowercase "nos" stored raw
@@ -1056,7 +1057,8 @@ export class ProductService {
       if (dto.status !== undefined) productPatch.status = dto.status;
       if (dto.tags !== undefined) productPatch.tags = dto.tags;
       if (dto.bodyHtml !== undefined)
-        productPatch.bodyHtml = dto.bodyHtml;
+        productPatch.bodyHtml =
+          dto.bodyHtml == null ? null : sanitizeProductHtml(dto.bodyHtml);
       if (!isVendor && dto.hsnCode !== undefined)
         productPatch.hsnCode = dto.hsnCode || null;
       if (!isVendor && dto.gstRate !== undefined)
@@ -2483,7 +2485,7 @@ export class ProductService {
         channelId: manual.id,
         externalId: `manual_${randomUUID()}`,
         title: `${original.title} (Copy)`,
-        bodyHtml: original.bodyHtml,
+        bodyHtml: original.bodyHtml == null ? null : sanitizeProductHtml(original.bodyHtml),
         vendor: original.vendor,
         productType: original.productType,
         status: 'DRAFT',

@@ -44,13 +44,13 @@
     "@anthropic-ai/sdk": "^0.133.0",
     "@nest-lab/throttler-storage-redis": "^1.2.0",
     "@nestjs/bullmq": "^11.0.4",
-    "@nestjs/common": "^11.0.1",
-    "@nestjs/config": "^4.0.3",
-    "@nestjs/core": "^11.0.1",
+    "@nestjs/common": "^11.2.8",
+    "@nestjs/config": "^4.0.4",
+    "@nestjs/core": "^11.2.8",
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/mapped-types": "^2.1.0",
     "@nestjs/passport": "^11.0.5",
-    "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/platform-express": "^11.2.8",
     "@nestjs/schedule": "^4.1.2",
     "@nestjs/serve-static": "^5.0.5",
     "@nestjs/throttler": "^6.5.0",
@@ -58,7 +58,7 @@
     "@react-pdf/renderer": "^4.9.0",
     "@shopify/shopify-api": "^13.0.0",
     "bcrypt": "^6.0.0",
-    "bullmq": "^5.73.0",
+    "bullmq": "^5.81.5",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "compression": "^1.8.2",
@@ -66,10 +66,10 @@
     "crypto-js": "^4.2.0",
     "helmet": "^8.1.0",
     "ioredis": "^5.10.1",
-    "joi": "^18.0.2",
+    "joi": "^18.3.0",
     "json2csv": "^6.0.0-alpha.2",
     "libphonenumber-js": "^1.12.41",
-    "nodemailer": "^6.9.16",
+    "nodemailer": "^10.2.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "qrcode": "^1.5.4",
@@ -77,15 +77,16 @@
     "react": "^19.2.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "sanitize-html": "^2.18.1",
     "slugify": "^1.6.8",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
     "@nestjs/cli": "^11.0.16",
     "@nestjs/schematics": "^11.0.9",
-    "@nestjs/testing": "^11.0.1",
+    "@nestjs/testing": "^11.2.8",
     "@types/bcrypt": "^6.0.0",
     "@types/compression": "^1.8.1",
     "@types/cookie-parser": "^1.4.10",
@@ -95,10 +96,10 @@
     "@types/json2csv": "^5.0.7",
     "@types/multer": "^2.0.0",
     "@types/node": "^22.10.7",
-    "@types/nodemailer": "^6.4.17",
     "@types/passport-jwt": "^4.0.1",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.3.0",
+    "@types/sanitize-html": "^2.16.2",
     "@types/supertest": "^6.0.2",
     "dotenv": "^17.3.1",
     "eslint": "^9.18.0",
@@ -128,12 +129,31 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
+      "/node_modules/.+\\.js$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "allowJs": true,
+            "isolatedModules": true,
+            "module": "CommonJS",
+            "moduleResolution": "Node",
+            "resolvePackageJsonExports": false
+          }
+        }
+      ],
       "^.+\\.(t|j)sx?$": "ts-jest"
     },
+    "transformIgnorePatterns": [
+      "/node_modules/(?!(?:htmlparser2|domhandler|domutils|domelementtype|dom-serializer|entities)/)"
+    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "overrides": {
+    "multer": "^2.5.0",
+    "uuid": "^11.1.1"
   }
 }

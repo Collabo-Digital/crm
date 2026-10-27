@@ -1991,6 +1991,18 @@ export const PRODUCT_UPDATE_MUTATION = /* GraphQL */ `
   }
 `;
 
+export interface ProductDescriptionResponse {
+  product: { descriptionHtml: string | null } | null;
+}
+
+export const PRODUCT_DESCRIPTION_QUERY = /* GraphQL */ `
+  query ProductDescriptionForPush($id: ID!) {
+    product(id: $id) {
+      descriptionHtml
+    }
+  }
+`;
+
 // ─── productVariantsBulkUpdate / Create ─────────────────────────────────────
 // Replace REST `PUT /variants/{id}.json`, `POST /products/{id}/variants.json`
 // and `PUT /inventory_items/{id}.json` — sku, cost, weight, HS code and
