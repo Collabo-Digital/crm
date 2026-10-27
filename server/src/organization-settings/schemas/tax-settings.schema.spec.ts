@@ -27,7 +27,15 @@ describe('TaxSettings', () => {
       invoicePrefix: 'INV',
       // Not chosen: the store's Shopify orders decide until the merchant does.
       pricesIncludeTax: null,
+      // A regular taxpayer below the e-invoicing limit until told otherwise.
+      composition: false,
+      eInvoicing: false,
     });
+  });
+
+  it('patches the composition and e-invoicing switches without resetting anything else', () => {
+    expect(UpdateTaxSettingsSchema.parse({ composition: true })).toEqual({ composition: true });
+    expect(UpdateTaxSettingsSchema.parse({ eInvoicing: true })).toEqual({ eInvoicing: true });
   });
 
   describe('invoicePrefix', () => {

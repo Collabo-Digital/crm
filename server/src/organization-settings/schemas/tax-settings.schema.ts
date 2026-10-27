@@ -77,6 +77,26 @@ export const TaxSettingsSchema = z.object({
    * Shopify orders decide (see `catalogPricesIncludeTax`).
    */
   pricesIncludeTax: z.boolean().nullable().default(null),
+
+  /**
+   * Registered under the composition scheme (CGST Act section 10). Such a
+   * seller cannot collect tax, so every sale is charged and invoiced at no GST
+   * and each document is a Bill of Supply carrying the Rule 5(1)(f) line; and
+   * it cannot supply to another state (section 10(2)(c)), so those sales are
+   * refused. Cannot be on together with `eInvoicing`: the composition limit
+   * is far below the e-invoicing one.
+   */
+  composition: z.boolean().default(false),
+
+  /**
+   * Turnover above the e-invoicing limit (₹5 crore in any year since 2017-18).
+   * Invoices and credit notes to GST-registered buyers, and exports, then need
+   * an IRN and a signed QR from the government's portal (Rule 48(4)), and
+   * anything issued otherwise "shall not be treated as an invoice" (Rule 48(5)).
+   * Collabo cannot get an IRN yet, so those documents are refused rather than
+   * issued invalid; the others print the Rule 46(s) declaration.
+   */
+  eInvoicing: z.boolean().default(false),
 });
 
 export type TaxSettings = z.infer<typeof TaxSettingsSchema>;
@@ -116,6 +136,8 @@ export const UpdateTaxSettingsSchema = z.object({
     })
     .optional(),
   pricesIncludeTax: z.boolean().optional(),
+  composition: z.boolean().optional(),
+  eInvoicing: z.boolean().optional(),
 });
 export type UpdateTaxSettingsInput = z.infer<typeof UpdateTaxSettingsSchema>;
 

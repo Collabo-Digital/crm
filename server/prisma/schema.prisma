@@ -445,6 +445,10 @@ model OrganizationSettings {
   /// The point of sale: UPI id, round-off, staff PINs required, approval
   /// limits, receipt width and footer, quick tiles. See src/pos/pos-settings.schema.ts.
   posSettings          Json?    @map("pos_settings") @db.JsonB
+  /// How invoices, bills and receipts look: theme, brand colour, business IDs,
+  /// terms, signature, and which optional blocks print. See
+  /// src/organization-settings/schemas/invoice-settings.schema.ts.
+  invoiceSettings      Json?    @map("invoice_settings") @db.JsonB
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
