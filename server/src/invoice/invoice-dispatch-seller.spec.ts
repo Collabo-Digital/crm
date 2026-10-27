@@ -75,6 +75,7 @@ function build(opts: { locationGstinId: string | null; placeOfSupplyCode: string
     { resolveLineGstRates: jest.fn().mockResolvedValue([5]) } as any,
     { getNextInvoiceNumber: jest.fn().mockResolvedValue('INV-26-27/000001') } as any,
     { invoiceIssued: jest.fn() } as any,
+    {} as any,
   );
   jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
   const issue = async (dto: { sellerGstinId?: string } = {}) => {

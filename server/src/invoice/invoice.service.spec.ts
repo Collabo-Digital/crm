@@ -12,6 +12,7 @@ import { TaxResolverService } from '../gst/tax-resolver.service';
 import { InvoiceNumberService } from './invoice-number.service';
 import { InvoiceService } from './invoice.service';
 import { CommerceEventsService } from '../commerce/commerce-events.service';
+import { IMAGE_STORAGE } from '../product/image-storage/image-storage.interface';
 import { GstReturnType } from './dto/query-gst-return.dto';
 
 /**
@@ -95,6 +96,7 @@ describe('InvoiceService.getGstReturn', () => {
         { provide: TaxResolverService, useValue: {} },
         { provide: InvoiceNumberService, useValue: {} },
         { provide: CommerceEventsService, useValue: { invoiceIssued: jest.fn() } },
+        { provide: IMAGE_STORAGE, useValue: {} },
       ],
     }).compile();
 
@@ -268,7 +270,7 @@ describe('InvoiceService.autoInvoiceForPaidOrder', () => {
       $transaction: jest.fn(),
     };
     const service = new InvoiceService(
-      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any,
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any, {} as any,
     );
     const create = jest
       .spyOn(service, 'create')
@@ -357,7 +359,7 @@ describe('InvoiceService.autoInvoiceForShippedCodOrder', () => {
       },
     };
     const service = new InvoiceService(
-      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any,
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any, {} as any,
     );
     const create = jest
       .spyOn(service, 'create')
@@ -483,6 +485,7 @@ describe('InvoiceService.createForOrderTx dating', () => {
       taxResolver as any,
       invoiceNumber as any,
       { invoiceIssued: jest.fn() } as any,
+      {} as any,
     );
     const warn = jest
       .spyOn((service as any).logger, 'warn')
@@ -698,6 +701,7 @@ describe('InvoiceService.createForOrderTx amounts', () => {
       { resolveLineGstRates: jest.fn().mockResolvedValue([18]) } as any,
       { getNextInvoiceNumber: jest.fn().mockResolvedValue('INV-26-27/000001') } as any,
       { invoiceIssued: jest.fn() } as any,
+      {} as any,
     );
     jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
     return { service, tx };
@@ -912,6 +916,7 @@ describe('InvoiceService credit notes', () => {
       {} as any,
       { getNextCreditNoteNumber: jest.fn().mockResolvedValue('CN-26-27/000001') } as any,
       {} as any,
+      {} as any,
     );
     jest.spyOn((service as any).logger, 'log').mockImplementation(() => undefined);
     const raise = async (dto: { amount?: number; tax?: number }) => {
@@ -1035,6 +1040,7 @@ describe('InvoiceService.cancel', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
     );
     return { service, prisma };
   }
@@ -1124,7 +1130,7 @@ describe('InvoiceService.update', () => {
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const service = new InvoiceService(
-      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any,
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any, {} as any,
     );
     return { service, prisma, updates, events };
   }
@@ -1261,7 +1267,7 @@ describe('InvoiceService.bulkCreate', () => {
       },
     };
     const service = new InvoiceService(
-      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any,
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any, {} as any,
     );
     let n = 0;
     const create = jest.spyOn(service, 'create').mockImplementation(async (_org, dto) => {

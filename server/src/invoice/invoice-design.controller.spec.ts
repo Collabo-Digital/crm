@@ -4,6 +4,7 @@ import { UserRole } from '@prisma/client';
 import request from 'supertest';
 import { ROLES_KEY } from '../auth/decorators/roles.decorator';
 import { PrismaService } from '../prisma/prisma.service';
+import { IMAGE_STORAGE } from '../product/image-storage/image-storage.interface';
 import { InvoiceDesignController } from './invoice-design.controller';
 import type { DocumentModel } from './render/document-model';
 import { renderDocumentPdf } from './render/document-pdf';
@@ -12,6 +13,7 @@ import { renderDocumentPdf } from './render/document-pdf';
 jest.mock('./render/document-pdf', () => ({ renderDocumentPdf: jest.fn() }));
 const render = renderDocumentPdf as jest.Mock;
 const drawn = () => (render.mock.calls[0] as [DocumentModel])[0];
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
 
 /**
  * The settings page's live preview, over HTTP: what it accepts, that it
@@ -21,41 +23,42 @@ const drawn = () => (render.mock.calls[0] as [DocumentModel])[0];
 describe('POST /organization/settings/invoice/preview', () => {
   let app: INestApplication;
   let prisma: Record<string, Record<string, jest.Mock>>;
+  let images: { read: jest.Mock };
 
   beforeEach(async () => {
     render.mockReset().mockResolvedValue(Buffer.from('%PDF-1.7 preview'));
     // Reads only: a write would be a TypeError, and the test would fail.
     prisma = {
       organization: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue({
-            name: 'Saanjh',
-            website: null,
-            timezone: 'Asia/Kolkata',
-            currency: 'INR',
-            gstEnabled: false,
-          }),
+        findUnique: jest.fn().mockResolvedValue({
+          name: 'Saanjh',
+          website: null,
+          timezone: 'Asia/Kolkata',
+          currency: 'INR',
+          gstEnabled: false,
+        }),
       },
       organizationSettings: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue({
-            invoiceSettings: {
-              theme: 'classic',
-              terms: 'Saved terms',
-              footerNote: 'Saved note',
-            },
-            taxSettings: null,
-            storeProfileSettings: null,
-            posSettings: null,
-          }),
+        findUnique: jest.fn().mockResolvedValue({
+          invoiceSettings: {
+            theme: 'classic',
+            terms: 'Saved terms',
+            footerNote: 'Saved note',
+          },
+          taxSettings: null,
+          storeProfileSettings: { logoStorageKey: 'org_1/logo.png' },
+          posSettings: null,
+        }),
       },
       organizationGstin: { findFirst: jest.fn().mockResolvedValue(null) },
     };
+    images = { read: jest.fn().mockResolvedValue(PNG) };
     const module = await Test.createTestingModule({
       controllers: [InvoiceDesignController],
-      providers: [{ provide: PrismaService, useValue: prisma }],
+      providers: [
+        { provide: PrismaService, useValue: prisma },
+        { provide: IMAGE_STORAGE, useValue: images },
+      ],
     }).compile();
     app = module.createNestApplication();
     app.use((req: { user?: unknown }, _res: unknown, next: () => void) => {
@@ -160,6 +163,12 @@ describe('POST /organization/settings/invoice/preview', () => {
       'Invalid settings payload',
     );
     expect(render).not.toHaveBeenCalled();
+  });
+
+  it('embeds the saved logo, read through the image storage', async () => {
+    await post({ sample: 'tax_invoice' });
+    expect(images.read).toHaveBeenCalledWith('org_1/logo.png');
+    expect(drawn().seller.logo).toEqual({ data: PNG, format: 'png' });
   });
 
   it('cannot swap the uploaded signature: only its upload route sets it', async () => {

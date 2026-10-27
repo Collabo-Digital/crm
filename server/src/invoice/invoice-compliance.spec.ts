@@ -138,6 +138,7 @@ describe('InvoiceService.createForOrderTx compliance', () => {
       { resolveLineGstRates: jest.fn().mockResolvedValue(opts.rates ?? lineItems.map(() => 18)) } as never,
       invoiceNumber as never,
       { invoiceIssued: jest.fn() } as never,
+      {} as never,
     );
     jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
     const issue = async (dto: { buyerGstin?: string } = {}) => {
@@ -351,6 +352,7 @@ describe('InvoiceService credit notes, compliance', () => {
       {} as never,
       invoiceNumber as never,
       {} as never,
+      {} as never,
     );
     jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
     const raise = async () => {
@@ -480,6 +482,7 @@ describe('InvoiceService.update under e-invoicing', () => {
       prisma as never,
       {} as never,
       new GstCalculatorService(),
+      {} as never,
       {} as never,
       {} as never,
       {} as never,

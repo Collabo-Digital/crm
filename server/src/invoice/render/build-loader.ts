@@ -1,7 +1,5 @@
 import { Logger, NotFoundException } from '@nestjs/common';
 import { PaymentLinkStatus } from '@prisma/client';
-import { promises as fs } from 'fs';
-import { resolve, sep } from 'path';
 import { resolveReportingTimeZone } from '../../common/utils/zoned-date.util';
 import {
     InvoiceSettingsSchema,
@@ -13,6 +11,7 @@ import { parseStoreProfileSettings } from '../../organization-settings/schemas/s
 import { parseTaxSettings, type TaxSettings } from '../../organization-settings/schemas/tax-settings.schema';
 import { parsePosSettings } from '../../pos/pos-settings.schema';
 import type { PrismaService } from '../../prisma/prisma.service';
+import type { IImageStorage } from '../../product/image-storage/image-storage.interface';
 import type { BillContext } from './build-bill-document';
 import type { InvoiceDocumentInput } from './build-invoice-document';
 import { addressLine, currentBrand, currentSnapshot, type DocumentBrand } from './build-parts';
@@ -21,24 +20,14 @@ import { readRenderSnapshot } from './render-snapshot';
 
 /**
  * The database side of the builders: each function reads what one document
- * needs and hands the pure builder plain values.
+ * needs, with its logo and signature from the image storage, and hands the
+ * pure builder plain values.
  */
 
 const logger = new Logger('InvoiceDocuments');
 
-/** LocalImageStorage's folder. */
-const UPLOADS = resolve(process.cwd(), 'uploads', 'products');
-
-/**
- * An uploaded file's bytes, by its storage key. The image storage's own
- * `read(storageKey)` replaces this body once it exists; nothing else here
- * touches the disk.
- */
-export async function readUploadedFile(storageKey: string): Promise<Buffer> {
-    const path = resolve(UPLOADS, storageKey);
-    if (!path.startsWith(UPLOADS + sep)) throw new Error(`${storageKey} is not an upload`);
-    return fs.readFile(path);
-}
+/** Where uploaded logos and signatures are read from. */
+type ImageReader = Pick<IImageStorage, 'read'>;
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -50,10 +39,10 @@ export function imageOf(data: Buffer): DocImage | null {
 }
 
 /** An uploaded logo or signature, or null when there is none or it can't be used: a picture never stops a PDF. */
-export async function loadDocImage(storageKey: string | null | undefined): Promise<DocImage | null> {
+export async function loadDocImage(storage: ImageReader, storageKey: string | null | undefined): Promise<DocImage | null> {
     if (!storageKey) return null;
     try {
-        const image = imageOf(await readUploadedFile(storageKey));
+        const image = imageOf(await storage.read(storageKey));
         if (!image) logger.warn(`Upload ${storageKey} is not a PNG or JPEG; printing without it.`);
         return image;
     } catch (err) {
@@ -102,7 +91,7 @@ export async function loadCurrentSettings(prisma: PrismaService, orgId: string):
 }
 
 /** An invoice or credit note with its order as it is now, its snapshot and its pictures. */
-export async function loadInvoiceDocument(prisma: PrismaService, orgId: string, invoiceId: string): Promise<InvoiceDocumentInput> {
+export async function loadInvoiceDocument(prisma: PrismaService, storage: ImageReader, orgId: string, invoiceId: string): Promise<InvoiceDocumentInput> {
     const [invoice, settings] = await Promise.all([
         prisma.invoice.findFirst({
             where: { id: invoiceId, organizationId: orgId },
@@ -144,7 +133,10 @@ export async function loadInvoiceDocument(prisma: PrismaService, orgId: string, 
     if (!invoice) throw new NotFoundException('Invoice not found');
 
     const snapshot = readRenderSnapshot(invoice.metadata) ?? currentSnapshot(settings.design, settings.brand);
-    const [logo, signature] = await Promise.all([loadDocImage(snapshot.brand.logoStorageKey), loadDocImage(snapshot.design.signature?.storageKey)]);
+    const [logo, signature] = await Promise.all([
+        loadDocImage(storage, snapshot.brand.logoStorageKey),
+        loadDocImage(storage, snapshot.design.signature?.storageKey),
+    ]);
     const { order } = invoice;
     const link = order.paymentLinks[0];
     const tracking = order.fulfillments[0];
@@ -224,12 +216,12 @@ export async function loadInvoiceDocument(prisma: PrismaService, orgId: string, 
 }
 
 /** What a till's bill prints besides its receipt: the current settings and logo. */
-export async function loadBillContext(prisma: PrismaService, orgId: string): Promise<BillContext> {
+export async function loadBillContext(prisma: PrismaService, storage: ImageReader, orgId: string): Promise<BillContext> {
     const settings = await loadCurrentSettings(prisma, orgId);
     return {
         design: settings.design,
         brand: settings.brand,
-        logo: await loadDocImage(settings.brand.logoStorageKey),
+        logo: await loadDocImage(storage, settings.brand.logoStorageKey),
         timeZone: settings.timeZone,
         currency: settings.currency,
     };
@@ -253,7 +245,12 @@ export interface PreviewContext {
     signature: DocImage | null;
 }
 
-export async function loadPreviewContext(prisma: PrismaService, orgId: string, edits: UpdateInvoiceSettingsInput = {}): Promise<PreviewContext> {
+export async function loadPreviewContext(
+    prisma: PrismaService,
+    storage: ImageReader,
+    orgId: string,
+    edits: UpdateInvoiceSettingsInput = {},
+): Promise<PreviewContext> {
     const [settings, registration] = await Promise.all([
         loadCurrentSettings(prisma, orgId),
         // The default registration, else the oldest active one: the till's choice.
@@ -265,6 +262,9 @@ export async function loadPreviewContext(prisma: PrismaService, orgId: string, e
     ]);
     // Merged like a save, but never written: the signature stays the uploaded one.
     const design = InvoiceSettingsSchema.parse({ ...settings.design, ...edits });
-    const [logo, signature] = await Promise.all([loadDocImage(settings.brand.logoStorageKey), loadDocImage(design.signature?.storageKey)]);
+    const [logo, signature] = await Promise.all([
+        loadDocImage(storage, settings.brand.logoStorageKey),
+        loadDocImage(storage, design.signature?.storageKey),
+    ]);
     return { settings, design, registration: settings.gstEnabled ? registration : null, logo, signature };
 }

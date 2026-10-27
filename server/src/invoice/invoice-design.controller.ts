@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Post, Res } from '@nestjs/common';
+import { Body, Controller, HttpCode, Inject, Post, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
 import { OrgId } from '../auth/decorators/org-id.decorator';
@@ -6,6 +6,10 @@ import { ORG_MANAGERS, Roles } from '../auth/decorators/roles.decorator';
 import { UpdateInvoiceSettingsSchema } from '../organization-settings/schemas/invoice-settings.schema';
 import { ZodValidationPipe } from '../organization-settings/zod-validation.pipe';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  IMAGE_STORAGE,
+  type IImageStorage,
+} from '../product/image-storage/image-storage.interface';
 import { loadPreviewContext } from './render/build-loader';
 import { renderDocumentPdf } from './render/document-pdf';
 import { PREVIEW_SAMPLES, previewDocument } from './render/sample-documents';
@@ -24,7 +28,10 @@ export type InvoicePreviewInput = z.infer<typeof InvoicePreviewSchema>;
  */
 @Controller('organization/settings/invoice')
 export class InvoiceDesignController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(IMAGE_STORAGE) private readonly imageStorage: IImageStorage,
+  ) {}
 
   // POST /api/v1/organization/settings/invoice/preview — a sample document
   // as a PDF, raw like GET /invoices/:id/pdf. Called on every change to the
@@ -38,7 +45,12 @@ export class InvoiceDesignController {
     body: InvoicePreviewInput,
     @Res() res: Response,
   ) {
-    const context = await loadPreviewContext(this.prisma, orgId, body.settings);
+    const context = await loadPreviewContext(
+      this.prisma,
+      this.imageStorage,
+      orgId,
+      body.settings,
+    );
     const buffer = await renderDocumentPdf(
       previewDocument(body.sample, context),
     );

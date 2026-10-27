@@ -208,19 +208,22 @@ export function latest(dates: Array<Date | null | undefined>): Date | null {
     return dates.reduce<Date | null>((a, d) => (d && (!a || d > a) ? d : a), null);
 }
 
-/** The brand as a document issued now snapshots it (design 4.2). */
+/**
+ * The brand as a document issued now keeps it (design 4.2): the snapshot the
+ * issuing transaction writes, and what a document without one prints.
+ */
 export function currentBrand(
-    org: { name: string; website: string | null },
+    org: { name: string; website: string | null } | null,
     profile: StoreProfileSettings,
     upiId: string | null,
 ): DocumentBrand {
     return {
-        tradeName: profile.storeName.trim() || org.name,
+        tradeName: profile.storeName.trim() || org?.name || '',
         logoStorageKey: profile.logoStorageKey || null,
         supportPhone: profile.supportPhone,
         whatsappPhone: profile.whatsappPhone,
         supportEmail: profile.supportEmail,
-        website: profile.website.trim() || org.website || '',
+        website: profile.website.trim() || org?.website || '',
         upiId,
     };
 }

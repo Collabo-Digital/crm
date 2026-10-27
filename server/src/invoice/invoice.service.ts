@@ -1,4 +1,5 @@
 import {
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -9,7 +10,12 @@ import {
 } from '@nestjs/common';
 import { buildInvoiceDocument, invoicePdfFilename } from './render/build-invoice-document';
 import { loadInvoiceDocument } from './render/build-loader';
+import { currentBrand } from './render/build-parts';
 import { renderDocumentPdf } from './render/document-pdf';
+import {
+  IMAGE_STORAGE,
+  type IImageStorage,
+} from '../product/image-storage/image-storage.interface';
 import { CommerceEventsService } from '../commerce/commerce-events.service';
 import { isCashOnDelivery } from '../commerce/order-vars';
 import {
@@ -187,6 +193,7 @@ export class InvoiceService {
     private readonly taxResolver: TaxResolverService,
     private readonly invoiceNumber: InvoiceNumberService,
     private readonly commerceEvents: CommerceEventsService,
+    @Inject(IMAGE_STORAGE) private readonly imageStorage: IImageStorage,
   ) {}
 
   // ─── GENERATE INVOICE ───
@@ -1152,20 +1159,16 @@ export class InvoiceService {
     } | null,
     treatment: Pick<RenderSnapshot, 'documentType' | 'composition' | 'eInvoiceDeclaration'>,
   ): RenderSnapshot {
-    const profile = parseStoreProfileSettings(settings?.storeProfileSettings ?? null);
     return {
       v: 1,
       ...treatment,
       design: parseInvoiceSettings(settings?.invoiceSettings ?? null),
-      brand: {
-        tradeName: profile.storeName.trim() || org?.name || '',
-        logoStorageKey: profile.logoStorageKey || null,
-        supportPhone: profile.supportPhone,
-        whatsappPhone: profile.whatsappPhone,
-        supportEmail: profile.supportEmail,
-        website: profile.website || org?.website || '',
-        upiId: parsePosSettings(settings?.posSettings ?? null).upiId,
-      },
+      // The same brand a document without a snapshot prints, so the two cannot drift.
+      brand: currentBrand(
+        org,
+        parseStoreProfileSettings(settings?.storeProfileSettings ?? null),
+        parsePosSettings(settings?.posSettings ?? null).upiId,
+      ),
     };
   }
 
@@ -1327,7 +1330,7 @@ export class InvoiceService {
    * with; its payment and tracking are read as they are now.
    */
   async pdf(id: string, orgId: string): Promise<{ buffer: Buffer; filename: string; invoiceNumber: string }> {
-    const input = await loadInvoiceDocument(this.prisma, orgId, id);
+    const input = await loadInvoiceDocument(this.prisma, this.imageStorage, orgId, id);
     const buffer = await renderDocumentPdf(buildInvoiceDocument(input));
     const { invoiceNumber } = input.invoice;
     return { buffer, filename: invoicePdfFilename(invoiceNumber), invoiceNumber };

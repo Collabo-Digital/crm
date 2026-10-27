@@ -12,6 +12,7 @@ const drawn = () => (render.mock.calls[0] as [DocumentModel])[0];
 /** `InvoiceService.pdf`: the invoice's rows, built into a document, drawn, and named. */
 
 const d = (v: string | number) => new Prisma.Decimal(v);
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
 
 const row = (over: Record<string, unknown> = {}) => ({
   invoiceNumber: 'INV-26-27/000124',
@@ -93,29 +94,35 @@ const row = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function service(invoice: Record<string, unknown> | null) {
+function service(
+  invoice: Record<string, unknown> | null,
+  storeProfileSettings: Record<string, unknown> | null = null,
+) {
+  const images = {
+    read: jest.fn((key: string) =>
+      key === 'org_1/logo.png'
+        ? Promise.resolve(PNG)
+        : Promise.reject(new NotFoundException('Image not found')),
+    ),
+  };
   const prisma = {
     invoice: { findFirst: jest.fn().mockResolvedValue(invoice) },
     organization: {
-      findUnique: jest
-        .fn()
-        .mockResolvedValue({
-          name: 'Saanjh',
-          website: null,
-          timezone: 'Asia/Kolkata',
-          currency: 'INR',
-          gstEnabled: true,
-        }),
+      findUnique: jest.fn().mockResolvedValue({
+        name: 'Saanjh',
+        website: null,
+        timezone: 'Asia/Kolkata',
+        currency: 'INR',
+        gstEnabled: true,
+      }),
     },
     organizationSettings: {
-      findUnique: jest
-        .fn()
-        .mockResolvedValue({
-          taxSettings: { defaultUnitOfMeasure: 'PCS' },
-          invoiceSettings: null,
-          storeProfileSettings: null,
-          posSettings: null,
-        }),
+      findUnique: jest.fn().mockResolvedValue({
+        taxSettings: { defaultUnitOfMeasure: 'PCS' },
+        invoiceSettings: null,
+        storeProfileSettings,
+        posSettings: null,
+      }),
     },
   };
   return {
@@ -126,8 +133,10 @@ function service(invoice: Record<string, unknown> | null) {
       {} as any,
       {} as any,
       {} as any,
+      images as never,
     ),
     prisma,
+    images,
   };
 }
 
@@ -176,6 +185,15 @@ describe('InvoiceService.pdf', () => {
         lines: ['Cash · 27 Oct 2026, 01:31 · ₹1,995.00'],
       },
     });
+  });
+
+  it('embeds the uploaded logo, read through the image storage', async () => {
+    const { invoices, images } = service(row(), {
+      logoStorageKey: 'org_1/logo.png',
+    });
+    await invoices.pdf('inv_1', 'org_1');
+    expect(images.read).toHaveBeenCalledWith('org_1/logo.png');
+    expect(drawn().seller.logo).toEqual({ data: PNG, format: 'png' });
   });
 
   it('a credit note is drawn as one, from the invoice it reverses', async () => {

@@ -7,6 +7,7 @@ import { CommerceEventsModule } from '../commerce/commerce-events.module';
 import { ChannelModule } from '../channel/channel.module';
 import { InvoiceModule } from '../invoice/invoice.module';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
+import { ImageStorageModule } from '../product/image-storage/image-storage.module';
 import { PosController } from './pos.controller';
 import { PosPublicController } from './pos-public.controller';
 import { PosCatalogService } from './pos-catalog.service';
@@ -23,6 +24,7 @@ import { PosBillService } from './pos-bill.service';
 //   ChannelModule    — marking a bill paid on Shopify when its balance is collected.
 //   InvoiceModule, CommerceEventsModule — the follow-ups of a bill becoming paid.
 //   LoyaltyModule    — a walk-in bill's customer, added to send it, gets its order counted.
+//   ImageStorageModule — the uploaded logo on a bill's PDF.
 @Module({
     imports: [
         OrderModule,
@@ -33,6 +35,7 @@ import { PosBillService } from './pos-bill.service';
         ChannelModule,
         InvoiceModule,
         LoyaltyModule,
+        ImageStorageModule,
     ],
     controllers: [PosController, PosPublicController],
     providers: [PosCatalogService, PosStaffService, PosSaleService, PosReceiptService, PosWhatsAppService, PosBillService],

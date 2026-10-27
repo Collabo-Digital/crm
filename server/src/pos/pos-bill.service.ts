@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InvoiceStatus, MessageStatus, Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
@@ -13,6 +13,7 @@ import { formatMoney } from '../commerce/order-vars';
 import { billPdfFilename, buildBillDocument } from '../invoice/render/build-bill-document';
 import { loadBillContext } from '../invoice/render/build-loader';
 import { renderDocumentPdf } from '../invoice/render/document-pdf';
+import { IMAGE_STORAGE, type IImageStorage } from '../product/image-storage/image-storage.interface';
 import { PosReceiptService, billLinks } from './pos-receipt.service';
 import { PosStaffService } from './pos-staff.service';
 import { BillDocument, BillSendPlan, PosWhatsAppService, WhatsAppBillSetup, refusalReason } from './pos-whatsapp.service';
@@ -118,6 +119,7 @@ export class PosBillService {
         private readonly invoices: InvoiceService,
         private readonly media: MessagingMediaStorage,
         config: ConfigService,
+        @Inject(IMAGE_STORAGE) private readonly imageStorage: IImageStorage,
     ) {
         const links = billLinks(config);
         this.linkKey = links.key;
@@ -312,7 +314,7 @@ export class PosBillService {
         let pdf: { buffer: Buffer; filename: string };
         if (invoice) pdf = await this.invoices.pdf(invoice.id, orgId);
         else {
-            const [receipt, context] = await Promise.all([this.receipts.receipt(orgId, orderId), loadBillContext(this.prisma, orgId)]);
+            const [receipt, context] = await Promise.all([this.receipts.receipt(orgId, orderId), loadBillContext(this.prisma, this.imageStorage, orgId)]);
             pdf = { buffer: await renderDocumentPdf(buildBillDocument(receipt, context)), filename: billPdfFilename(receipt.order.name) };
         }
         const { storageKey } = await this.media.save(orgId, pdf.buffer, 'application/pdf');

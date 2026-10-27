@@ -81,6 +81,7 @@ function build(opts: { customer?: Record<string, unknown> | null; plan?: unknown
     const invoices = { pdf: jest.fn().mockResolvedValue({ buffer: Buffer.from('%PDF-invoice'), filename: 'INV-26-27-000042.pdf', invoiceNumber: 'INV-26-27/000042' }) };
     const media = { save: jest.fn(async (orgId: string, buffer: Buffer) => ({ storageKey: `${orgId}/saved.pdf`, size: buffer.length })) };
     const config = { get: (k: string) => ({ encryptionKey: SECRET, 'jwt.accessSecret': 'jwt', frontendUrl: 'https://app.example.com' })[k] };
+    const images = { read: jest.fn() };
     const service = new PosBillService(
         prisma,
         whatsapp as any,
@@ -91,6 +92,7 @@ function build(opts: { customer?: Record<string, unknown> | null; plan?: unknown
         invoices as any,
         media as any,
         config as any,
+        images as never,
     );
     jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
     const append = jest.spyOn(service as any, 'append').mockImplementation(async (orderId: any, a: any) => {
@@ -103,7 +105,7 @@ function build(opts: { customer?: Record<string, unknown> | null; plan?: unknown
         attempts.set(orderId, (attempts.get(orderId) ?? []).map((a) => (a.id === id ? { ...a, ...patch } : a)));
     });
     const latest = () => attempts.get(ORDER)?.at(-1);
-    return { service, prisma, tx, whatsapp, receipts, staff, loyalty, invoices, media, append, settle, attempts, latest };
+    return { service, prisma, tx, whatsapp, receipts, staff, loyalty, invoices, media, images, append, settle, attempts, latest };
 }
 
 const sale = (over: Record<string, unknown> = {}) => ({
@@ -239,11 +241,11 @@ describe('PosBillService — the bill’s PDF', () => {
     });
 
     it('a template with a document header goes with the bill’s PDF, made from its receipt and kept in the org’s chat media', async () => {
-        const { service, whatsapp, receipts, media, invoices, latest, prisma } = build({ plan: pdfPlan() });
+        const { service, whatsapp, receipts, media, invoices, latest, prisma, images } = build({ plan: pdfPlan() });
         await service.afterSale(ORG, USER, sale());
         await flush();
         expect(receipts.receipt).toHaveBeenCalledWith(ORG, ORDER);
-        expect(loadBillContext).toHaveBeenCalledWith(prisma, ORG);
+        expect(loadBillContext).toHaveBeenCalledWith(prisma, images, ORG);
         expect(buildBillDocument).toHaveBeenCalledWith(await receipts.receipt.mock.results[0].value, context);
         expect(render).toHaveBeenCalledWith(model);
         expect(media.save).toHaveBeenCalledWith(ORG, Buffer.from('%PDF-1.3 bill'), 'application/pdf');

@@ -1,30 +1,29 @@
 import { NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { promises as fs } from 'fs';
-import { join } from 'path';
 import { InvoiceSettingsSchema } from '../../organization-settings/schemas/invoice-settings.schema';
 import type { PrismaService } from '../../prisma/prisma.service';
-import { imageOf, loadBillContext, loadDocImage, loadInvoiceDocument, loadPreviewContext, readUploadedFile } from './build-loader';
+import { imageOf, loadBillContext, loadDocImage, loadInvoiceDocument, loadPreviewContext } from './build-loader';
 
 /**
- * The loaders' side of the builders: pictures from the upload folder by
+ * The loaders' side of the builders: pictures from the image storage by
  * their first bytes, and the rows a document reads turned into plain values.
- * The queries themselves were run against Postgres (see the report).
+ * The queries themselves were run against Postgres; the storage keeps its
+ * reads inside the uploads folder (local.storage.spec.ts).
  */
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('rest of a png')]);
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('rest of a jpeg')]);
 const GIF = Buffer.from('GIF89a and the rest');
 
+/** An image storage holding these files; any other key is not found, as the real one says. */
+function storageWith(files: Record<string, Buffer> = {}) {
+    return {
+        read: jest.fn((key: string) => (files[key] ? Promise.resolve(files[key]) : Promise.reject(new NotFoundException('Image not found')))),
+    };
+}
+
 describe('pictures on documents', () => {
-    const org = `test-build-loader-${process.pid}`;
-    const dir = join(process.cwd(), 'uploads', 'products', org);
-    beforeAll(async () => {
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(join(dir, 'logo.png'), PNG);
-        await fs.writeFile(join(dir, 'renamed.png'), GIF);
-    });
-    afterAll(() => fs.rm(dir, { recursive: true, force: true }));
+    const storage = storageWith({ 'org_1/logo.png': PNG, 'org_1/sign.jpg': JPEG, 'org_1/renamed.png': GIF });
 
     it('knows PNG and JPEG by their first bytes, and nothing else', () => {
         expect(imageOf(PNG)).toEqual({ data: PNG, format: 'png' });
@@ -33,17 +32,18 @@ describe('pictures on documents', () => {
         expect(imageOf(Buffer.alloc(0))).toBeNull();
     });
 
-    it('reads an upload by its storage key', async () => {
-        await expect(readUploadedFile(`${org}/logo.png`)).resolves.toEqual(PNG);
-        await expect(loadDocImage(`${org}/logo.png`)).resolves.toEqual({ data: PNG, format: 'png' });
+    it('reads an upload from the image storage by its key', async () => {
+        await expect(loadDocImage(storage, 'org_1/logo.png')).resolves.toEqual({ data: PNG, format: 'png' });
+        await expect(loadDocImage(storage, 'org_1/sign.jpg')).resolves.toEqual({ data: JPEG, format: 'jpg' });
+        expect(storage.read).toHaveBeenCalledWith('org_1/logo.png');
     });
 
-    it('prints without the picture when there is none, it is gone, it is not an image, or the key leaves the uploads', async () => {
-        await expect(loadDocImage(null)).resolves.toBeNull();
-        await expect(loadDocImage(`${org}/missing.png`)).resolves.toBeNull();
-        await expect(loadDocImage(`${org}/renamed.png`)).resolves.toBeNull();
-        await expect(readUploadedFile('../../package.json')).rejects.toThrow('not an upload');
-        await expect(loadDocImage('../../package.json')).resolves.toBeNull();
+    it('prints without the picture when there is none, it is gone, or it is not an image', async () => {
+        storage.read.mockClear();
+        await expect(loadDocImage(storage, null)).resolves.toBeNull();
+        expect(storage.read).not.toHaveBeenCalled();
+        await expect(loadDocImage(storage, 'org_1/missing.png')).resolves.toBeNull();
+        await expect(loadDocImage(storage, 'org_1/renamed.png')).resolves.toBeNull();
     });
 });
 
@@ -95,7 +95,7 @@ const ROW = {
 
 describe('loadInvoiceDocument', () => {
     it('hands the builder plain numbers, the order as it is now, and the time zone (India for an untouched UTC)', async () => {
-        const input = await loadInvoiceDocument(prismaWith(ROW, { taxSettings: { defaultUnitOfMeasure: 'PCS' } }).prisma, 'org_1', 'inv_1');
+        const input = await loadInvoiceDocument(prismaWith(ROW, { taxSettings: { defaultUnitOfMeasure: 'PCS' } }).prisma, storageWith(), 'org_1', 'inv_1');
         expect(input.invoice).toMatchObject({ subtotal: 1237.14, totalIgst: 61.86, grandTotal: 1299 });
         expect(input.invoice.lineItems[0]).toMatchObject({ unitPrice: 1237.14, gstRate: 5, igstRate: 5, igstAmount: 61.86, totalAmount: 1299 });
         expect(input.order).toEqual({
@@ -116,9 +116,16 @@ describe('loadInvoiceDocument', () => {
         expect(input).toMatchObject({ timeZone: 'Asia/Kolkata', defaultUnit: 'PCS', original: null, logo: null, signature: null });
     });
 
-    it('prints from the snapshot the invoice was issued with', async () => {
-        const input = await loadInvoiceDocument(prismaWith({ ...ROW, metadata: { render: SNAPSHOT } }).prisma, 'org_1', 'inv_1');
-        expect(input.snapshot).toEqual(SNAPSHOT);
+    it('prints from the snapshot the invoice was issued with, its logo and signature from the image storage', async () => {
+        const snapshot = {
+            ...SNAPSHOT,
+            design: InvoiceSettingsSchema.parse({ theme: 'classic', signature: { storageKey: 'org_1/sign.jpg', url: 'u' } }),
+            brand: { ...SNAPSHOT.brand, logoStorageKey: 'org_1/logo.png' },
+        };
+        const storage = storageWith({ 'org_1/logo.png': PNG, 'org_1/sign.jpg': JPEG });
+        const input = await loadInvoiceDocument(prismaWith({ ...ROW, metadata: { render: snapshot } }).prisma, storage, 'org_1', 'inv_1');
+        expect(input.snapshot).toEqual(snapshot);
+        expect(input).toMatchObject({ logo: { data: PNG, format: 'png' }, signature: { data: JPEG, format: 'jpg' } });
     });
 
     it('one issued before snapshots: the current settings, store profile and UPI id, as a tax invoice', async () => {
@@ -128,7 +135,7 @@ describe('loadInvoiceDocument', () => {
             posSettings: { upiId: 'saanjh@okaxis' },
             taxSettings: null,
         };
-        const input = await loadInvoiceDocument(prismaWith(ROW, settings).prisma, 'org_1', 'inv_1');
+        const input = await loadInvoiceDocument(prismaWith(ROW, settings).prisma, storageWith(), 'org_1', 'inv_1');
         expect(input.snapshot).toMatchObject({
             documentType: 'TAX_INVOICE',
             composition: false,
@@ -141,13 +148,13 @@ describe('loadInvoiceDocument', () => {
 
     it('scoped to the organization, and a 404 for any other', async () => {
         const { prisma, mocks } = prismaWith(null);
-        await expect(loadInvoiceDocument(prisma, 'org_1', 'inv_x')).rejects.toBeInstanceOf(NotFoundException);
+        await expect(loadInvoiceDocument(prisma, storageWith(), 'org_1', 'inv_x')).rejects.toBeInstanceOf(NotFoundException);
         expect(mocks.invoice.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'inv_x', organizationId: 'org_1' } }));
     });
 
     it('reads only the first paid payment link, the latest tracked fulfillment and the latest "paid" entry', async () => {
         const { prisma, mocks } = prismaWith(ROW);
-        await loadInvoiceDocument(prisma, 'org_1', 'inv_1');
+        await loadInvoiceDocument(prisma, storageWith(), 'org_1', 'inv_1');
         const [query] = mocks.invoice.findFirst.mock.calls[0] as [{ include: { order: { select: Record<string, unknown> } } }];
         const order = query.include.order.select;
         expect(order.paymentLinks).toMatchObject({ where: { status: 'PAID' }, orderBy: [{ paidAt: 'asc' }, { id: 'asc' }], take: 1 });
@@ -158,13 +165,20 @@ describe('loadInvoiceDocument', () => {
 
 describe('loadBillContext and loadPreviewContext', () => {
     it('a bill: the current settings, in the currency the till sells in', async () => {
-        const context = await loadBillContext(prismaWith(null, { invoiceSettings: { footerNote: 'Visit again!' } }).prisma, 'org_1');
-        expect(context).toMatchObject({ currency: 'INR', timeZone: 'Asia/Kolkata', logo: null, design: { footerNote: 'Visit again!' }, brand: { tradeName: 'Saanjh' } });
+        const settings = { invoiceSettings: { footerNote: 'Visit again!' }, storeProfileSettings: { logoStorageKey: 'org_1/logo.png' } };
+        const context = await loadBillContext(prismaWith(null, settings).prisma, storageWith({ 'org_1/logo.png': PNG }), 'org_1');
+        expect(context).toMatchObject({
+            currency: 'INR',
+            timeZone: 'Asia/Kolkata',
+            logo: { data: PNG, format: 'png' },
+            design: { footerNote: 'Visit again!' },
+            brand: { tradeName: 'Saanjh' },
+        });
     });
 
     it('a preview: the edits over the saved settings, the uploaded signature kept, and the real registration with GST on', async () => {
         const { prisma, mocks } = prismaWith(null, { invoiceSettings: { theme: 'classic', terms: 'Saved terms', signature: { storageKey: 'org_1/missing.png', url: 'u' } } });
-        const context = await loadPreviewContext(prisma, 'org_1', { theme: 'modern', brandColor: '#0F766E' });
+        const context = await loadPreviewContext(prisma, storageWith(), 'org_1', { theme: 'modern', brandColor: '#0F766E' });
         expect(context.design).toMatchObject({ theme: 'modern', brandColor: '#0F766E', terms: 'Saved terms', signature: { storageKey: 'org_1/missing.png' } });
         expect(context.registration).toMatchObject({ gstin: '29ABCDE1234F1Z5', legalName: 'Saanjh Apparel Private Limited' });
         expect(context.signature).toBeNull();
@@ -176,6 +190,6 @@ describe('loadBillContext and loadPreviewContext', () => {
     it('a preview without GST has no registration to print', async () => {
         const { prisma, mocks } = prismaWith(null);
         mocks.organization.findUnique.mockResolvedValue({ name: 'Saanjh', website: null, timezone: 'UTC', currency: 'INR', gstEnabled: false });
-        expect((await loadPreviewContext(prisma, 'org_1')).registration).toBeNull();
+        expect((await loadPreviewContext(prisma, storageWith(), 'org_1')).registration).toBeNull();
     });
 });
