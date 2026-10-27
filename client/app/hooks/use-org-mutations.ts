@@ -7,6 +7,7 @@ import { useAuthStore } from "~/stores/auth.store";
 import { orgKeys } from "~/hooks/use-org-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { takeAfterOnboarding } from "~/lib/return-path";
+import { SessionChangedError } from "~/lib/session-stamp";
 import type {
   CreateOrganizationRequest,
   CreatePersonalRequest,
@@ -40,18 +41,30 @@ export function useCreateOrganizationMutation() {
   });
 }
 
-/** Mutation hook for creating a personal workspace. */
+/** Mutation hook for creating a personal workspace, and moving the session into it. */
 export function useCreatePersonalMutation() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const setTokens = useAuthStore((s) => s.setTokens);
   const setCurrentOrg = useAuthStore((s) => s.setCurrentOrg);
   const setOrganizations = useAuthStore((s) => s.setOrganizations);
   const existingOrgs = useAuthStore((s) => s.organizations);
   const clearPendingPlan = useAuthStore((s) => s.clearPendingPlan);
 
   return useMutation({
-    mutationFn: (data: CreatePersonalRequest) => orgService.createPersonal(data),
-    onSuccess: (org) => {
+    mutationFn: async (data: CreatePersonalRequest) => {
+      const org = await orgService.createPersonal(data);
+      // The token minted at sign-up names no org, and the server would run
+      // this workspace's requests in whichever org it resolves first. The
+      // workspace exists either way (a second try is refused), so a failed
+      // switch is left to AuthGuard, which retries it before showing it.
+      const tokens = await authService.switchOrg({ orgId: org.id }).catch((error: unknown) => {
+        if (error instanceof SessionChangedError) throw error;
+        return null;
+      });
+      return { org, tokens };
+    },
+    onSuccess: ({ org, tokens }) => {
       queryClient.invalidateQueries({ queryKey: orgKeys.list() });
 
       // Add the new personal workspace to auth store so AuthGuard allows dashboard access
@@ -78,6 +91,7 @@ export function useCreatePersonalMutation() {
         },
       };
       setOrganizations([...existingOrgs, newMembership]);
+      if (tokens) setTokens(tokens.accessToken, tokens.refreshToken);
       setCurrentOrg(org.id);
       clearPendingPlan();
       navigate(takeAfterOnboarding() ?? "/dashboard");
