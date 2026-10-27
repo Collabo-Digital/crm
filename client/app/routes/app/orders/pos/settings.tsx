@@ -16,6 +16,7 @@ import { useDebounced } from "~/hooks/use-debounced";
 import { useCreatePosStaffMutation, useUpdatePosSettingsMutation, useUpdatePosStaffMutation } from "~/hooks/use-pos-mutations";
 import { usePosProducts, usePosSetup, usePosStaff } from "~/hooks/use-pos-queries";
 import { serverMessage } from "~/lib/handle-mutation-error";
+import { UPI_ID } from "~/lib/pos-cart";
 import { cn, formatCurrency } from "~/lib/utils";
 import type { PosProduct, PosSettings, PosSetup, PosStaffRole, PosStaffView } from "~/types/api";
 
@@ -23,7 +24,6 @@ export function meta() {
   return [{ title: "Point of sale settings | Collabo CRM" }];
 }
 
-const UPI_ID = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,63}$/;
 const PIN = /^\d{4,6}$/;
 const selectClass = "h-8 w-full rounded-lg border border-input bg-background px-2 text-sm";
 

@@ -1,4 +1,4 @@
-import type { FinancialStatus, GstType, InvoiceStatus } from "~/types/api";
+import type { FinancialStatus, GstType, Invoice, InvoiceStatus } from "~/types/api";
 
 /**
  * Canonical invoice-status pill styling, labels and derived display state.
@@ -58,6 +58,18 @@ export function resolveDisplayStatus(invoice: {
   return financialStatus && OUTSTANDING_FINANCIAL_STATES.has(financialStatus)
     ? "UNPAID"
     : "ISSUED";
+}
+
+/**
+ * What the document is: a credit note, or what it was issued as. A cancelled
+ * document keeps its kind, and one issued before the snapshot existed was a
+ * tax invoice.
+ */
+export function documentLabel(
+  invoice: Pick<Invoice, "status" | "metadata">,
+): "Tax invoice" | "Bill of supply" | "Credit note" {
+  if (invoice.status === "CREDIT_NOTE") return "Credit note";
+  return invoice.metadata?.render?.documentType === "BILL_OF_SUPPLY" ? "Bill of supply" : "Tax invoice";
 }
 
 /** Short labels for the row sub-label — the column is narrow. */

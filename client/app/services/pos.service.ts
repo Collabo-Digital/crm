@@ -63,6 +63,9 @@ export const posService = {
     apiClient.post<PosBillState>(`/pos/sales/${orderId}/send-bill`, { channel: "whatsapp", ...data }).then((r) => r.data),
 
   receipt: (orderId: string) => apiClient.get<PosReceipt>(`/pos/receipts/${orderId}`).then((r) => r.data),
+  /** Records the receipt's first print; `printedBefore` is as it was before this call. */
+  markReceiptPrinted: (orderId: string) =>
+    apiClient.post<{ printedBefore: boolean }>(`/pos/receipts/${orderId}/printed`).then((r) => r.data),
   /**
    * The customer's bill behind a link. Plain axios rather than apiClient: the
    * page is public, so it must send no staff token, and a 401 must not start

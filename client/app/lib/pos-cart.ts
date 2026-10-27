@@ -252,6 +252,9 @@ export function quickCashAmounts(due: number): number[] {
   return amounts;
 }
 
+/** A UPI ID (VPA): name@bank, with no spaces. */
+export const UPI_ID = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,63}$/;
+
 /**
  * A UPI intent link (NPCI's upi://pay). A VPA holds only letters, digits and
  * ".-_@", so `pa` goes in as typed — some UPI apps refuse an encoded "@".

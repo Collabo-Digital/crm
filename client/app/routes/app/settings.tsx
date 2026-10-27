@@ -10,7 +10,7 @@ import {
   Building2, Lock, Bell, Palette, Users, Shield, Smartphone,
   Check, ChevronRight, AlertTriangle, Loader2, Plus, X, Mail, Trash2,
   Sun, Moon, Monitor, Receipt, Star, MapPin, Package, ShoppingBag, Layers, MessageSquare,
-  Pencil, Store, ArrowLeft,
+  Pencil, Store, ArrowLeft, ReceiptText,
 } from "lucide-react";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -70,6 +70,8 @@ import { LocationKindBadge } from "~/components/app/inventory/location-kind-badg
 import { GstReturnSettings } from "~/components/app/settings/gst-return-settings";
 import { CatalogPricesSetting } from "~/components/app/settings/catalog-prices-setting";
 import { InvoiceSeriesSetting } from "~/components/app/settings/invoice-series-setting";
+import { InvoiceSettingsTab } from "~/components/app/settings/invoice-settings-tab";
+import { TaxSchemeSetting } from "~/components/app/settings/tax-scheme-setting";
 import { platformOffered } from "~/lib/channel-providers";
 import { roleLabel } from "~/lib/labels";
 
@@ -87,6 +89,7 @@ const TABS = [
   { id: "channels", label: "Channels", icon: Layers },
   { id: "inbox", label: "Inbox", icon: MessageSquare },
   { id: "tax-gst", label: "Tax & GST", icon: Receipt },
+  { id: "invoices", label: "Invoices & bills", icon: ReceiptText },
   { id: "loyalty", label: "Loyalty Tiers", icon: Star },
   { id: "security", label: "Security", icon: Lock },
   // { id: "notifications", label: "Notifications", icon: Bell },
@@ -1054,6 +1057,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
         </Section>
       )}
 
+      {/* Composition scheme and e-invoicing: which documents get issued at all. */}
+      {gstEnabled && <TaxSchemeSetting />}
+
       {/* State Base Tax Rates */}
       {gstEnabled && (
         <StateTaxRatesSection />
@@ -1683,7 +1689,7 @@ export default function SettingsPage() {
         <div className="flex items-center gap-4 rounded-3xl bg-brand/35 p-5"><span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-card"><Building2 className="size-6 text-brand-strong" strokeWidth={1.7} /></span><div className="min-w-0"><p className="text-xs text-muted-foreground">Your workspace</p><p className="mt-1 truncate text-base font-semibold">{org?.name || "Workspace settings"}</p></div></div>
         {[
           { label: "Workspace", ids: ["general", "store-profile", "members", "billing", "developers"] },
-          { label: "Commerce & conversations", ids: ["channels", "inbox", "products", "orders", "tax-gst", "loyalty"] },
+          { label: "Commerce & conversations", ids: ["channels", "inbox", "products", "orders", "tax-gst", "invoices", "loyalty"] },
           { label: "Account", ids: ["security"] },
         ].map((group) => {
           const entries = visibleTabs.filter((item) => group.ids.includes(item.id));
@@ -2219,6 +2225,8 @@ export default function SettingsPage() {
           {activeTab === "tax-gst" && org && (
             <TaxGstTab orgId={org.id} gstEnabled={org.gstEnabled ?? false} />
           )}
+
+          {activeTab === "invoices" && <InvoiceSettingsTab />}
 
           {/* ─── LOYALTY TIERS ─── */}
           {activeTab === "loyalty" && org && (

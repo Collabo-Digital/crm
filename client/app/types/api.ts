@@ -1995,6 +1995,19 @@ export interface TaxSettings {
    * `OrganizationSettingsResponse.pricesIncludeTax`).
    */
   pricesIncludeTax: boolean | null;
+  /**
+   * Registered under the composition scheme: every sale is charged and
+   * invoiced at no GST, documents are Bills of Supply, and sales to another
+   * state are refused. Never on together with `eInvoicing` (the server says
+   * so with a 400).
+   */
+  composition: boolean;
+  /**
+   * Turnover above the e-invoicing limit. Invoices and credit notes to
+   * GST-registered buyers, and exports, are refused until Collabo can get an
+   * IRN; other documents print the Rule 46(s) declaration.
+   */
+  eInvoicing: boolean;
 }
 
 /**
@@ -2023,9 +2036,75 @@ export interface StoreProfileSettings {
   whatsappPhone: string;
   supportEmail: string;
   website: string;
-  /** Absolute URL — there is no upload pipeline for this yet. */
+  /** Absolute URL: the uploaded logo's, or one typed in on Store profile. */
   logoUrl: string;
+  /**
+   * The uploaded file behind `logoUrl`, blank when the logo was typed in as a
+   * link. PDFs print only an uploaded logo; a typed one prints the trading
+   * name instead. Set and cleared only by the logo upload routes.
+   */
+  logoStorageKey: string;
 }
+
+/** IDs a brand can print beside its GSTIN. PAN is not one: it is read off the GSTIN. */
+export type BusinessIdType = "CIN" | "FSSAI" | "UDYAM" | "IEC" | "LUT" | "DL" | "CUSTOM";
+
+export interface BusinessId {
+  type: BusinessIdType;
+  /** Printed only for CUSTOM; the others carry their standard label. */
+  label: string;
+  value: string;
+  onA4: boolean;
+  onReceipt: boolean;
+}
+
+/** Whether a document prints the buyer's phone (and email on A4): not at all, masked, or in full. */
+export type ContactShown = "hide" | "mask" | "show";
+
+/**
+ * How the organization's invoices, bills and receipts look. Mirrors
+ * `InvoiceSettingsSchema` in server/src/organization-settings/schemas/
+ * invoice-settings.schema.ts; the server fills every default. Issued documents
+ * keep a copy of these, so a change never alters one already sent.
+ */
+export interface InvoiceSettings {
+  theme: "modern" | "classic";
+  /** Invoices to GST-registered buyers use Classic whatever `theme` says. */
+  classicForB2b: boolean;
+  /** `#RRGGBB`, or null to print in ink. */
+  brandColor: string | null;
+  showPan: boolean;
+  businessIds: BusinessId[];
+  registeredOffice: string;
+  /** The store profile's support phone, WhatsApp and email in the header and footer. */
+  showSupportContact: boolean;
+  /** One term per line; printed numbered. */
+  terms: string;
+  returnPolicy: string;
+  returnPolicyUrl: string;
+  footerNote: string;
+  /** Credit notes carry a signatory block whatever this says. */
+  signatureMode: "computer" | "image" | "blank";
+  /** Set and cleared by the signature upload routes only. */
+  signature: { storageKey: string; url: string } | null;
+  signatoryName: string;
+  signatoryDesignation: string;
+  showSku: boolean;
+  amountInWords: boolean;
+  /** `auto`: when the document has more than one HSN or rate. Business invoices always carry it. */
+  taxSummary: "auto" | "always" | "never";
+  customerContact: ContactShown;
+  receiptCustomerContact: ContactShown;
+  /** A UPI QR for the balance on unpaid invoices. Never on cash-on-delivery orders. */
+  upiQr: "unpaid" | "never";
+  receiptQr: "ebill" | "upi-when-due" | "off";
+}
+
+/** PATCH /organization/settings/invoice. The signature image is set by its own upload. */
+export type UpdateInvoiceSettingsRequest = Partial<Omit<InvoiceSettings, "signature">>;
+
+/** The sample documents the settings preview can draw. */
+export type InvoiceSample = "tax_invoice" | "tax_invoice_b2b" | "bill_of_supply" | "credit_note" | "bill";
 
 /** Response from GET /organization/settings — every domain returned together. */
 export interface OrganizationSettingsResponse {
@@ -2034,6 +2113,7 @@ export interface OrganizationSettingsResponse {
   inventorySettings: InventorySettings;
   taxSettings: TaxSettings;
   storeProfileSettings: StoreProfileSettings;
+  invoiceSettings: InvoiceSettings;
   /**
    * How orders and drafts read a catalogue or typed price. `effective` is
    * `taxSettings.pricesIncludeTax` once chosen, else `detected` (what the
@@ -2043,7 +2123,7 @@ export interface OrganizationSettingsResponse {
 }
 
 /** Patch payload for PATCH /organization/settings/store-profile. */
-export type UpdateStoreProfileSettingsRequest = Partial<StoreProfileSettings>;
+export type UpdateStoreProfileSettingsRequest = Partial<Omit<StoreProfileSettings, "logoStorageKey">>;
 
 /** Patch payload for PATCH /organization/settings/products. */
 export type UpdateProductSettingsRequest = Partial<ProductSettings>;
@@ -2731,6 +2811,9 @@ export type GstType = "CGST_SGST" | "IGST";
 /** Invoice status. */
 export type InvoiceStatus = "DRAFT" | "ISSUED" | "CANCELLED" | "CREDIT_NOTE";
 
+/** A Bill of Supply is issued under the composition scheme, or when nothing on it is taxable. */
+export type InvoiceDocumentType = "TAX_INVOICE" | "BILL_OF_SUPPLY";
+
 /** An invoice line item with full tax breakdown. */
 export interface InvoiceLineItem {
   id: string;
@@ -2779,6 +2862,11 @@ export interface Invoice {
   currency: string;
   status: InvoiceStatus;
   cancelledAt: string | null;
+  /**
+   * `render` is what the document looked like when it was issued. Invoices
+   * issued before it existed have none, and were all tax invoices.
+   */
+  metadata?: { render?: { documentType?: InvoiceDocumentType } } | null;
   /** `financialStatus` drives the derived "Unpaid" pill — see `lib/invoice-status.ts`. */
   order: {
     id: string;
@@ -5441,6 +5529,8 @@ export interface PosSetup {
   staff: PosStaffView[];
   tiles: PosProduct[];
   gstEnabled: boolean;
+  /** Composition sellers charge no GST, so the till shows no GST estimate. */
+  composition: boolean;
   storeName: string;
   currency: "INR";
   billDelivery: {
@@ -5566,11 +5656,26 @@ export interface PosBillState {
 export interface PosReceipt {
   width: 58 | 80;
   footer: string | null;
-  store: { name: string; address: string | null; phone: string | null; gstin: string | null; logoUrl: string | null };
+  store: {
+    name: string;
+    address: string | null;
+    phone: string | null;
+    gstin: string | null;
+    logoUrl: string | null;
+    legalName: string | null;
+    whatsapp: string | null;
+    /** PAN and the business IDs marked for receipts, labelled ("FSSAI Lic. No."). */
+    ids: Array<{ label: string; value: string }>;
+  };
+  /** `subtitle` is the composition scheme's Rule 5(1)(f) line, when it applies. */
+  document: { title: "TAX INVOICE" | "BILL OF SUPPLY" | "BILL"; subtitle: string | null };
   order: { id: string; name: string; createdAt: string; staffName: string | null; storeName: string | null };
   invoice: { number: string; date: string; placeOfSupply: string | null; gstType: "INTRA" | "INTER" | null } | null;
-  customer: { name: string | null; phone: string | null; gstin: string | null } | null;
+  /** `phoneShown` follows the receipt's customer-contact setting: masked, in full, or null. */
+  customer: { name: string | null; phone: string | null; gstin: string | null; phoneShown: string | null } | null;
   lines: Array<{
+    /** "A", "B"… by ascending rate, keyed to `gstSummary`; null on an untaxed line. */
+    taxCode: string | null;
     title: string;
     variantTitle: string | null;
     hsn: string | null;
@@ -5585,10 +5690,15 @@ export interface PosReceipt {
     total: number;
   }>;
   totals: { subtotal: number; discount: number; taxable: number; cgst: number; sgst: number; igst: number; roundOff: number; total: number; payable: number };
-  gstSummary: Array<{ rate: number; taxable: number; cgst: number; sgst: number; igst: number }>;
+  gstSummary: Array<{ code: string; rate: number; taxable: number; cgst: number; sgst: number; igst: number }>;
   payments: Array<{ method: PosPaymentMethod; amount: number; tendered: number | null; change: number | null; reference: string | null }>;
   paid: number;
   balanceDue: number;
+  returnPolicy: string | null;
+  /** The e-bill link, a UPI QR for the balance, or none, as the receipt QR setting says. */
+  qr: { kind: "ebill"; url: string } | { kind: "upi"; uri: string; amount: number } | null;
+  /** The receipt was printed before, so this print is a duplicate. */
+  printedBefore: boolean;
 }
 
 // ─── Public store links ─────────────────────────────────────────────────────

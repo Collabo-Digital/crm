@@ -98,10 +98,11 @@ function Bill({ bill: r }: { bill: PosReceipt }) {
       <section className="space-y-4 border-b px-5 py-4">
         <div className="flex items-center justify-between gap-3">
           <span className="rounded-full bg-muted px-2.5 py-1 text-micro font-semibold tracking-wide uppercase">
-            {r.invoice ? "Tax invoice" : r.balanceDue > 0 ? "Bill" : "Receipt"}
+            {r.invoice ? (r.document.title === "BILL OF SUPPLY" ? "Bill of supply" : "Tax invoice") : r.balanceDue > 0 ? "Bill" : "Receipt"}
           </span>
           <span className="text-caption text-muted-foreground">{formatDateTime(r.invoice?.date ?? r.order.createdAt)}</span>
         </div>
+        {r.document.subtitle && <p className="text-caption text-muted-foreground">{r.document.subtitle}</p>}
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-caption">
           {r.invoice && <Meta label="Invoice number" value={r.invoice.number} mono />}
           <Meta label="Bill number" value={r.order.name} mono />
