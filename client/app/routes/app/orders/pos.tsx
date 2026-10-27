@@ -83,6 +83,8 @@ export default function PosPage() {
   const setup = usePosSetup(storeId);
   const data = setup.data;
   const settings = data?.settings;
+  // Composition sellers charge no GST, so the till neither estimates it nor asks for a rate.
+  const chargesGst = !!data?.gstEnabled && !data.composition;
   const stores = data?.stores ?? [];
   const activeStore = stores.find((s) => s.id === storeId) ?? stores.find((s) => s.isDefault) ?? stores[0];
 
@@ -502,7 +504,7 @@ export default function PosPage() {
       customerRequired={settings?.customerAtCheckout === "required"}
       cartDiscount={cartDiscount}
       note={note}
-      gstEnabled={!!data?.gstEnabled}
+      gstEnabled={chargesGst}
       priceChangeNeedsPin={!!settings?.priceOverrideNeedsApproval}
       approvalNeed={approvalNeed}
       approvedBy={approvalValid ? approval!.approverName : null}
@@ -796,7 +798,7 @@ export default function PosPage() {
           <CustomItemDialog
             open={dialog === "custom"}
             onOpenChange={(open) => setDialog(open ? "custom" : null)}
-            gstEnabled={data.gstEnabled}
+            gstEnabled={chargesGst}
             onAdd={(item) => {
               const key = `custom:${newClientSaleId()}`;
               setLines((prev) => [

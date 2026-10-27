@@ -4,7 +4,7 @@ import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
 
 import { isString, useSessionState } from "~/hooks/use-session-state";
 import type { ListUrlState } from "~/hooks/use-list-url-state";
-import { Download, Plus, Clock, AlertTriangle } from "lucide-react";
+import { Download, Plus, Clock, AlertTriangle, Info } from "lucide-react";
 
 import {
   PageHeader,
@@ -60,6 +60,7 @@ import {
 } from "~/hooks/use-invoice-queries";
 import { useInvoiceActionGates } from "~/hooks/use-invoice-action-gates";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
+import { useOrganizationSettings } from "~/hooks/use-settings-queries";
 import { useGstins } from "~/hooks/use-gst-queries";
 import { useWarehouses } from "~/hooks/use-inventory-queries";
 import {
@@ -233,6 +234,9 @@ function InvoicesView() {
   const { data: org } = useCurrentOrg();
   const currency = org?.currency ?? "INR";
   const { canIssue, canCancel } = useInvoiceActionGates();
+  // Composition taxpayers file CMP-08 and GSTR-4, so the GSTR-1 reminder is
+  // not theirs and the returns below are for reference only.
+  const composition = useOrganizationSettings().data?.taxSettings.composition ?? false;
 
   // Only used to decide whether a GSTIN filter is worth showing at all — a
   // single-registration org has nothing to filter by.
@@ -587,7 +591,7 @@ function InvoicesView() {
           </div>
 
           {/* Filing reminder */}
-          {gstr1DueDate && gstr1DaysLeft !== null && gstr1DaysLeft >= 0 && (
+          {!composition && gstr1DueDate && gstr1DaysLeft !== null && gstr1DaysLeft >= 0 && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-brand px-5 py-3">
               <p className="flex items-center gap-2 text-caption text-brand-foreground">
                 <Clock className="size-4 shrink-0" />
@@ -662,6 +666,16 @@ function InvoicesView() {
               product in the live catalogues carries an HSN code, and adding them
               is hours of data entry), and a warning that can be neither quieted
               nor acted on is one people learn to look past. */}
+          {composition && (
+            <div className="flex items-start gap-2 rounded-xl bg-info-subtle px-5 py-3">
+              <Info className="mt-0.5 size-4 shrink-0 text-info" />
+              <p className="text-caption">
+                <strong className="font-semibold">You're on the composition scheme.</strong>{" "}
+                Composition taxpayers file CMP-08 every quarter and GSTR-4 once a year, not GSTR-1 or GSTR-3B.
+                The returns below are for your reference.
+              </p>
+            </div>
+          )}
           {stats && stats.uninvoicedPaidOrders > 0 && (
             <DismissibleWarning
               id="uninvoiced-orders"

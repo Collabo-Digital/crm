@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router";
 import { Loader2 } from "lucide-react";
 import { useOrganizationSettings } from "~/hooks/use-settings-queries";
 import { useUpdateStoreProfileSettingsMutation } from "~/hooks/use-settings-mutations";
@@ -43,6 +44,7 @@ export function StoreProfileTab() {
   const mutation = useUpdateStoreProfileSettingsMutation();
 
   const [draft, setDraft] = useState<StoreProfileSettings | null>(null);
+  const { hash } = useLocation();
 
   // Seed the draft once the server value arrives, and re-seed after a save so
   // the form shows the canonicalised (trimmed) values the server kept.
@@ -50,6 +52,16 @@ export function StoreProfileTab() {
   useEffect(() => {
     if (saved) setDraft(saved);
   }, [saved]);
+
+  // A link to one field (the invoice settings' checklist) lands on it. The
+  // form appears only once the settings load, after the router has scrolled.
+  const ready = draft !== null;
+  useEffect(() => {
+    if (!ready || !hash.startsWith("#store-")) return;
+    const field = document.getElementById(hash.slice(1));
+    field?.scrollIntoView({ block: "center" });
+    field?.focus({ preventScroll: true });
+  }, [ready, hash]);
 
   if (isLoading || !draft) {
     return (
@@ -88,10 +100,11 @@ export function StoreProfileTab() {
         <div className="grid gap-4 sm:grid-cols-2">
           {FIELDS.map((field) => (
             <div key={field.key} className={field.half ? "" : "sm:col-span-2"}>
-              <label className="mb-1.5 block text-xs font-medium text-gray-700 dark:text-gray-300">
+              <label htmlFor={`store-${field.key}`} className="mb-1.5 block text-xs font-medium text-gray-700 dark:text-gray-300">
                 {field.label}
               </label>
               <input
+                id={`store-${field.key}`}
                 value={draft[field.key]}
                 onChange={(e) => set(field.key, e.target.value)}
                 placeholder={field.placeholder}
