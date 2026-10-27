@@ -50,7 +50,7 @@ const MANAGER_ONLY = ['updateSettings', 'listStaff', 'createStaff', 'updateStaff
 describe('point-of-sale access', () => {
     it('has the routes of the contract', () => {
         expect(handlers.map(([name]) => name).sort()).toEqual(
-            ['setup', 'updateSettings', 'listStaff', 'createStaff', 'updateStaff', 'unlock', 'approve', 'products', 'scan', 'customers', 'createSale', 'collectPayment', 'delivery', 'sendBill', 'receipt'].sort(),
+            ['setup', 'updateSettings', 'listStaff', 'createStaff', 'updateStaff', 'unlock', 'approve', 'products', 'scan', 'customers', 'createSale', 'collectPayment', 'delivery', 'sendBill', 'receipt', 'receiptPrinted'].sort(),
         );
     });
 
@@ -97,5 +97,6 @@ describe('point-of-sale access', () => {
 
     it('prints a receipt for an agent who has Orders but not Invoices', () => {
         expect(passes(proto.receipt, { role: UserRole.AGENT, permissions: ['section.orders'] })).toBe(true);
+        expect(passes(proto.receiptPrinted, { role: UserRole.AGENT, permissions: ['section.orders'] })).toBe(true);
     });
 });

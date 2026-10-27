@@ -10,13 +10,14 @@ import { MessagingMediaStorage } from '../messaging/media/messaging-media.storag
 import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { countryCodeOf, normalizePhone, phoneLookupVariants } from '../common/phone.util';
 import { formatMoney } from '../commerce/order-vars';
-import { billLinkPrefix } from '../campaigns/templates/template-starters';
-import { PosReceiptService } from './pos-receipt.service';
+import { billPdfFilename, buildBillDocument } from '../invoice/render/build-bill-document';
+import { loadBillContext } from '../invoice/render/build-loader';
+import { renderDocumentPdf } from '../invoice/render/document-pdf';
+import { PosReceiptService, billLinks } from './pos-receipt.service';
 import { PosStaffService } from './pos-staff.service';
 import { BillDocument, BillSendPlan, PosWhatsAppService, WhatsAppBillSetup, refusalReason } from './pos-whatsapp.service';
 import { BillValues, hasBillDocument } from './pos-bill-template';
-import { billLinkKey, billToken, maskPhone, readBillToken } from './pos-bill-link';
-import { billPdfFilename, renderBillPdf } from './pos-bill-pdf';
+import { billToken, maskPhone, readBillToken } from './pos-bill-link';
 import { SendBillInput } from './pos-requests.schema';
 import { readPosMeta } from './pos-order-meta';
 
@@ -118,8 +119,9 @@ export class PosBillService {
         private readonly media: MessagingMediaStorage,
         config: ConfigService,
     ) {
-        this.linkKey = billLinkKey(config.get<string>('encryptionKey') || config.get<string>('jwt.accessSecret')!);
-        this.linkPrefix = billLinkPrefix(config.get<string>('frontendUrl') ?? '');
+        const links = billLinks(config);
+        this.linkKey = links.key;
+        this.linkPrefix = links.prefix;
     }
 
     billUrl(orderId: string): string {
@@ -208,7 +210,7 @@ export class PosBillService {
         return this.view(orgId, orderId);
     }
 
-    /** The bill behind a public link: its receipt, with the customer's number masked. */
+    /** The bill behind a public link: its receipt, with the customer's number masked whatever the receipt shows. */
     async publicBill(token: string) {
         const orderId = readBillToken(this.linkKey, token);
         const order = orderId
@@ -216,7 +218,9 @@ export class PosBillService {
             : null;
         if (!orderId || !order) throw new NotFoundException("This bill link isn't valid.");
         const receipt = await this.receipts.receipt(order.organizationId, orderId);
-        return { ...receipt, customer: receipt.customer ? { ...receipt.customer, phone: maskPhone(receipt.customer.phone) } : null };
+        const customer = receipt.customer;
+        const masked = customer ? maskPhone(customer.phone) : null;
+        return { ...receipt, customer: customer ? { ...customer, phone: masked, phoneShown: customer.phoneShown && masked } : null };
     }
 
     /** Checks what can be checked now, keeps the attempt, and sends after the response. */
@@ -296,7 +300,8 @@ export class PosBillService {
 
     /**
      * The bill's PDF in the organization's chat media: the sale's GST invoice
-     * when it has one, as the statutory document, else the bill itself.
+     * when it has one, as the statutory document, else the bill itself, A4
+     * like the invoice.
      */
     private async document(orgId: string, orderId: string): Promise<BillDocument> {
         const invoice = await this.prisma.invoice.findFirst({
@@ -307,8 +312,8 @@ export class PosBillService {
         let pdf: { buffer: Buffer; filename: string };
         if (invoice) pdf = await this.invoices.pdf(invoice.id, orgId);
         else {
-            const receipt = await this.receipts.receipt(orgId, orderId);
-            pdf = { buffer: await renderBillPdf(receipt), filename: billPdfFilename(receipt.order.name) };
+            const [receipt, context] = await Promise.all([this.receipts.receipt(orgId, orderId), loadBillContext(this.prisma, orgId)]);
+            pdf = { buffer: await renderDocumentPdf(buildBillDocument(receipt, context)), filename: billPdfFilename(receipt.order.name) };
         }
         const { storageKey } = await this.media.save(orgId, pdf.buffer, 'application/pdf');
         return { storageKey, filename: pdf.filename };

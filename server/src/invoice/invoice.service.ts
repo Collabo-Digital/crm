@@ -7,7 +7,9 @@ import {
   HttpException,
   PayloadTooLargeException,
 } from '@nestjs/common';
-import { invoicePdfFilename, renderInvoicePdf, type InvoiceForPdf } from './pdf/invoice-pdf';
+import { buildInvoiceDocument, invoicePdfFilename } from './render/build-invoice-document';
+import { loadInvoiceDocument } from './render/build-loader';
+import { renderDocumentPdf } from './render/document-pdf';
 import { CommerceEventsService } from '../commerce/commerce-events.service';
 import { isCashOnDelivery } from '../commerce/order-vars';
 import {
@@ -1226,13 +1228,15 @@ export class InvoiceService {
   }
 
   /**
-   * The invoice as a PDF — the file the app downloads and the one customers
-   * are sent on WhatsApp.
+   * The invoice or credit note as a PDF — the file the app downloads and the
+   * one customers are sent on WhatsApp. Drawn from the snapshot it was issued
+   * with; its payment and tracking are read as they are now.
    */
   async pdf(id: string, orgId: string): Promise<{ buffer: Buffer; filename: string; invoiceNumber: string }> {
-    const invoice = await this.findOne(id, orgId);
-    const buffer = await renderInvoicePdf(invoice as unknown as InvoiceForPdf);
-    return { buffer, filename: invoicePdfFilename(invoice.invoiceNumber), invoiceNumber: invoice.invoiceNumber };
+    const input = await loadInvoiceDocument(this.prisma, orgId, id);
+    const buffer = await renderDocumentPdf(buildInvoiceDocument(input));
+    const { invoiceNumber } = input.invoice;
+    return { buffer, filename: invoicePdfFilename(invoiceNumber), invoiceNumber };
   }
 
   // ─── GET SINGLE INVOICE ───
