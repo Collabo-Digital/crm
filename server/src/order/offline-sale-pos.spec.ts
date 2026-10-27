@@ -11,18 +11,19 @@ import { OrderService } from './order.service';
 const ORG = 'org_1';
 const USER = 'user_1';
 
-function build() {
+function build({ shirtDeletedAt = null }: { shirtDeletedAt?: Date | null } = {}) {
     const variants = [
         {
             id: 'var_shirt', title: 'M', sku: 'SH-M', price: 1000, gstRate: null, taxable: true,
             trackQuantity: true, continueSellingWhenOutOfStock: false, inventoryQuantity: 10,
-            product: { id: 'prod_shirt', title: 'Linen shirt', vendor: 'Acme', vendorKey: null, gstRate: 5, channel: { currency: 'INR' } },
+            product: { id: 'prod_shirt', title: 'Linen shirt', vendor: 'Acme', vendorKey: null, gstRate: 5, deletedAt: shirtDeletedAt, channel: { currency: 'INR' } },
         },
         {
-            // The hidden custom-item variant: untracked, nothing in stock.
+            // The hidden custom-item variant: untracked, nothing in stock, and
+            // its product deleted so no list or search shows it.
             id: 'var_custom', title: 'GST 18%', sku: null, price: 0, gstRate: 18, taxable: true,
             trackQuantity: false, continueSellingWhenOutOfStock: true, inventoryQuantity: 0,
-            product: { id: 'prod_custom', title: 'Custom item', vendor: null, vendorKey: null, gstRate: null, channel: { currency: 'INR' } },
+            product: { id: 'prod_custom', title: 'Custom item', vendor: null, vendorKey: null, gstRate: null, deletedAt: new Date('2026-01-01'), channel: { currency: 'INR' } },
         },
     ];
     const tx: any = {
@@ -119,6 +120,30 @@ describe('createOfflineOrder — a walk-in', () => {
         expect(tx.customer.create).not.toHaveBeenCalled();
         expect(tx.order.create.mock.calls[0][0].data.customerId).toBeNull();
         expect(loyalty.recomputeForCustomer).not.toHaveBeenCalled();
+    });
+});
+
+describe('createOfflineOrder — a product deleted after it was picked', () => {
+    it('is refused by name, before any order is written', async () => {
+        const { service, tx, ledger } = build({ shirtDeletedAt: new Date() });
+        await expect(service.createOfflineOrder(ORG, USER, sale())).rejects.toThrow(
+            '"Linen shirt — M" has been deleted from your products, so it can\'t be sold.',
+        );
+        expect(tx.order.create).not.toHaveBeenCalled();
+        expect(ledger.applyMovement).not.toHaveBeenCalled();
+    });
+
+    it('is refused on a bill too, beside a custom item', async () => {
+        const { service, tx } = build({ shirtDeletedAt: new Date() });
+        await expect(
+            service.createOfflineOrder(
+                ORG,
+                USER,
+                sale({ lineItems: [{ productVariantId: 'var_shirt', quantity: 1 }, { productVariantId: 'var_custom', quantity: 1, unitPriceOverride: 250 }] }),
+                { customTitles: [null, 'Alteration'] },
+            ),
+        ).rejects.toThrow(/Linen shirt — M/);
+        expect(tx.order.create).not.toHaveBeenCalled();
     });
 });
 

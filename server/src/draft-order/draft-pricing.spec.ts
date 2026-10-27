@@ -192,7 +192,7 @@ describe('DraftOrderService under the composition scheme', () => {
       order: { findFirst: jest.fn().mockResolvedValue(null) },
       draftOrder: {
         create: jest.fn(({ data }: { data: object }) => Promise.resolve({ id: 'd_1', ...data })),
-        update: jest.fn(({ data }: { data: object }) => Promise.resolve({ id: 'd_1', ...data })),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       draftOrderLineItem: {
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
