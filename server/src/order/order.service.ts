@@ -2760,26 +2760,35 @@ export class OrderService {
       );
     }
 
-    // Never capture more than was authorised.
-    //
-    // The only prior checks were "not already PAID/REFUNDED" and "is Shopify";
-    // `dto.amount` went straight into the mutation, and the DTO caps it at
-    // nothing (`@IsNumber() @Min(0)`). Shopify was the sole backstop on a path
-    // that moves real money. The authorised figure is already in hand — it is
-    // this method's own fallback below — so this costs no extra call.
+    // Never capture more than Shopify still holds on the authorization. The
+    // authorized amount is not the ceiling once part of it has been captured,
+    // and Shopify takes the capture in the customer's (presentment) currency,
+    // which can differ from the shop currency the order is stored in.
     //
     // Rejected rather than silently clamped: quietly correcting a wrong amount
     // hides whatever produced it.
-    const authorized = Number(authTx.amountSet.shopMoney.amount);
-    if (dto.amount !== undefined && Number.isFinite(authorized) && dto.amount > authorized) {
+    const balance = authTx.totalUnsettledSet?.presentmentMoney;
+    const remainingCents = Math.round(Number(balance?.amount) * 100);
+    if (!balance || !Number.isFinite(remainingCents) || remainingCents <= 0) {
       throw new BadRequestException(
-        `Cannot capture ${dto.amount.toFixed(2)} — only ${authorized.toFixed(2)} ` +
-        `${authTx.amountSet.shopMoney.currencyCode} was authorised on this order.`,
+        'Shopify reports nothing left to capture on this authorization. Refresh the order before retrying.',
+      );
+    }
+    if (dto.currency && dto.currency.toUpperCase() !== balance.currencyCode.toUpperCase()) {
+      throw new BadRequestException(
+        `This payment was authorised in ${balance.currencyCode}, so it must be captured in ` +
+        `${balance.currencyCode}, not ${dto.currency}.`,
+      );
+    }
+    const remaining = (remainingCents / 100).toFixed(2);
+    if (dto.amount !== undefined && Math.round(dto.amount * 100) > remainingCents) {
+      throw new BadRequestException(
+        `Cannot capture ${dto.amount.toFixed(2)} — only ${remaining} ` +
+        `${balance.currencyCode} is left to capture on this order.`,
       );
     }
 
-    const amountStr =
-      dto.amount !== undefined ? dto.amount.toFixed(2) : authTx.amountSet.shopMoney.amount;
+    const amountStr = dto.amount !== undefined ? dto.amount.toFixed(2) : remaining;
 
     const capResp = await this.graphql.request<OrderCaptureResponse, OrderCaptureVariables>(
       auth,
@@ -2789,27 +2798,51 @@ export class OrderService {
           id: gid,
           parentTransactionId: authTx.id,
           amount: amountStr,
-          currency: dto.currency ?? authTx.amountSet.shopMoney.currencyCode,
+          currency: balance.currencyCode,
           finalCapture: dto.finalCapture ?? false,
         },
       },
     );
     ShopifyGraphqlClient.throwIfUserErrors(capResp.orderCapture.userErrors, 'orderCapture');
 
+    // A capture can come back FAILURE or ERROR without any userErrors. Nothing
+    // was taken, so nothing is recorded. Anything else that is not SUCCESS
+    // (PENDING, AWAITING_RESPONSE, UNKNOWN) may still settle, so it is recorded
+    // as pending and not treated as payment.
+    const transaction = capResp.orderCapture.transaction;
+    if (!transaction || transaction.status === 'FAILURE' || transaction.status === 'ERROR') {
+      throw new BadRequestException(
+        'Shopify did not capture this payment. Check the payment provider before retrying.',
+      );
+    }
+    const succeeded = transaction.status === 'SUCCESS';
+
+    // Shopify's own verdict after the capture: a partial capture leaves the
+    // order PARTIALLY_PAID, not PAID. A status this enum lacks (EXPIRED) keeps
+    // the local value, and the orders/updated webhook reconciles it.
+    const reported = transaction.order?.displayFinancialStatus ?? null;
+    const financialStatus = (Object.values(OrderFinancialStatus) as string[]).includes(reported ?? '')
+      ? (reported as OrderFinancialStatus)
+      : order.financialStatus;
+
     const captured = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.order.update({
         where: { id },
-        data: { financialStatus: OrderFinancialStatus.PAID },
+        data: { financialStatus },
       });
       await tx.orderTimelineEvent.create({
         data: {
           orderId: id,
           actorId: userId,
-          action: 'captured',
-          message: `Payment captured (${amountStr} ${dto.currency ?? authTx.amountSet.shopMoney.currencyCode})`,
+          action: succeeded ? 'captured' : 'capture_pending',
+          message: succeeded
+            ? `Payment captured (${amountStr} ${balance.currencyCode})`
+            : `Payment capture pending at the provider (${amountStr} ${balance.currencyCode})`,
           metadata: {
-            transactionId: capResp.orderCapture.transaction?.id ?? null,
+            transactionId: transaction.id,
+            captureStatus: transaction.status,
             amount: amountStr,
+            currency: balance.currencyCode,
             finalCapture: dto.finalCapture ?? false,
           } as Prisma.InputJsonValue,
         },
@@ -2817,8 +2850,13 @@ export class OrderService {
       return updated;
     });
 
-    // Capturing IS the payment edge — same reasoning as `markPaid`.
-    await this.invoiceService.autoInvoiceForPaidOrder(orgId, id);
+    // Invoice only when this capture is what made the order fully paid. A
+    // partial or pending capture is not; the capture (or webhook) that does
+    // complete payment invoices then, and the invoice service refuses a second
+    // live invoice for the same order.
+    if (succeeded && financialStatus === OrderFinancialStatus.PAID) {
+      await this.invoiceService.autoInvoiceForPaidOrder(orgId, id);
+    }
     return captured;
   }
 

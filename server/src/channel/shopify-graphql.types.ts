@@ -606,6 +606,8 @@ export interface OrderCapturableTransactionNode {
   kind: string;
   status: string;
   amountSet: MoneyBag;
+  /** What is still capturable on this authorization. Null once nothing is. */
+  totalUnsettledSet: MoneyBag | null;
 }
 
 export interface OrderCapturableTransactionsResponse {
@@ -623,7 +625,8 @@ export const ORDER_CAPTURABLE_TRANSACTIONS_QUERY = /* GraphQL */ `
         id
         kind
         status
-        amountSet { shopMoney { amount currencyCode } }
+        amountSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+        totalUnsettledSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
       }
     }
   }
@@ -646,6 +649,7 @@ export interface OrderCaptureResponse {
       kind: string;
       status: string;
       amountSet: MoneyBag;
+      order: { displayFinancialStatus: string | null } | null;
     } | null;
     userErrors: ShopifyUserError[];
   };
@@ -659,6 +663,7 @@ export const ORDER_CAPTURE_MUTATION = /* GraphQL */ `
         kind
         status
         amountSet { shopMoney { amount currencyCode } }
+        order { displayFinancialStatus }
       }
       userErrors { field message }
     }
