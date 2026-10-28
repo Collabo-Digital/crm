@@ -11,7 +11,7 @@ import { WhatsAppAccountService } from './whatsapp-account.service';
 describe('WhatsAppOAuthService.handleSignupCallback', () => {
     const state = 'state-1';
 
-    function build(opts: { isOnBizApp?: boolean; subscribeFails?: boolean; pack?: Record<string, unknown>; rows?: Array<Record<string, unknown>> } = {}) {
+    function build(opts: { isOnBizApp?: boolean; subscribeFails?: boolean; pack?: Record<string, unknown>; rows?: Array<Record<string, unknown>>; granted?: string[]; debugFails?: boolean } = {}) {
         const created: Array<Record<string, unknown>> = [];
         const prisma = {
             templatePack: {
@@ -50,13 +50,30 @@ describe('WhatsAppOAuthService.handleSignupCallback', () => {
         const metaGraph = {
             request: jest.fn().mockImplementation(({ path }: { path: string }) => {
                 if (path === '/oauth/access_token') return Promise.resolve({ data: { access_token: 'BISU_TOKEN' } });
+                if (path === '/debug_token') {
+                    if (opts.debugFails) return Promise.reject(new Error('(#190) Invalid OAuth access token'));
+                    const target_ids = opts.granted ?? ['1029'];
+                    return Promise.resolve({
+                        data: {
+                            data: {
+                                app_id: 'app',
+                                is_valid: true,
+                                granular_scopes: [
+                                    { scope: 'business_management', target_ids: ['biz9'] },
+                                    { scope: 'whatsapp_business_management', target_ids },
+                                    { scope: 'whatsapp_business_messaging', target_ids },
+                                ],
+                            },
+                        },
+                    });
+                }
                 if (path === '/1029') return Promise.resolve({ data: { id: '1029', name: 'Acme WABA', owner_business_info: { id: 'biz9' } } });
                 throw new Error(`unexpected ${path}`);
             }),
             baseScopes: () => [],
         };
         const account = {
-            firstNumberId: jest.fn().mockResolvedValue('pn_first'),
+            numberIds: jest.fn().mockResolvedValue(['pn_first', 'pn1']),
             fetchNumber: jest.fn().mockResolvedValue({
                 id: 'pn1',
                 display_phone_number: '+91 98450 00000',
@@ -89,9 +106,63 @@ describe('WhatsAppOAuthService.handleSignupCallback', () => {
         const { service, metaGraph } = build();
         await service.handleSignupCallback('code', state, 'org1', 'u1', { wabaId: '1029', phoneNumberId: 'pn1' });
         const paths = metaGraph.request.mock.calls.map((c) => c[0].path);
-        expect(paths).toEqual(['/oauth/access_token', '/1029']);
+        expect(paths).toEqual(['/oauth/access_token', '/debug_token', '/1029']);
         const exchange = metaGraph.request.mock.calls[0][0];
         expect(exchange.query).toEqual({ client_id: 'app', client_secret: 'secret', code: 'code' });
+    });
+
+    describe('binds the account and number to what Meta granted the token', () => {
+        it('refuses a WABA the token was not granted, before reading its numbers or writing a row', async () => {
+            const { service, prisma, account } = build({ granted: ['1029'] });
+            await expect(
+                service.handleSignupCallback('code', state, 'org1', 'u1', { wabaId: '777000777', phoneNumberId: 'pn1' }),
+            ).rejects.toThrow('did not give Collabo access to that WhatsApp Business account');
+
+            expect(account.numberIds).not.toHaveBeenCalled();
+            expect(account.fetchNumber).not.toHaveBeenCalled();
+            expect(account.subscribeApp).not.toHaveBeenCalled();
+            expect(prisma.channel.create).not.toHaveBeenCalled();
+            expect(prisma.channel.update).not.toHaveBeenCalled();
+        });
+
+        it('refuses a number that is not on the granted WABA, even one the token can read', async () => {
+            const { service, prisma, account } = build();
+            await expect(
+                service.handleSignupCallback('code', state, 'org1', 'u1', { wabaId: '1029', phoneNumberId: 'pn_of_someone_else' }),
+            ).rejects.toThrow('not on the WhatsApp Business account Meta granted');
+
+            expect(account.numberIds).toHaveBeenCalledWith('1029', 'BISU_TOKEN');
+            expect(account.fetchNumber).not.toHaveBeenCalled();
+            expect(prisma.channel.create).not.toHaveBeenCalled();
+            expect(prisma.channel.update).not.toHaveBeenCalled();
+        });
+
+        it('leaves an existing row untouched when a reconnect fails the binding', async () => {
+            const { service, prisma } = build({
+                granted: ['1029'],
+                rows: [{ id: 'ch_old', platform: ChannelPlatform.WHATSAPP, status: ChannelStatus.ERROR, externalStoreId: '1029', metadata: {} }],
+            });
+            await expect(
+                service.handleSignupCallback('code', state, 'org1', 'u1', { wabaId: '1029', phoneNumberId: 'pn_of_someone_else' }),
+            ).rejects.toThrow();
+            expect(prisma.channel.update).not.toHaveBeenCalled();
+            expect(prisma.$executeRaw).not.toHaveBeenCalled();
+        });
+
+        it('fails closed when Meta cannot say what the token was granted', async () => {
+            const { service, prisma } = build({ debugFails: true });
+            await expect(
+                service.handleSignupCallback('code', state, 'org1', 'u1', { wabaId: '1029', phoneNumberId: 'pn1' }),
+            ).rejects.toThrow('Failed to inspect access token');
+            expect(prisma.channel.create).not.toHaveBeenCalled();
+        });
+
+        it('takes the granted account when the session names none, and the owning business from Meta', async () => {
+            const { service, created } = build({ granted: ['1029', '2048'] });
+            await service.handleSignupCallback('code', state, 'org1', 'u1', { phoneNumberId: 'pn1', businessId: 'biz_from_browser' });
+            expect(created[0]).toMatchObject({ externalStoreId: '1029' });
+            expect(created[0].credentials).toMatchObject({ wabaId: '1029', businessId: 'biz9' });
+        });
     });
 
     it('registers a Cloud API number with a PIN it keeps, and subscribes the app', async () => {
@@ -141,7 +212,7 @@ describe('WhatsAppOAuthService.handleSignupCallback', () => {
     it('falls back to the first number on the account when session info names none', async () => {
         const { service, account } = build();
         await service.handleSignupCallback('code', state, 'org1', 'u1', { wabaId: '1029' });
-        expect(account.firstNumberId).toHaveBeenCalledWith('1029', 'BISU_TOKEN');
+        expect(account.numberIds).toHaveBeenCalledWith('1029', 'BISU_TOKEN');
         expect(account.fetchNumber).toHaveBeenCalledWith('1029', 'pn_first', 'BISU_TOKEN');
     });
 

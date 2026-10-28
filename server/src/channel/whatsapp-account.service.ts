@@ -147,16 +147,30 @@ export class WhatsAppAccountService {
         }
     }
 
-    /** The first number on an account, for signups whose session info named none. */
-    async firstNumberId(wabaId: string, token: string): Promise<string | null> {
-        const res = await this.metaGraph.request<{ data?: Array<{ id: string }> }>({
-            method: 'GET',
-            path: `/${wabaId}/phone_numbers`,
-            accessToken: token,
-            scopes: this.scopes(wabaId),
-            priority: Priority.INTERACTIVE,
-        });
-        return res.data.data?.[0]?.id ?? null;
+    /**
+     * The numbers on an account, first one first. A signup's number must be
+     * one of them: Meta's number read does not say which account it is on.
+     */
+    async numberIds(wabaId: string, token: string): Promise<string[]> {
+        const ids: string[] = [];
+        let after: string | undefined;
+        for (let page = 0; page < 10; page++) {
+            const res = await this.metaGraph.request<{
+                data?: Array<{ id: string }>;
+                paging?: { next?: string; cursors?: { after?: string } };
+            }>({
+                method: 'GET',
+                path: `/${wabaId}/phone_numbers`,
+                query: { fields: 'id', limit: 100, after },
+                accessToken: token,
+                scopes: this.scopes(wabaId),
+                priority: Priority.INTERACTIVE,
+            });
+            ids.push(...(res.data.data ?? []).map((n) => n.id));
+            after = res.data.paging?.next ? res.data.paging.cursors?.after : undefined;
+            if (!after) break;
+        }
+        return ids;
     }
 
     /** A connected WhatsApp row with its decrypted token. */
