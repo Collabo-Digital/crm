@@ -498,6 +498,12 @@ export interface CreatePersonalRequest {
   billingInterval: BillingInterval;
 }
 
+/** What the owner types to delete a workspace: their password, and the workspace's name as shown. */
+export interface DeleteOrganizationRequest {
+  password: string;
+  confirmName: string;
+}
+
 /** Payload for updating an existing organization's settings. */
 export interface UpdateOrganizationRequest {
   name?: string;

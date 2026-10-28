@@ -16,6 +16,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "~/components/ui/select";
 import { Button } from "~/components/ui/button";
+import { Input } from "~/components/ui/input";
+import { Label } from "~/components/ui/label";
 import { Switch } from "~/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { cn } from "~/lib/utils";
@@ -424,6 +426,71 @@ function VendorRoleDialog({ orgId, member, onClose }: { orgId: string; member: O
             onClick={() => updateRole.mutate({ memberId: member.id, data: { role: "VENDOR", vendorScope } }, { onSuccess: onClose })}
           >
             {updateRole.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Change role"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Deleting a workspace cannot be undone, and stops its plan, channels,
+ * automations and broadcasts. The owner types its name and their password,
+ * which the server checks again.
+ */
+function DeleteWorkspaceDialog({ orgId, name, onClose }: { orgId: string; name: string; onClose: () => void }) {
+  const [typedName, setTypedName] = useState("");
+  const [password, setPassword] = useState("");
+  const deleteOrg = useDeleteOrganizationMutation();
+  const ready = typedName.trim() === name.trim() && password.length > 0;
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!ready || deleteOrg.isPending) return;
+    deleteOrg.mutate({ orgId, password, confirmName: typedName }, { onSuccess: onClose });
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !deleteOrg.isPending && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete {name}?</DialogTitle>
+          <DialogDescription>
+            This permanently deletes the workspace and all its data. Its plan is cancelled, its channels are disconnected,
+            and its automations and broadcasts stop. This cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <form id="delete-workspace" onSubmit={submit} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="delete-workspace-name" className="block leading-normal">
+              Type <span className="font-semibold">{name}</span> to confirm
+            </Label>
+            <Input
+              id="delete-workspace-name"
+              value={typedName}
+              onChange={(event) => setTypedName(event.target.value)}
+              autoComplete="off"
+              autoFocus
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="delete-workspace-password">Your password</Label>
+            <Input
+              id="delete-workspace-password"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+            />
+          </div>
+        </form>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={deleteOrg.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" form="delete-workspace" variant="destructive" disabled={!ready || deleteOrg.isPending}>
+            {deleteOrg.isPending && <Loader2 className="animate-spin" />}
+            Delete workspace
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1597,7 +1664,8 @@ export default function SettingsPage() {
 
   // ── Mutations for organization, member, and invite operations ──
   const updateOrg = useUpdateOrganizationMutation(currentOrgId ?? "");
-  const deleteOrg = useDeleteOrganizationMutation();
+  // The delete-workspace dialog, open while the owner confirms.
+  const [deletingWorkspace, setDeletingWorkspace] = useState(false);
   const updateRole = useUpdateMemberRoleMutation(currentOrgId ?? "");
   const removeMember = useRemoveMemberMutation(currentOrgId ?? "");
   const revokeInvite = useRevokeInviteMutation(currentOrgId ?? "");
@@ -1631,12 +1699,6 @@ export default function SettingsPage() {
       timezone: orgTimezone ?? org?.timezone,
       currency: orgCurrency ?? org?.currency,
     });
-  }
-
-  function handleDeleteOrg() {
-    if (!currentOrgId) return;
-    if (!window.confirm("Are you sure? This will permanently delete this workspace and all its data.")) return;
-    deleteOrg.mutate(currentOrgId);
   }
 
   // Password form
@@ -1883,16 +1945,14 @@ export default function SettingsPage() {
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         Permanently delete this workspace and all its data. This action cannot be undone.
                       </p>
-                      <button
-                        onClick={handleDeleteOrg}
-                        disabled={deleteOrg.isPending}
-                        className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 px-4 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                      >
-                        {deleteOrg.isPending && <Loader2 className="size-3.5 animate-spin" />}
+                      <Button variant="destructive" className="mt-3" onClick={() => setDeletingWorkspace(true)}>
                         Delete Workspace
-                      </button>
+                      </Button>
                     </div>
                   </div>
+                  {deletingWorkspace && currentOrgId && org && (
+                    <DeleteWorkspaceDialog orgId={currentOrgId} name={org.name} onClose={() => setDeletingWorkspace(false)} />
+                  )}
                 </div>
               )}
             </>
