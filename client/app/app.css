@@ -548,15 +548,6 @@ html.dark { color-scheme: dark; }
   .app-main [data-slot="page-header"]:not([data-mobile-title]) [data-slot="page-header-title"] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .app-main [data-slot="page-header"]:not([data-mobile-title]) [data-slot="page-header-description"] { display: none; }
   .app-main [data-slot="page-header"]:not([data-mobile-title]):not(:has([data-slot="page-header-actions"] > *)) { display: none; }
-  [data-slot="button"], [data-slot="select-trigger"] { min-height: 44px; }
-  [data-slot="button"][data-size^="icon"] { min-width: 44px; }
-  [data-slot="dropdown-menu-item"], [data-slot="select-item"] { min-height: 44px; }
-  [data-slot="input"], [data-slot="textarea"], .app-main input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]), .app-main select, .app-main textarea {
-    font-size: 16px;
-    min-height: 44px;
-  }
-  [data-slot="dialog-content"] input, [data-slot="sheet-content"] input,
-  [data-slot="dialog-content"] textarea, [data-slot="sheet-content"] textarea { font-size: 16px; }
   /* Every dialog is a bottom sheet. Its bottom and height follow the visible
      area (--sheet-keyboard, --sheet-viewport from hooks/use-bottom-sheet), so
      the iOS keyboard never covers it; the button row stays pinned to it. */
@@ -598,8 +589,27 @@ html.dark { color-scheme: dark; }
   [data-slot="sheet-body"] { min-height: 0; overscroll-behavior: contain; }
   [data-slot="popover-content"] { max-width: calc(100vw - 24px); }
   .mobile-menu { max-height: 88dvh; display: flex; flex-direction: column; }
-  .settings-page button:not([role="switch"]):not([role="checkbox"]) { min-height: 44px; }
   .settings-page input:not([type="checkbox"]):not([type="radio"]), .settings-page select { min-width: 0; }
+}
+
+/* Finger-sized controls on phones, and on any touch screen by its pointer, so
+   a tablet at the counter gets them too. A Radix trigger or close that wraps a
+   Button renames the Button's data-slot, so a Button is also known by the
+   data-size it always carries; menu and popover triggers count even when
+   hand-built. */
+@media (max-width: 767px), (pointer: coarse) {
+  [data-slot="button"], [data-slot="select-trigger"],
+  [data-slot="dropdown-menu-trigger"], [data-slot="popover-trigger"],
+  [data-slot$="-trigger"][data-size], [data-slot$="-close"][data-size] { min-height: 44px; }
+  :is([data-slot="button"], [data-slot$="-trigger"], [data-slot$="-close"])[data-size^="icon"] { min-width: 44px; }
+  [data-slot="dropdown-menu-item"], [data-slot="select-item"] { min-height: 44px; }
+  [data-slot="input"], [data-slot="textarea"], .app-main input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]), .app-main select, .app-main textarea {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  [data-slot="dialog-content"] input, [data-slot="sheet-content"] input,
+  [data-slot="dialog-content"] textarea, [data-slot="sheet-content"] textarea { font-size: 16px; }
+  .settings-page button:not([role="switch"]):not([role="checkbox"]) { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

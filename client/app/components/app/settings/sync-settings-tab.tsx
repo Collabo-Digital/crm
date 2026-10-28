@@ -3,6 +3,7 @@ import { Check, Loader2 } from "lucide-react";
 import { Link } from "react-router";
 import { PaymentsCard } from "~/components/app/settings/payments-card";
 import { Switch } from "~/components/ui/switch";
+import { cn } from "~/lib/utils";
 import {
   useOrganizationSettings,
 } from "~/hooks/use-settings-queries";
@@ -470,8 +471,9 @@ function SettingsToggleRow({
   disabled?: boolean;
   onChange: (next: boolean) => void;
 }) {
+  // A label, so the whole row toggles: the switch alone is a small target.
   return (
-    <div className="flex items-start justify-between gap-4 px-5 py-4">
+    <label className={cn("flex items-start justify-between gap-4 px-5 py-4", !disabled && "cursor-pointer")}>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
           {label}
@@ -487,7 +489,7 @@ function SettingsToggleRow({
         disabled={disabled}
         onChange={onChange}
       />
-    </div>
+    </label>
   );
 }
 
