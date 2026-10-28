@@ -201,7 +201,7 @@ export default function CreateOrganizationPage() {
         <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
           <Building2 className="size-5 text-[#084734]" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">Set up your organization</h2>
+        <h1 className="text-2xl font-bold text-gray-900">Set up your organization</h1>
         <p className="mt-1.5 text-sm text-gray-500">
           Tell us about your business. You can update these details anytime.
         </p>
@@ -249,11 +249,12 @@ export default function CreateOrganizationPage() {
                   id="name"
                   placeholder="Acme Store"
                   aria-invalid={!!errors.name}
+                  aria-describedby={errors.name ? "name-error" : undefined}
                   {...register("name")}
                   className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
                 />
                 {errors.name && (
-                  <p className="text-xs text-red-500">{errors.name.message}</p>
+                  <p id="name-error" className="text-xs text-red-700">{errors.name.message}</p>
                 )}
               </div>
               <div className="space-y-1.5">
@@ -262,13 +263,15 @@ export default function CreateOrganizationPage() {
                 </label>
                 <input
                   id="logo"
+                  aria-invalid={!!errors.logo}
+                  aria-describedby={errors.logo ? "logo-error" : undefined}
                   placeholder="https://example.com/logo.png"
                   {...register("logo")}
                   onBlur={handleLogoUrlBlur}
                   className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2 text-xs text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40"
                 />
                 {errors.logo && (
-                  <p className="text-xs text-red-500">{errors.logo.message}</p>
+                  <p id="logo-error" className="text-xs text-red-700">{errors.logo.message}</p>
                 )}
               </div>
             </div>
@@ -300,13 +303,15 @@ export default function CreateOrganizationPage() {
                 <Globe className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-gray-400" />
                 <input
                   id="website"
+                  aria-invalid={!!errors.website}
+                  aria-describedby={errors.website ? "website-error" : undefined}
                   placeholder="https://yourstore.com"
                   {...register("website")}
                   className="w-full rounded-lg border border-gray-200 bg-white py-2.5 pl-9 pr-3.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40"
                 />
               </div>
               {errors.website && (
-                <p className="text-xs text-red-500">{errors.website.message}</p>
+                <p id="website-error" className="text-xs text-red-700">{errors.website.message}</p>
               )}
             </div>
           </div>
@@ -330,7 +335,7 @@ export default function CreateOrganizationPage() {
 
           {/* Server error */}
           {serverError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+            <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
               <p className="text-sm text-red-600">{serverError}</p>
             </div>
           )}

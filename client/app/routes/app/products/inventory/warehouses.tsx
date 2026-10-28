@@ -989,10 +989,11 @@ function LocationAddressFields({
             placeholder="6 digits"
             className="h-9"
             aria-invalid={zipInvalid || undefined}
+            aria-describedby={zipInvalid ? "location-zip-error" : undefined}
             autoComplete="postal-code"
           />
           {zipInvalid && (
-            <p className="text-caption text-danger">Enter the 6-digit PIN code.</p>
+            <p id="location-zip-error" className="text-caption text-danger">Enter the 6-digit PIN code.</p>
           )}
         </div>
         <div className="space-y-1 sm:col-span-2">
@@ -1111,6 +1112,14 @@ function LocationGstFields({
               className="h-9 font-mono"
               autoCapitalize="characters"
               aria-invalid={mismatch || undefined}
+              aria-describedby={
+                [
+                  typed.length === 15 && !GSTIN_PATTERN.test(typed) ? "location-gstin-error" : null,
+                  mismatch ? "location-gstin-mismatch" : null,
+                ]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
             />
             {gstinStateCode && (
               <p className="text-caption text-muted-foreground">
@@ -1118,13 +1127,13 @@ function LocationGstFields({
               </p>
             )}
             {typed.length === 15 && !GSTIN_PATTERN.test(typed) && (
-              <p className="text-caption text-danger">
+              <p id="location-gstin-error" className="text-caption text-danger">
                 This is not a valid GSTIN. Check it against the registration certificate.
               </p>
             )}
           </div>
           {mismatch && (
-            <p className="flex items-start gap-1.5 rounded-lg bg-warning-subtle px-3 py-2 text-caption text-foreground">
+            <p id="location-gstin-mismatch" className="flex items-start gap-1.5 rounded-lg bg-warning-subtle px-3 py-2 text-caption text-foreground">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
               This GSTIN is for {stateName(gstinStateCode!)} but the location is in{" "}
               {stateName(stateCode)}. Check the number or the state before saving.

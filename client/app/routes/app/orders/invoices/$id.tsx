@@ -257,10 +257,11 @@ export default function InvoicePage() {
                   placeholder="Buyer name"
                   aria-label="Buyer name"
                   aria-invalid={nameMissing}
+                  aria-describedby={nameMissing ? "invoice-buyer-name-error" : undefined}
                   {...field("buyerName")}
                 />
                 {nameMissing && (
-                  <p className="mt-1 text-micro text-danger">Buyer name is required.</p>
+                  <p id="invoice-buyer-name-error" className="mt-1 text-micro text-danger">Buyer name is required.</p>
                 )}
               </div>
               <div>
@@ -270,6 +271,7 @@ export default function InvoicePage() {
                   maxLength={15}
                   className="font-mono"
                   aria-invalid={gstinInvalid}
+                  aria-describedby={gstinInvalid ? "invoice-buyer-gstin-error" : undefined}
                   value={draft.buyerGstin}
                   onChange={(e) =>
                     setDraft((d) =>
@@ -278,7 +280,7 @@ export default function InvoicePage() {
                   }
                 />
                 {gstinInvalid && (
-                  <p className="mt-1 text-micro text-danger">
+                  <p id="invoice-buyer-gstin-error" className="mt-1 text-micro text-danger">
                     That isn't a valid 15-character GSTIN.
                   </p>
                 )}

@@ -53,7 +53,7 @@ export default function LoginPage() {
       {/* Heading */}
       <div className="mb-7">
 
-        <p className="text-[38px] font-bold text-gray-900">Welcome back</p>
+        <h1 className="text-[38px] font-bold text-gray-900">Welcome back</h1>
         <p className="mt-1.5 text-[14px] text-sm text-gray-500">
           Sign in to your Collabo account to continue.
         </p>
@@ -71,11 +71,12 @@ export default function LoginPage() {
             placeholder="john@example.com"
             autoComplete="email"
             aria-invalid={!!errors.email}
+            aria-describedby={errors.email ? "email-error" : undefined}
             {...register("email")}
             className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
           />
           {errors.email && (
-            <p className="text-xs text-red-500">{errors.email.message}</p>
+            <p id="email-error" className="text-xs text-red-700">{errors.email.message}</p>
           )}
         </div>
 
@@ -94,6 +95,7 @@ export default function LoginPage() {
               placeholder="Enter your password"
               autoComplete="current-password"
               aria-invalid={!!errors.password}
+              aria-describedby={errors.password ? "password-error" : undefined}
               {...register("password")}
               className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
             />
@@ -101,7 +103,6 @@ export default function LoginPage() {
               type="button"
               className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
               onClick={() => setShowPassword((visible) => !visible)}
-              tabIndex={-1}
               aria-label={showPassword ? "Hide password" : "Show password"}
             >
               {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
@@ -109,7 +110,7 @@ export default function LoginPage() {
 
           </div>
           {errors.password && (
-            <p className="text-xs text-red-500">{errors.password.message}</p>
+            <p id="password-error" className="text-xs text-red-700">{errors.password.message}</p>
           )}
           <div className="flex justify-end mt-4">
             <Link
@@ -123,7 +124,7 @@ export default function LoginPage() {
 
         {/* Server error */}
         {serverError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+          <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
             <p className="text-sm text-red-600">{serverError}</p>
           </div>
         )}

@@ -115,9 +115,9 @@ export function BrandCarousel({
                 key={activeIndex}
                 className="relative flex flex-1 flex-col items-center justify-center px-4 text-center"
             >
-                <h1 className="animate-in fade-in slide-in-from-bottom-2 duration-700 text-3xl font-bold leading-tight text-white md:text-4xl">
+                <p className="animate-in fade-in slide-in-from-bottom-2 duration-700 text-3xl font-bold leading-tight text-white md:text-4xl">
                     {slide.title}
-                </h1>
+                </p>
                 <p className="animate-in fade-in slide-in-from-bottom-2 duration-700 mt-4 max-w-sm text-sm leading-relaxed text-gray-400">
                     {slide.subtitle}
                 </p>
