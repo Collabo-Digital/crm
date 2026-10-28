@@ -3,6 +3,8 @@ export const REDIS_PREFIX = 'crm:';
 export const REDIS_KEYS = {
     SESSION: 'session:',
     LOGIN_ATTEMPTS: 'login_attempts:',
+    /// Tries at an account's current email verification code.
+    VERIFY_ATTEMPTS: 'verify_attempts:',
     /// Set for a short gap after an email of one kind goes to one recipient.
     EMAIL_SEND_GAP: 'email_gap:',
     /// Emails of one kind sent to one recipient in the last hour.
@@ -47,6 +49,17 @@ export const LOGIN_RATE_LIMIT = {
      * guessing spread over many IP addresses.
      */
     MAX_ATTEMPTS_ANY_IP: 50,
+    WINDOW_SECONDS: 900,
+};
+
+/**
+ * Tries at one email verification code, per account from anywhere: six digits
+ * fall to guessing spread over many IP addresses. Past the limit the code is
+ * spent and only a new one can verify the address. The window outlasts the
+ * code (ten minutes), so the count cannot lapse while the code still works.
+ */
+export const VERIFY_CODE_LIMIT = {
+    MAX_ATTEMPTS: 5,
     WINDOW_SECONDS: 900,
 };
 

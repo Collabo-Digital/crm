@@ -6,6 +6,7 @@ import {
   BadRequestException,
   Logger,
   HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -109,6 +110,16 @@ export class AuthService {
   }
 
   async verifyEmail(userId: string, code: string) {
+    // Counted per account before the code is checked: the per-IP throttle
+    // alone let guesses spread over many addresses walk the six digits.
+    if (await this.redis.countVerifyAttempt(userId)) {
+      // Spent, so even a Redis restart cannot give it more tries.
+      await this.prisma.user.updateMany({
+        where: { id: userId, emailVerified: false },
+        data: { emailVerifyCode: null, emailVerifyExpires: null },
+      });
+      throw new HttpException('Too many incorrect codes. Request a new code and try again.', HttpStatus.TOO_MANY_REQUESTS);
+    }
     const user = await this.userService.verifyEmail(userId, code);
 
     // Pull a typed row so the super-admin flag has the right type without any casts.
@@ -165,6 +176,8 @@ export class AuthService {
       ? await this.userService.regenerateVerifyCode(userId)
       : null;
     if (user) {
+      // A new code gets its own tries.
+      await this.redis.resetVerifyAttempts(user.id);
       await this.emailService.sendVerificationCode(user.email, user.emailVerifyCode as string);
     }
     return {
@@ -205,6 +218,7 @@ export class AuthService {
         ? await this.userService.regenerateVerifyCode(user.id)
         : null;
       if (updatedUser) {
+        await this.redis.resetVerifyAttempts(user.id);
         await this.emailService.sendVerificationCode(user.email, updatedUser.emailVerifyCode!);
       }
 

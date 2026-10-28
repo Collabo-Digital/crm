@@ -1,7 +1,7 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
-import { REDIS_PREFIX, REDIS_KEYS, REDIS_TTL, LOGIN_RATE_LIMIT, EMAIL_SEND_LIMIT } from './redis.constants';
+import { REDIS_PREFIX, REDIS_KEYS, REDIS_TTL, LOGIN_RATE_LIMIT, EMAIL_SEND_LIMIT, VERIFY_CODE_LIMIT } from './redis.constants';
 
 const REFRESH_ROTATION_PENDING = 'pending';
 
@@ -146,6 +146,20 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
     async resetLoginAttempts(email: string, ip: string): Promise<void> {
         await this.client.del(...this.loginKeys(email, ip));
+    }
+
+    // ─── EMAIL VERIFICATION ATTEMPTS ───
+    // Counted per account before the code is checked, like login, and only
+    // cleared when a new code is issued.
+
+    /** Count one try at the account's verification code; true when it is over the limit and must be refused. */
+    async countVerifyAttempt(userId: string): Promise<boolean> {
+        const tries = await this.countInWindow(this.key(REDIS_KEYS.VERIFY_ATTEMPTS, userId), VERIFY_CODE_LIMIT.WINDOW_SECONDS);
+        return tries > VERIFY_CODE_LIMIT.MAX_ATTEMPTS;
+    }
+
+    async resetVerifyAttempts(userId: string): Promise<void> {
+        await this.client.del(this.key(REDIS_KEYS.VERIFY_ATTEMPTS, userId));
     }
 
     // ─── EMAIL SEND LIMITS ───
