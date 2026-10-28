@@ -15,6 +15,7 @@ import { MEDIA_DOWNLOAD_QUEUE } from './media/media-download.queue';
 import { MediaDownloadProcessor } from './media/media-download.processor';
 import { MediaDownloadService } from './media/media-download.service';
 import { MessagingMediaStorage } from './media/messaging-media.storage';
+import { UploadQuotaService } from './media/upload-quota';
 import { VoiceNoteConverter } from './media/voice-note.converter';
 import { MESSAGING_OUTBOUND_QUEUE } from './send/outbound.queue';
 import { MessagingSendService } from './send/messaging-send.service';
@@ -52,6 +53,7 @@ import { PlatformSenderService } from './send/platform-sender.service';
         OutboundProcessor,
         OutboundSweeper,
         PlatformSenderService,
+        UploadQuotaService,
         VoiceNoteConverter,
     ],
     exports: [
@@ -66,6 +68,7 @@ import { PlatformSenderService } from './send/platform-sender.service';
         MessagingMediaStorage,
         MessagingSendService,
         PlatformSenderService,
+        UploadQuotaService,
         VoiceNoteConverter,
     ],
 })

@@ -37,13 +37,15 @@ export class PixelEventsAggregator {
         await this.rollup(new Date(Date.now() - 60 * 60 * 1000));
     }
 
-    async rollupRecentDay(): Promise<void> {
-        await this.rollup(new Date(Date.now() - 24 * 60 * 60 * 1000));
+    /** The Refresh button names its own workspace; only the hourly cron runs across every workspace. */
+    async rollupRecentDay(organizationId: string): Promise<void> {
+        await this.rollup(new Date(Date.now() - 24 * 60 * 60 * 1000), organizationId);
     }
 
-    async rollup(since: Date): Promise<void> {
+    async rollup(since: Date, organizationId?: string): Promise<void> {
         const events = await this.prisma.rawAnalyticsEvent.findMany({
             where: {
+                ...(organizationId && { organizationId }),
                 occurredAt: { gte: since },
                 visitorId: { not: null },
                 eventName: {
