@@ -183,7 +183,7 @@ function PlanCard({ plan, currency, gstPercent, salesEmail, selected, current, u
       role="radio"
       aria-checked={selected}
       onClick={onSelect}
-      className={cn(frame, "transition-all hover:border-[#CEF17B] hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#CEF17B]/60")}
+      className={cn(frame, "transition-all hover:border-[#CEF17B] hover:shadow-md focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring")}
     >
       {body}
     </button>

@@ -14,6 +14,7 @@ import {
 } from '@prisma/client';
 import slugify from 'slugify';
 import { randomBytes } from 'crypto';
+import * as bcrypt from 'bcrypt';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -24,6 +25,7 @@ import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { CreatePersonalDto } from './dto/create-personal.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { UpgradeToOrganizationDto } from './dto/upgrade-to-organization.dto';
+import { DeleteOrganizationDto } from './dto/delete-organization.dto';
 
 @Injectable()
 export class OrganizationService {
@@ -228,8 +230,9 @@ export class OrganizationService {
   // is switched off here: otherwise customers kept getting automated messages
   // nobody could stop, and the WhatsApp number and Shopify store stayed
   // claimed, so no other workspace could connect them.
-  async delete(orgId: string, userId: string) {
+  async delete(orgId: string, userId: string, confirm: DeleteOrganizationDto) {
     await this.requireRole(orgId, userId, [UserRole.OWNER]);
+    await this.checkDeleteConfirmation(orgId, userId, confirm);
 
     // Each step below stops the deletion if it fails, so the owner can retry
     // rather than end up with a deleted workspace that still charges or sends.
@@ -278,6 +281,24 @@ export class OrganizationService {
     await Promise.all(members.map((m) => this.redis.deleteSession(m.userId)));
 
     return { message: 'Organization deleted' };
+  }
+
+  /**
+   * Nothing restores a deleted workspace, and deleting it stops its billing,
+   * channels and automations, so a signed-in session is not enough: the
+   * owner types the workspace's name and their password, as on sign-in.
+   */
+  private async checkDeleteConfirmation(orgId: string, userId: string, confirm: DeleteOrganizationDto) {
+    const [org, user] = await Promise.all([
+      this.prisma.organization.findUnique({ where: { id: orgId }, select: { name: true } }),
+      this.prisma.user.findUnique({ where: { id: userId }, select: { password: true } }),
+    ]);
+    if (!org || confirm.confirmName.trim() !== org.name.trim()) {
+      throw new BadRequestException('Type the workspace name exactly as it is shown to delete it.');
+    }
+    if (!user || !(await bcrypt.compare(confirm.password, user.password))) {
+      throw new ForbiddenException('That password is not right.');
+    }
   }
 
   // ─── ROLE CHECK HELPER ───

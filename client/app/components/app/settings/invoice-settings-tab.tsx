@@ -43,12 +43,13 @@ import {
 } from "~/lib/invoice-settings";
 import { UPI_ID } from "~/lib/pos-cart";
 import type { InvoiceSample, InvoiceSettings } from "~/types/api";
+import { scrollBehavior } from "~/lib/motion";
 
 /** Scrolls to a field and puts the cursor in it, for the setup checklist. */
 function goTo(id: string) {
   const target = document.getElementById(id);
   if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
   const field = target.matches("input, textarea, select, button")
     ? target
     : target.querySelector<HTMLElement>("input:not([type=file]), textarea, select, button");

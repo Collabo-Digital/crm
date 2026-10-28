@@ -74,11 +74,12 @@ export default function LoginPage() {
             placeholder="john@example.com"
             autoComplete="email"
             aria-invalid={!!errors.email}
+            aria-describedby={errors.email ? "email-error" : undefined}
             {...register("email")}
             className={AUTH_INPUT}
           />
           {errors.email && (
-            <p className="mt-1 text-xs text-danger-text">{errors.email.message}</p>
+            <p id="email-error" className="mt-1 text-xs text-danger-text">{errors.email.message}</p>
           )}
         </div>
 
@@ -94,21 +95,21 @@ export default function LoginPage() {
               placeholder="Enter your password"
               autoComplete="current-password"
               aria-invalid={!!errors.password}
+              aria-describedby={errors.password ? "password-error" : undefined}
               {...register("password")}
               className={`${AUTH_INPUT} pr-10`}
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => setShowPassword((visible) => !visible)}
-              tabIndex={-1}
               aria-label={showPassword ? "Hide password" : "Show password"}
             >
               {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
           </div>
           {errors.password && (
-            <p className="mt-1 text-xs text-danger-text">{errors.password.message}</p>
+            <p id="password-error" className="mt-1 text-xs text-danger-text">{errors.password.message}</p>
           )}
           <div className="flex justify-end mt-4">
             <Link
@@ -151,8 +152,8 @@ export default function LoginPage() {
       </p>
       <p className="mt-6 text-center text-sm text-muted-foreground">
         By signing in, you agree to the{" "}
-        <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong hover:text-brand-strong-hover transition-colors">Terms of service</a> and{" "}
-        <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong hover:text-brand-strong-hover transition-colors">Privacy policy</a>.
+        <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong underline underline-offset-2 hover:text-brand-strong-hover transition-colors">Terms of service</a> and{" "}
+        <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong underline underline-offset-2 hover:text-brand-strong-hover transition-colors">Privacy policy</a>.
       </p>
     </div>
   );

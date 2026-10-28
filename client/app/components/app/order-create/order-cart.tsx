@@ -128,7 +128,7 @@ export function OrderCart({
                         quantity: Math.max(1, parseInt(e.target.value, 10) || 1),
                       })
                     }
-                    className="h-7 w-16 rounded-md border border-input bg-white dark:bg-gray-800 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B]/60"
+                    className="h-7 w-16 rounded-md border border-input bg-white dark:bg-gray-800 px-2 text-right text-xs tabular-nums focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                 </td>
                 <td className="px-3 py-2 text-right">
@@ -143,7 +143,7 @@ export function OrderCart({
                         unitPrice: Math.max(0, parseFloat(e.target.value) || 0),
                       })
                     }
-                    className="h-7 w-24 rounded-md border border-input bg-white dark:bg-gray-800 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B]/60"
+                    className="h-7 w-24 rounded-md border border-input bg-white dark:bg-gray-800 px-2 text-right text-xs tabular-nums focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums font-semibold">

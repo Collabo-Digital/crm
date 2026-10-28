@@ -3,12 +3,21 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { readStoreLinkToken, storeLinkKey } from '../../../commerce/store-links';
+import { isKnownCourierUrl } from '../../../order/known-couriers';
 
 export type PublicOrderStatus = 'confirmed' | 'shipped' | 'out_for_delivery' | 'delivered' | 'cancelled';
 
 export interface PublicOrderLink {
     storeName: string;
-    order: { name: string; status: PublicOrderStatus; carrier: string | null; trackingNumber: string | null; trackingUrl: string | null };
+    order: {
+        name: string;
+        status: PublicOrderStatus;
+        carrier: string | null;
+        trackingNumber: string | null;
+        trackingUrl: string | null;
+        /** The page opens a known courier's tracking at once; any other address waits for the customer to choose it. */
+        knownCourier: boolean;
+    };
 }
 
 export interface PublicCartLink {
@@ -81,6 +90,7 @@ export class PublicLinksService {
                         ? 'shipped'
                         : 'confirmed';
         const tracked = shipments.find((f) => f.trackingUrl || f.trackingNumber) ?? null;
+        const trackingUrl = safeUrl(tracked?.trackingUrl, ['https:', 'http:']);
         return {
             storeName: storeNameOf(order.organization),
             order: {
@@ -88,7 +98,8 @@ export class PublicLinksService {
                 status,
                 carrier: tracked?.trackingCompany || null,
                 trackingNumber: tracked?.trackingNumber || null,
-                trackingUrl: safeUrl(tracked?.trackingUrl, ['https:', 'http:']),
+                trackingUrl,
+                knownCourier: isKnownCourierUrl(trackingUrl),
             },
         };
     }

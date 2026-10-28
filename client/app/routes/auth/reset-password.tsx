@@ -67,7 +67,7 @@ export default function ResetPasswordPage() {
         <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-danger-subtle">
           <KeyRound className="size-6 text-danger" />
         </div>
-        <h2 className="text-2xl font-bold text-foreground">Invalid link</h2>
+        <h1 className="text-2xl font-bold text-foreground">Invalid link</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           This reset link is missing or invalid. Please request a new one.
         </p>
@@ -88,7 +88,7 @@ export default function ResetPasswordPage() {
         <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-brand/30">
           <KeyRound className="size-5 text-brand-strong" />
         </div>
-        <h2 className="text-2xl font-bold text-foreground">Set a new password</h2>
+        <h1 className="text-2xl font-bold text-foreground">Set a new password</h1>
         <p className="mt-1.5 text-sm text-muted-foreground">
           Choose a strong password you haven't used before.
         </p>
@@ -107,20 +107,21 @@ export default function ResetPasswordPage() {
               placeholder="Min. 8 characters"
               autoComplete="new-password"
               aria-invalid={!!errors.newPassword}
+              aria-describedby={errors.newPassword ? "newPassword-error" : undefined}
               {...register("newPassword")}
-              className="h-11 w-full rounded-lg border border-input bg-card px-3.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground shadow-sm transition aria-[invalid=true]:border-destructive"
+              className="h-11 w-full rounded-lg border border-input bg-card px-3.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground shadow-sm outline-none transition aria-[invalid=true]:border-destructive focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => setShowNewPassword((visible) => !visible)}
-              tabIndex={-1}
+              aria-label={showNewPassword ? "Hide password" : "Show password"}
             >
               {showNewPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
           </div>
           {errors.newPassword && (
-            <p className="text-xs text-danger-text">{errors.newPassword.message}</p>
+            <p id="newPassword-error" className="text-xs text-danger-text">{errors.newPassword.message}</p>
           )}
         </div>
 
@@ -136,20 +137,21 @@ export default function ResetPasswordPage() {
               placeholder="Re-enter your password"
               autoComplete="new-password"
               aria-invalid={!!errors.confirmPassword}
+              aria-describedby={errors.confirmPassword ? "confirmPassword-error" : undefined}
               {...register("confirmPassword")}
-              className="h-11 w-full rounded-lg border border-input bg-card px-3.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground shadow-sm transition aria-[invalid=true]:border-destructive"
+              className="h-11 w-full rounded-lg border border-input bg-card px-3.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground shadow-sm outline-none transition aria-[invalid=true]:border-destructive focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => setShowConfirmPassword((visible) => !visible)}
-              tabIndex={-1}
+              aria-label={showConfirmPassword ? "Hide password" : "Show password"}
             >
               {showConfirmPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
           </div>
           {errors.confirmPassword && (
-            <p className="text-xs text-danger-text">{errors.confirmPassword.message}</p>
+            <p id="confirmPassword-error" className="text-xs text-danger-text">{errors.confirmPassword.message}</p>
           )}
         </div>
 
@@ -161,7 +163,7 @@ export default function ResetPasswordPage() {
 
         {/* Server error */}
         {serverError && (
-          <div className="rounded-lg bg-danger-subtle px-4 py-3">
+          <div role="alert" className="rounded-lg bg-danger-subtle px-4 py-3">
             <p className="text-sm text-danger-text">{serverError}</p>
           </div>
         )}

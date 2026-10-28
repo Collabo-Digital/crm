@@ -167,8 +167,8 @@ export default function PosSettingsPage() {
             <SectionCard title="UPI payments" icon={<Wallet className="size-4 text-muted-foreground" />} description="The till shows a QR code for the exact bill amount, paid straight to this UPI ID.">
               <div className="grid gap-4 p-5 sm:grid-cols-2">
                 <Field id="pos-upi" label="UPI ID" hint={upiInvalid ? undefined : "Like yourshop@okaxis. Leave empty to record UPI payments without a QR code."}>
-                  <Input id="pos-upi" value={form.upiId} maxLength={100} autoComplete="off" spellCheck={false} placeholder="yourshop@okaxis" aria-invalid={upiInvalid || undefined} onChange={(e) => patch({ upiId: e.target.value })} />
-                  {upiInvalid && <p className="text-micro text-danger">A UPI ID looks like name@bank, with no spaces.</p>}
+                  <Input id="pos-upi" value={form.upiId} maxLength={100} autoComplete="off" spellCheck={false} placeholder="yourshop@okaxis" aria-invalid={upiInvalid || undefined} aria-describedby={upiInvalid ? "pos-upi-error" : undefined} onChange={(e) => patch({ upiId: e.target.value })} />
+                  {upiInvalid && <p id="pos-upi-error" className="text-micro text-danger">A UPI ID looks like name@bank, with no spaces.</p>}
                 </Field>
                 <Field id="pos-payee" label="Payee name" hint="Customers see this name in their UPI app.">
                   <Input id="pos-payee" value={form.upiPayeeName} maxLength={60} placeholder={setup.data?.storeName} onChange={(e) => patch({ upiPayeeName: e.target.value })} />
@@ -198,9 +198,9 @@ export default function PosSettingsPage() {
                   <div className="space-y-1">
                     <div className="relative">
                       <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-caption text-muted-foreground">₹</span>
-                      <Input id="pos-above" type="number" inputMode="numeric" min={1} step="1" value={form.customerRequiredAbove} placeholder="50000" aria-invalid={aboveInvalid || undefined} onChange={(e) => patch({ customerRequiredAbove: e.target.value })} className="pl-7 tabular-nums" />
+                      <Input id="pos-above" type="number" inputMode="numeric" min={1} step="1" value={form.customerRequiredAbove} placeholder="50000" aria-invalid={aboveInvalid || undefined} aria-describedby={aboveInvalid ? "pos-above-error" : undefined} onChange={(e) => patch({ customerRequiredAbove: e.target.value })} className="pl-7 tabular-nums" />
                     </div>
-                    {aboveInvalid && <p className="text-micro text-danger">Enter a whole amount in rupees.</p>}
+                    {aboveInvalid && <p id="pos-above-error" className="text-micro text-danger">Enter a whole amount in rupees.</p>}
                   </div>
                 </div>
               </div>
@@ -223,10 +223,10 @@ export default function PosSettingsPage() {
                   </div>
                   <div className="space-y-1">
                     <div className="relative">
-                      <Input id="pos-limit" type="number" inputMode="decimal" min={0} max={100} step="0.5" value={form.discountApprovalPercent} aria-invalid={limitInvalid || undefined} onChange={(e) => patch({ discountApprovalPercent: e.target.value })} className="pr-8 tabular-nums" />
+                      <Input id="pos-limit" type="number" inputMode="decimal" min={0} max={100} step="0.5" value={form.discountApprovalPercent} aria-invalid={limitInvalid || undefined} aria-describedby={limitInvalid ? "pos-limit-error" : undefined} onChange={(e) => patch({ discountApprovalPercent: e.target.value })} className="pr-8 tabular-nums" />
                       <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-caption text-muted-foreground">%</span>
                     </div>
-                    {limitInvalid && <p className="text-micro text-danger">Enter a number from 0 to 100.</p>}
+                    {limitInvalid && <p id="pos-limit-error" className="text-micro text-danger">Enter a number from 0 to 100.</p>}
                   </div>
                 </div>
                 <Toggle id="pos-price" label="Price changes need a manager's PIN" hint="When a cashier changes a product's price in the cart." checked={form.priceOverrideNeedsApproval} onChange={(v) => patch({ priceOverrideNeedsApproval: v })} />

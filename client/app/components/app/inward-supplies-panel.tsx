@@ -227,7 +227,7 @@ export function InwardSuppliesPanel({
                   value={supplier}
                   onChange={(e) => setGateway(e.target.value)}
                   placeholder="Shopify Payments, Razorpay…"
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
               </label>
               <label className="block">
@@ -238,7 +238,7 @@ export function InwardSuppliesPanel({
                   value={supplierGstin}
                   onChange={(e) => setSupplierGstin(e.target.value)}
                   placeholder="29AABCU9603R1ZM"
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 font-mono text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 font-mono text-caption focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
               </label>
               <label className="block">
@@ -251,7 +251,7 @@ export function InwardSuppliesPanel({
                   step="0.01"
                   value={feeAmount}
                   onChange={(e) => setFeeAmount(e.target.value)}
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
               </label>
               <label className="block">
@@ -267,7 +267,7 @@ export function InwardSuppliesPanel({
                   step="0.01"
                   value={gstAmount}
                   onChange={(e) => setGstAmount(e.target.value)}
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
               </label>
             </div>

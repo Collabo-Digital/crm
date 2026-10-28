@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   Archive,
   Barcode,
@@ -33,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import { DockButton, FloatingDock } from "~/components/app/floating-dock";
+import { ModalFrame, ModalTitle } from "~/components/app/order-dialog-primitives";
 
 /**
  * Floating dock of bulk actions shown while one or more products are selected.
@@ -86,6 +87,7 @@ export function BulkActionBar({
   const generateBarcodes = useGenerateBarcodesMutation();
 
   const [tagDialogOpen, setTagDialogOpen] = useState<"add" | "remove" | null>(null);
+  const tagHelpId = useId();
   const [tagsInput, setTagsInput] = useState("");
 
   const isPending =
@@ -261,29 +263,28 @@ export function BulkActionBar({
       </FloatingDock>
 
       {tagDialogOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setTagDialogOpen(null)}
+        <ModalFrame
+          onClose={() => setTagDialogOpen(null)}
+          describedBy={tagHelpId}
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          className="w-full max-w-md rounded-xl bg-white dark:bg-gray-900 shadow-xl outline-none"
         >
-          <div
-            className="w-full max-w-md rounded-xl bg-white dark:bg-gray-900 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
             <header className="border-b px-5 py-3">
-              <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
+              <ModalTitle className="text-sm font-bold text-gray-900 dark:text-gray-100">
                 {tagDialogOpen === "add" ? "Add tags" : "Remove tags"}
-              </h3>
-              <p className="text-[11px] text-muted-foreground">
+              </ModalTitle>
+              <p id={tagHelpId} className="text-[11px] text-muted-foreground">
                 Comma-separated. Applied to {editableCount} product{editableCount === 1 ? "" : "s"}.
               </p>
             </header>
             <div className="px-5 py-4">
               <input
                 autoFocus
+                aria-label="Tags"
                 value={tagsInput}
                 onChange={(e) => setTagsInput(e.target.value)}
                 placeholder="summer, sale"
-                className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
               />
             </div>
             <footer className="flex items-center gap-2 border-t px-5 py-3">
@@ -304,8 +305,7 @@ export function BulkActionBar({
                 Cancel
               </button>
             </footer>
-          </div>
-        </div>
+        </ModalFrame>
       )}
     </>
   );

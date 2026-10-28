@@ -1,4 +1,7 @@
 import { useState, useEffect, type ReactNode } from "react";
+import { Pause, Play } from "lucide-react";
+
+import { useMediaQuery } from "~/hooks/use-media-query";
 
 export interface BrandSlide {
     /** Title — pass plain string OR JSX (use <span className="text-brand">…</span> for accent). */
@@ -73,22 +76,33 @@ export function BrandCarousel({
     className = "",
 }: BrandCarouselProps) {
     const [activeIndex, setActiveIndex] = useState(0);
-    const [isPaused, setIsPaused] = useState(false);
+    // Moving content must be possible to pause (WCAG 2.2.2): the button stops
+    // it, and it holds while the pointer or keyboard focus is on it. With
+    // reduce motion on, it waits for Play.
+    const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+    const [playChoice, setPlayChoice] = useState<boolean | null>(null);
+    const playing = playChoice ?? !reduceMotion;
+    const [hovered, setHovered] = useState(false);
+    const [focused, setFocused] = useState(false);
 
     useEffect(() => {
-        if (isPaused || slides.length <= 1) return;
+        if (!playing || hovered || focused || slides.length <= 1) return;
         const id = setInterval(() => {
             setActiveIndex((i) => (i + 1) % slides.length);
         }, intervalMs);
         return () => clearInterval(id);
-    }, [isPaused, slides.length, intervalMs]);
+    }, [playing, hovered, focused, slides.length, intervalMs]);
 
     const slide = slides[activeIndex];
 
     return (
         <div
-            // onMouseEnter={() => setIsPaused(true)}
-            // onMouseLeave={() => setIsPaused(false)}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            onFocus={() => setFocused(true)}
+            onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
+            }}
             className={`relative flex flex-col  p-10 ${className}`}
         >
             {/* Decorative glow blobs */}
@@ -104,12 +118,27 @@ export function BrandCarousel({
                         aria-label={`Go to slide ${i + 1}`}
                         aria-current={i === activeIndex}
                         onClick={() => setActiveIndex(i)}
-                        className={`h-[2px] rounded-full transition-all duration-500 ${i === activeIndex
-                            ? "w-10 bg-white"
-                            : "w-6 bg-white/30 hover:bg-white/60"
-                            }`}
-                    />
+                        // A 24px target round the 2px dash.
+                        className="group flex h-6 items-center focus-visible:outline-white"
+                    >
+                        <span
+                            className={`block h-[2px] rounded-full transition-all duration-500 ${i === activeIndex
+                                ? "w-10 bg-white"
+                                : "w-6 bg-white/30 group-hover:bg-white/60"
+                                }`}
+                        />
+                    </button>
                 ))}
+                {slides.length > 1 && (
+                    <button
+                        type="button"
+                        onClick={() => setPlayChoice(!playing)}
+                        aria-label={playing ? "Pause slides" : "Play slides"}
+                        className="ml-1 flex size-6 items-center justify-center rounded-full text-white/70 hover:text-white focus-visible:outline-white"
+                    >
+                        {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+                    </button>
+                )}
             </div>
 
             {/* Slide content — key forces remount so animations re-fire */}
@@ -117,9 +146,9 @@ export function BrandCarousel({
                 key={activeIndex}
                 className="relative flex flex-1 flex-col items-center justify-center px-4 text-center"
             >
-                <h2 className="animate-in fade-in slide-in-from-bottom-2 duration-700 text-3xl font-bold leading-tight text-white md:text-4xl">
+                <p className="animate-in fade-in slide-in-from-bottom-2 duration-700 text-3xl font-bold leading-tight text-white md:text-4xl">
                     {slide.title}
-                </h2>
+                </p>
                 <p className="animate-in fade-in slide-in-from-bottom-2 duration-700 mt-4 max-w-sm text-sm leading-relaxed text-white/70">
                     {slide.subtitle}
                 </p>

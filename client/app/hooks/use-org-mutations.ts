@@ -12,6 +12,7 @@ import type {
   CreateOrganizationRequest,
   CreatePersonalRequest,
   UpdateOrganizationRequest,
+  DeleteOrganizationRequest,
   UpgradeToOrganizationRequest,
   UpdateMemberRoleRequest,
   UpdateMemberPermissionsRequest,
@@ -178,13 +179,13 @@ export function useCreateOrganizationInSettingsMutation() {
   });
 }
 
-/** Mutation hook for deleting an organization. Navigates to dashboard on success. */
+/** Mutation hook for deleting an organization, confirmed with its name and the owner's password. Navigates to dashboard on success. */
 export function useDeleteOrganizationMutation() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (orgId: string) => orgService.delete(orgId),
+    mutationFn: ({ orgId, ...confirm }: { orgId: string } & DeleteOrganizationRequest) => orgService.delete(orgId, confirm),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: orgKeys.list() });
       toast.success("Organization deleted.");

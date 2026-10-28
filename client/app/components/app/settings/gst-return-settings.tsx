@@ -145,7 +145,7 @@ export function GstReturnSettings() {
             </label>
             <div className="mt-1 sm:col-span-2 sm:mt-0">
               <Select value={form.uqc} onValueChange={(next) => set({ uqc: next })} disabled={!canManage}>
-                <SelectTrigger id="default-uqc" className="h-9 w-56 text-caption">
+                <SelectTrigger id="default-uqc" aria-label="Default unit of quantity" className="h-9 w-56 text-caption">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

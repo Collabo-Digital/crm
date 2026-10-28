@@ -65,6 +65,7 @@ import type {
   InboxSavedView,
 } from "~/types/api";
 import { platformOffered } from "~/lib/channel-providers";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Inbox | Collabo CRM" }];
@@ -299,6 +300,8 @@ export default function InboxPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 md:gap-2">
+      {/* An open chat names its contact in the tab. */}
+      {conversation && <title>{pageTitle(conversation.contact.customer?.name ?? conversation.contact.name, "Inbox")}</title>}
       <NewChatDialog
         open={newChatOpen}
         onOpenChange={setNewChatOpen}

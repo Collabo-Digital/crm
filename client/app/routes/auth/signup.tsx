@@ -73,11 +73,12 @@ export default function SignupPage() {
               placeholder="John"
               autoComplete="given-name"
               aria-invalid={!!errors.firstName}
+              aria-describedby={errors.firstName ? "firstName-error" : undefined}
               {...register("firstName")}
               className={AUTH_INPUT}
             />
             {errors.firstName && (
-              <p className="mt-1 text-xs text-danger-text">{errors.firstName.message}</p>
+              <p id="firstName-error" className="mt-1 text-xs text-danger-text">{errors.firstName.message}</p>
             )}
           </div>
           <div>
@@ -89,11 +90,12 @@ export default function SignupPage() {
               placeholder="Doe"
               autoComplete="family-name"
               aria-invalid={!!errors.lastName}
+              aria-describedby={errors.lastName ? "lastName-error" : undefined}
               {...register("lastName")}
               className={AUTH_INPUT}
             />
             {errors.lastName && (
-              <p className="mt-1 text-xs text-danger-text">{errors.lastName.message}</p>
+              <p id="lastName-error" className="mt-1 text-xs text-danger-text">{errors.lastName.message}</p>
             )}
           </div>
         </div>
@@ -109,11 +111,12 @@ export default function SignupPage() {
             placeholder="john@example.com"
             autoComplete="email"
             aria-invalid={!!errors.email}
+            aria-describedby={errors.email ? "email-error" : undefined}
             {...register("email")}
             className={AUTH_INPUT}
           />
           {errors.email && (
-            <p className="mt-1 text-xs text-danger-text">{errors.email.message}</p>
+            <p id="email-error" className="mt-1 text-xs text-danger-text">{errors.email.message}</p>
           )}
         </div>
 
@@ -129,21 +132,21 @@ export default function SignupPage() {
               placeholder="Min. 8 characters"
               autoComplete="new-password"
               aria-invalid={!!errors.password}
+              aria-describedby={errors.password ? "password-error" : undefined}
               {...register("password")}
               className={`${AUTH_INPUT} pr-10`}
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => setShowPassword((visible) => !visible)}
-              tabIndex={-1}
               aria-label={showPassword ? "Hide password" : "Show password"}
             >
               {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
           </div>
           {errors.password && (
-            <p className="mt-1 text-xs text-danger-text">{errors.password.message}</p>
+            <p id="password-error" className="mt-1 text-xs text-danger-text">{errors.password.message}</p>
           )}
         </div>
 
@@ -179,8 +182,8 @@ export default function SignupPage() {
 
       <p className="mt-3 text-center text-sm text-muted-foreground">
         By creating an account, you agree to the{" "}
-        <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong hover:text-brand-strong-hover transition-colors">Terms of service</a> and{" "}
-        <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong hover:text-brand-strong-hover transition-colors">Privacy policy</a>.
+        <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong underline underline-offset-2 hover:text-brand-strong-hover transition-colors">Terms of service</a> and{" "}
+        <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong underline underline-offset-2 hover:text-brand-strong-hover transition-colors">Privacy policy</a>.
       </p>
     </div>
   );

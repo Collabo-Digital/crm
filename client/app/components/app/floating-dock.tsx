@@ -50,7 +50,7 @@ export function FloatingDock({
           onClick={onClear}
           aria-label="Clear selection"
           title="Clear selection"
-          className="flex size-[34px] shrink-0 items-center justify-center rounded-full bg-white/8 transition-colors hover:bg-brand hover:text-brand-forest"
+          className="flex size-[34px] shrink-0 items-center justify-center rounded-full bg-white/8 transition-colors hover:bg-brand hover:text-brand-forest focus-visible:outline-brand"
         >
           <X className="size-4" />
         </button>
@@ -83,7 +83,7 @@ export function DockButton({
     <Comp
       type={asChild ? undefined : "button"}
       className={cn(
-        "flex h-[34px] shrink-0 items-center justify-center gap-1.5 rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-brand/60 disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5 [&_svg]:shrink-0",
+        "flex h-[34px] shrink-0 items-center justify-center gap-1.5 rounded-full transition-colors outline-none disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5 [&_svg]:shrink-0 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
         iconOnly ? "w-[34px]" : "px-3",
         tone === "danger" && "text-red-300 hover:bg-red-500/20",
         // Plain until hovered, focused or holding an open menu, then lime.

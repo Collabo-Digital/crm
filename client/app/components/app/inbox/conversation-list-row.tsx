@@ -83,6 +83,8 @@ export const ConversationListRow = memo(function ConversationListRow({
         <div className="flex items-baseline gap-2">
           <span className={cn("min-w-0 flex-1 truncate text-[15px] font-medium text-foreground md:text-caption md:font-normal", unread && "font-semibold md:font-semibold")}>
             {contact.name}
+            {/* The badge below is hidden from screen readers; say the count here. */}
+            {unread && <span className="sr-only">, {unreadCount} unread</span>}
           </span>
           {showOwner && owner && <span className="max-w-[45%] truncate text-micro text-muted-foreground">{owner}</span>}
           <span className="shrink-0 text-micro text-muted-foreground">
@@ -98,7 +100,7 @@ export const ConversationListRow = memo(function ConversationListRow({
           {unread && (
             <span
               className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-unread px-1 text-micro font-semibold text-unread-foreground md:h-4 md:min-w-4"
-              aria-label={`${unreadCount} unread`}
+              aria-hidden
             >
               {unreadCount > 99 ? "99+" : unreadCount}
             </span>

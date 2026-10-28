@@ -12,6 +12,7 @@ import { SUPPORT_EMAIL, supportEmailLink } from "~/lib/support";
 import { cn } from "~/lib/utils";
 import { useNewMessageAlerts } from "~/hooks/use-new-message-alerts";
 import { useAuthStore } from "~/stores/auth.store";
+import { SkipToContent } from "~/components/app/route-announcer";
 
 // Routes that fill the window height and scroll their own panes instead of the
 // page. The inbox needs this so its composer stays pinned and each column
@@ -94,11 +95,13 @@ export default function AppLayout() {
           isFullHeight ? "flex h-dvh flex-col overflow-hidden" : "min-h-screen",
         )}
       >
+        <SkipToContent targetId="main-content" />
         <ImpersonationBanner />
         <Navbar immersive={immersive} />
         {/* Same container on every route except a full-width one — otherwise
             only the vertical behaviour differs. */}
         <main
+          id="main-content"
           className={cn(
             // Identical padding on every route, and an identical container on
             // every route but a full-width one, so the inbox lines up with

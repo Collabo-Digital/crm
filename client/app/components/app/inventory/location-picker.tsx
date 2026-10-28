@@ -88,7 +88,7 @@ export function LocationPicker({
       <PopoverTrigger
         className={cn(
           "flex h-9 max-w-[22rem] items-center gap-2 rounded-lg border border-border bg-card px-3 text-left shadow-sm",
-          "hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40",
+          "hover:border-brand focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
           className,
         )}
         aria-label={`Location: ${selected?.name ?? "choose"}`}

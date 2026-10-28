@@ -14,6 +14,7 @@ import { useTemplate } from "~/hooks/use-campaign-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { formatDateTime } from "~/lib/format-date";
 import { approvedAsMarketing, packSlotTitle } from "~/lib/template-pack";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Template | Collabo CRM" }];
@@ -40,6 +41,7 @@ export default function TemplatePage() {
       </Link>
       <PageHeader data-mobile-title>
         <PageHeaderContent>
+          <title>{pageTitle(template.name, "Template")}</title>
           <PageHeaderTitle className="flex flex-wrap items-center gap-3 font-mono">
             {/* Long names (collabo_cod_confirm_v1) wrap after an underscore on a phone. */}
             <span className="min-w-0 break-words">

@@ -10,6 +10,7 @@ import { InboxEventsService } from '../messaging/inbox-events.service';
 import { MessagingSendService, SendOutcome } from '../messaging/send/messaging-send.service';
 import type { OutboundPayload } from '../messaging/outbound';
 import { MessagingMediaStorage } from '../messaging/media/messaging-media.storage';
+import { UploadQuotaService } from '../messaging/media/upload-quota';
 import { VOICE_INPUT_FORMATS, VoiceNoteConverter, VoiceNoteError, voiceNoteDurationMs } from '../messaging/media/voice-note.converter';
 import { signMediaPath, verifyMediaSignature } from '../messaging/media/media-url';
 import { replyWindow } from '../messaging/outbound';
@@ -102,6 +103,7 @@ export class InboxService {
         private readonly paymentLinks: PaymentLinksService,
         private readonly whatsAppPay: WhatsAppPayService,
         config: ConfigService,
+        private readonly uploadQuota: UploadQuotaService,
     ) {
         this.linkSecret = config.get<string>('messaging.linkSecret')!;
     }
@@ -576,6 +578,7 @@ export class InboxService {
         if (file.size > UPLOAD_MAX_BYTES[mediaKind]) {
             throw new BadRequestException(`${mediaKind[0].toUpperCase()}${mediaKind.slice(1)}s can be at most ${UPLOAD_MAX_BYTES[mediaKind] / 1024 / 1024} MB.`);
         }
+        await this.uploadQuota.reserve(orgId, file.size);
         const saved = await this.storage.save(orgId, file.buffer, mime);
         return { storageKey: saved.storageKey, mime, size: saved.size, filename: file.originalname, mediaKind };
     }
@@ -584,6 +587,7 @@ export class InboxService {
     private async uploadVoiceNote(orgId: string, file: UploadedFile, mime: string) {
         if (!VOICE_INPUT_FORMATS[mime]) throw new BadRequestException('Voice messages can be recorded as WebM, Ogg, MP4, MP3 or WAV audio only.');
         if (file.size > VOICE_UPLOAD_MAX_BYTES) throw new BadRequestException('This recording is too large. Voice messages can be at most 2 minutes long.');
+        await this.uploadQuota.reserve(orgId, file.size);
         let note: { buffer: Buffer; durationMs: number };
         try {
             note = await this.voiceNotes.toVoiceNote(file.buffer, mime);

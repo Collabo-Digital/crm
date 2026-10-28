@@ -59,7 +59,7 @@ export default function ForgotPasswordPage() {
         <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-brand/30">
           <CheckCircle2 className="size-6 text-brand-strong" />
         </div>
-        <h2 className="text-2xl font-bold text-foreground">Check your email</h2>
+        <h1 className="text-2xl font-bold text-foreground">Check your email</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           We sent a password reset link to{" "}
           <span className="font-semibold text-foreground">{sentEmail}</span>.
@@ -103,7 +103,7 @@ export default function ForgotPasswordPage() {
         <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-brand/30">
           <Mail className="size-5 text-brand-strong" />
         </div>
-        <h2 className="text-2xl font-bold text-foreground">Forgot your password?</h2>
+        <h1 className="text-2xl font-bold text-foreground">Forgot your password?</h1>
         <p className="mt-1.5 text-sm text-muted-foreground">
           No problem. Enter your email and we'll send you a reset link.
         </p>
@@ -121,17 +121,18 @@ export default function ForgotPasswordPage() {
             placeholder="john@example.com"
             autoComplete="email"
             aria-invalid={!!errors.email}
+            aria-describedby={errors.email ? "email-error" : undefined}
             {...register("email")}
-            className="h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm text-foreground placeholder:text-muted-foreground shadow-sm transition aria-[invalid=true]:border-destructive"
+            className="h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm text-foreground placeholder:text-muted-foreground shadow-sm outline-none transition aria-[invalid=true]:border-destructive focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           {errors.email && (
-            <p className="text-xs text-danger-text">{errors.email.message}</p>
+            <p id="email-error" className="text-xs text-danger-text">{errors.email.message}</p>
           )}
         </div>
 
         {/* Server error */}
         {serverError && (
-          <div className="rounded-lg bg-danger-subtle px-4 py-3">
+          <div role="alert" className="rounded-lg bg-danger-subtle px-4 py-3">
             <p className="text-sm text-danger-text">{serverError}</p>
           </div>
         )}

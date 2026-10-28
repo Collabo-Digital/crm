@@ -149,6 +149,7 @@ function CustomerForm({
         className={selectClass}
         value={stateCode}
         aria-invalid={(attempted && !!errors.state) || undefined}
+        aria-describedby={attempted && errors.state ? `${id}-state-error` : undefined}
         onChange={(e) => setStateCode(e.target.value)}
       >
         <option value="">Choose a state</option>
@@ -269,7 +270,7 @@ function CustomerForm({
           !looking && (
             <div className="space-y-4">
               <Field id={`${id}-name`} label={gst ? "Business or buyer name" : "Name"} optional={!needsAddress} error={attempted ? errors.name : null}>
-                <Input id={`${id}-name`} value={name} maxLength={120} autoComplete="off" autoCapitalize="words" onChange={(e) => setName(e.target.value)} className="h-11" aria-invalid={(attempted && !!errors.name) || undefined} />
+                <Input id={`${id}-name`} value={name} maxLength={120} autoComplete="off" autoCapitalize="words" onChange={(e) => setName(e.target.value)} className="h-11" aria-invalid={(attempted && !!errors.name) || undefined} aria-describedby={attempted && errors.name ? `${id}-name-error` : undefined} />
               </Field>
               <div>
                 <button
@@ -283,7 +284,7 @@ function CustomerForm({
                 </button>
                 {moreOpen && (
                   <Field id={`${id}-email`} label="Email" optional error={errors.email && (attempted || !EMAIL.test(email.trim())) ? errors.email : null}>
-                    <Input id={`${id}-email`} type="email" inputMode="email" autoComplete="off" value={email} maxLength={160} onChange={(e) => setEmail(e.target.value)} className="h-11" aria-invalid={(attempted && !!errors.email) || undefined} />
+                    <Input id={`${id}-email`} type="email" inputMode="email" autoComplete="off" value={email} maxLength={160} onChange={(e) => setEmail(e.target.value)} className="h-11" aria-invalid={(attempted && !!errors.email) || undefined} aria-describedby={errors.email && (attempted || !EMAIL.test(email.trim())) ? `${id}-email-error` : undefined} />
                   </Field>
                 )}
               </div>
@@ -311,6 +312,7 @@ function CustomerForm({
                   spellCheck={false}
                   placeholder="32ABCDE1234F1Z5"
                   aria-invalid={((attempted || gstin.length === 15) && !!errors.gstin) || undefined}
+                  aria-describedby={(attempted || gstin.length === 15) && errors.gstin ? `${id}-gstin-error` : undefined}
                   onChange={(e) => {
                     const next = e.target.value.toUpperCase().replace(/\s/g, "");
                     setGstin(next);
@@ -330,11 +332,11 @@ function CustomerForm({
           <fieldset className="space-y-4 border-t pt-4">
             <legend className="sr-only">Address</legend>
             <Field id={`${id}-address`} label="Address" error={attempted ? errors.address1 : null}>
-              <Input id={`${id}-address`} value={address1} maxLength={200} autoComplete="street-address" placeholder="House, street, area" onChange={(e) => setAddress1(e.target.value)} className="h-11" aria-invalid={(attempted && !!errors.address1) || undefined} />
+              <Input id={`${id}-address`} value={address1} maxLength={200} autoComplete="street-address" placeholder="House, street, area" onChange={(e) => setAddress1(e.target.value)} className="h-11" aria-invalid={(attempted && !!errors.address1) || undefined} aria-describedby={attempted && errors.address1 ? `${id}-address-error` : undefined} />
             </Field>
             <div className="grid grid-cols-[minmax(0,1fr)_8rem] gap-3">
               <Field id={`${id}-city`} label="City" error={attempted ? errors.city : null}>
-                <Input id={`${id}-city`} value={city} maxLength={80} autoComplete="address-level2" onChange={(e) => setCity(e.target.value)} className="h-11" aria-invalid={(attempted && !!errors.city) || undefined} />
+                <Input id={`${id}-city`} value={city} maxLength={80} autoComplete="address-level2" onChange={(e) => setCity(e.target.value)} className="h-11" aria-invalid={(attempted && !!errors.city) || undefined} aria-describedby={attempted && errors.city ? `${id}-city-error` : undefined} />
               </Field>
               <Field id={`${id}-zip`} label="PIN code" error={attempted ? errors.zip : null}>
                 <Input
@@ -346,6 +348,7 @@ function CustomerForm({
                   onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 6))}
                   className="h-11 tabular-nums"
                   aria-invalid={(attempted && !!errors.zip) || undefined}
+                  aria-describedby={attempted && errors.zip ? `${id}-zip-error` : undefined}
                 />
               </Field>
             </div>
@@ -383,7 +386,7 @@ function Field({ id, label, optional, error, children }: { id: string; label: st
         {optional && <Optional />}
       </Label>
       {children}
-      {error && <p className="text-caption text-danger">{error}</p>}
+      {error && <p id={`${id}-error`} className="text-caption text-danger">{error}</p>}
     </div>
   );
 }

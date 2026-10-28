@@ -27,6 +27,7 @@ import type { UpdateStoreProfileSettingsInput } from './schemas/store-profile-se
 import { UpdateInvoiceSettingsSchema } from './schemas/invoice-settings.schema';
 import type { UpdateInvoiceSettingsInput } from './schemas/invoice-settings.schema';
 import { Roles, ORG_MANAGERS } from '../auth/decorators/roles.decorator';
+import { RequireSection } from '../auth/decorators/require-section.decorator';
 
 // Multer buffers the whole file in memory before the service sees it, so this
 // cap bounds that. The service holds the logo (1 MB) and the signature
@@ -44,8 +45,13 @@ const IMAGE_UPLOAD_LIMIT = 5 * 1024 * 1024;
  * unknown fields on the JwtPayload, leaving `user.orgId` undefined and
  * tripping the service's assertOrgId. The parameter-level form keeps the
  * pipe scoped to the body where it belongs.
+ *
+ * Read by the order form, products, invoices and package slips, and by their
+ * Settings tabs; a member kept to Chat or Campaigns has no use for the tax,
+ * invoice and store set-up.
  */
 @Controller('organization/settings')
+@RequireSection('orders', 'products', 'invoices')
 export class OrganizationSettingsController {
   constructor(private readonly service: OrganizationSettingsService) {}
 

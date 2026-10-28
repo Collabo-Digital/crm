@@ -11,6 +11,7 @@ import {
   useRefreshAnalytics,
 } from "~/hooks/use-analytics-queries";
 import { QueryErrorState } from "~/components/app/query-error-state";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import type { SparklinePoint } from "~/components/app/chart-line-default";
 import type {
   AnalyticsRange,
@@ -52,6 +53,8 @@ export default function AnalyticsPage() {
   const { data, isLoading, isFetching, isError, isPlaceholderData, refetch } =
     useAnalyticsDashboard({ range, channel });
   const refresh = useRefreshAnalytics();
+  // Refreshing calls Shopify and rewrites the figures; the server refuses it to viewers.
+  const canRefresh = useCurrentRole().role !== "VIEWER";
   // First load only. A range/channel change keeps the previous data on screen
   // (dimmed via `stale`) rather than going back to skeletons.
   const initialLoading = isLoading && !data;
@@ -89,16 +92,18 @@ export default function AnalyticsPage() {
               <SelectItem value="12m">Last 12 months</SelectItem>
             </SelectContent>
           </Select>
-          <button
-            type="button"
-            onClick={() => refresh.mutate({ range, channel })}
-            disabled={refresh.isPending}
-            aria-label="Refresh analytics"
-            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-input bg-card px-3 text-caption font-medium text-foreground shadow-sm hover:bg-muted disabled:opacity-60"
-          >
-            <RefreshCw className={`size-3.5 ${refresh.isPending ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline">Refresh</span>
-          </button>
+          {canRefresh && (
+            <button
+              type="button"
+              onClick={() => refresh.mutate({ range, channel })}
+              disabled={refresh.isPending}
+              aria-label="Refresh analytics"
+              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-input bg-card px-3 text-caption font-medium text-foreground shadow-sm hover:bg-muted disabled:opacity-60"
+            >
+              <RefreshCw className={`size-3.5 ${refresh.isPending ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          )}
         </div>
       </div>
 

@@ -247,7 +247,7 @@ export function GenerateInvoiceDialog({
               className={`mt-1 w-full rounded-lg border bg-background px-3 py-2 font-mono text-caption outline-none focus:ring-1 ${
                 buyerGstinInvalid
                   ? "border-danger focus:ring-danger"
-                  : "focus:ring-brand"
+                  : "focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
               }`}
             />
             {buyerGstinInvalid && (

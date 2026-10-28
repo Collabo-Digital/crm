@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Link } from "react-router";
 import { SaveBar } from "~/components/app/save-bar";
@@ -182,14 +182,16 @@ function VendorMetafieldRow({
   invalid: boolean;
   onChange: (patch: { namespace?: string; key?: string }) => void;
 }) {
+  const id = useId();
+
   return (
     <div className="space-y-3 px-5 py-4">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-foreground">
+          <p id={`${id}-label`} className="text-sm font-medium text-foreground">
             Identify vendor by product metafield
           </p>
-          <p className="mt-1 text-caption text-muted-foreground leading-relaxed">
+          <p id={`${id}-help`} className="mt-1 text-caption text-muted-foreground leading-relaxed">
             When ON, product sync reads the metafield below into each product's vendor key, which is
             used to scope vendor accounts (their products + order lines). The built-in Shopify "Vendor"
             field is the fallback for untagged products. Re-sync products after enabling. Default OFF.
@@ -199,6 +201,8 @@ function VendorMetafieldRow({
           checked={settings.vendorMetafieldEnabled}
           disabled={!canManage || isFieldSaving(mutation, "vendorMetafieldEnabled")}
           onChange={(checked) => mutation.mutate({ vendorMetafieldEnabled: checked })}
+          labelledBy={`${id}-label`}
+          describedBy={`${id}-help`}
         />
       </div>
       {settings.vendorMetafieldEnabled && (
@@ -495,14 +499,15 @@ function SettingsToggleRow({
   disabled?: boolean;
   onChange: (next: boolean) => void;
 }) {
+  const id = useId();
   return (
     <div className="flex items-start justify-between gap-4 px-5 py-4">
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+        <p id={`${id}-label`} className="text-sm font-medium text-gray-900 dark:text-gray-100">
           {label}
         </p>
         {help && (
-          <p className="mt-1 text-caption text-muted-foreground leading-relaxed">
+          <p id={`${id}-help`} className="mt-1 text-caption text-muted-foreground leading-relaxed">
             {help}
           </p>
         )}
@@ -511,19 +516,34 @@ function SettingsToggleRow({
         checked={checked}
         disabled={disabled}
         onChange={onChange}
+        labelledBy={`${id}-label`}
+        describedBy={help ? `${id}-help` : undefined}
       />
     </div>
   );
 }
 
+/** `labelledBy` and `describedBy` are the ids of the row's title and help text. */
 function ToggleSwitch({
   checked,
   disabled,
   onChange,
+  labelledBy,
+  describedBy,
 }: {
   checked: boolean;
   disabled?: boolean;
   onChange: (next: boolean) => void;
+  labelledBy: string;
+  describedBy?: string;
 }) {
-  return <Switch checked={checked} disabled={disabled} onCheckedChange={onChange} />;
+  return (
+    <Switch
+      checked={checked}
+      disabled={disabled}
+      onCheckedChange={onChange}
+      aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
+    />
+  );
 }

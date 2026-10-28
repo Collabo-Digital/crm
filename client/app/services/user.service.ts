@@ -19,4 +19,8 @@ export const userService = {
 
   deleteAccount: () =>
     apiClient.delete<{ message: string }>("/users/me").then((response) => response.data),
+
+  /** Ends every other session of this account; this one stays signed in. */
+  signOutOtherDevices: () =>
+    apiClient.post<{ message: string }>("/users/me/sign-out-other-devices").then((response) => response.data),
 };

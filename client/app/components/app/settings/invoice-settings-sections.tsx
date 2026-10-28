@@ -51,7 +51,7 @@ function Field({ id, label, hint, error, children }: { id: string; label: string
       <Label htmlFor={id}>{label}</Label>
       {children}
       {error ? (
-        <p className="text-micro text-danger">{error}</p>
+        <p id={`${id}-error`} className="text-micro text-danger">{error}</p>
       ) : (
         hint && <p className="text-micro text-muted-foreground">{hint}</p>
       )}
@@ -282,13 +282,14 @@ export function LookSection({ draft, set, errors, readOnly }: SectionProps) {
               placeholder="#0F766E"
               disabled={readOnly}
               aria-invalid={(hexTouched && !!errors.brandColor) || undefined}
+              aria-describedby={hexTouched && errors.brandColor ? "invoice-brand-hex-error" : undefined}
               onBlur={() => setHexTouched(true)}
               onChange={(e) => set("brandColor", e.target.value.trim() === "" ? null : e.target.value)}
               className="w-28 font-mono uppercase"
             />
           </div>
           {hexTouched && errors.brandColor ? (
-            <p className="text-micro text-danger">{errors.brandColor}</p>
+            <p id="invoice-brand-hex-error" className="text-micro text-danger">{errors.brandColor}</p>
           ) : (
             color &&
             isLightBrandColor(color) && (
@@ -442,6 +443,7 @@ function BusinessIdRow({
             placeholder="Name, like BIS Reg. No."
             disabled={readOnly}
             aria-invalid={(touched && !!errors[`businessIds.${index}.label`]) || undefined}
+            aria-describedby={problem ? `invoice-business-id-${index}-error` : undefined}
             onChange={(e) => onChange({ ...id, label: e.target.value })}
           />
         )}
@@ -453,11 +455,12 @@ function BusinessIdRow({
           autoFocus={autoFocus}
           disabled={readOnly}
           aria-invalid={(touched && !!errors[`businessIds.${index}.value`]) || undefined}
+          aria-describedby={problem ? `invoice-business-id-${index}-error` : undefined}
           onChange={(e) => onChange({ ...id, value: e.target.value })}
           className="font-mono"
         />
       </div>
-      {problem && <p className="text-micro text-danger">{problem}</p>}
+      {problem && <p id={`invoice-business-id-${index}-error`} className="text-micro text-danger">{problem}</p>}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
         <label className="flex min-h-8 items-center gap-2 text-caption">
           <Checkbox checked={id.onA4} disabled={readOnly} onCheckedChange={(v) => onChange({ ...id, onA4: v === true })} />
@@ -593,6 +596,7 @@ export function TermsSection({ draft, set, errors, readOnly }: SectionProps) {
             placeholder="https://yourstore.com/returns"
             disabled={readOnly}
             aria-invalid={(linkTouched && !!errors.returnPolicyUrl) || undefined}
+            aria-describedby={linkTouched && errors.returnPolicyUrl ? "invoice-return-link-error" : undefined}
             onBlur={() => setLinkTouched(true)}
             onChange={(e) => set("returnPolicyUrl", e.target.value)}
           />
@@ -780,6 +784,7 @@ export function PaymentsSection({
                 placeholder="yourshop@okaxis"
                 disabled={readOnly}
                 aria-invalid={!!upiError || undefined}
+                aria-describedby={upiError ? "invoice-upi-error" : undefined}
                 onChange={(e) => onUpiId(e.target.value)}
                 className="sm:max-w-sm"
               />
