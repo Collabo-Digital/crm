@@ -2,7 +2,9 @@ import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import Redis from 'ioredis';
-import { REDIS_PREFIX, REDIS_KEYS, REDIS_TTL, LOGIN_RATE_LIMIT, EMAIL_SEND_LIMIT, VERIFY_CODE_LIMIT } from './redis.constants';
+import {
+    REDIS_PREFIX, REDIS_KEYS, REDIS_TTL, LOGIN_RATE_LIMIT, EMAIL_SEND_LIMIT, INVITE_SEND_LIMIT, VERIFY_CODE_LIMIT,
+} from './redis.constants';
 
 const REFRESH_ROTATION_PENDING = 'pending';
 
@@ -209,6 +211,12 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         if (gapFree !== 'OK') return false;
         const sentThisHour = await this.countInWindow(this.key(REDIS_KEYS.EMAIL_SEND_COUNT, id), 3600);
         return sentThisHour <= EMAIL_SEND_LIMIT.MAX_PER_HOUR;
+    }
+
+    /** Whether `userId` may send one more invitation email today, counting it if so. */
+    async allowInviteFromSender(userId: string): Promise<boolean> {
+        const sentToday = await this.countInWindow(this.key(REDIS_KEYS.INVITE_SENDER_COUNT, userId), 86400);
+        return sentToday <= INVITE_SEND_LIMIT.MAX_PER_SENDER_PER_DAY;
     }
 
     // ─── UPLOAD QUOTA ───

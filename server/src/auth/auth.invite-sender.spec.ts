@@ -102,7 +102,7 @@ describe('InvitesService.resend — the admin who re-sends takes the invitation 
     const prisma = {
       teamInvite: {
         findFirst: jest.fn(() =>
-          Promise.resolve({ id: 'inv1', status: InviteStatus.PENDING, invitedBy: 'u-removed-admin', organization: { name: 'Shop' } }),
+          Promise.resolve({ id: 'inv1', email: 'a@b.c', status: InviteStatus.PENDING, invitedBy: 'u-removed-admin', organization: { name: 'Shop' } }),
         ),
         update: jest.fn(({ data }: { data: Record<string, unknown> }) =>
           Promise.resolve({
@@ -113,7 +113,8 @@ describe('InvitesService.resend — the admin who re-sends takes the invitation 
       },
     };
     const email = { sendTeamInvite: jest.fn(() => Promise.resolve()) };
-    const service = new InvitesService(prisma as never, email as never, {} as never);
+    const redis = { allowInviteFromSender: jest.fn(() => Promise.resolve(true)), allowEmailSend: jest.fn(() => Promise.resolve(true)) };
+    const service = new InvitesService(prisma as never, email as never, {} as never, redis as never);
 
     await service.resend('org', 'inv1', 'u-current-admin');
 

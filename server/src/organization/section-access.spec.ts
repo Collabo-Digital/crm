@@ -20,7 +20,8 @@ describe('section access — invites', () => {
     };
     const email = { sendTeamInvite: jest.fn().mockResolvedValue(undefined) };
     const users = { findIdByEmail: jest.fn().mockResolvedValue(null) };
-    return { service: new InvitesService(prisma as never, email as never, users as never), prisma, email };
+    const redis = { allowInviteFromSender: jest.fn().mockResolvedValue(true), allowEmailSend: jest.fn().mockResolvedValue(true) };
+    return { service: new InvitesService(prisma as never, email as never, users as never, redis as never), prisma, email };
   }
 
   it('stores the chosen sections on an AGENT invite', async () => {

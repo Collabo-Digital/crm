@@ -11,6 +11,8 @@ export const REDIS_KEYS = {
     EMAIL_SEND_GAP: 'email_gap:',
     /// Emails of one kind sent to one recipient in the last hour.
     EMAIL_SEND_COUNT: 'email_count:',
+    /// Invitation emails one member sent today.
+    INVITE_SENDER_COUNT: 'invite_sender_count:',
     REFRESH_TOKEN: 'refresh:',
     USER_REFRESH_TOKENS: 'user_tokens:',
     REFRESH_ROTATION: 'refresh_rotation:',
@@ -73,4 +75,14 @@ export const VERIFY_CODE_LIMIT = {
 export const EMAIL_SEND_LIMIT = {
     MIN_GAP_SECONDS: 50,
     MAX_PER_HOUR: 5,
+};
+
+/**
+ * Invitation emails one member may send in a day, on top of the
+ * per-recipient limit above. Any signed-in account can make a workspace and
+ * invite from it, and invitations share the SMTP account that carries every
+ * workspace's sign-up and password-reset mail.
+ */
+export const INVITE_SEND_LIMIT = {
+    MAX_PER_SENDER_PER_DAY: 200,
 };
