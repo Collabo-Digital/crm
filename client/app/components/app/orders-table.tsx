@@ -29,6 +29,7 @@ import {
 } from "~/components/app/data-table";
 import { StatusBadge } from "~/components/ui/status-badge";
 import { cn, formatCurrency } from "~/lib/utils";
+import { formatDayMonth } from "~/lib/format-date";
 import { useSyncOrderMutation } from "~/hooks/use-order-mutations";
 import {
   FINANCIAL_CLASSES,
@@ -132,11 +133,7 @@ export function OrdersTable({ orders, currency, onViewDetail }: OrdersTableProps
                     </p>
                     <p className="flex items-center gap-1 text-micro text-muted-foreground">
                       <ChannelBadge platform={platform} name={orderSourceLabel(order)} /> · {order.itemCount} item
-                      {order.itemCount !== 1 ? "s" : ""} ·{" "}
-                      {new Date(order.createdAt).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "2-digit",
-                      })}
+                      {order.itemCount !== 1 ? "s" : ""} · {formatDayMonth(order.createdAt)}
                     </p>
                   </div>
                 </div>

@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { oneOf, useSessionState } from "~/hooks/use-session-state";
 import { Package, RefreshCw } from "lucide-react";
 import { cn } from "~/lib/utils";
+import { formatDateTime } from "~/lib/format-date";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -253,7 +254,7 @@ function formatLastRefreshed(iso: string): string {
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
-  return `on ${then.toLocaleDateString()} at ${then.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return `on ${formatDateTime(iso)}`;
 }
 
 /**

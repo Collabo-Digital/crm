@@ -25,6 +25,7 @@ import {
 import { SectionCard } from "~/components/app/section-card";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { cn, formatCurrency } from "~/lib/utils";
+import { formatDate } from "~/lib/format-date";
 import { DRAFT_STATUS_CLASSES, DRAFT_STATUS_LABELS } from "~/lib/draft-status";
 import {
   ModalShell,
@@ -254,13 +255,13 @@ export default function DraftDetailPage() {
               {draft.completedAt && (
                 <DescRow
                   label="Completed"
-                  value={new Date(draft.completedAt).toLocaleDateString("en-IN")}
+                  value={formatDate(draft.completedAt)}
                 />
               )}
               {draft.invoiceSentAt && (
                 <DescRow
                   label="Invoice sent"
-                  value={new Date(draft.invoiceSentAt).toLocaleDateString("en-IN")}
+                  value={formatDate(draft.invoiceSentAt)}
                 />
               )}
               {draft.invoiceUrl && (

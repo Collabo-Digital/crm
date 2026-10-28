@@ -41,4 +41,13 @@ describe('AnalyticsDashboardService.getDashboard', () => {
 
     expect(stats.find((s) => s.key === 'totalCheckout')?.change).toBe(0);
   });
+
+  it('labels trend days day-first, never month-first', async () => {
+    const service = build([{ date: daysAgo(1), metrics: { pixelAddToCartSessions: 1 } }]);
+
+    const { trend } = await service.getDashboard('org_1', { range: '30d', channel: 'all' } as any);
+
+    expect(trend.length).toBeGreaterThan(0);
+    for (const point of trend) expect(point.label).toMatch(/^\d{1,2} [A-Z][a-z]{2}$/);
+  });
 });

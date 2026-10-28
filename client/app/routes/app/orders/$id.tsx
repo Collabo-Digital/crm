@@ -40,6 +40,7 @@ import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
 import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import { cn, formatCurrency } from "~/lib/utils";
+import { formatDate, formatDayMonth } from "~/lib/format-date";
 import {
   FINANCIAL_CLASSES,
   FINANCIAL_LABELS_FULL,
@@ -542,9 +543,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
                       </p>
                       {r.reason && <p className="text-micro text-muted-foreground">{r.reason}</p>}
                     </div>
-                    <p className="text-micro text-muted-foreground">
-                      {new Date(r.createdAt).toLocaleDateString("en-IN")}
-                    </p>
+                    <p className="text-micro text-muted-foreground">{formatDate(r.createdAt)}</p>
                   </li>
                 ))}
               </ul>
@@ -655,9 +654,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
  * — dropped rather than left as a second source of truth.)
  */
 /** "27 Aug" — for group captions, where the year is noise. */
-function shortDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-}
+const shortDate = formatDayMonth;
 
 /** "28 Aug, 11:30 am". */
 function shortDateTime(iso: string): string {

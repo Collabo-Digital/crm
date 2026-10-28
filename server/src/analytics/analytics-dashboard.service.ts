@@ -10,6 +10,7 @@ import {
   QueryAnalyticsDto,
   rangeToDays,
 } from './dto/query-analytics.dto';
+import { dayMonthLabel } from '../common/utils/day-label.util';
 
 // ─── DTOs returned to the client ─────────────────────────────────────────
 
@@ -24,7 +25,7 @@ export interface DashboardStat {
 }
 
 export interface DashboardTrendPoint {
-  /// Day ("MM-DD") for 30d windows, month ("Jan") for longer ones.
+  /// Day ("21 Oct") for 30d windows, month ("Jan") for longer ones.
   label: string;
   addToCart: number;
   reachedCheckout: number;
@@ -325,7 +326,7 @@ export class AnalyticsDashboardService {
         d.setUTCDate(d.getUTCDate() - i);
         const key = d.toISOString().slice(0, 10);
         buckets.set(key, {
-          label: key.slice(5),
+          label: dayMonthLabel(d),
           addToCart: 0,
           reachedCheckout: 0,
           completedOrders: 0,
