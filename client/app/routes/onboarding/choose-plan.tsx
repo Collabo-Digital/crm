@@ -193,7 +193,7 @@ export default function ChoosePlanPage() {
         <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
           <Rocket className="size-5 text-[#084734]" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">Choose your plan</h2>
+        <h1 className="text-2xl font-bold text-gray-900">Choose your plan</h1>
         <p className="mt-1.5 text-sm text-gray-500">
           Pick a plan and complete payment to continue. Cancel anytime from
           settings.

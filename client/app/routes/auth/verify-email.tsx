@@ -88,7 +88,7 @@ export default function VerifyEmailPage() {
         <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
           <Mail className="size-6 text-[#084734]" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">Check your inbox</h2>
+        <h1 className="text-2xl font-bold text-gray-900">Check your inbox</h1>
         <p className="mt-2 text-sm text-gray-500">
           We sent a 6-digit verification code to your email address. Enter it
           below to confirm your account.
@@ -118,7 +118,7 @@ export default function VerifyEmailPage() {
 
         {/* Server error */}
         {serverError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+          <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
             <p className="text-center text-sm text-red-600">{serverError}</p>
           </div>
         )}

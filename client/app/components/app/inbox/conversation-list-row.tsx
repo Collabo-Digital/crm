@@ -76,6 +76,8 @@ export const ConversationListRow = memo(function ConversationListRow({
         <div className="flex items-baseline justify-between gap-2">
           <span className={cn("truncate text-[15px] font-medium text-foreground md:text-caption md:font-normal", unread && "font-semibold md:font-semibold")}>
             {contact.name}
+            {/* The count beside the row is outside this button; say it here. */}
+            {unread && <span className="sr-only">, {unreadCount} unread</span>}
           </span>
           <span className="shrink-0 text-micro text-muted-foreground">
             {formatRowTime(conversation.lastMessageAt, now)}
@@ -106,7 +108,7 @@ export const ConversationListRow = memo(function ConversationListRow({
       {unread && (
         <span
           className="mt-0.5 flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand px-1 text-[11px] font-semibold text-brand-foreground md:h-4 md:min-w-4 md:text-micro"
-          aria-label={`${unreadCount} unread`}
+          aria-hidden
         >
           {unreadCount > 99 ? "99+" : unreadCount}
         </span>

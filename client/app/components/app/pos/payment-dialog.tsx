@@ -286,9 +286,10 @@ export function PaymentDialog({
                     onFocus={(e) => e.currentTarget.select()}
                     onChange={(e) => setAmountText(e.target.value)}
                     aria-invalid={tooMuch || undefined}
+                    aria-describedby={tooMuch ? "payment-amount-error" : undefined}
                     className="h-12 text-lg tabular-nums md:text-lg"
                   />
-                  {tooMuch && <p className="text-caption text-danger">That is more than the {inr(remaining)} left to pay.</p>}
+                  {tooMuch && <p id="payment-amount-error" className="text-caption text-danger">That is more than the {inr(remaining)} left to pay.</p>}
                   {mode === "sale" && method !== "CASH" && validAmount && !tooMuch && applied < remaining && (
                     <p className="text-caption text-muted-foreground">Split: {inr(round2(remaining - applied))} is left for another method.</p>
                   )}

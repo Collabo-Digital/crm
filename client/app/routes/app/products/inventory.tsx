@@ -70,6 +70,7 @@ import {
   useBulkAdjustmentMutation,
 } from "~/hooks/use-inventory-mutations";
 import type { StockBucket, StockLine, StockListParams } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 const BUCKETS: StockBucket[] = ["AVAILABLE", "RESERVED", "QC", "DAMAGED"];
 
@@ -81,6 +82,10 @@ const STOCK_TABS = [
   { value: "oversold", label: "Oversold" },
 ] as const;
 const STOCK_TAB_VALUES = STOCK_TABS.map((t) => t.value);
+
+export function meta() {
+  return [{ title: pageTitle("Inventory") }];
+}
 
 export default function InventoryPage() {
   const status = useInventoryStatus();

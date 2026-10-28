@@ -25,6 +25,7 @@ import { formatDateTime } from "~/lib/format-date";
 import { getInitials } from "~/lib/inbox-format";
 import { cn } from "~/lib/utils";
 import type { BroadcastDetail, BroadcastRecipientRow, BroadcastRecipientStatus } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Broadcast | Collabo CRM" }];
@@ -119,6 +120,7 @@ export default function BroadcastPage() {
       </Link>
       <PageHeader data-mobile-title>
         <PageHeaderContent>
+          <title>{pageTitle(broadcast.name, "Broadcast")}</title>
           <PageHeaderTitle className="flex flex-wrap items-center gap-3">
             {broadcast.name}
             <span className={cn("rounded-full px-2 py-0.5 text-caption font-semibold", BROADCAST_STATUS_CLASS[broadcast.status])}>{BROADCAST_STATUS_LABEL[broadcast.status]}</span>

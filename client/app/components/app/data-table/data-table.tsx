@@ -188,6 +188,20 @@ export function DataTable<Row>({
     if (el) setScrolledX(el.scrollLeft > 0);
   }
 
+  // A table taller or wider than its box is a Tab stop, so keyboard users can
+  // scroll it with the arrow keys even when no row inside takes focus.
+  const [scrollable, setScrollable] = useState(false);
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const measure = () =>
+      setScrollable(el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth);
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, []);
+
   const stickyLeft = hasSelection ? SELECT_WIDTH : 0;
   function cellClass(column: ColumnDef<Row>, index: number): string {
     return cn(
@@ -506,6 +520,9 @@ export function DataTable<Row>({
         <div
           ref={scrollerRef}
           onScroll={onScroll}
+          tabIndex={scrollable ? 0 : undefined}
+          role={scrollable ? "region" : undefined}
+          aria-label={scrollable ? `${noun} table` : undefined}
           className="max-h-[min(64vh,720px)] overflow-auto [overscroll-behavior-x:contain]"
         >
           <div
@@ -526,7 +543,7 @@ export function DataTable<Row>({
               style={{ gridTemplateColumns: template }}
             >
               {hasSelection && selection && (
-                <div className="sticky left-0 z-30 flex items-center justify-center bg-inherit">
+                <div role="columnheader" className="sticky left-0 z-30 flex items-center justify-center bg-inherit">
                   <Checkbox
                     checked={allOnPage ? true : someOnPage ? "indeterminate" : false}
                     disabled={rows.length === 0}
@@ -598,7 +615,11 @@ export function DataTable<Row>({
                   </div>
                 );
               })}
-              {hasActions && <div />}
+              {hasActions && (
+                <div role="columnheader">
+                  <span className="sr-only">Actions</span>
+                </div>
+              )}
             </div>
 
             {/* Body */}
@@ -633,7 +654,7 @@ export function DataTable<Row>({
                     style={{ gridTemplateColumns: template }}
                   >
                     {hasSelection && selection && (
-                      <div className="sticky left-0 z-10 flex items-center justify-center bg-inherit">
+                      <div role="cell" className="sticky left-0 z-10 flex items-center justify-center bg-inherit">
                         <Checkbox
                           checked={selected}
                           onCheckedChange={(checked) => selection.onToggle(row, checked === true)}

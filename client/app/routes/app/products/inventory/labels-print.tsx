@@ -63,6 +63,7 @@ import {
 } from "~/lib/label-stock";
 import { inventoryService } from "~/services/inventory.service";
 import type { LabelData } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 /**
  * Barcode label printing.
@@ -104,6 +105,10 @@ function defaultPresetFor(family: StockFamily): string {
   const list = presetsInFamily(family);
   const pick = list.find((p) => p.recommended) ?? list.find((p) => p.common) ?? list[0];
   return pick?.id ?? DEFAULT_OPTIONS.presetId;
+}
+
+export function meta() {
+  return [{ title: pageTitle("Print product labels") }];
 }
 
 export default function LabelsPrintPage() {

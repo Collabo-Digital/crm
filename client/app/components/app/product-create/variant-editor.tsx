@@ -7,6 +7,7 @@ import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { formatMargin } from "~/lib/utils";
 import { CODE_TERMS } from "~/lib/inventory-vocabulary";
+import { ModalFrame, ModalTitle } from "~/components/app/order-dialog-primitives";
 import { stockLinesFor } from "./stock-locations";
 
 /**
@@ -138,7 +139,7 @@ export function VariantEditor({
                         value={v.option1 ?? ""}
                         onChange={(e) => patchVariant(idx, { option1: e.target.value })}
                         list={`opt-list-0`}
-                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                       />
                     </td>
                   )}
@@ -148,7 +149,7 @@ export function VariantEditor({
                         value={v.option2 ?? ""}
                         onChange={(e) => patchVariant(idx, { option2: e.target.value })}
                         list={`opt-list-1`}
-                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                       />
                     </td>
                   )}
@@ -158,7 +159,7 @@ export function VariantEditor({
                         value={v.option3 ?? ""}
                         onChange={(e) => patchVariant(idx, { option3: e.target.value })}
                         list={`opt-list-2`}
-                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                       />
                     </td>
                   )}
@@ -167,7 +168,7 @@ export function VariantEditor({
                       value={v.sku ?? ""}
                       onChange={(e) => patchVariant(idx, { sku: e.target.value })}
                       placeholder="—"
-                      className="h-7 w-24 rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                      className="h-7 w-24 rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs font-mono focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                   </td>
                   <td className="px-2 py-2 text-right">
@@ -180,7 +181,7 @@ export function VariantEditor({
                           price: e.target.value === "" ? 0 : parseFloat(e.target.value),
                         })
                       }
-                      className="h-7 w-20 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                      className="h-7 w-20 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                   </td>
                   <td className="px-2 py-2 text-right">
@@ -193,7 +194,7 @@ export function VariantEditor({
                           compareAtPrice: e.target.value === "" ? undefined : parseFloat(e.target.value),
                         })
                       }
-                      className="h-7 w-20 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                      className="h-7 w-20 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                   </td>
                   {stockColumns ? (
@@ -243,7 +244,7 @@ export function VariantEditor({
                           }
                           disabled={stockReadOnly}
                           title={stockReadOnly ? "Set per warehouse in Inventory" : undefined}
-                          className="h-7 w-16 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B] disabled:opacity-50"
+                          className="h-7 w-16 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                         />
                       )}
                     </td>
@@ -320,7 +321,7 @@ function StockCell({
       // quietly truncated to 1.
       onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
       aria-label={label}
-      className="h-7 w-16 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+      className="h-7 w-16 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
     />
   );
 }
@@ -358,26 +359,25 @@ function VariantDetailPanel({
   const variantTitle = titleLabels.length > 0 ? titleLabels.join(" / ") : "Default Title";
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-stretch justify-end bg-black/30"
-      onClick={onClose}
+    <ModalFrame
+      onClose={onClose}
+      overlayClassName="fixed inset-0 z-[60] flex items-stretch justify-end bg-black/30"
+      className="flex h-full w-full max-w-md flex-col bg-white dark:bg-gray-900 shadow-2xl outline-none"
     >
-      <aside
-        onClick={(e) => e.stopPropagation()}
-        className="flex h-full w-full max-w-md flex-col bg-white dark:bg-gray-900 shadow-2xl"
-      >
         <header className="flex items-center justify-between border-b px-5 py-3">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Variant details
             </p>
-            <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
+            <ModalTitle className="text-sm font-bold text-gray-900 dark:text-gray-100">
+              <span className="sr-only">Variant details: </span>
               {variantTitle}
-            </h3>
+            </ModalTitle>
           </div>
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close"
             className="rounded-md p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800"
           >
             <X className="size-4" />
@@ -517,7 +517,7 @@ function VariantDetailPanel({
                     onChange={(e) =>
                       onChange({ weightUnit: e.target.value as "g" | "kg" | "oz" | "lb" })
                     }
-                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   >
                     <option value="g">g</option>
                     <option value="kg">kg</option>
@@ -577,7 +577,7 @@ function VariantDetailPanel({
                   onChange={(e) => onChange({ hsnCode: e.target.value || undefined })}
                   disabled={isVendor}
                   placeholder="Same as product"
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 font-mono text-xs disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
               </label>
               <label className="block">
@@ -592,7 +592,7 @@ function VariantDetailPanel({
                     })
                   }
                   disabled={isVendor}
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Same as product</option>
                   {GST_RATE_OPTIONS.map((rate) => (
@@ -610,7 +610,7 @@ function VariantDetailPanel({
                   value={variant.unitOfMeasure ?? ""}
                   onChange={(e) => onChange({ unitOfMeasure: e.target.value || undefined })}
                   disabled={isVendor}
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Same as product</option>
                   {COMMON_UQC.map((u) => (
@@ -633,7 +633,7 @@ function VariantDetailPanel({
                     })
                   }
                   disabled={isVendor}
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Same as product</option>
                   {GST_SUPPLY_TYPES.map((t) => (
@@ -659,8 +659,7 @@ function VariantDetailPanel({
             Changes save when you click "Save changes" / "Create product".
           </p>
         </footer>
-      </aside>
-    </div>
+    </ModalFrame>
   );
 }
 
@@ -711,7 +710,7 @@ function PanelField({
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className={`mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 ${
+        className={`mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring ${
           mono ? "font-mono" : ""
         }`}
       />

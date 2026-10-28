@@ -250,19 +250,19 @@ function PickSlipView() {
               value={opts.companyName}
               onChange={(e) => set({ companyName: e.target.value })}
               placeholder="Company name"
-              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c] dark:bg-gray-800"
+              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none dark:bg-gray-800 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <input
               value={opts.fromAddress}
               onChange={(e) => set({ fromAddress: e.target.value })}
               placeholder="From / return address (optional)"
-              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c] dark:bg-gray-800"
+              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none dark:bg-gray-800 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <input
               value={opts.note}
               onChange={(e) => set({ note: e.target.value })}
               placeholder="Note shown on the slip (optional)"
-              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c] dark:bg-gray-800"
+              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none dark:bg-gray-800 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
           </div>
         </div>
