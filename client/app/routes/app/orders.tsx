@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   type DateRangePreset,
   type OrderRangePreset,
@@ -20,7 +20,7 @@ import {
 } from "~/components/ui/page-header";
 import { StatCard } from "~/components/app/stat-card";
 import { MoneyTotal } from "~/components/app/money-total";
-import { DataTable, useDataTableState } from "~/components/app/data-table";
+import { DataTable, useDataTableState, type FilterDef } from "~/components/app/data-table";
 import { OrderMobileSummary, OrderRowActions, useOrderColumns } from "~/components/app/orders-table";
 import { ShopifySyncCell } from "~/components/app/shopify-sync-cell";
 import { describeOrderShopifySync } from "~/lib/shopify-sync";
@@ -34,11 +34,22 @@ import { formatCurrency } from "~/lib/utils";
 import { useExclusiveDownload } from "~/hooks/use-exclusive-download";
 import { reportingTimeZone, todayIn } from "~/lib/reporting-date";
 import { useOrders, useOrderStats } from "~/hooks/use-order-queries";
+import { useChannels } from "~/hooks/use-channel-queries";
+import { FULFILLMENT_FILTER_OPTIONS, PAYMENT_FILTER_OPTIONS } from "~/lib/order-status";
+import { comparedChange, comparedLabel, type TrendGoodWhen } from "~/lib/trend";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { orderService } from "~/services/order.service";
 import { dashboardService } from "~/services/dashboard.service";
-import type { Order, OrderListParams, DashboardQueryParams, OrderStatsResponse } from "~/types/api";
+import type {
+  ChannelPlatform,
+  DashboardQueryParams,
+  FulfillmentStatus,
+  Order,
+  OrderListParams,
+  OrderPaymentFilter,
+  OrderStatsResponse,
+} from "~/types/api";
 
 export function meta() {
   return [
@@ -62,12 +73,17 @@ const STAT_CARDS: ReadonlyArray<{
   icon: React.ReactNode;
   /** Renders the value through formatCurrency instead of toLocaleString. */
   currency?: boolean;
+  /** A growing backlog is bad news, so its rise is red. */
+  goodWhen?: TrendGoodWhen;
 }> = [
   { key: "totalNewOrders", label: "Total New Orders", icon: <ShoppingBag className="size-4" /> },
-  { key: "pendingOrders", label: "Pending Orders", icon: <Package className="size-4" /> },
+  { key: "pendingOrders", label: "Pending Orders", icon: <Package className="size-4" />, goodWhen: "down" },
   { key: "totalSales", label: "Total Sales", icon: <Target className="size-4" />, currency: true },
   { key: "totalProductsSold", label: "Products Sold", icon: <Box className="size-4" /> },
 ];
+
+/** Chat channels never hold orders, so the Channel filter leaves them out. */
+const CHAT_PLATFORMS: ReadonlyArray<ChannelPlatform> = ["WHATSAPP", "INSTAGRAM", "FACEBOOK"];
 
 export default function OrdersPage() {
   // The whole view — page, search, date range, sort, page size — lives in the
@@ -90,11 +106,33 @@ export default function OrdersPage() {
   const canOperate = canManage || role === "AGENT";
   const showShopifyColumn = !isVendor;
 
-  const columns = useOrderColumns({ currency: orgCurrency, showShopifyColumn });
+  const columns = useOrderColumns({ currency: orgCurrency, showShopifyColumn, showPaymentColumn: !isVendor });
+  const { data: channels } = useChannels();
+  // A vendor's rows carry neither payment nor channel, so they filter by
+  // fulfilment only.
+  const filters = useMemo<FilterDef[]>(
+    () => [
+      ...(isVendor ? [] : [{ key: "payment", label: "Payment", options: PAYMENT_FILTER_OPTIONS }]),
+      { key: "fulfillment", label: "Fulfilment", options: FULFILLMENT_FILTER_OPTIONS },
+      ...(isVendor
+        ? []
+        : [
+          {
+            key: "channel",
+            label: "Channel",
+            options: channels
+              ?.filter((c) => !CHAT_PLATFORMS.includes(c.platform))
+              .map((c) => ({ value: c.id, label: c.name })),
+          },
+        ]),
+    ],
+    [channels, isVendor],
+  );
   const table = useDataTableState({
     key: "orders",
     list,
     columns,
+    filters,
     sort: { default: { field: "externalCreatedAt", dir: "desc" } },
     // Opens on 7 days rather than All Time: all-time stats scan every order.
     date: {
@@ -115,12 +153,22 @@ export default function OrdersPage() {
     ? `${dateFilter.custom.from}-to-${dateFilter.custom.to}`
     : dateFilter.preset;
 
+  // A search looks through every date unless a range was picked on purpose.
+  // Searching inside the 7-day default answered "No orders match" for last
+  // month's order, or anyone's phone number.
+  const searchAllDates = table.debouncedSearch.trim() !== "" && table.isDefaultDate;
+  const payment = table.filters.payment?.[0] as OrderPaymentFilter | undefined;
+  const fulfillmentStatus = table.filters.fulfillment?.[0] as FulfillmentStatus | undefined;
+  const channelId = table.filters.channel?.[0];
+
   const params: OrderListParams = {
     page: table.page,
     limit: table.limit,
     search: table.debouncedSearch || undefined,
-    dateFrom,
-    dateTo,
+    ...(searchAllDates ? {} : { dateFrom, dateTo }),
+    payment,
+    fulfillmentStatus,
+    channelId,
     sortBy: table.sort?.field,
     sortOrder: table.sort?.dir,
   };
@@ -142,7 +190,7 @@ export default function OrdersPage() {
   const sortDir = table.sort?.dir;
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [table.page, table.limit, table.debouncedSearch, dateFrom, dateTo, sortField, sortDir]);
+  }, [table.page, table.limit, table.debouncedSearch, dateFrom, dateTo, sortField, sortDir, payment, fulfillmentStatus, channelId]);
 
   function toggleRow(order: Order, checked: boolean) {
     setSelectedIds((prev) => {
@@ -174,10 +222,6 @@ export default function OrdersPage() {
           [...selectedCurrencies][0],
         )
       : undefined;
-
-  function formatChange(direction: "up" | "down" | "same", percentage: number) {
-    return direction === "down" ? -percentage : percentage;
-  }
 
   const downloadReport = () => startDownload(
     "report",
@@ -214,8 +258,9 @@ export default function OrdersPage() {
               until its file arrives or fails. */}
           {!isVendor && (
             <div className="hidden items-center gap-2 md:flex">
+              {/* Outline: Create Order is this page's one primary action. */}
               <Button
-                variant="brand"
+                variant="outline"
                 size="action"
                 disabled={activeDownload !== null}
                 aria-busy={activeDownload === "report"}
@@ -276,7 +321,7 @@ export default function OrdersPage() {
             </div>
           ))
         ) : stats ? (
-          STAT_CARDS.map(({ key, label, icon, currency }, i, arr) => {
+          STAT_CARDS.map(({ key, label, icon, currency, goodWhen }, i, arr) => {
             const metric = stats[key];
             return (
               <div key={key} className="flex min-w-0 items-center gap-4">
@@ -295,12 +340,9 @@ export default function OrdersPage() {
                       Number(metric.current).toLocaleString()
                     )
                   }
-                  {...(metric.change
-                    ? {
-                      change: formatChange(metric.change.direction, metric.change.percentage),
-                      changeLabel: "vs previous period",
-                    }
-                    : {})}
+                  change={comparedChange(metric)}
+                  goodWhen={goodWhen}
+                  changeLabel={comparedLabel(metric)}
                   icon={icon}
                   className="flex-1"
                 />
@@ -311,9 +353,7 @@ export default function OrdersPage() {
             );
           })
         ) : (
-          /* No `change` here — passing 0 renders a GREEN "0%" up-trend badge
-             (the card treats `change >= 0` as positive), so a failed stats
-             request comes out looking like four healthy metrics. */
+          /* No `change` here: a failed stats request has no trend to show. */
           STAT_CARDS.map(({ key, label, icon }) => (
             <StatCard key={key} variant="inline" label={label} value="—" icon={icon} />
           ))
@@ -327,7 +367,8 @@ export default function OrdersPage() {
         meta={data?.meta}
         status={{ isLoading, isError, isPlaceholderData, refetch }}
         noun="orders"
-        searchPlaceholder="Search order #, customer or email…"
+        searchPlaceholder="Search order #, customer, email or phone…"
+        dateLabel={searchAllDates ? "All dates while searching" : undefined}
         onRowClick={(order) => navigate(`/orders/${order.id}`)}
         mobileRow={(order) => (
           <>
@@ -352,10 +393,24 @@ export default function OrdersPage() {
           />
         )}
         actionsWidth={canOperate && showShopifyColumn ? 128 : 56}
-        emptyState={{
-          title: "No orders yet",
-          description: "Orders will appear here once synced from your channels.",
-        }}
+        // The default 7 days is not a filter, so a quiet week used to read
+        // "No orders yet" while older orders existed.
+        emptyState={
+          dateFilter.preset === "all" && !dateFilter.custom
+            ? {
+              title: "No orders yet",
+              description: "Orders will appear here once synced from your channels.",
+            }
+            : {
+              title: "No orders in this period",
+              description: "Older orders are still here. Show all dates, or search by order number, name or phone.",
+              action: (
+                <Button variant="outline" size="sm" onClick={() => table.setDatePreset("all")}>
+                  Show all dates
+                </Button>
+              ),
+            }
+        }
       />
 
       {slipHref && (

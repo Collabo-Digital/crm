@@ -290,7 +290,7 @@ export function OfflineOrderForm({
 
         <Section
           title="Delivery address"
-          subtitle="Leave blank for a counter sale. For a delivered order the state here sets the GST place of supply — a different state from yours means IGST instead of CGST + SGST."
+          subtitle="Leave blank when nothing is delivered. For a delivered order the state here sets the GST place of supply — a different state from yours means IGST instead of CGST + SGST."
         >
           {autofilled && shipTo === autofilled ? (
             <p className="mb-2 rounded-md bg-muted px-2 py-1.5 text-[10px] text-muted-foreground">

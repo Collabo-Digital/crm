@@ -27,13 +27,16 @@ import {
   TextCell,
   type ColumnDef,
 } from "~/components/app/data-table";
+import { StatusBadge } from "~/components/ui/status-badge";
 import { cn, formatCurrency } from "~/lib/utils";
+import { formatDayMonth } from "~/lib/format-date";
 import { useSyncOrderMutation } from "~/hooks/use-order-mutations";
 import {
   FINANCIAL_CLASSES,
   FULFILLMENT_CLASSES,
   FINANCIAL_LABELS,
   FULFILLMENT_LABELS,
+  orderPaymentBadges,
 } from "~/lib/order-status";
 import { ChannelBadge } from "~/components/app/channel-badge";
 import { orderSourceLabel } from "~/lib/order-source";
@@ -52,7 +55,7 @@ type OrderRow = Pick<
   // The dashboard's `DashboardRecentOrder` carries neither of these, so they are
   // optional here rather than required — the compact variant degrades to no
   // channel line, and the sync menu item simply does not render.
-  Partial<Pick<Order, "channel" | "metadata" | "shopifySync" | "sourceName" | "sourceLabel">>;
+  Partial<Pick<Order, "channel" | "metadata" | "shopifySync" | "sourceName" | "sourceLabel" | "cashOnDelivery" | "tags">>;
 
 function customerOf(order: OrderRow) {
   const first = order.customer?.firstName?.trim() ?? "";
@@ -135,11 +138,7 @@ export function OrdersTable({ orders, currency, onViewDetail }: OrdersTableProps
                     </p>
                     <p className="flex items-center gap-1 text-micro text-muted-foreground">
                       <ChannelBadge platform={platform} name={orderSourceLabel(order)} /> · {order.itemCount} item
-                      {order.itemCount !== 1 ? "s" : ""} ·{" "}
-                      {new Date(order.createdAt).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "2-digit",
-                      })}
+                      {order.itemCount !== 1 ? "s" : ""} · {formatDayMonth(order.createdAt)}
                     </p>
                   </div>
                 </div>
@@ -183,9 +182,11 @@ export function OrderMobileSummary({ order, currency }: { order: OrderRow; curre
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
-        <StatusPill className={cn("h-6 px-2.5", FINANCIAL_CLASSES[order.financialStatus])}>
-          {FINANCIAL_LABELS[order.financialStatus]}
-        </StatusPill>
+        {orderPaymentBadges(order).map((badge) => (
+          <StatusPill key={badge.label} className="h-6 px-2.5" tone={badge.tone}>
+            {badge.label}
+          </StatusPill>
+        ))}
         <StatusPill className={cn("h-6 px-2.5", FULFILLMENT_CLASSES[order.fulfillmentStatus])}>
           {FULFILLMENT_LABELS[order.fulfillmentStatus]}
         </StatusPill>
@@ -205,16 +206,22 @@ export function OrderMobileSummary({ order, currency }: { order: OrderRow; curre
 /**
  * Column definitions for the orders list.
  *
- * Payment is a pill in words, like the phone rows. It was a small tick beside
- * paid order numbers, with nothing at all on unpaid ones, which said nothing
- * to a screen reader and little at a glance.
+ * Payment is a pill in words beside Fulfilment, so the day's triage (COD to
+ * confirm, unpaid, not shipped) reads straight off the list, in the Packing
+ * screen's words. It was a small tick beside paid order numbers, with nothing
+ * at all on unpaid ones, which said nothing to a screen reader and little at
+ * a glance. Shopify is last, so a Collabo-created order can be pushed from
+ * the list without opening it.
  */
 export function useOrderColumns({
   currency,
   showShopifyColumn,
+  showPaymentColumn,
 }: {
   /** Fallback only — every row renders in its own `order.currency`. */
   currency: string;
+  /** The vendor projection of the list carries no payment status. */
+  showPaymentColumn: boolean;
   /**
    * The vendor projection of the list carries neither `channel` nor the push
    * record, and a vendor cannot sync anyway, so the column would only ever
@@ -278,16 +285,24 @@ export function useOrderColumns({
           <MoneyCell amount={order.totalPrice} currency={order.currency || currency} strong />
         ),
       },
-      {
-        key: "payment",
-        label: "Payment",
-        width: 120,
-        cell: (order) => (
-          <StatusPill className={FINANCIAL_CLASSES[order.financialStatus]}>
-            {FINANCIAL_LABELS[order.financialStatus]}
-          </StatusPill>
-        ),
-      },
+      ...(showPaymentColumn
+        ? [
+          {
+            key: "payment",
+            label: "Payment",
+            width: 150,
+            cell: (order: Order) => (
+              <span className="flex min-w-0 flex-wrap items-center gap-1">
+                {orderPaymentBadges(order).map((badge) => (
+                  <StatusBadge key={badge.label} tone={badge.tone}>
+                    {badge.label}
+                  </StatusBadge>
+                ))}
+              </span>
+            ),
+          },
+        ]
+        : []),
       {
         key: "fulfillment",
         label: "Fulfillment",
@@ -323,7 +338,7 @@ export function useOrderColumns({
       });
     }
     return columns;
-  }, [currency, showShopifyColumn]);
+  }, [currency, showShopifyColumn, showPaymentColumn]);
 }
 
 const SYNC_ACTION_LABEL: Record<OrderSyncAction, string> = {

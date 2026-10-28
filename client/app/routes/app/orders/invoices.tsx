@@ -556,6 +556,8 @@ function InvoicesView() {
                     maximumFractionDigits: 0,
                   }),
                   change: stats.taxCollected.changePct ?? undefined,
+                  // Tax follows sales; more of it is neither good nor bad news.
+                  goodWhen: "neither" as const,
                   changeLabel: "CGST + SGST + IGST",
                 },
                 {
@@ -564,7 +566,7 @@ function InvoicesView() {
                   value: formatCurrency(stats.outstanding.amount, currency, {
                     maximumFractionDigits: 0,
                   }),
-                  changeLabel: `${stats.outstanding.invoiceCount} invoices unpaid`,
+                  changeLabel: `${stats.outstanding.invoiceCount} ${stats.outstanding.invoiceCount === 1 ? "invoice" : "invoices"} unpaid`,
                 },
                 {
                   key: "issued",
@@ -579,6 +581,7 @@ function InvoicesView() {
                     label={card.label}
                     value={card.value}
                     change={card.change}
+                    goodWhen={card.goodWhen}
                     changeLabel={card.changeLabel}
                     className="flex-1"
                   />

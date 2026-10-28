@@ -718,7 +718,7 @@ export function ProductFormDialog({
             <ModalTitle className="text-sm font-bold text-gray-900 dark:text-gray-100">
               {isEdit ? "Edit product" : "Create product"}
             </ModalTitle>
-            <p id={descriptionId} className="text-[10px] text-muted-foreground">
+            <p id={descriptionId} className="text-caption text-muted-foreground">
               {isEdit
                 ? "Update name, price, tax, or stock for this CRM-managed product."
                 : "Add a product to your CRM. It can be used in offline orders right away, and syncs to Shopify when you connect a store."}
@@ -765,7 +765,7 @@ export function ProductFormDialog({
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                  <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                     Status
                   </span>
                   <Select
@@ -792,7 +792,7 @@ export function ProductFormDialog({
                 />
               </div>
               <label className="block">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   Description
                 </span>
                 <div className="mt-1">
@@ -827,7 +827,7 @@ export function ProductFormDialog({
                   disabled={isVendor}
                 />
                 <label className="block">
-                  <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                  <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                     GST rate (%)
                   </span>
                   <select
@@ -844,11 +844,11 @@ export function ProductFormDialog({
                     ))}
                   </select>
                   {errors.gstRate && (
-                    <span className="text-[10px] text-red-600">{errors.gstRate}</span>
+                    <span className="text-caption text-red-600">{errors.gstRate}</span>
                   )}
                 </label>
                 <label className="block">
-                  <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                  <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                     Unit of measure (UQC)
                   </span>
                   <select
@@ -866,7 +866,7 @@ export function ProductFormDialog({
                   </select>
                 </label>
                 <label className="block">
-                  <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                  <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                     Supply type
                   </span>
                   <select
@@ -913,7 +913,7 @@ export function ProductFormDialog({
                   stockSection={
                     stockPerLocation ? (
                       <div className="space-y-1.5">
-                        <div className="flex items-center gap-2 text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                        <div className="flex items-center gap-2 text-caption font-medium text-gray-600 dark:text-gray-400">
                           <span className="flex-1">Stock</span>
                           {form.variant.trackQuantity && stockLocations.length > 0 && (
                             <span className="w-20 pr-3 text-right sm:w-24">Quantity</span>
@@ -938,7 +938,7 @@ export function ProductFormDialog({
                           />
                         </OpeningStockBody>
                         {errors.stock && (
-                          <p className="text-[10px] text-red-600">{errors.stock}</p>
+                          <p className="text-caption text-red-600">{errors.stock}</p>
                         )}
                       </div>
                     ) : undefined
@@ -950,7 +950,7 @@ export function ProductFormDialog({
                    *  vendors, who can only edit existing variant fields. */}
                   {!isVendor && (
                     <div>
-                      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      <p className="mb-1.5 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
                         Option types
                       </p>
                       <OptionsEditor
@@ -958,14 +958,14 @@ export function ProductFormDialog({
                         onChange={(next) => patch({ options: next })}
                       />
                       {errors.options && (
-                        <p className="mt-1 text-[10px] text-red-600">{errors.options}</p>
+                        <p className="mt-1 text-caption text-red-600">{errors.options}</p>
                       )}
                     </div>
                   )}
 
                   {stockPerLocation && (
                     <div>
-                      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      <p className="mb-1.5 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
                         Stock at
                       </p>
                       <OpeningStockBody
@@ -982,19 +982,19 @@ export function ProductFormDialog({
                             onRemove={removeStockLocation}
                           />
                         </div>
-                        <p className="mt-1.5 text-[10px] text-muted-foreground">
+                        <p className="mt-1.5 text-caption text-muted-foreground">
                           Enter each variant&apos;s quantity at these locations in the table below.
                         </p>
                       </OpeningStockBody>
                       {errors.stock && (
-                        <p className="mt-1 text-[10px] text-red-600">{errors.stock}</p>
+                        <p className="mt-1 text-caption text-red-600">{errors.stock}</p>
                       )}
                     </div>
                   )}
 
                   <div>
                     <div className="mb-1.5 flex items-center justify-between">
-                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      <p className="text-micro font-semibold uppercase tracking-wider text-muted-foreground">
                         Variants ({form.variants.length})
                       </p>
                       {isVendor ? null : !isEdit ? (
@@ -1005,7 +1005,7 @@ export function ProductFormDialog({
                             form.options.length === 0 ||
                             form.options.some((o) => !o.name || o.values.length === 0)
                           }
-                          className="inline-flex items-center gap-1 rounded-md border border-input bg-white dark:bg-gray-900 px-2 py-1 text-[10px] text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40"
+                          className="inline-flex items-center gap-1 rounded-md border border-input bg-white dark:bg-gray-900 px-2 py-1 text-caption text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40"
                         >
                           <Sparkles className="size-3" />
                           Add variants
@@ -1016,7 +1016,7 @@ export function ProductFormDialog({
                           onClick={() => void handleGenerateInEdit()}
                           disabled={saving || !!optionsError()}
                           title={optionsError() ?? "Saves the option types, then creates every missing combination"}
-                          className="inline-flex items-center gap-1 rounded-md border border-input bg-white dark:bg-gray-900 px-2 py-1 text-[10px] text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40"
+                          className="inline-flex items-center gap-1 rounded-md border border-input bg-white dark:bg-gray-900 px-2 py-1 text-caption text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40"
                         >
                           {saving ? (
                             <Loader2 className="size-3 animate-spin" />
@@ -1036,12 +1036,12 @@ export function ProductFormDialog({
                         stockLocations={stockPerLocation ? stockLocations : undefined}
                       />
                     ) : (
-                      <p className="rounded-lg border border-dashed border-input bg-gray-50 dark:bg-gray-800/40 py-4 text-center text-[11px] text-muted-foreground">
+                      <p className="rounded-lg border border-dashed border-input bg-gray-50 dark:bg-gray-800/40 py-4 text-center text-caption text-muted-foreground">
                         Define option types, then click "Add variants".
                       </p>
                     )}
                     {errors.variants && (
-                      <p className="mt-1 text-[10px] text-red-600">{errors.variants}</p>
+                      <p className="mt-1 text-caption text-red-600">{errors.variants}</p>
                     )}
                   </div>
                 </div>
@@ -1142,7 +1142,7 @@ function Section({
 }) {
   return (
     <div className="space-y-3">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <p className="text-micro font-semibold uppercase tracking-wider text-muted-foreground">
         {title}
       </p>
       {children}
@@ -1308,7 +1308,7 @@ function SingleVariantFields({
         />
         {stockSection ? null : variant.trackQuantity && stockReadOnly ? (
           <div className="flex flex-col">
-            <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+            <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
               Stock on hand
             </span>
             {/* A link, not prose. Naming the destination without going there is
@@ -1332,7 +1332,7 @@ function SingleVariantFields({
           />
         ) : (
           <div className="flex flex-col">
-            <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+            <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
               Stock on hand
             </span>
             <p className="mt-1 h-9 flex items-center text-xs italic text-muted-foreground">
@@ -1347,7 +1347,7 @@ function SingleVariantFields({
       <button
         type="button"
         onClick={() => setAdvancedOpen((v) => !v)}
-        className="inline-flex items-center gap-1 text-[11px] font-medium text-brand-strong hover:underline"
+        className="inline-flex items-center gap-1 text-caption font-medium text-brand-strong hover:underline"
       >
         {advancedOpen ? (
           <ChevronDown className="size-3" />
@@ -1371,7 +1371,7 @@ function SingleVariantFields({
                 placeholder="0.00"
               />
               <div className="flex flex-col">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   Profit / margin
                 </span>
                 <p className="mt-1 h-9 flex items-center text-xs font-medium text-gray-900 dark:text-gray-100">
@@ -1422,7 +1422,7 @@ function SingleVariantFields({
                   placeholder="0.0"
                 />
                 <label className="block">
-                  <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                  <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                     Weight unit
                   </span>
                   <select
@@ -1500,7 +1500,7 @@ function FieldsSubsection({
 }) {
   return (
     <div className="space-y-2">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <p className="text-micro font-semibold uppercase tracking-wider text-muted-foreground">
         {title}
       </p>
       <div className="space-y-2">{children}</div>
@@ -1541,7 +1541,7 @@ function Toggle({
           {label}
         </span>
         {hint && (
-          <p className="mt-0.5 text-[10px] text-muted-foreground">{hint}</p>
+          <p className="mt-0.5 text-caption text-muted-foreground">{hint}</p>
         )}
       </div>
     </label>
@@ -1575,7 +1575,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+      <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
         {label}
         {required && <span className="text-red-500"> *</span>}
       </span>
@@ -1592,9 +1592,9 @@ function Field({
           disabled ? "cursor-not-allowed opacity-60" : ""
         }`}
       />
-      {error && <span className="mt-1 block text-[10px] text-red-600">{error}</span>}
+      {error && <span className="mt-1 block text-caption text-red-600">{error}</span>}
       {hint && !error && (
-        <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground">
+        <span className="mt-1 block text-caption leading-relaxed text-muted-foreground">
           {hint}
         </span>
       )}

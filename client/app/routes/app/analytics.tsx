@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { oneOf, useSessionState } from "~/hooks/use-session-state";
 import { Package, RefreshCw } from "lucide-react";
 import { cn } from "~/lib/utils";
+import { formatDateTime } from "~/lib/format-date";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -155,8 +156,10 @@ export default function AnalyticsPage() {
                 variant="inline"
                 label={label}
                 value={value.toLocaleString()}
-                change={change}
-                changeLabel={changeLabel}
+                change={change ?? undefined}
+                // Fewer abandoned carts is the good news.
+                goodWhen={key === "totalAbandonedCarts" ? "down" : "up"}
+                changeLabel={change === null ? "None in the previous period" : changeLabel}
                 sparklineData={sparklineFor(key, trend)}
                 className="flex-1"
               />
@@ -256,7 +259,7 @@ function formatLastRefreshed(iso: string): string {
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
-  return `on ${then.toLocaleDateString()} at ${then.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return `on ${formatDateTime(iso)}`;
 }
 
 /**

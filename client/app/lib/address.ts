@@ -111,3 +111,24 @@ export function mapsUrl(lines: string[]): string {
 export function mapsEmbedUrl(lines: string[]): string {
   return `https://maps.google.com/maps?q=${encodeURIComponent(lines.join(", "))}&z=15&output=embed`;
 }
+
+/**
+ * What stops a customer's address from being saved, in words for the form,
+ * or null when it is complete. Mirrors the server's checks: a first line, a
+ * city, and a PIN code, which in India is 6 digits.
+ */
+export function addressProblem(address: {
+  address1?: string;
+  city?: string;
+  zip?: string;
+  country?: string;
+  country_code?: string;
+}): string | null {
+  if (!address.address1?.trim()) return "Enter the first line of the address.";
+  if (!address.city?.trim()) return "Enter the city.";
+  const zip = address.zip?.trim() ?? "";
+  if (!zip) return "Enter the PIN code.";
+  const indian = address.country_code === "IN" || /^india$/i.test(address.country ?? "");
+  if (indian && !/^\d{6}$/.test(zip)) return "An Indian PIN code is 6 digits, like 400001.";
+  return null;
+}
