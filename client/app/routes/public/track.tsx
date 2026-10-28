@@ -123,9 +123,11 @@ function OrderStatus({ link, next }: { link: PublicOrderLink; next: { url: strin
 
         {next && (
           <div className="space-y-3 border-t pt-4">
-            <p className="text-body">
-              Tracking for this order is on <span className="break-all font-medium">{next.host}</span>.
-            </p>
+            {/* The site on a line of its own, whole: the customer reads where the button goes. */}
+            <div className="text-body">
+              <p>Tracking for this order is on</p>
+              <p className="break-all font-medium">{next.host}</p>
+            </div>
             <Button asChild className="h-11 w-full">
               <a href={next.url} rel="noopener noreferrer">
                 <span className="truncate">Continue to {next.host}</span>
