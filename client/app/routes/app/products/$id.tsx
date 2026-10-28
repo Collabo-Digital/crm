@@ -1078,7 +1078,8 @@ export default function ProductDetailPage() {
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <Breadcrumb>
+          {/* On a phone the app bar's back arrow does this job. */}
+          <Breadcrumb className="max-md:hidden">
             <BreadcrumbList>
               <BreadcrumbItem>
                 <BreadcrumbLink asChild>
@@ -1180,7 +1181,7 @@ export default function ProductDetailPage() {
               aria-controls="product-tabpanel"
               onClick={() => setActiveTab(id)}
               className={cn(
-                "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none",
+                "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none max-md:min-h-11 pointer-coarse:min-h-11",
                 isActive
                   ? "font-semibold text-gray-900 dark:text-gray-900"
                   : "font-medium text-background hover:text-background/70 dark:text-gray-400 dark:hover:text-gray-200",

@@ -1,6 +1,13 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { useCloseOnBack } from "~/hooks/use-bottom-sheet";
 import { cn } from "~/lib/utils";
+
+/** On a phone, back closes the screen and stays on the till. Mounted with the content. */
+function BackClose({ onClose }: { onClose: () => void }) {
+  useCloseOnBack(onClose);
+  return null;
+}
 
 /**
  * One step of a sale — the cart, the customer, payment — as the whole screen
@@ -70,6 +77,7 @@ export function PosScreen({
         >
           <DialogPrimitive.Title className="sr-only">{title}</DialogPrimitive.Title>
           <DialogPrimitive.Description className="sr-only">{description}</DialogPrimitive.Description>
+          <BackClose onClose={() => onOpenChange(false)} />
           {children}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

@@ -47,7 +47,12 @@ export function TextCell({
   className?: string;
 }) {
   return (
-    <span title={title} className={cn(TRUNCATE, muted && "text-muted-foreground", className)}>
+    <span
+      title={title}
+      // A bare dash is an empty value; the phone card leaves those fields off.
+      data-empty={children === "—" || undefined}
+      className={cn(TRUNCATE, muted && "text-muted-foreground", className)}
+    >
       {children}
     </span>
   );
@@ -120,7 +125,7 @@ export function SignedCell({ value }: { value: number }) {
 }
 
 export function DashCell() {
-  return <span className="text-muted-foreground">—</span>;
+  return <span data-empty className="text-muted-foreground">—</span>;
 }
 
 /** Name on top, a muted detail line under it; optional initials avatar. */

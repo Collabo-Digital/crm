@@ -2,6 +2,26 @@ import { formatCurrency } from "~/lib/utils";
 import type { CartLine } from "./order-cart";
 import type { OfflinePaymentMethod, Warehouse } from "~/types/api";
 
+/**
+ * The bill's figures as the form shows them. The server computes the final
+ * tax; this is the estimate, shared by the summary and the phone's total bar.
+ */
+export function billTotals(lines: CartLine[], pricesIncludeTax: boolean) {
+  const subtotal = lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
+  // Server-authoritative tax — UI estimate: assume 0 if gstRate unknown.
+  const estimatedTax = lines.reduce((s, l) => {
+    if (!l.gstRate) return s;
+    if (pricesIncludeTax) {
+      // Rounded per line as the server does, so the figures match to the paisa.
+      const amount = round2(l.unitPrice * l.quantity);
+      return s + round2(amount - round2((amount * 100) / (100 + l.gstRate)));
+    }
+    return s + ((l.unitPrice * l.quantity * l.gstRate) / 100);
+  }, 0);
+  const grandTotal = pricesIncludeTax ? subtotal : subtotal + estimatedTax;
+  return { subtotal, estimatedTax, grandTotal };
+}
+
 export function BillSummary({
   lines,
   currency,
@@ -49,18 +69,7 @@ export function BillSummary({
    */
   pricesIncludeTax?: boolean;
 }) {
-  const subtotal = lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
-  // Server-authoritative tax — UI estimate: assume 0 if gstRate unknown.
-  const estimatedTax = lines.reduce((s, l) => {
-    if (!l.gstRate) return s;
-    if (pricesIncludeTax) {
-      // Rounded per line as the server does, so the figures match to the paisa.
-      const amount = round2(l.unitPrice * l.quantity);
-      return s + round2(amount - round2((amount * 100) / (100 + l.gstRate)));
-    }
-    return s + ((l.unitPrice * l.quantity * l.gstRate) / 100);
-  }, 0);
-  const grandTotal = pricesIncludeTax ? subtotal : subtotal + estimatedTax;
+  const { subtotal, estimatedTax, grandTotal } = billTotals(lines, pricesIncludeTax);
 
   return (
     <div className="space-y-4 rounded-xl border bg-white dark:bg-gray-900 p-4 shadow-sm">
@@ -68,7 +77,7 @@ export function BillSummary({
         <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
           Bill summary
         </p>
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-caption text-muted-foreground">
           Final tax is computed by the server using GST rules at submit.
         </p>
       </div>
@@ -102,7 +111,7 @@ export function BillSummary({
             invoice resolves the default on its own. */}
         {warehouses && warehouses.length > 1 && onWarehouseChange && (
           <label className="block">
-            <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+            <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
               Dispatch from
             </span>
             <select
@@ -120,7 +129,7 @@ export function BillSummary({
         )}
 
         <label className="block">
-          <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+          <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
             Payment method
           </span>
           <select
@@ -138,7 +147,7 @@ export function BillSummary({
         </label>
 
         <label className="block">
-          <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+          <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
             Note (optional)
           </span>
           <textarea
@@ -155,7 +164,7 @@ export function BillSummary({
           type="button"
           onClick={onSubmit}
           disabled={!canSubmit || isSubmitting || isSavingDraft}
-          className="inline-flex w-full items-center justify-center rounded-lg bg-[#CEF17B] px-4 py-2.5 text-xs font-semibold text-gray-900 hover:bg-[#BADE6F] disabled:pointer-events-none disabled:opacity-40"
+          className="inline-flex w-full items-center justify-center rounded-lg bg-[#CEF17B] px-4 py-2.5 text-xs font-semibold text-gray-900 hover:bg-[#BADE6F] disabled:pointer-events-none disabled:opacity-40 max-md:min-h-11 max-md:text-label pointer-coarse:min-h-11"
         >
           {isSubmitting ? "Creating order…" : "Create order & generate bill"}
         </button>
@@ -170,8 +179,8 @@ export function BillSummary({
           disabled={!canSubmit || isSubmitting || isSavingDraft}
           className={
             draftOnly
-              ? "inline-flex w-full items-center justify-center rounded-lg bg-[#CEF17B] px-4 py-2.5 text-xs font-semibold text-gray-900 hover:bg-[#BADE6F] disabled:pointer-events-none disabled:opacity-40"
-              : "inline-flex w-full items-center justify-center rounded-lg border border-input bg-white dark:bg-gray-900 px-4 py-2 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:pointer-events-none disabled:opacity-40"
+              ? "inline-flex w-full items-center justify-center rounded-lg bg-[#CEF17B] px-4 py-2.5 text-xs font-semibold text-gray-900 hover:bg-[#BADE6F] disabled:pointer-events-none disabled:opacity-40 max-md:min-h-11 max-md:text-label pointer-coarse:min-h-11"
+              : "inline-flex w-full items-center justify-center rounded-lg border border-input bg-white dark:bg-gray-900 px-4 py-2 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:pointer-events-none disabled:opacity-40 max-md:min-h-11 max-md:text-label pointer-coarse:min-h-11"
           }
         >
           {isSavingDraft ? "Saving draft…" : "Save as draft"}
@@ -179,7 +188,7 @@ export function BillSummary({
       )}
 
       {!canSubmit && disabledReason && (
-        <p className="text-center text-[10px] text-amber-700 dark:text-amber-400">
+        <p className="text-center text-caption text-amber-700 dark:text-amber-400">
           {disabledReason}
         </p>
       )}

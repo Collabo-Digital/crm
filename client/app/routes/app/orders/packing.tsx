@@ -173,6 +173,12 @@ export default function PackingQueuePage() {
   };
   useKeyboardWedge(openSlip, !cameraOpen || phone);
 
+  const openScanner = () => {
+    wakeSound();
+    setSlipFeedback(null);
+    setCameraOpen(true);
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader>
@@ -192,12 +198,8 @@ export default function PackingQueuePage() {
           <Button
             variant="brand"
             size="action"
-            className="h-11 flex-1 rounded-xl md:h-auto md:flex-none md:rounded-full"
-            onClick={() => {
-              wakeSound();
-              setSlipFeedback(null);
-              setCameraOpen(true);
-            }}
+            className="max-md:hidden"
+            onClick={openScanner}
           >
             {lookup.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <ScanBarcode className="size-3.5" />}
             Scan a packing slip
@@ -231,6 +233,18 @@ export default function PackingQueuePage() {
         mobileRow={(row) => <QueueCard row={row} />}
         emptyState={{ title: bucketDef.empty, description: bucketDef.hint }}
       />
+
+      {/* Phones: the next slip is always one thumb-tap away, above the tab bar. */}
+      <div className="mobile-action-dock sticky z-30 -mx-4 border-t bg-card/95 px-4 py-3 backdrop-blur md:hidden">
+        <Button
+          variant="brand"
+          className="h-11 w-full text-section"
+          onClick={() => (cameraOpen ? setCameraOpen(false) : openScanner())}
+        >
+          {lookup.isPending ? <Loader2 className="animate-spin" /> : <ScanBarcode />}
+          {cameraOpen ? "Close camera" : "Scan a packing slip"}
+        </Button>
+      </div>
 
       <CameraScanner
         open={cameraOpen}

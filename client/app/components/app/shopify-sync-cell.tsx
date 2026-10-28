@@ -35,6 +35,11 @@ function PillIcon({ state }: { state: ShopifySyncState }) {
   }
 }
 
+/** Whether someone has to act on it; a phone card shows the sync line only then. */
+export function syncNeedsAttention(summary: ShopifySyncSummary<string>): boolean {
+  return summary.state === "failed" || summary.state === "stuck" || summary.state === "out_of_sync";
+}
+
 export function ShopifySyncCell({
   summary,
   title,

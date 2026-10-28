@@ -5,6 +5,7 @@ import { SaveBar } from "~/components/app/save-bar";
 import { PaymentsCard } from "~/components/app/settings/payments-card";
 import { Input } from "~/components/ui/input";
 import { Switch } from "~/components/ui/switch";
+import { cn } from "~/lib/utils";
 import {
   useOrganizationSettings,
 } from "~/hooks/use-settings-queries";
@@ -500,8 +501,9 @@ function SettingsToggleRow({
   onChange: (next: boolean) => void;
 }) {
   const id = useId();
+  // A label, so the whole row toggles: the switch alone is a small target.
   return (
-    <div className="flex items-start justify-between gap-4 px-5 py-4">
+    <label className={cn("flex items-start justify-between gap-4 px-5 py-4", !disabled && "cursor-pointer")}>
       <div className="flex-1 min-w-0">
         <p id={`${id}-label`} className="text-sm font-medium text-gray-900 dark:text-gray-100">
           {label}
@@ -519,7 +521,7 @@ function SettingsToggleRow({
         labelledBy={`${id}-label`}
         describedBy={help ? `${id}-help` : undefined}
       />
-    </div>
+    </label>
   );
 }
 

@@ -70,7 +70,7 @@ export function AddressFields({
 
       <div className="col-span-2">
         <label className="block">
-          <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+          <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
             State — sets GST place of supply
           </span>
           <Select
@@ -144,7 +144,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+      <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
         {label}
       </span>
       <input

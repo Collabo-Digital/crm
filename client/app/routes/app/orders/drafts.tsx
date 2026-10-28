@@ -15,7 +15,7 @@ import {
 import { Button } from "~/components/ui/button";
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
-import { StatCard } from "~/components/app/stat-card";
+import { STAT_STRIP, StatCard } from "~/components/app/stat-card";
 import {
   DataTable,
   DateCell,
@@ -26,7 +26,7 @@ import {
   useDataTableState,
   type ColumnDef,
 } from "~/components/app/data-table";
-import { formatCurrency } from "~/lib/utils";
+import { cn, formatCurrency } from "~/lib/utils";
 import { DRAFT_STATUS_CLASSES, DRAFT_STATUS_LABELS } from "~/lib/draft-status";
 import {
   DropdownMenu,
@@ -196,7 +196,7 @@ export default function DraftsPage() {
 
       {/* KPI row. Org-wide, not page-derived — these figures must not move
           when the user pages through the table below. */}
-      <div className="grid grid-cols-1 gap-5 rounded-xl bg-card p-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className={cn("grid grid-cols-1 gap-5 rounded-xl bg-card p-3 sm:grid-cols-2 lg:grid-cols-4", STAT_STRIP)}>
         {statsLoading || !stats ? (
           Array.from({ length: 4 }).map((_, index) => (
             <div key={index} className="p-5">

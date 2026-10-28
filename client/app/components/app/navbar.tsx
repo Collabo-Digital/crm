@@ -33,6 +33,7 @@ import {
   Store,
   PackageCheck,
   LifeBuoy,
+  ChevronLeft,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
@@ -58,6 +59,8 @@ import { useCurrentRole } from "~/hooks/use-current-role";
 import { useInboxCounts } from "~/hooks/use-inbox-queries";
 import { toast } from "sonner";
 import { roleLabel } from "~/lib/labels";
+import { LIST_QUERY_KEYS, parentScreen, withQuery, type Screen } from "~/lib/app-bar";
+import { isString, readSessionState } from "~/hooks/use-session-state";
 
 type NavChild = {
   label: string;
@@ -143,6 +146,13 @@ const NAV_LINKS: NavItem[] = [
   { label: "Analytics", href: "/analytics", icon: BarChart3, children: ANALYTICS_CHILDREN },
 ];
 
+/** Every screen a phone's back arrow can return to: the sections, their tabs and Settings. */
+const SCREENS: Screen[] = [
+  ...NAV_LINKS,
+  ...NAV_LINKS.flatMap((item) => item.children ?? []).filter((child) => !NAV_LINKS.some((item) => item.href === child.href)),
+  { href: "/settings", label: "Settings" },
+].map(({ href, label }) => ({ href, label }));
+
 /**
  * The nav entry owning `pathname`, longest matching href first — so
  * /orders/drafts/<id> selects "Drafts" rather than "All orders". Matching on a
@@ -203,6 +213,12 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
     location.pathname === "/dashboard"
       ? null
       : (activeTop?.label ?? SCREEN_TITLES[location.pathname.split("/")[1] ?? ""] ?? null);
+  // A page under another screen (an order, a new draft, a settings tab) gets a
+  // back arrow to it on a phone, in place of the title and section tabs. A
+  // list comes back as it was left: its filters, search and page.
+  const parent = parentScreen(location.pathname, SCREENS);
+  const queryKey = parent ? LIST_QUERY_KEYS[parent.href] : undefined;
+  const backTo = parent && withQuery(parent.href, queryKey ? readSessionState(queryKey, "", isString) : "");
   // On a phone the section tabs scroll sideways; keep the current one in view.
   const sectionNavRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -245,10 +261,19 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
       <div className="mx-auto flex h-14 max-w-screen-xl items-center justify-between gap-2 px-4 md:h-[72px] md:px-6">
 
         {/* ── Logo ──────────────────────────────────────────────────── */}
-        <Link to={landingPath} className={cn("shrink-0 items-center", mobileTitle ? "hidden md:flex" : "flex")}>
+        <Link to={landingPath} className={cn("shrink-0 items-center pointer-coarse:min-h-11", mobileTitle ? "hidden md:flex" : "flex")}>
           <BrandLogo className="h-6 md:h-7" />
         </Link>
-        {mobileTitle && (
+        {parent && backTo ? (
+          <Link
+            to={backTo}
+            aria-label={`Back to ${parent.label}`}
+            className="-ml-2.5 flex min-h-11 min-w-0 items-center gap-0.5 rounded-full pr-3 text-foreground md:hidden"
+          >
+            <ChevronLeft className="size-6 shrink-0" />
+            <span className="truncate font-heading text-[19px] font-semibold tracking-tight">{parent.label}</span>
+          </Link>
+        ) : mobileTitle && (
           <span className="min-w-0 truncate font-heading text-[22px] font-semibold tracking-tight text-foreground md:hidden">{mobileTitle}</span>
         )}
 
@@ -266,7 +291,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                       role="link"
                       aria-disabled="true"
                       tabIndex={0}
-                      className="flex shrink-0 cursor-not-allowed items-center gap-1 rounded-full p-2.5 text-sm font-medium text-background/40 select-none focus-visible:outline-brand dark:text-gray-600"
+                      className="flex shrink-0 cursor-not-allowed items-center gap-1 rounded-full p-2.5 text-sm font-medium text-background/40 select-none focus-visible:outline-brand dark:text-gray-600 pointer-coarse:min-h-11"
                     >
                       <Lock className="size-3" />
                       {label}
@@ -280,7 +305,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                   to={target}
                   aria-current={isActive ? "page" : undefined}
                   className={cn(
-                    "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none p-2.5 focus-visible:outline-brand",
+                    "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none p-2.5 focus-visible:outline-brand pointer-coarse:min-h-11",
                     isActive
                       ? "font-semibold text-brand-foreground"
                       : "font-medium text-background hover:text-background/70 dark:text-gray-400 dark:hover:text-gray-200"
@@ -328,7 +353,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
         <div className="flex shrink-0 items-center gap-1 md:gap-3">
           <div id={APP_BAR_ACTIONS_ID} className="flex items-center gap-0.5 md:hidden" />
 
-          <button aria-label="Settings" onClick={() => navigate("/settings")} className="hidden md:flex size-9 items-center justify-center rounded-full bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
+          <button aria-label="Settings" onClick={() => navigate("/settings")} className="hidden md:flex size-9 pointer-coarse:size-11 items-center justify-center rounded-full bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
             <Settings className="size-4" />
           </button>
           {/* 
@@ -429,7 +454,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
       {sectionChildren && (
         <LayoutGroup id="section-nav">
           <div className="mx-auto flex max-w-screen-xl items-center md:mt-3 md:gap-3 md:px-6 md:pb-3">
-          <div ref={sectionNavRef} className="mobile-section-nav min-w-0 flex-1 overflow-x-auto px-1 max-md:border-b max-md:border-border/70 md:px-0">
+          <div ref={sectionNavRef} className={cn("mobile-section-nav min-w-0 flex-1 overflow-x-auto px-1 max-md:border-b max-md:border-border/70 md:px-0", parent && "max-md:hidden")}>
             <nav
               aria-label={`${activeTop?.label} section`}
               className="inline-flex min-w-max items-center gap-0.5 md:rounded-full md:bg-white md:px-1.5 md:py-1 md:shadow-sm md:ring-1 md:ring-black/[0.06] md:dark:bg-gray-900 md:dark:ring-gray-700"
@@ -451,11 +476,13 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                     <Fragment key={href}>
                       {groupHead}
                       <Tip text={lockReason} side="bottom">
+                        {/* A tap says why: touch screens never show the tooltip. */}
                         <span
                           role="link"
                           aria-disabled="true"
                           tabIndex={0}
-                          className="flex cursor-not-allowed items-center gap-1.5 rounded-full p-2.5 text-xs font-medium text-gray-300 select-none dark:text-gray-600"
+                          onClick={() => toast.info(lockReason)}
+                          className="flex cursor-not-allowed items-center gap-1.5 rounded-full p-2.5 text-xs font-medium text-gray-300 select-none dark:text-gray-600 max-md:min-h-11 max-md:text-sm"
                         >
                           <Lock className="size-3.5" />
                           {label}
@@ -471,7 +498,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                       to={href}
                       aria-current={isActive ? "page" : undefined}
                       className={cn(
-                        "relative flex min-h-11 items-center gap-1.5 px-3 py-2.5 text-sm select-none md:min-h-0 md:rounded-full md:p-2.5 md:text-xs",
+                        "relative flex min-h-11 items-center gap-1.5 px-3 py-2.5 text-sm select-none md:min-h-0 md:rounded-full md:p-2.5 md:text-xs pointer-coarse:min-h-11",
                         isActive
                           ? "font-semibold text-foreground md:text-brand-foreground"
                           : "font-medium text-muted-foreground hover:text-foreground"

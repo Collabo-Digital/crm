@@ -18,11 +18,12 @@ import {
   PageHeaderDescription,
   PageHeaderActions,
 } from "~/components/ui/page-header";
-import { StatCard } from "~/components/app/stat-card";
+import { STAT_STRIP, StatCard } from "~/components/app/stat-card";
 import { MoneyTotal } from "~/components/app/money-total";
 import { DataTable, useDataTableState, type FilterDef } from "~/components/app/data-table";
 import { OrderMobileSummary, OrderRowActions, useOrderColumns } from "~/components/app/orders-table";
-import { ShopifySyncCell } from "~/components/app/shopify-sync-cell";
+import { ShopifySyncCell, syncNeedsAttention } from "~/components/app/shopify-sync-cell";
+import { AppBarActions } from "~/components/app/app-bar-actions";
 import { describeOrderShopifySync } from "~/lib/shopify-sync";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
 import { DockButton, FloatingDock } from "~/components/app/floating-dock";
@@ -30,7 +31,7 @@ import { BulkInvoiceDialog } from "~/components/app/bulk-invoice-dialog";
 import { useInvoiceActionGates } from "~/hooks/use-invoice-action-gates";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Separator } from "~/components/ui/separator";
-import { formatCurrency } from "~/lib/utils";
+import { cn, formatCurrency } from "~/lib/utils";
 import { useExclusiveDownload } from "~/hooks/use-exclusive-download";
 import { reportingTimeZone, todayIn } from "~/lib/reporting-date";
 import { useOrders, useOrderStats } from "~/hooks/use-order-queries";
@@ -239,16 +240,17 @@ export default function OrdersPage() {
   return (
     // Bottom padding while the bulk-action dock is up, so it never covers the
     // pagination row.
-    <div className={slipHref ? "space-y-6 pb-24" : "space-y-6"}>
+    <div className={cn("space-y-4 md:space-y-6", slipHref && "pb-24")}>
       {/* Page header */}
-      <PageHeader>
+      {/* On a phone its buttons live in the app bar, so it takes no room. */}
+      <PageHeader className="max-md:contents">
         <PageHeaderContent>
           <PageHeaderTitle>Orders</PageHeaderTitle>
           <PageHeaderDescription>
             Track sales, payments and fulfilment.
           </PageHeaderDescription>
         </PageHeaderContent>
-        <PageHeaderActions className="w-full justify-end md:w-auto">
+        <PageHeaderActions className="max-md:hidden">
           {/* "Download report" is the dashboard's order CSV for the chosen
               date range; the JSON file is the same orders for developers,
               via the orders export route, so it waits in the menu. Both
@@ -260,7 +262,6 @@ export default function OrdersPage() {
             <Button
               variant="outline"
               size="action"
-              className="hidden md:inline-flex"
               disabled={activeDownload !== null}
               aria-busy={activeDownload === "report"}
               onClick={downloadReport}
@@ -276,17 +277,16 @@ export default function OrdersPage() {
           {!isVendor && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="mr-auto size-11 rounded-xl md:mr-0 md:size-9 md:rounded-full" aria-label="More order actions">
+                <Button variant="outline" className="size-9 rounded-full" aria-label="More order actions">
                   <MoreHorizontal className="size-5" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem className="md:hidden" onSelect={downloadReport} disabled={activeDownload !== null}><Download /> Download report</DropdownMenuItem>
                 <DropdownMenuItem onSelect={exportOrders} disabled={activeDownload !== null}><Upload /> {activeDownload === "json" ? "Preparing…" : "Raw data for developers (JSON)"}</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Button asChild variant="brand" size="action" className="h-11 rounded-xl px-5 md:h-8 md:rounded-lg md:px-3">
+          <Button asChild variant="brand" size="action" className="h-8 rounded-lg px-3">
             <Link to="/orders/new">
               <Plus className="size-3.5" />
               Create order
@@ -294,9 +294,31 @@ export default function OrdersPage() {
           </Button>
         </PageHeaderActions>
       </PageHeader>
+      {/* Phones: the actions sit in the app bar, so the list starts higher. */}
+      <AppBarActions>
+        {!isVendor && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="rounded-full" aria-label="More order actions">
+                <MoreHorizontal className="size-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={downloadReport} disabled={activeDownload !== null}><Download /> Download report</DropdownMenuItem>
+              <DropdownMenuItem onSelect={exportOrders} disabled={activeDownload !== null}><Upload /> {activeDownload === "json" ? "Preparing…" : "Raw data for developers (JSON)"}</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        <Button asChild variant="brand" size="sm" className="rounded-full px-3.5">
+          <Link to="/orders/new">
+            <Plus className="size-4" />
+            Create order
+          </Link>
+        </Button>
+      </AppBarActions>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-2 gap-4 rounded-3xl bg-card p-4 md:gap-5 md:rounded-xl md:p-3 lg:grid-cols-4">
+      <div className={cn("grid grid-cols-2 gap-4 rounded-3xl bg-card p-4 md:gap-5 md:rounded-xl md:p-3 lg:grid-cols-4", STAT_STRIP)}>
         {statsLoading ? (
           Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="min-w-0 p-1 md:p-5">
@@ -357,7 +379,9 @@ export default function OrdersPage() {
         mobileRow={(order) => (
           <>
             <OrderMobileSummary order={order} currency={orgCurrency} />
-            {showShopifyColumn && <div className="mt-3"><ShopifySyncCell summary={describeOrderShopifySync(order)} /></div>}
+            {showShopifyColumn && syncNeedsAttention(describeOrderShopifySync(order)) && (
+              <div className="mt-2"><ShopifySyncCell summary={describeOrderShopifySync(order)} /></div>
+            )}
           </>
         )}
         selection={{

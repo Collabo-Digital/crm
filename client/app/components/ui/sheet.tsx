@@ -4,6 +4,7 @@ import { XIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
+import { useCloseOnBack } from "~/hooks/use-bottom-sheet";
 
 /**
  * Slide-out side sheet built on Radix Dialog. Use this instead of `Dialog`
@@ -53,6 +54,13 @@ function SheetOverlay({
 
 type SheetSide = "left" | "right";
 
+/** On a phone, back closes the sheet. Mounted with the content, so only while open. */
+function SheetBackClose() {
+  const closeRef = React.useRef<HTMLButtonElement>(null);
+  useCloseOnBack(React.useCallback(() => closeRef.current?.click(), []));
+  return <DialogPrimitive.Close ref={closeRef} hidden tabIndex={-1} />;
+}
+
 function SheetContent({
   className,
   children,
@@ -79,6 +87,7 @@ function SheetContent({
         )}
         {...props}
       >
+        <SheetBackClose />
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close asChild>

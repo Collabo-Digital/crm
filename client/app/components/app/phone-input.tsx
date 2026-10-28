@@ -174,7 +174,7 @@ export function PhoneInput({
 
   return (
     <div className="block">
-      <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+      <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
         {label}
       </span>
       <div
@@ -198,7 +198,7 @@ export function PhoneInput({
             title={countryName(country)}
             className="flex shrink-0 items-center gap-1 border-r border-input px-2 text-xs hover:bg-muted/60 focus-visible:outline-none"
           >
-            <span className="rounded bg-muted px-1 text-[9px] font-semibold text-muted-foreground">
+            <span className="rounded bg-muted px-1 text-caption font-semibold text-muted-foreground">
               {country}
             </span>
             <span className="tabular-nums text-foreground">{dial}</span>
@@ -238,7 +238,7 @@ export function PhoneInput({
                         active && "bg-muted",
                       )}
                     >
-                      <span className="w-6 shrink-0 text-[9px] font-semibold text-muted-foreground">
+                      <span className="w-6 shrink-0 text-caption font-semibold text-muted-foreground">
                         {c.code}
                       </span>
                       <span className="min-w-0 flex-1 truncate">{c.name}</span>
@@ -265,7 +265,7 @@ export function PhoneInput({
         />
       </div>
       {invalid && (
-        <p id={errorId} className="mt-1 text-[10px] text-destructive">
+        <p id={errorId} className="mt-1 text-caption text-destructive">
           Enter a valid phone number for {countryName(country)}.
         </p>
       )}

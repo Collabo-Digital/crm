@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { isAxiosError } from "axios";
 import { toast } from "sonner";
 import {
+  ArrowLeft,
   Camera,
   ChevronRight,
   CirclePause,
@@ -248,13 +249,22 @@ function PackScreen({ task, queuePath, onStartAgain }: { task: PackTask; queuePa
       <div ref={topRef} />
       {phone && cameraOpen && <div aria-hidden style={{ height: `calc(50dvh - ${panelGap}px)` }} />}
 
-      <nav aria-label="Breadcrumb" className={cn("flex items-center gap-1.5 text-caption", scanning && "hidden")}>
+      <nav aria-label="Breadcrumb" className={cn("flex items-center gap-1.5 text-caption max-md:hidden", scanning && "hidden")}>
         <Link to={queuePath} className="text-muted-foreground hover:text-foreground">
           Packing
         </Link>
         <ChevronRight className="size-3 text-muted-foreground" />
         <span className="font-medium text-foreground">{task.orderName}</span>
       </nav>
+      {/* Phones pack full screen, without the app bar, so the way back is here. */}
+      <div className={cn("-mx-2 -mt-2 flex items-center gap-1 md:hidden", scanning && "hidden")}>
+        <Button asChild variant="ghost" size="icon" className="rounded-full">
+          <Link to={queuePath} aria-label="Back to packing">
+            <ArrowLeft className="size-5" />
+          </Link>
+        </Button>
+        <p className="min-w-0 truncate text-section text-foreground">Packing {task.orderName}</p>
+      </div>
 
       {/* Header: the order, who it's for, how it's paid. */}
       <header className={cn("rounded-xl bg-card p-4 ring-1 ring-border", scanning && "hidden")}>
