@@ -253,8 +253,8 @@ export function DataTable<Row>({
   const searchControls = (
     <>
       {searchable && (
-        <div className="relative min-w-0 basis-full md:min-w-55 md:max-w-110 md:flex-[1_1_280px]">
-          <Search className="pointer-events-none absolute left-3.5 top-3.5 size-4 text-muted-foreground md:left-2.5 md:top-2" />
+        <div className="relative min-w-[60%] flex-1 md:min-w-55 md:max-w-110 md:flex-[1_1_280px]">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground md:left-2.5" />
           <Input
             ref={searchRef}
             type="search"
@@ -265,7 +265,7 @@ export function DataTable<Row>({
             }}
             placeholder={searchPlaceholder}
             aria-label={searchPlaceholder}
-            className="h-11 rounded-xl bg-muted/50 pl-10 pr-10 text-base md:h-8 md:rounded-lg md:bg-transparent md:pl-8 md:pr-8 md:text-label [&::-webkit-search-cancel-button]:hidden"
+            className="h-11 rounded-xl bg-muted/50 pl-10 pr-10 text-base md:h-8 md:rounded-lg md:bg-transparent md:pl-8 md:pr-8 md:text-label pointer-coarse:h-11 [&::-webkit-search-cancel-button]:hidden"
           />
           {state.search ? (
             <button
@@ -273,7 +273,7 @@ export function DataTable<Row>({
               onClick={() => state.setSearch("")}
               aria-label="Clear search"
               title="Clear search"
-              className="absolute right-0 top-0 flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground md:right-1 md:top-1 md:size-6"
+              className="absolute right-0 top-1/2 flex size-11 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground md:right-1 md:size-6 pointer-coarse:right-0 pointer-coarse:size-11"
             >
               <X className="size-3.5" />
             </button>
@@ -340,8 +340,10 @@ export function DataTable<Row>({
         ) : (
           searchControls
         )}
-        <div className="flex-1" />
-        <SortMenu state={state} />
+        <div className="flex-1 max-md:hidden" />
+        <div className={hasTabs ? "max-md:hidden" : undefined}>
+          <SortMenu state={state} />
+        </div>
         <div className={mobileRow ? "hidden md:block" : undefined}>
           <ColumnsMenu state={state} />
         </div>
@@ -352,13 +354,16 @@ export function DataTable<Row>({
       {hasTabs && hasSearchControls && (
         <div className="flex flex-wrap items-center gap-2 px-4 pb-2 pt-2 md:px-2.5 md:pb-1.5">
           {searchControls}
+          <div className="md:hidden">
+            <SortMenu state={state} />
+          </div>
         </div>
       )}
       {!hasTabs && hasSearchControls && <div className="pb-1.5" />}
 
       {/* Row 3 — date chip, filter chips, + Filter, Clear all */}
       {hasChipRow && (
-        <div className="flex flex-wrap items-center gap-2 px-4 pb-4 md:gap-1.5 md:px-2.5 md:pb-2.5">
+        <div className="flex items-center gap-2 overflow-x-auto px-4 pb-3 [scrollbar-width:none] md:flex-wrap md:gap-1.5 md:overflow-visible md:px-2.5 md:pb-2.5 [&::-webkit-scrollbar]:hidden">
           {dateConfig && state.date && (
             <DateRangeFilter
               variant="chip"
@@ -403,7 +408,7 @@ export function DataTable<Row>({
                 setPendingKey(null);
                 state.clearAll();
               }}
-              className="h-10 px-2 text-label font-medium text-brand-strong underline-offset-3 hover:underline md:h-7"
+              className="h-11 shrink-0 whitespace-nowrap px-2 text-label font-medium text-brand-strong underline-offset-3 hover:underline md:h-7 pointer-coarse:h-11"
             >
               Clear all
             </button>
@@ -418,16 +423,14 @@ export function DataTable<Row>({
         aria-label={noun}
         aria-busy={status.isLoading || status.isPlaceholderData || undefined}
       >
-        {selection && hasRows && (
-          <label className="flex min-h-12 items-center gap-3 border-b border-border/60 px-4 text-xs font-medium text-muted-foreground">
+        {selection && hasRows && (allOnPage || someOnPage) && (
+          <label className="flex min-h-12 items-center gap-3 border-b border-border/60 px-4 text-caption font-medium text-muted-foreground">
             <Checkbox
               checked={allOnPage ? true : someOnPage ? "indeterminate" : false}
               onCheckedChange={() => selection.onToggleAll(rows, !allOnPage)}
               aria-label={allOnPage ? "Deselect all on this page" : "Select all on this page"}
             />
-            {rows.filter((row) => selection.isSelected(row)).length > 0
-              ? `${rows.filter((row) => selection.isSelected(row)).length} selected on this page`
-              : "Select all on this page"}
+            {rows.filter((row) => selection.isSelected(row)).length} selected on this page
             <span className="ml-auto tabular-nums">{meta?.total?.toLocaleString()} {noun}</span>
           </label>
         )}
@@ -458,7 +461,7 @@ export function DataTable<Row>({
             >
               <div className="flex items-start gap-3">
                 {selection && (
-                  <label className="-ml-2 -mt-2 flex size-10 shrink-0 items-center justify-center" data-row-stop>
+                  <label className="-my-2 -ml-2 flex size-10 shrink-0 items-center justify-center" data-row-stop>
                     <Checkbox
                       checked={selected}
                       onCheckedChange={(checked) => selection.onToggle(row, checked === true)}
@@ -470,10 +473,14 @@ export function DataTable<Row>({
                   {mobileRow ? mobileRow(row) : (
                     <>
                       {columns[0] && <div className="min-w-0 text-sm font-semibold">{columns[0].cell(row)}</div>}
-                      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
+                      <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2">
                         {columns.slice(1).map((column) => (
-                          <div key={column.key} className={cn("min-w-0", column.minWidth && column.minWidth > 160 && "col-span-2")}>
-                            <dt className="mb-1 text-caption font-medium text-muted-foreground">{column.label}</dt>
+                          <div
+                            key={column.key}
+                            // A field with nothing in it (a DashCell) is left off the card.
+                            className={cn("min-w-0 [&:has(>dd>[data-empty]:only-child)]:hidden", column.minWidth && column.minWidth > 160 && "col-span-2")}
+                          >
+                            <dt className="text-caption font-medium text-muted-foreground">{column.label}</dt>
                             <dd className="flex min-w-0 flex-wrap text-sm [overflow-wrap:anywhere]">{column.cell(row)}</dd>
                           </div>
                         ))}
@@ -481,13 +488,15 @@ export function DataTable<Row>({
                     </>
                   )}
                 </div>
-                {onRowClick && <ChevronRight aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground/60" />}
+                {/* The row's menu sits in the card's top corner rather than on a line of its own. */}
+                {rowActions ? (
+                  <div data-row-stop className="-my-2.5 -mr-2 flex shrink-0 items-center">
+                    {rowActions(row)}
+                  </div>
+                ) : (
+                  onRowClick && <ChevronRight aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground/60" />
+                )}
               </div>
-              {rowActions && (
-                <div data-row-stop className="mt-3 flex flex-wrap items-center justify-end gap-2 border-t border-border/50 pt-2 [&_button]:min-h-10 [&_button]:min-w-10">
-                  {rowActions(row)}
-                </div>
-              )}
             </div>
           );
         })}

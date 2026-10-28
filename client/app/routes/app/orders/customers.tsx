@@ -8,7 +8,7 @@ import {
 } from "~/components/ui/page-header";
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
-import { StatCard } from "~/components/app/stat-card";
+import { STAT_STRIP, StatCard } from "~/components/app/stat-card";
 import {
   ChannelCell,
   DataTable,
@@ -24,7 +24,7 @@ import {
 import { useListUrlState } from "~/hooks/use-list-url-state";
 import { useCustomers, useCustomerStats } from "~/hooks/use-customer-queries";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
-import { formatCurrency } from "~/lib/utils";
+import { cn, formatCurrency } from "~/lib/utils";
 import { VIP_CLASSES, VIP_LABELS, VIP_ORDER } from "~/lib/customer-status";
 import type {
   Customer,
@@ -213,7 +213,7 @@ export default function CustomersPage() {
       </PageHeader>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-1 gap-5 rounded-xl bg-card p-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className={cn("grid grid-cols-1 gap-5 rounded-xl bg-card p-3 sm:grid-cols-2 lg:grid-cols-4", STAT_STRIP)}>
         {statsLoading ? (
           Array.from({ length: STAT_CARDS.length }).map((_, i) => (
             <div key={i} className="p-5">

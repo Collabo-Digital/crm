@@ -164,33 +164,33 @@ export function OrdersTable({ orders, currency, onViewDetail }: OrdersTableProps
   );
 }
 
+/** An order as a three-line phone card: number and total, who and when, then its statuses. */
 export function OrderMobileSummary({ order, currency }: { order: OrderRow; currency: string }) {
   const { name } = customerOf(order);
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-foreground">{order.name}</p>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">{name}</p>
-        </div>
-        <p className="text-sm font-semibold tabular-nums tracking-tight text-foreground">
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="min-w-0 truncate text-sm font-semibold text-foreground">{order.name}</p>
+        <p className="shrink-0 text-sm font-semibold tabular-nums tracking-tight text-foreground">
           {formatCurrency(order.totalPrice, order.currency || currency)}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
+        <span className="min-w-0 truncate">{name}</span>
+        <span aria-hidden>·</span>
+        <span className="shrink-0"><DateCell value={order.createdAt} /></span>
+        <span aria-hidden>·</span>
+        <span className="shrink-0">{order.itemCount} item{order.itemCount !== 1 ? "s" : ""}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
         <StatusPill className={cn("h-6 px-2.5", FINANCIAL_CLASSES[order.financialStatus])}>
           {FINANCIAL_LABELS[order.financialStatus]}
         </StatusPill>
         <StatusPill className={cn("h-6 px-2.5", FULFILLMENT_CLASSES[order.fulfillmentStatus])}>
           {FULFILLMENT_LABELS[order.fulfillmentStatus]}
         </StatusPill>
-      </div>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted-foreground">
-        <span>{order.itemCount} item{order.itemCount !== 1 ? "s" : ""}</span>
-        <span aria-hidden>·</span>
-        <DateCell value={order.createdAt} />
         {order.channel && (
-          <><span aria-hidden>·</span><ChannelBadge platform={order.channel.platform as ChannelPlatform} name={orderSourceLabel(order)} /></>
+          <ChannelBadge platform={order.channel.platform as ChannelPlatform} name={orderSourceLabel(order)} />
         )}
       </div>
     </div>

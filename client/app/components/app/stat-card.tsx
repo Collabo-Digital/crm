@@ -77,6 +77,13 @@ interface StatCardProps {
     tone?: "default" | "inverted";
 }
 
+/**
+ * Add to the grid that holds a list page's KPI cards: on a phone they become
+ * one sideways-swiping line, so the list below starts on the first screen.
+ */
+export const STAT_STRIP =
+    "max-md:flex max-md:snap-x max-md:scroll-px-3 max-md:gap-3 max-md:overflow-x-auto max-md:rounded-3xl max-md:p-3 max-md:[scrollbar-width:none] max-md:[&::-webkit-scrollbar]:hidden max-md:*:w-[46%] max-md:*:shrink-0 max-md:*:snap-start max-md:*:items-start";
+
 const iconChip =
     "flex size-8 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground";
 
@@ -119,9 +126,9 @@ export function StatCard({
         return (
             <div data-slot="stat-card" className={cn("min-w-0", className)}>
                 <div className="flex items-center gap-3">
-                    <div className="flex min-w-0 flex-1 flex-col gap-2">
+                    <div className="flex min-w-0 flex-1 flex-col gap-1 md:gap-2">
                         <div className="flex items-center gap-3">
-                            <p className="text-body font-medium text-muted-foreground">{label}</p>
+                            <p className="text-body font-medium text-muted-foreground max-md:truncate">{label}</p>
                             {/* {icon && <div className={iconChip}>{icon}</div>} */}
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
@@ -134,7 +141,7 @@ export function StatCard({
                     </div>}
                 </div>
                 {changeLabel && (
-                    <p className="mt-1.5 text-caption text-muted-foreground">{changeLabel}</p>
+                    <p className="mt-0.5 text-caption text-muted-foreground max-md:truncate md:mt-1.5">{changeLabel}</p>
                 )}
             </div>
         );
