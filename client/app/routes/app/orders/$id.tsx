@@ -582,16 +582,24 @@ function OwnerOrderDetail({ id }: { id: string }) {
               /* POST /invoices is ORG_MANAGERS-only, so this carried no gate
                  and handed a VIEWER or AGENT a guaranteed 403. */
               canManage && (
-                <Button
-                  variant="brand"
-                  className="w-full"
-                  disabled={!gstEnabled}
-                  title={gstEnabled ? undefined : "GST is not enabled for this organization"}
-                  onClick={() => setShowInvoiceDialog(true)}
-                >
-                  <Receipt className="size-3.5" />
-                  Generate GST invoice
-                </Button>
+                <>
+                  <Button
+                    variant="brand"
+                    className="w-full"
+                    disabled={!gstEnabled}
+                    title={gstEnabled ? undefined : "GST is not enabled for this organization"}
+                    onClick={() => setShowInvoiceDialog(true)}
+                  >
+                    <Receipt className="size-3.5" />
+                    Generate GST invoice
+                  </Button>
+                  {/* Touch screens never show the hover reason, so it is written out. */}
+                  {!gstEnabled && (
+                    <p className="hidden text-caption text-muted-foreground max-md:block pointer-coarse:block">
+                      GST is not enabled for this organization. Turn it on in Settings → Tax &amp; GST.
+                    </p>
+                  )}
+                </>
               )
             )}
             {/* Why automatic invoicing did not produce one. The server has

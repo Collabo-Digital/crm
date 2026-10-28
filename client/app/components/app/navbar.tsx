@@ -441,11 +441,13 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                 if (!canAccess(href)) {
                   return (
                     <Tip key={href} text={lockReason} side="bottom">
+                      {/* A tap says why: touch screens never show the tooltip. */}
                       <span
                         role="link"
                         aria-disabled="true"
                         tabIndex={0}
-                        className="flex cursor-not-allowed items-center gap-1.5 rounded-full p-2.5 text-xs font-medium text-gray-300 select-none dark:text-gray-600"
+                        onClick={() => toast.info(lockReason)}
+                        className="flex cursor-not-allowed items-center gap-1.5 rounded-full p-2.5 text-xs font-medium text-gray-300 select-none dark:text-gray-600 max-md:min-h-11 max-md:text-sm"
                       >
                         <Lock className="size-3.5" />
                         {label}

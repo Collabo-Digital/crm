@@ -114,6 +114,11 @@ export default function CustomerDetailPage() {
   // No numeric customer number exists — ids are cuids. Shopify's own id is the
   // closest thing to the mockup's "#56578"; the cuid tail is the fallback.
   const displayId = customer.externalId || customer.id.slice(-8);
+  const sendBlocked = !customer.phone
+    ? "This customer has no phone number."
+    : !canAccess("/inbox")
+      ? "You do not have access to the inbox."
+      : undefined;
 
   return (
     // `items-start` is load-bearing: without it the grid stretches both columns
@@ -164,7 +169,7 @@ export default function CustomerDetailPage() {
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <DropdownMenu>
                 {/* 38px is the measured height of a `size="action"` pill, so the
                     circle sits flush beside Send Message. The stock icon size
@@ -193,8 +198,8 @@ export default function CustomerDetailPage() {
               <Button
                 variant="brand"
                 size="action"
-                disabled={!customer.phone || !canAccess("/inbox") || startChat.isPending}
-                title={!customer.phone ? "This customer has no phone number." : !canAccess("/inbox") ? "You do not have access to the inbox." : undefined}
+                disabled={Boolean(sendBlocked) || startChat.isPending}
+                title={sendBlocked}
                 onClick={() =>
                   startChat.mutate(
                     { phone: customer.phone!, customerId: customer.id, name: [customer.firstName, customer.lastName].filter(Boolean).join(" ") || undefined },
@@ -204,6 +209,12 @@ export default function CustomerDetailPage() {
               >
                 Send Message
               </Button>
+              {/* Touch screens never show the hover reason, so it is written out. */}
+              {sendBlocked && (
+                <p className="hidden basis-full text-right text-caption text-muted-foreground max-md:block pointer-coarse:block">
+                  {sendBlocked}
+                </p>
+              )}
 
               {/* <NotYet title="Stepping between customers isn't available yet">
                 <Button
