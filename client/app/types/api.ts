@@ -546,11 +546,13 @@ export interface OrgMember {
   joinedAt: string;
   user: {
     id: string;
-    email: string;
+    /** Sent to owners, admins and managers, and for the member's own row. */
+    email?: string;
     firstName: string;
     lastName: string;
     avatarUrl: string | null;
-    lastLoginAt: string | null;
+    /** As `email`. */
+    lastLoginAt?: string | null;
   };
 }
 

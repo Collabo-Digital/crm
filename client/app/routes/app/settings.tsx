@@ -2078,7 +2078,7 @@ export default function SettingsPage() {
                               {member.user.firstName} {member.user.lastName}
                               {isCurrentUser && <span className="ml-1.5 text-[10px] text-gray-400">(you)</span>}
                             </p>
-                            <p className="text-xs md:text-[10px] text-muted-foreground">{member.user.email}</p>
+                            {member.user.email && <p className="text-xs md:text-[10px] text-muted-foreground">{member.user.email}</p>}
                           </div>
 
                           {hasSectionAccess && canManageAccess && (
