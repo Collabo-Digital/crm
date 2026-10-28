@@ -260,6 +260,7 @@ export function OrderItemsFulfillment({
   groupCaptions,
   canActOnItems,
   canCreateFulfillment,
+  onFulfil,
 }: {
   orderId: string;
   items: FulfillmentItem[];
@@ -301,6 +302,14 @@ export function OrderItemsFulfillment({
    * group with no entry falls back to its own tracking summary.
    */
   groupCaptions?: Partial<Record<LineGroupKey, string | null>>;
+  /**
+   * `"detail"` only. Opens the page's fulfil dialog for these lines, where
+   * tracking and the customer email are chosen. The group and row "Fulfil…"
+   * entries used to mark lines shipped on the spot, with no tracking and
+   * Shopify's shipping email sent, while a button of the same name opened
+   * the dialog. Without it the lines are fulfilled directly (vendor view).
+   */
+  onFulfil?: (lineIds: string[]) => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [trackingNumber, setTrackingNumber] = useState("");
@@ -374,6 +383,12 @@ export function OrderItemsFulfillment({
         },
       },
     );
+  }
+
+  function startFulfil(ids: string[]) {
+    if (ids.length === 0) return;
+    if (onFulfil) onFulfil(ids);
+    else fulfillLines(ids);
   }
 
   function holdLines(ids: string[]) {
@@ -612,6 +627,8 @@ export function OrderItemsFulfillment({
           isDetail ? "border-y" : "border-b",
         )}
       >
+        {/* With the dialog, tracking is entered there. */}
+        {!onFulfil && (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <input
             value={trackingNumber}
@@ -632,6 +649,7 @@ export function OrderItemsFulfillment({
             className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
           />
         </div>
+        )}
         <input
           value={holdReason}
           onChange={(e) => setHoldReason(e.target.value)}
@@ -652,8 +670,8 @@ export function OrderItemsFulfillment({
           )}
           {canCreateFulfillment && (
             <Button
-              variant="accent"
-              onClick={() => fulfillLines(selectedIds)}
+              variant={onFulfil ? "outline" : "accent"}
+              onClick={() => startFulfil(selectedIds)}
               disabled={busy || selectedIds.length === 0}
               className="text-caption font-semibold text-brand-strong"
             >
@@ -662,7 +680,7 @@ export function OrderItemsFulfillment({
               ) : (
                 <CheckCircle2 className="size-3.5" />
               )}
-              Mark fulfilled
+              {onFulfil ? "Fulfil selected…" : "Mark fulfilled"}
             </Button>
           )}
           {allowInProgress && (
@@ -748,7 +766,9 @@ export function OrderItemsFulfillment({
         case "unfulfilled":
         case "in_progress":
         case "partial":
-          if (!canCreateFulfillment) return null;
+          // The card's own Fulfil items button already covers every line
+          // still to ship; the group menu offers just these.
+          if (!canCreateFulfillment || onFulfil) return null;
           return (
             <Button variant="accent" size="xs" onClick={() => fulfillLines(ids)} disabled={busy}>
               {createFulfillment.isPending ? <Loader2 className="animate-spin" /> : null}
@@ -772,7 +792,7 @@ export function OrderItemsFulfillment({
           if (deliverable.length === 0) return null;
           return (
             <Button
-              variant="brand"
+              variant="outline"
               size="xs"
               onClick={() => deliverLines(deliverable)}
               disabled={busy}
@@ -819,9 +839,9 @@ export function OrderItemsFulfillment({
             ) : (
               <>
                 {canCreateFulfillment && (
-                  <DropdownMenuItem onSelect={() => fulfillLines(ids)} disabled={busy}>
+                  <DropdownMenuItem onSelect={() => startFulfil(ids)} disabled={busy}>
                     <CheckCircle2 />
-                    Fulfil these items
+                    {onFulfil ? "Fulfil these items…" : "Fulfil these items"}
                   </DropdownMenuItem>
                 )}
                 {key === "on_hold" ? (
@@ -928,9 +948,9 @@ export function OrderItemsFulfillment({
           {trigger}
           <DropdownMenuContent align="end" className="w-48">
             {showFulfil && (
-              <DropdownMenuItem onSelect={() => fulfillLines([li.id])} disabled={busy}>
+              <DropdownMenuItem onSelect={() => startFulfil([li.id])} disabled={busy}>
                 <CheckCircle2 />
-                Fulfil this item
+                {onFulfil ? "Fulfil this item…" : "Fulfil this item"}
               </DropdownMenuItem>
             )}
             {showDeliver && (
