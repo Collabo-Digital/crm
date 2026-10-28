@@ -99,6 +99,9 @@ const TABS = [
   // { id: "appearance",    label: "Appearance",       icon: Palette },
 ];
 
+/** Tabs showing the store, tax and invoice set-up (GET /organization/settings and /gst). */
+const SETUP_TABS = ["store-profile", "products", "orders", "tax-gst", "invoices"];
+
 const INDUSTRIES = [
   "Retail", "E-commerce", "Fashion", "Electronics", "Food & Beverage",
   "Health & Beauty", "Home & Garden", "Sports & Outdoors", "Technology",
@@ -1552,7 +1555,7 @@ function AppearanceTab() {
 export default function SettingsPage() {
   const navigate = useNavigate();
   const { tab } = useParams();
-  const activeTab = TABS.some((t) => t.id === tab) ? tab! : "general";
+  const requestedTab = TABS.some((t) => t.id === tab) ? tab! : "general";
   // Settings tabs an influencer may open. Anything else is an organization
   // setting they have no business in, and the layout would bounce them off it
   // anyway — listing it would just be a dead link. Channels is why they are
@@ -1589,10 +1592,19 @@ export default function SettingsPage() {
   // affordances that would only be refused.
   const canManageTeam = memberRole === "OWNER" || memberRole === "ADMIN";
   // Inbox settings are for members who can open the Inbox; billing and
-  // developers for owners and admins.
+  // developers for owners and admins. The store, tax and invoice set-up is
+  // read by Orders, Products and Invoices, and the server refuses it to
+  // members without one of them.
+  const canSeeSetup = canAccess("/orders") || canAccess("/products") || canAccess("/orders/invoices");
   const visibleTabs = isInfluencer
     ? TABS.filter((t) => INFLUENCER_TABS.includes(t.id))
-    : TABS.filter((t) => (t.id !== "inbox" || canAccess("/inbox")) && ((t.id !== "billing" && t.id !== "developers") || canManageTeam));
+    : TABS.filter(
+        (t) =>
+          (t.id !== "inbox" || canAccess("/inbox")) &&
+          (!SETUP_TABS.includes(t.id) || canSeeSetup) &&
+          ((t.id !== "billing" && t.id !== "developers") || canManageTeam),
+      );
+  const activeTab = !isInfluencer && SETUP_TABS.includes(requestedTab) && !canSeeSetup ? "general" : requestedTab;
   // Staff only. Influencers hold a membership like anyone else, but they are an
   // outside party managed in their own section, with their own lifecycle.
   const staffMembers = (members ?? []).filter((m) => m.role !== "INFLUENCER");
