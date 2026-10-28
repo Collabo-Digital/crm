@@ -3,11 +3,12 @@ import { Link } from "react-router";
 import { ArrowLeft, CheckCircle2, CircleAlert, Clock, ImageIcon, LayoutGrid, Loader2, Lock, MessageCircle, Plus, Printer, ReceiptIndianRupee, Search, ShieldCheck, Users, Wallet, X } from "lucide-react";
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
+import { SaveBar } from "~/components/app/save-bar";
 import { SectionCard } from "~/components/app/section-card";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
-import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "~/components/ui/page-header";
+import { PageHeader, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "~/components/ui/page-header";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
@@ -128,15 +129,9 @@ export default function PosSettingsPage() {
   const limitInvalid = !!form?.discountApprovalPercent.trim() && (!Number.isFinite(limit) || limit < 0 || limit > 100);
   const above = Number(form?.customerRequiredAbove);
   const aboveInvalid = !!form?.customerRequiredAbove.trim() && (!Number.isInteger(above) || above < 1);
-  const canSave = dirty && !upiInvalid && !limitInvalid && !aboveInvalid && !save.isPending;
+  const invalid = upiInvalid || limitInvalid || aboveInvalid;
+  const canSave = dirty && !invalid && !save.isPending;
   const patch = (p: Partial<Form>) => setForm((f) => (f ? { ...f, ...p } : f));
-
-  const saveButton = (
-    <Button type="submit" form="pos-settings" variant="accent" disabled={!canSave}>
-      {save.isPending && <Loader2 className="animate-spin" />}
-      Save changes
-    </Button>
-  );
 
   return (
     <div className="settings-page mx-auto max-w-3xl space-y-6">
@@ -149,7 +144,6 @@ export default function PosSettingsPage() {
           <PageHeaderTitle>Point of sale settings</PageHeaderTitle>
           <PageHeaderDescription>How the till takes payment, who can unlock it, and what the receipt says.</PageHeaderDescription>
         </PageHeaderContent>
-        <PageHeaderActions className="max-md:hidden">{saveButton}</PageHeaderActions>
       </PageHeader>
 
       {setup.isLoading || (setup.data && !form) ? (
@@ -266,10 +260,13 @@ export default function PosSettingsPage() {
               />
             </SectionCard>
 
-            <div className="flex items-center justify-end gap-3">
-              {dirty && <span className="text-caption text-muted-foreground">You have unsaved changes.</span>}
-              {saveButton}
-            </div>
+            <SaveBar
+              dirty={dirty}
+              saving={save.isPending}
+              invalid={invalid}
+              onDiscard={() => setForm(toForm(settings))}
+              what="the point of sale settings"
+            />
           </form>
 
           <StaffSection requirePin={form.requireStaffPin} />

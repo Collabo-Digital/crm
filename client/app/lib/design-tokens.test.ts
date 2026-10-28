@@ -239,10 +239,7 @@ const SMALL_TEXT_ALLOWANCE: Record<string, number> = {
   "components/app/products/csv-import-wizard.tsx": 11,
   "components/app/sales-donut-chart.tsx": 2,
   "components/app/settings/billing-tab.tsx": 1,
-  "components/app/settings/catalog-prices-setting.tsx": 2,
   "components/app/settings/developers-tab.tsx": 1,
-  "components/app/settings/gst-return-settings.tsx": 3,
-  "components/app/settings/invoice-series-setting.tsx": 3,
   "components/app/settings/payments-card.tsx": 2,
   "components/app/settings/section-access-picker.tsx": 1,
   "components/app/settings/upgrade-organization-dialog.tsx": 6,
@@ -258,7 +255,6 @@ const SMALL_TEXT_ALLOWANCE: Record<string, number> = {
   "routes/app/products/$id.tsx": 18,
   "routes/app/products/inventory.tsx": 5,
   "routes/app/products/inventory/warehouses.tsx": 6,
-  "routes/app/settings.tsx": 34,
   "routes/auth/signup.tsx": 1,
   "routes/onboarding/invite-team.tsx": 1,
 };

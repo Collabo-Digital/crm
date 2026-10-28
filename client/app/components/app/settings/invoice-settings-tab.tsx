@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useBlocker } from "react-router";
-import { CheckCircle2, Circle, Eye, ListChecks, Loader2, Lock } from "lucide-react";
+import { Link } from "react-router";
+import { CheckCircle2, Circle, Eye, ListChecks, Lock } from "lucide-react";
 
 import { QueryErrorState } from "~/components/app/query-error-state";
+import { SaveBar } from "~/components/app/save-bar";
 import { SectionCard } from "~/components/app/section-card";
 import { InvoicePreview } from "~/components/app/settings/invoice-preview";
 import {
   BusinessSection,
-  LogoSection,
+  LogoFromStoreProfile,
   LookSection,
   PaymentsSection,
   ReceiptSection,
@@ -16,7 +17,6 @@ import {
   TermsSection,
 } from "~/components/app/settings/invoice-settings-sections";
 import { Button } from "~/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { Sheet, SheetBody, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "~/components/ui/sheet";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useCurrentRole } from "~/hooks/use-current-role";
@@ -26,10 +26,8 @@ import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { usePosSetup } from "~/hooks/use-pos-queries";
 import { useOrganizationSettings } from "~/hooks/use-settings-queries";
 import {
-  useRemoveLogoMutation,
   useRemoveSignatureMutation,
   useSaveInvoiceSettingsMutation,
-  useUploadLogoMutation,
   useUploadSignatureMutation,
 } from "~/hooks/use-settings-mutations";
 import {
@@ -44,7 +42,6 @@ import {
   type InvoiceDraft,
 } from "~/lib/invoice-settings";
 import { UPI_ID } from "~/lib/pos-cart";
-import { cn } from "~/lib/utils";
 import type { InvoiceSample, InvoiceSettings } from "~/types/api";
 
 /** Scrolls to a field and puts the cursor in it, for the setup checklist. */
@@ -62,10 +59,10 @@ function goTo(id: string) {
  * Settings › Invoices & bills: how invoices, credit notes, bills and till
  * receipts look, with the server's own PDF of a sample beside the form.
  *
- * A form with one Save, like the store profile: the fields are local until
- * saved, and only the ones that changed are sent. The logo and signature
- * uploads save at once. Owners, admins and managers change it (the server's
- * ORG_MANAGERS); everyone else sees it read-only.
+ * A form with one Save, like every settings form: the fields are local until
+ * saved, and only the ones that changed are sent. The signature upload saves
+ * at once; the logo is set on Store profile. Owners, admins and managers
+ * change it (the server's ORG_MANAGERS); everyone else sees it read-only.
  */
 export function InvoiceSettingsTab() {
   const { role } = useCurrentRole();
@@ -76,8 +73,6 @@ export function InvoiceSettingsTab() {
   // The UPI ID lives in the till's settings, which only managers may read.
   const pos = usePosSetup(undefined, canManage);
   const save = useSaveInvoiceSettingsMutation();
-  const uploadLogo = useUploadLogoMutation();
-  const removeLogo = useRemoveLogoMutation();
   const uploadSignature = useUploadSignatureMutation();
   const removeSignature = useRemoveSignatureMutation();
   // Wide enough for the preview beside the form. Below it the preview opens
@@ -107,8 +102,6 @@ export function InvoiceSettingsTab() {
   const upiValue = upi?.draft.trim() ?? "";
   const upiChanged = !!upi && upiValue !== upi.base;
   const dirty = Object.keys(patch).length > 0 || upiChanged;
-  // Leaving the page, by a link in the checklist or anywhere else, asks first.
-  const leaving = useBlocker(({ currentLocation, nextLocation }) => dirty && currentLocation.pathname !== nextLocation.pathname);
 
   if (settings.isError) {
     return <QueryErrorState resource="the invoice settings" onRetry={() => void settings.refetch()} />;
@@ -141,7 +134,7 @@ export function InvoiceSettingsTab() {
   const pan = gstEnabled ? panFromGstin(gstin?.gstin) : null;
 
   const checklist: Array<{ label: string; done: boolean; target?: string; to?: string }> = [
-    { label: "Upload your logo", done: !!store.logoStorageKey, target: "invoice-logo-section" },
+    { label: "Upload your logo", done: !!store.logoStorageKey, to: "/settings/store-profile#store-logo" },
     { label: "Pick a brand colour", done: draft.brandColor !== null, target: "invoice-brand-hex" },
     { label: "Add your return policy", done: !!draft.returnPolicy.trim(), target: "invoice-return-policy" },
     ...(upi ? [{ label: "Add your UPI ID", done: !!upiValue, target: "invoice-upi" }] : []),
@@ -246,16 +239,7 @@ export function InvoiceSettingsTab() {
           )}
 
           <LookSection {...sectionProps} />
-          <div id="invoice-logo-section">
-            <LogoSection
-              logoUrl={store.logoUrl}
-              uploaded={!!store.logoStorageKey}
-              readOnly={readOnly}
-              busy={uploadLogo.isPending ? "uploading" : removeLogo.isPending ? "removing" : null}
-              onUpload={(file) => uploadLogo.mutate(file)}
-              onRemove={() => removeLogo.mutate()}
-            />
-          </div>
+          <LogoFromStoreProfile logoUrl={store.logoUrl} uploaded={!!store.logoStorageKey} />
           <BusinessSection {...sectionProps} pan={pan} />
           <TermsSection {...sectionProps} />
           <SignatureSection
@@ -277,28 +261,14 @@ export function InvoiceSettingsTab() {
           {/* Pinned while there is something to save, or while the Preview
               button is the only way to the preview. */}
           {canManage && (
-            <div className={cn("mobile-action-dock bottom-4 z-10", (dirty || !wide) && "sticky")}>
-              <div className="flex items-center gap-2 rounded-xl bg-card px-4 py-3 shadow-lg ring-1 ring-border">
-                <p className="min-w-0 flex-1 text-caption text-muted-foreground max-md:sr-only" aria-live="polite">
-                  {dirty ? "You have unsaved changes." : "All changes saved."}
-                </p>
-                {!wide && (
-                  <Button type="button" variant="outline" onClick={() => setPreviewOpen(true)} className="max-md:flex-1">
-                    <Eye />
-                    Preview
-                  </Button>
-                )}
-                {dirty && (
-                  <Button type="button" variant="ghost" onClick={discard} disabled={save.isPending}>
-                    Discard
-                  </Button>
-                )}
-                <Button type="submit" variant="accent" disabled={!dirty || blocked || save.isPending} className="max-md:flex-1">
-                  {save.isPending && <Loader2 className="animate-spin" />}
-                  Save changes
+            <SaveBar dirty={dirty} saving={save.isPending} invalid={blocked} onDiscard={discard} pinned={!wide} what="invoices and bills">
+              {!wide && (
+                <Button type="button" variant="outline" onClick={() => setPreviewOpen(true)} className="max-md:flex-1">
+                  <Eye />
+                  Preview
                 </Button>
-              </div>
-            </div>
+              )}
+            </SaveBar>
           )}
         </form>
 
@@ -311,23 +281,6 @@ export function InvoiceSettingsTab() {
           </aside>
         )}
       </div>
-
-      <Dialog open={leaving.state === "blocked"} onOpenChange={(open) => !open && leaving.reset?.()}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Leave without saving?</DialogTitle>
-            <DialogDescription>Your changes to invoices and bills aren't saved yet.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => leaving.reset?.()}>
-              Stay
-            </Button>
-            <Button variant="destructive" onClick={() => leaving.proceed?.()}>
-              Leave
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {!wide && (
         <Sheet open={previewOpen} onOpenChange={setPreviewOpen}>
