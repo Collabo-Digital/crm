@@ -10,7 +10,7 @@ import {
   Building2, Lock, Bell, Palette, Users, Shield, Smartphone,
   Check, ChevronRight, AlertTriangle, Loader2, Plus, X, Mail, Trash2,
   Sun, Moon, Monitor, Receipt, Star, MapPin, Package, ShoppingBag, Layers, MessageSquare,
-  Pencil, Store, ArrowLeft, ReceiptText,
+  Pencil, Store, ArrowLeft, ReceiptText, LogOut,
 } from "lucide-react";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -33,6 +33,7 @@ import {
 } from "~/hooks/use-org-mutations";
 import { userService } from "~/services/user.service";
 import { apiClient } from "~/lib/api-client";
+import { handleMutationError } from "~/lib/handle-mutation-error";
 import { useGstins, useIndianStates, useStateTaxRates, useProductTypeTaxRates, useCollections, useCollectionOverrides } from "~/hooks/use-gst-queries";
 import {
   useCreateGstinMutation, useUpdateGstinMutation, useDeleteGstinMutation,
@@ -1660,6 +1661,13 @@ export default function SettingsPage() {
     },
   });
 
+  // A lost or shared phone: end every session but this one.
+  const signOutOthers = useMutation({
+    mutationFn: () => userService.signOutOtherDevices(),
+    onSuccess: () => toast.success("Signed out of every other device. This one stays signed in."),
+    onError: (error) => handleMutationError(error, "Could not sign out the other devices."),
+  });
+
   // Delete account
   const deleteAccount = useMutation({
     mutationFn: () => userService.deleteAccount(),
@@ -1939,6 +1947,18 @@ export default function SettingsPage() {
                     </button>
                   </div>
                 </form>
+              </Section>
+
+              <Section title="Signed-in devices" description="Lost a phone, or signed in on a shared computer? End those sessions.">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+                    Every other phone, tablet and computer signed in to your account is signed out at once. This one stays signed in.
+                  </p>
+                  <Button variant="outline" onClick={() => signOutOthers.mutate()} disabled={signOutOthers.isPending}>
+                    {signOutOthers.isPending ? <Loader2 className="animate-spin" /> : <LogOut />}
+                    Sign out of other devices
+                  </Button>
+                </div>
               </Section>
 
               {/* <Section title="Two-Factor Authentication" description="Add an extra layer of security.">
