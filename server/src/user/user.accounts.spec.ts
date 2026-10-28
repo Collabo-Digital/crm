@@ -1,6 +1,10 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { ConversationStatus, UserRole } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 import { UserService } from './user.service';
+
+/** The account's password, hashed cheaply for tests. */
+const PASSWORD_HASH = bcrypt.hashSync('account-password', 4);
 
 describe('UserService — account lookup and deletion', () => {
   function build() {
@@ -70,11 +74,37 @@ describe('UserService — account lookup and deletion', () => {
   });
 
   describe('softDelete', () => {
-    it('refuses while the account owns a live workspace', async () => {
-      const { service, prisma } = build();
+    function withPassword() {
+      const built = build();
+      built.prisma.user.findUnique.mockResolvedValue({ password: PASSWORD_HASH });
+      return built;
+    }
+
+    it.each([
+      ['a wrong password', 'guess'],
+      ['no password', ''],
+    ])('does not close the account with %s, and changes nothing', async (_label, password) => {
+      const { service, prisma } = withPassword();
+
+      await expect(service.softDelete('u1', password)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { id: 'u1' }, select: { password: true } });
+      expect(prisma.organizationMember.updateMany).not.toHaveBeenCalled();
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('checks the password before saying which workspace the account owns', async () => {
+      const { service, prisma } = withPassword();
       prisma.organizationMember.findFirst.mockResolvedValue({ organization: { name: 'Acme' } });
 
-      await expect(service.softDelete('u1')).rejects.toThrow('You own the workspace "Acme"');
+      await expect(service.softDelete('u1', 'guess')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.organizationMember.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('refuses while the account owns a live workspace', async () => {
+      const { service, prisma } = withPassword();
+      prisma.organizationMember.findFirst.mockResolvedValue({ organization: { name: 'Acme' } });
+
+      await expect(service.softDelete('u1', 'account-password')).rejects.toThrow('You own the workspace "Acme"');
       expect(prisma.organizationMember.findFirst.mock.calls[0][0].where).toMatchObject({
         userId: 'u1',
         role: UserRole.OWNER,
@@ -85,9 +115,9 @@ describe('UserService — account lookup and deletion', () => {
     });
 
     it('ends the memberships, releases their open chats and frees the address', async () => {
-      const { service, prisma } = build();
+      const { service, prisma } = withPassword();
 
-      await service.softDelete('u1');
+      await service.softDelete('u1', 'account-password');
 
       expect(prisma.organizationMember.updateMany).toHaveBeenCalledWith({
         where: { userId: 'u1', isActive: true },

@@ -512,6 +512,65 @@ function DeleteWorkspaceDialog({ orgId, name, onClose }: { orgId: string; name: 
   );
 }
 
+/**
+ * Deleting an account cannot be undone, so it takes the account's password,
+ * which the server checks: a signed-in session alone (a stolen token, an
+ * unlocked phone) is not enough.
+ */
+function DeleteAccountDialog({ onClose }: { onClose: () => void }) {
+  const navigate = useNavigate();
+  const logout = useAuthStore((state) => state.logout);
+  const [password, setPassword] = useState("");
+  const deleteAccount = useMutation({
+    mutationFn: () => userService.deleteAccount(password),
+    onSuccess: () => {
+      toast.success("Account deleted.");
+      logout();
+      navigate("/auth/login");
+    },
+    onError: (error) => handleMutationError(error, "Could not delete your account."),
+  });
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!password || deleteAccount.isPending) return;
+    deleteAccount.mutate();
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !deleteAccount.isPending && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete your account?</DialogTitle>
+          <DialogDescription>
+            You leave every workspace you are a member of, and you are signed out everywhere. This cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <form id="delete-account" onSubmit={submit} className="space-y-1.5">
+          <Label htmlFor="delete-account-password">Your password</Label>
+          <Input
+            id="delete-account-password"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete="current-password"
+            autoFocus
+          />
+        </form>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={deleteAccount.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" form="delete-account" variant="destructive" disabled={!password || deleteAccount.isPending}>
+            {deleteAccount.isPending && <Loader2 className="animate-spin" />}
+            Delete my account
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Loyalty Tiers Tab ───────────────────────────────────────────────────────
 
 const loyaltySchema = z.object({
@@ -1627,7 +1686,6 @@ function AppearanceTab() {
 
 /** Main settings page with tabbed navigation for workspace, security, and preferences. */
 export default function SettingsPage() {
-  const navigate = useNavigate();
   const { tab } = useParams();
   const requestedTab = TABS.some((t) => t.id === tab) ? tab! : "general";
   // Settings tabs an influencer may open. Anything else is an organization
@@ -1652,7 +1710,6 @@ export default function SettingsPage() {
 
   const authUser = useAuthStore((state) => state.user);
   const currentOrgId = useAuthStore((state) => state.currentOrgId);
-  const logout = useAuthStore((state) => state.logout);
 
   // Org data
   const { data: org, isLoading: orgLoading } = useCurrentOrg();
@@ -1690,6 +1747,8 @@ export default function SettingsPage() {
   const updateOrg = useUpdateOrganizationMutation(currentOrgId ?? "");
   // The delete-workspace dialog, open while the owner confirms.
   const [deletingWorkspace, setDeletingWorkspace] = useState(false);
+  // The delete-account dialog, open while the person confirms with their password.
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const updateRole = useUpdateMemberRoleMutation(currentOrgId ?? "");
   const removeMember = useRemoveMemberMutation(currentOrgId ?? "");
   const revokeInvite = useRevokeInviteMutation(currentOrgId ?? "");
@@ -1752,17 +1811,6 @@ export default function SettingsPage() {
     mutationFn: () => userService.signOutOtherDevices(),
     onSuccess: () => toast.success("Signed out of every other device. This one stays signed in."),
     onError: (error) => handleMutationError(error, "Could not sign out the other devices."),
-  });
-
-  // Delete account
-  const deleteAccount = useMutation({
-    mutationFn: () => userService.deleteAccount(),
-    onSuccess: () => {
-      toast.success("Account deleted.");
-      logout();
-      navigate("/auth/login");
-    },
-    onError: () => toast.error("Failed to delete account."),
   });
 
   return (
@@ -2085,20 +2133,12 @@ export default function SettingsPage() {
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       Permanently delete your account. This cannot be undone.
                     </p>
-                    <button
-                      onClick={() => {
-                        if (window.confirm("Are you sure you want to delete your account? This cannot be undone.")) {
-                          deleteAccount.mutate();
-                        }
-                      }}
-                      disabled={deleteAccount.isPending}
-                      className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 px-4 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                    >
-                      {deleteAccount.isPending && <Loader2 className="size-3.5 animate-spin" />}
+                    <Button variant="destructive" className="mt-3" onClick={() => setDeletingAccount(true)}>
                       Delete My Account
-                    </button>
+                    </Button>
                   </div>
                 </div>
+                {deletingAccount && <DeleteAccountDialog onClose={() => setDeletingAccount(false)} />}
               </div>
             </>
           )}

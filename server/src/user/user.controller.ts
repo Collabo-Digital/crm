@@ -1,4 +1,5 @@
 import { Controller, Get, Patch, Post, Delete, Body, HttpCode } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -10,6 +11,7 @@ import { extractGrants } from '../auth/permissions';
 import { UserService } from './user.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { DeleteAccountDto } from './dto/delete-account.dto';
 
 @Controller('users')
 @NoOrgRequired()
@@ -70,9 +72,13 @@ export class UserController {
     return { message: 'Signed out of every other device.' };
   }
 
+  // Closing the account cannot be undone, so a signed-in session is not
+  // enough: the body carries the password, and a few tries a minute keep it
+  // from being guessed here.
   @Delete('me')
-  async deleteAccount(@CurrentUser() user: JwtPayload) {
-    await this.userService.softDelete(user.sub);
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  async deleteAccount(@CurrentUser() user: JwtPayload, @Body() dto: DeleteAccountDto) {
+    await this.userService.softDelete(user.sub, dto.password);
     await this.authService.revokeAllUserTokens(user.sub);
     return { message: 'Account deleted.' };
   }
