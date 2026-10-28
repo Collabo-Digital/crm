@@ -112,7 +112,7 @@ export function VariantOptionsCard({
       <div className="space-y-3 px-5 py-4">
         {options.length === 0 ? (
           <p className="text-caption text-muted-foreground">
-            No options yet. Add Size, Color, or Material to start building variants.
+            No options yet. Add Size, Colour or Material to start building variants.
           </p>
         ) : (
           options.map((option, index) => (

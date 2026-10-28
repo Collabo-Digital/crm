@@ -854,7 +854,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
   return (
     <>
       {/* GST Toggle */}
-      <Section title="GST Status" description="Enable GST to generate tax-compliant invoices for Indian businesses.">
+      <Section title="GST" description="Enable GST to generate tax-compliant invoices for Indian businesses.">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs font-medium text-gray-700 dark:text-gray-300">Enable GST</p>
@@ -866,7 +866,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
 
       {/* GSTIN Registrations */}
       {gstEnabled && (
-        <Section title="GSTIN Registrations" description="Add your GST Identification Numbers for each state where your business is registered.">
+        <Section title="GSTIN registrations" description="Add your GST Identification Numbers for each state where your business is registered.">
           {/* GSTIN List */}
           {gstinsLoading ? (
             <div className="flex items-center justify-center py-8">
@@ -918,9 +918,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                         <button
                           onClick={() => updateGstin.mutate({ id: g.id, data: { isDefault: true } })}
                           className="rounded-md px-2 py-1 text-caption text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-                          title="Set as default"
+                          title="Make this the default GSTIN"
                         >
-                          Set Default
+                          Set as default
                         </button>
                       )}
                       <button
@@ -980,7 +980,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
           {showAddForm && (
             <div className="mt-4 space-y-3 rounded-lg border border-dashed border-brand bg-brand/5 p-4">
               <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
-                {editingId ? "Edit GSTIN Registration" : "Add GSTIN Registration"}
+                {editingId ? "Edit GSTIN registration" : "Add GSTIN registration"}
               </p>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1011,7 +1011,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                   </Select>
                 </div>
                 <div>
-                  <label htmlFor="gstin-form-legal-name" className="text-label text-muted-foreground">Legal Name *</label>
+                  <label htmlFor="gstin-form-legal-name" className="text-label text-muted-foreground">Legal name *</label>
                   <input
                     id="gstin-form-legal-name"
                     value={form.legalName}
@@ -1021,7 +1021,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                   />
                 </div>
                 <div>
-                  <label htmlFor="gstin-form-trade-name" className="text-label text-muted-foreground">Trade Name</label>
+                  <label htmlFor="gstin-form-trade-name" className="text-label text-muted-foreground">Trade name</label>
                   <input
                     id="gstin-form-trade-name"
                     value={form.tradeName || ""}
@@ -1222,14 +1222,14 @@ function StateTaxRatesSection() {
   const availableStates = states.filter((s) => !existingCodes.has(s.code));
 
   return (
-    <Section title="State Base Tax Rates" description="Set default GST rates per state. Used when no product-level or collection-level rate is configured.">
+    <Section title="State base tax rates" description="Set default GST rates per state. Used when no product-level or collection-level rate is configured.">
       {isLoading ? (
         <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : taxRates.length === 0 && !showAddForm ? (
         <div className="py-6 text-center">
           <p className="text-xs text-muted-foreground">No state tax rates configured.</p>
           <button onClick={() => setShowAddForm(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-brand-foreground hover:bg-brand-hover transition-colors">
-            <Plus className="size-3.5" /> Add State Rate
+            <Plus className="size-3.5" /> Add state rate
           </button>
         </div>
       ) : (
@@ -1239,7 +1239,7 @@ function StateTaxRatesSection() {
               <div key={rate.id} className="flex items-center justify-between rounded-lg border p-3">
                 <div>
                   <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{rate.stateName}</p>
-                  <p className="text-caption text-muted-foreground">State Code: {rate.stateCode}</p>
+                  <p className="text-caption text-muted-foreground">State code {rate.stateCode}</p>
                 </div>
                 <div className="flex items-center gap-3">
                   {/* Editable in place. The update mutation existed and was
@@ -1271,7 +1271,7 @@ function StateTaxRatesSection() {
 
           {!showAddForm && (
             <button onClick={() => setShowAddForm(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-input px-3 py-1.5 text-xs text-muted-foreground hover:border-brand-strong hover:text-foreground transition-colors">
-              <Plus className="size-3.5" /> Add State Rate
+              <Plus className="size-3.5" /> Add state rate
             </button>
           )}
         </>
@@ -1291,7 +1291,7 @@ function StateTaxRatesSection() {
             </Select>
           </div>
           <div className="w-28">
-            <label className="text-label text-muted-foreground">GST Rate</label>
+            <label className="text-label text-muted-foreground">GST rate</label>
             <Select value={gstRate} onValueChange={setGstRate}>
               <SelectTrigger aria-label="GST rate" className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
               <SelectContent>
@@ -1332,14 +1332,14 @@ function ProductTypeTaxRatesSection() {
   const availableTypes = (productTypes as string[]).filter((t) => !existingTypes.has(t));
 
   return (
-    <Section title="Product Type Tax Rates" description="Set default GST rates by product type (e.g., T-Shirts = 12%, Electronics = 18%). Overrides state base rates.">
+    <Section title="Product type tax rates" description="Set default GST rates by product type (e.g., T-Shirts = 12%, Electronics = 18%). Overrides state base rates.">
       {isLoading ? (
         <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : taxRates.length === 0 && !showAddForm ? (
         <div className="py-6 text-center">
           <p className="text-xs text-muted-foreground">No product type tax rates configured.</p>
           <button onClick={() => setShowAddForm(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-brand-foreground hover:bg-brand-hover transition-colors">
-            <Plus className="size-3.5" /> Add Product Type Rate
+            <Plus className="size-3.5" /> Add product type rate
           </button>
         </div>
       ) : (
@@ -1363,7 +1363,7 @@ function ProductTypeTaxRatesSection() {
 
           {!showAddForm && (
             <button onClick={() => setShowAddForm(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-input px-3 py-1.5 text-xs text-muted-foreground hover:border-brand-strong hover:text-foreground transition-colors">
-              <Plus className="size-3.5" /> Add Product Type Rate
+              <Plus className="size-3.5" /> Add product type rate
             </button>
           )}
         </>
@@ -1372,7 +1372,7 @@ function ProductTypeTaxRatesSection() {
       {showAddForm && (
         <div className="mt-3 flex items-end gap-3 rounded-lg border border-dashed border-brand bg-brand/5 p-4">
           <div className="flex-1">
-            <label className="text-label text-muted-foreground">Product Type</label>
+            <label className="text-label text-muted-foreground">Product type</label>
             <Select value={productType} onValueChange={setProductType}>
               <SelectTrigger aria-label="Product type" className="mt-1 h-9 text-xs"><SelectValue placeholder="Select product type" /></SelectTrigger>
               <SelectContent>
@@ -1387,7 +1387,7 @@ function ProductTypeTaxRatesSection() {
             </Select>
           </div>
           <div className="w-28">
-            <label className="text-label text-muted-foreground">GST Rate</label>
+            <label className="text-label text-muted-foreground">GST rate</label>
             <Select value={gstRate} onValueChange={setGstRate}>
               <SelectTrigger aria-label="GST rate" className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
               <SelectContent>
@@ -1429,7 +1429,7 @@ function CollectionOverridesSection() {
   const isLoading = collectionsLoading || overridesLoading;
 
   return (
-    <Section title="Collection Tax Overrides" description="Override GST rate for all products in a Shopify collection. Overrides state base rates but not individual product rates.">
+    <Section title="Collection tax overrides" description="Override GST rate for all products in a Shopify collection. Overrides state base rates but not individual product rates.">
       {isLoading ? (
         <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : collections.length === 0 ? (
@@ -1441,7 +1441,7 @@ function CollectionOverridesSection() {
         <div className="py-6 text-center">
           <p className="text-xs text-muted-foreground">No collection overrides configured.</p>
           <button onClick={() => setShowAddForm(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-brand-foreground hover:bg-brand-hover transition-colors">
-            <Plus className="size-3.5" /> Add Override
+            <Plus className="size-3.5" /> Add override
           </button>
         </div>
       ) : (
@@ -1465,7 +1465,7 @@ function CollectionOverridesSection() {
 
           {!showAddForm && availableCollections.length > 0 && (
             <button onClick={() => setShowAddForm(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-input px-3 py-1.5 text-xs text-muted-foreground hover:border-brand-strong hover:text-foreground transition-colors">
-              <Plus className="size-3.5" /> Add Override
+              <Plus className="size-3.5" /> Add override
             </button>
           )}
         </>
@@ -1485,7 +1485,7 @@ function CollectionOverridesSection() {
             </Select>
           </div>
           <div className="w-28">
-            <label className="text-label text-muted-foreground">GST Rate</label>
+            <label className="text-label text-muted-foreground">GST rate</label>
             <Select value={gstRate} onValueChange={setGstRate}>
               <SelectTrigger aria-label="GST rate" className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
               <SelectContent>
@@ -1905,12 +1905,12 @@ export default function SettingsPage() {
                       <AlertTriangle className="size-4 text-red-600" />
                     </div>
                     <div className="flex-1">
-                      <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Danger Zone</p>
+                      <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Danger zone</p>
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         Permanently delete this workspace and all its data. This action cannot be undone.
                       </p>
                       <Button variant="destructive" className="mt-3" onClick={() => setDeletingWorkspace(true)}>
-                        Delete Workspace
+                        Delete workspace
                       </Button>
                     </div>
                   </div>
@@ -1925,9 +1925,9 @@ export default function SettingsPage() {
           {/* ─── SECURITY ─── */}
           {activeTab === "security" && (
             <>
-              <Section title="Change Password" description="Update your account password regularly.">
+              <Section title="Change password" description="Update your account password regularly.">
                 <form onSubmit={passwordForm.handleSubmit((formData) => changePassword.mutate(formData))} className="space-y-3">
-                  <Field label="Current Password" htmlFor="currentPassword">
+                  <Field label="Current password" htmlFor="currentPassword">
                     <input
                       id="currentPassword"
                       type="password"
@@ -1941,7 +1941,7 @@ export default function SettingsPage() {
                       <p id="currentPassword-error" className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.currentPassword.message}</p>
                     )}
                   </Field>
-                  <Field label="New Password" hint="Minimum 8 characters." htmlFor="newPassword">
+                  <Field label="New password" hint="Minimum 8 characters." htmlFor="newPassword">
                     <input
                       id="newPassword"
                       type="password"
@@ -1955,7 +1955,7 @@ export default function SettingsPage() {
                       <p id="newPassword-error" className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.newPassword.message}</p>
                     )}
                   </Field>
-                  <Field label="Confirm New Password" htmlFor="confirmPassword">
+                  <Field label="Confirm new password" htmlFor="confirmPassword">
                     <input
                       id="confirmPassword"
                       type="password"
@@ -1976,7 +1976,7 @@ export default function SettingsPage() {
                       className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-4 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors disabled:opacity-50"
                     >
                       {changePassword.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                      Update Password
+                      Update password
                     </button>
                   </div>
                 </form>
@@ -2019,7 +2019,7 @@ export default function SettingsPage() {
                     <AlertTriangle className="size-4 text-red-600" />
                   </div>
                   <div className="flex-1">
-                    <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Delete Account</p>
+                    <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Delete account</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       Permanently delete your account. This cannot be undone.
                     </p>
@@ -2033,7 +2033,7 @@ export default function SettingsPage() {
                       className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 px-4 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
                     >
                       {deleteAccount.isPending && <Loader2 className="size-3.5 animate-spin" />}
-                      Delete My Account
+                      Delete my account
                     </button>
                   </div>
                 </div>
@@ -2044,7 +2044,7 @@ export default function SettingsPage() {
           {/* ─── TEAM MEMBERS ─── */}
           {activeTab === "members" && (
             <>
-              <Section title="Team Members" description="Manage who has access to your workspace.">
+              <Section title="Team members" description="Manage who has access to your workspace.">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <p className="text-xs text-muted-foreground">
                     {membersLoading ? "Loading…" : `${staffMembers.length} member${staffMembers.length !== 1 ? "s" : ""}`}
@@ -2186,7 +2186,7 @@ export default function SettingsPage() {
 
               {/* Pending invites */}
               {staffInvites.length > 0 && (
-                <Section title="Pending Invitations" description="Invitations that haven't been accepted yet.">
+                <Section title="Pending invitations" description="Invitations that haven't been accepted yet.">
                   <div className="space-y-2">
                     {staffInvites.map((invite) => (
                       <div key={invite.id} className="flex items-center justify-between gap-3 rounded-lg bg-muted/60 px-4 py-3">

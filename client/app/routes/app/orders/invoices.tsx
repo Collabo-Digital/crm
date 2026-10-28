@@ -564,7 +564,7 @@ function InvoicesView() {
                   value: formatCurrency(stats.outstanding.amount, currency, {
                     maximumFractionDigits: 0,
                   }),
-                  changeLabel: `${stats.outstanding.invoiceCount} invoices unpaid`,
+                  changeLabel: `${stats.outstanding.invoiceCount} ${stats.outstanding.invoiceCount === 1 ? "invoice" : "invoices"} unpaid`,
                 },
                 {
                   key: "issued",

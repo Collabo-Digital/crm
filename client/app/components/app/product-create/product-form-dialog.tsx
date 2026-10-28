@@ -897,7 +897,7 @@ export function ProductFormDialog({
                   disabled={isVendor}
                   className="size-3.5 accent-[#CEF17B] disabled:opacity-50"
                 />
-                This product has multiple variants (e.g. Size, Color)
+                This product has multiple variants (e.g. Size, Colour)
               </label>
 
               {!form.hasOptions ? (

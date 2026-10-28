@@ -135,22 +135,8 @@ export default function DashboardPage() {
               onCustomApply={range.applyCustom}
             />
             {/* One download at a time: both lock while either runs, and the
-                clicked one shows progress until its file arrives or fails. */}
-            <Button
-              size="action"
-              className="hidden md:inline-flex"
-              variant="outline"
-              onClick={() => exportJson(params)}
-              disabled={exporting !== null}
-              aria-busy={exporting === "json"}
-            >
-              {exporting === "json" ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Upload className="size-3.5" />
-              )}
-              {exporting === "json" ? "Exporting…" : "Export JSON"}
-            </Button>
+                clicked one shows progress until its file arrives or fails.
+                The JSON file is for developers, so it waits in the menu. */}
             <Button
               variant="brand"
               className="hidden md:inline-flex"
@@ -164,13 +150,13 @@ export default function DashboardPage() {
               ) : (
                 <Download className="size-3.5" />
               )}
-              {exporting === "report" ? "Preparing…" : "Download Report"}
+              {exporting === "report" ? "Preparing…" : "Download report"}
             </Button>
             <DropdownMenu>
-              <DropdownMenuTrigger asChild><Button variant="outline" size="icon" className="rounded-full md:hidden" aria-label="Dashboard actions"><MoreHorizontal className="size-5" /></Button></DropdownMenuTrigger>
+              <DropdownMenuTrigger asChild><Button variant="outline" size="icon" className="rounded-full md:size-9" aria-label="More dashboard actions"><MoreHorizontal className="size-5" /></Button></DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem disabled={exporting !== null} onClick={() => downloadReport(params)}><Download className="size-4" />Download report</DropdownMenuItem>
-                <DropdownMenuItem disabled={exporting !== null} onClick={() => exportJson(params)}><Upload className="size-4" />Export JSON</DropdownMenuItem>
+                <DropdownMenuItem className="md:hidden" disabled={exporting !== null} onClick={() => downloadReport(params)}><Download className="size-4" />Download report</DropdownMenuItem>
+                <DropdownMenuItem disabled={exporting !== null} onClick={() => exportJson(params)}><Upload className="size-4" />{exporting === "json" ? "Preparing…" : "Raw data for developers (JSON)"}</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </PageHeaderActions>

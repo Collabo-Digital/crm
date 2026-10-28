@@ -20,7 +20,7 @@ export const PACK_SLOTS: Record<PackSlotKey, { title: string; category: "UTILITY
   order_cancelled: { title: "Order cancelled", category: "UTILITY" },
   refund_processed: { title: "Refund processed", category: "UTILITY" },
   gst_invoice: { title: "GST invoice", category: "UTILITY" },
-  store_bill: { title: "Bill from the till", category: "UTILITY" },
+  store_bill: { title: "Bill from point of sale", category: "UTILITY" },
   review_request: { title: "Review request", category: "UTILITY" },
   optin_confirmed: { title: "Subscription confirmed", category: "UTILITY" },
   payment_link: { title: "Payment link", category: "UTILITY" },

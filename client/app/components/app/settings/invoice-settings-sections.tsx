@@ -185,7 +185,7 @@ export function LookSection({ draft, set, errors, readOnly }: SectionProps) {
     { value: "classic" as const, title: "Classic", hint: "A ruled grid in black and white, the way accountants expect." },
   ];
   return (
-    <SectionCard title="Look" icon={<Palette className="size-4 text-muted-foreground" />} description="For invoices, credit notes and bills. Till receipts print in black and white.">
+    <SectionCard title="Look" icon={<Palette className="size-4 text-muted-foreground" />} description="For invoices, credit notes and bills. Point of sale receipts print in black and white.">
       <div id="invoice-look" className="divide-y">
         <div className="space-y-2 px-5 py-4">
           <p className="text-label">Theme</p>
@@ -570,7 +570,7 @@ export function TermsSection({ draft, set, errors, readOnly }: SectionProps) {
             onChange={(e) => set("terms", e.target.value)}
           />
         </Field>
-        <Field id="invoice-return-policy" label="Return policy" hint="Printed on invoices and till receipts.">
+        <Field id="invoice-return-policy" label="Return policy" hint="Printed on invoices and point of sale receipts.">
           <Textarea
             id="invoice-return-policy"
             rows={2}
@@ -773,7 +773,7 @@ export function PaymentsSection({
               id="invoice-upi"
               label="UPI ID"
               error={upiError ?? undefined}
-              hint={draft.upiQr === "unpaid" && !upiId.trim() ? "Add a UPI ID for the QR to print. The till uses it too." : "The till uses it too."}
+              hint={draft.upiQr === "unpaid" && !upiId.trim() ? "Add a UPI ID for the QR to print. Point of sale uses it too." : "Point of sale uses it too."}
             >
               <Input
                 id="invoice-upi"
@@ -800,7 +800,7 @@ export function PaymentsSection({
 
 export function ReceiptSection({ draft, set, readOnly }: SectionProps) {
   return (
-    <SectionCard title="Till receipt" icon={<Printer className="size-4 text-muted-foreground" />}>
+    <SectionCard title="Point of sale receipt" icon={<Printer className="size-4 text-muted-foreground" />}>
       <div id="invoice-receipt" className="divide-y">
         <Choices
           label="QR code"

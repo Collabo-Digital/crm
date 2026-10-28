@@ -121,14 +121,14 @@ export function ProductSettingsTab() {
         />
         <SettingsToggleRow
           label="Track quantity (all products)"
-          help="When ON, every variant tracks inventory regardless of its individual setting — stock decrements on offline orders and Shopify pushes set inventory_management=shopify. Combine with the option below if you want to track but still allow overselling. Turn OFF (default) to honor each variant's per-row setting."
+          help="When ON, every variant tracks its stock, whatever its own setting: stock goes down with offline orders, and Shopify tracks it too. Combine with the option below to track stock but still sell when it runs out. When OFF (default), each variant's own setting applies."
           checked={settings.trackQuantityGlobally}
           disabled={!canManage || isFieldSaving(mutation, "trackQuantityGlobally")}
           onChange={(checked) => mutation.mutate({ trackQuantityGlobally: checked })}
         />
         <SettingsToggleRow
           label="Continue selling when out of stock (all products)"
-          help="When ON, every variant in your catalog is treated as continue-selling — offline orders accept lines even when stock is 0, and Shopify pushes use inventory_policy=continue across the board. The per-variant toggle on individual products becomes redundant. Turn OFF to honor each variant's setting individually (default)."
+          help="When ON, every product can be sold when it is out of stock: offline orders accept items with no stock left, and Shopify keeps selling them too, so the setting on each product no longer matters. When OFF (default), each variant's own setting applies."
           checked={settings.allowOversellGlobally}
           disabled={!canManage || isFieldSaving(mutation, "allowOversellGlobally")}
           onChange={(checked) => mutation.mutate({ allowOversellGlobally: checked })}
@@ -315,7 +315,7 @@ export function OrderSettingsTab() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-base font-bold text-gray-900 dark:text-gray-100">
+        <h2 className="text-section">
           Order settings
         </h2>
         <p className="mt-1 text-xs text-muted-foreground">

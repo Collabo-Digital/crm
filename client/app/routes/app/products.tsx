@@ -367,7 +367,7 @@ export default function ProductsPage() {
       <PageHeader>
         <PageHeaderContent>
           <PageHeaderTitle>Products</PageHeaderTitle>
-          <PageHeaderDescription>Your catalog, stock, and pricing in one place.</PageHeaderDescription>
+          <PageHeaderDescription>Your catalogue, stock and pricing in one place.</PageHeaderDescription>
         </PageHeaderContent>
         {!isVendor && (
           <PageHeaderActions className="w-full justify-end md:w-auto">

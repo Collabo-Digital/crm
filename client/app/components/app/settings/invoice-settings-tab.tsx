@@ -176,7 +176,7 @@ export function InvoiceSettingsTab() {
       <div className="space-y-1">
         <h2 className="text-section max-md:hidden">Invoices & bills</h2>
         <p className="text-caption text-muted-foreground">
-          How your invoices, credit notes and till receipts look. A document keeps the look it was issued with, so changes
+          How your invoices, credit notes and point of sale receipts look. A document keeps the look it was issued with, so changes
           here apply to new ones.
         </p>
       </div>

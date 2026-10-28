@@ -72,7 +72,7 @@ export function TillPhoneHeader({
       {staffBadge}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" className="size-11 rounded-full" aria-label="Till menu">
+          <Button variant="ghost" size="icon" className="size-11 rounded-full" aria-label="Point of sale menu">
             <MoreVertical />
           </Button>
         </DropdownMenuTrigger>
@@ -94,12 +94,12 @@ export function TillPhoneHeader({
           )}
           {onLock && (
             <DropdownMenuItem onSelect={onLock}>
-              <Lock /> Lock the till
+              <Lock /> Lock point of sale
             </DropdownMenuItem>
           )}
           <DropdownMenuItem asChild>
             <Link to={exitTo}>
-              <LogOut /> {exitTo === "/orders" ? "Exit to Orders" : "Exit the till"}
+              <LogOut /> {exitTo === "/orders" ? "Exit to Orders" : "Exit point of sale"}
             </Link>
           </DropdownMenuItem>
         </DropdownMenuContent>
