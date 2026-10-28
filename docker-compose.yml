@@ -6,6 +6,10 @@
 #   - postgres  PostgreSQL 16 database
 #   - redis     Redis 7 (for BullMQ + sessions)
 #
+# Postgres and Redis are published on 127.0.0.1 only, for tools on this host;
+# the app reaches them over the compose network. POSTGRES_PASSWORD must be set
+# in .env (compose refuses to start without it).
+#
 # Usage:
 #   docker compose up -d           # start all services in background
 #   docker compose logs -f app     # tail app logs
@@ -15,17 +19,17 @@
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
     container_name: collabo-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-collabo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-collabo_dev_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-collabo_crm}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-collabo} -d ${POSTGRES_DB:-collabo_crm}"]
       interval: 5s
@@ -35,14 +39,14 @@ services:
       - collabo-network
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ba19c50b56777f5c11c58eff8ddb69d0d5f27ba131cffb63f180ccfd43c66af
     container_name: collabo-redis
     restart: unless-stopped
     command: redis-server --maxmemory 256mb --maxmemory-policy noeviction
     volumes:
       - redis_data:/data
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -72,9 +76,9 @@ services:
       SERVE_STATIC: "true"
 
       # Database (uses internal Docker network DNS)
-      DATABASE_URL: postgresql://${POSTGRES_USER:-collabo}:${POSTGRES_PASSWORD:-collabo_dev_password}@postgres:5432/${POSTGRES_DB:-collabo_crm}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-collabo}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-collabo_crm}
       # Local Postgres has no pooler, so the direct URL is the same as DATABASE_URL.
-      DIRECT_URL: postgresql://${POSTGRES_USER:-collabo}:${POSTGRES_PASSWORD:-collabo_dev_password}@postgres:5432/${POSTGRES_DB:-collabo_crm}
+      DIRECT_URL: postgresql://${POSTGRES_USER:-collabo}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-collabo_crm}
 
       # Redis
       REDIS_URL: redis://redis:6379

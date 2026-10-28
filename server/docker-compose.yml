@@ -51,7 +51,7 @@ services:
       start_period: 40s
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ba19c50b56777f5c11c58eff8ddb69d0d5f27ba131cffb63f180ccfd43c66af
     container_name: collabo-redis
     restart: unless-stopped
     volumes:
@@ -65,7 +65,7 @@ services:
       retries: 3
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
     container_name: collabo-caddy
     restart: unless-stopped
     ports:
