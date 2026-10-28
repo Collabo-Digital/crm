@@ -292,9 +292,7 @@ export function VariantInlineEditor({
                 </Field>
                 <Field label="Margin">
                   <p className="flex h-9 items-center text-body tabular-nums text-muted-foreground">
-                    {draft.cost.trim()
-                      ? formatMargin(draft.price, draft.cost, currency)
-                      : "Set cost to see"}
+                    {formatMargin(draft.price, draft.cost, currency)}
                   </p>
                 </Field>
                 <Field label="Barcode" htmlFor="vie-barcode">

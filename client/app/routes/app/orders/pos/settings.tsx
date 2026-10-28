@@ -3,11 +3,12 @@ import { Link } from "react-router";
 import { ArrowLeft, CheckCircle2, CircleAlert, Clock, ImageIcon, LayoutGrid, Loader2, Lock, MessageCircle, Plus, Printer, ReceiptIndianRupee, Search, ShieldCheck, Users, Wallet, X } from "lucide-react";
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
+import { SaveBar } from "~/components/app/save-bar";
 import { SectionCard } from "~/components/app/section-card";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
-import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "~/components/ui/page-header";
+import { PageHeader, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "~/components/ui/page-header";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
@@ -111,7 +112,7 @@ export default function PosSettingsPage() {
           title="Only owners, admins and managers can change point of sale settings"
           action={
             <Button asChild variant="outline" size="sm">
-              <Link to="/orders/pos">Back to the till</Link>
+              <Link to="/orders/pos">Back to point of sale</Link>
             </Button>
           }
         />
@@ -128,15 +129,9 @@ export default function PosSettingsPage() {
   const limitInvalid = !!form?.discountApprovalPercent.trim() && (!Number.isFinite(limit) || limit < 0 || limit > 100);
   const above = Number(form?.customerRequiredAbove);
   const aboveInvalid = !!form?.customerRequiredAbove.trim() && (!Number.isInteger(above) || above < 1);
-  const canSave = dirty && !upiInvalid && !limitInvalid && !aboveInvalid && !save.isPending;
+  const invalid = upiInvalid || limitInvalid || aboveInvalid;
+  const canSave = dirty && !invalid && !save.isPending;
   const patch = (p: Partial<Form>) => setForm((f) => (f ? { ...f, ...p } : f));
-
-  const saveButton = (
-    <Button type="submit" form="pos-settings" variant="accent" disabled={!canSave}>
-      {save.isPending && <Loader2 className="animate-spin" />}
-      Save changes
-    </Button>
-  );
 
   return (
     <div className="settings-page mx-auto max-w-3xl space-y-6">
@@ -147,9 +142,8 @@ export default function PosSettingsPage() {
             Back to the till
           </Link>
           <PageHeaderTitle>Point of sale settings</PageHeaderTitle>
-          <PageHeaderDescription>How the till takes payment, who can unlock it, and what the receipt says.</PageHeaderDescription>
+          <PageHeaderDescription>How point of sale takes payment, who can unlock it, and what the receipt says.</PageHeaderDescription>
         </PageHeaderContent>
-        <PageHeaderActions className="max-md:hidden">{saveButton}</PageHeaderActions>
       </PageHeader>
 
       {setup.isLoading || (setup.data && !form) ? (
@@ -170,7 +164,7 @@ export default function PosSettingsPage() {
               save.mutate(diff, { onSuccess: (saved) => setForm(toForm(saved)) });
             }}
           >
-            <SectionCard title="UPI payments" icon={<Wallet className="size-4 text-muted-foreground" />} description="The till shows a QR code for the exact bill amount, paid straight to this UPI ID.">
+            <SectionCard title="UPI payments" icon={<Wallet className="size-4 text-muted-foreground" />} description="Point of sale shows a QR code for the exact bill amount, paid straight to this UPI ID.">
               <div className="grid gap-4 p-5 sm:grid-cols-2">
                 <Field id="pos-upi" label="UPI ID" hint={upiInvalid ? undefined : "Like yourshop@okaxis. Leave empty to record UPI payments without a QR code."}>
                   <Input id="pos-upi" value={form.upiId} maxLength={100} autoComplete="off" spellCheck={false} placeholder="yourshop@okaxis" aria-invalid={upiInvalid || undefined} aria-describedby={upiInvalid ? "pos-upi-error" : undefined} onChange={(e) => patch({ upiId: e.target.value })} />
@@ -198,7 +192,7 @@ export default function PosSettingsPage() {
                   <div>
                     <Label htmlFor="pos-above">Ask for name and address on bills of</Label>
                     <p className="mt-1 text-micro text-muted-foreground">
-                      GST rules need the buyer's name and address from ₹50,000. Asked even when the till doesn't ask for the customer. Leave empty to never ask.
+                      GST rules need the buyer's name and address from ₹50,000. Asked even when point of sale doesn't ask for the customer. Leave empty to never ask.
                     </p>
                   </div>
                   <div className="space-y-1">
@@ -221,7 +215,7 @@ export default function PosSettingsPage() {
 
             <SectionCard title="Staff PINs and approvals" icon={<ShieldCheck className="size-4 text-muted-foreground" />}>
               <div className="divide-y">
-                <Toggle id="pos-pin" label="Staff unlock the till with a PIN" hint="Each sale then records who billed it. The till locks when someone taps Lock." checked={form.requireStaffPin} onChange={(v) => patch({ requireStaffPin: v })} />
+                <Toggle id="pos-pin" label="Staff unlock point of sale with a PIN" hint="Each sale then records who billed it. It locks when someone taps Lock." checked={form.requireStaffPin} onChange={(v) => patch({ requireStaffPin: v })} />
                 <div className="grid gap-2 px-5 py-4 sm:grid-cols-[1fr_140px] sm:items-center">
                   <div>
                     <Label htmlFor="pos-limit">Discounts above this need a manager's PIN</Label>
@@ -254,7 +248,7 @@ export default function PosSettingsPage() {
               </div>
             </SectionCard>
 
-            <SectionCard title="Quick tiles" icon={<LayoutGrid className="size-4 text-muted-foreground" />} description="Products shown on the till before anything is searched, for one-tap billing.">
+            <SectionCard title="Quick tiles" icon={<LayoutGrid className="size-4 text-muted-foreground" />} description="Products shown at point of sale before anything is searched, for one-tap billing.">
               <TilePicker
                 ids={form.tileVariantIds}
                 info={tileInfo}
@@ -266,10 +260,13 @@ export default function PosSettingsPage() {
               />
             </SectionCard>
 
-            <div className="flex items-center justify-end gap-3">
-              {dirty && <span className="text-caption text-muted-foreground">You have unsaved changes.</span>}
-              {saveButton}
-            </div>
+            <SaveBar
+              dirty={dirty}
+              saving={save.isPending}
+              invalid={invalid}
+              onDiscard={() => setForm(toForm(settings))}
+              what="the point of sale settings"
+            />
           </form>
 
           <StaffSection requirePin={form.requireStaffPin} />
@@ -453,7 +450,7 @@ function StaffSection({ requirePin }: { requirePin: boolean }) {
       icon={<Users className="size-4 text-muted-foreground" />}
       description={
         requirePin
-          ? "Each person unlocks the till with their own PIN. Managers also approve discounts and price changes."
+          ? "Each person unlocks point of sale with their own PIN. Managers also approve discounts and price changes."
           : "PINs say who billed a sale. Managers also approve discounts and price changes."
       }
     >

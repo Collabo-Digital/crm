@@ -32,7 +32,7 @@ export function useCreatePosStaffMutation() {
   return useMutation({
     mutationFn: (data: { name: string; role: PosStaffRole; pin: string }) => posService.createStaff(data),
     onSuccess: (staff) => {
-      toast.success(`${staff.name} can now unlock the till.`);
+      toast.success(`${staff.name} can now unlock point of sale.`);
       invalidate();
     },
   });

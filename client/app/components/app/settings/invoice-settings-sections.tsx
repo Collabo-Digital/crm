@@ -185,7 +185,7 @@ export function LookSection({ draft, set, errors, readOnly }: SectionProps) {
     { value: "classic" as const, title: "Classic", hint: "A ruled grid in black and white, the way accountants expect." },
   ];
   return (
-    <SectionCard title="Look" icon={<Palette className="size-4 text-muted-foreground" />} description="For invoices, credit notes and bills. Till receipts print in black and white.">
+    <SectionCard title="Look" icon={<Palette className="size-4 text-muted-foreground" />} description="For invoices, credit notes and bills. Point of sale receipts print in black and white.">
       <div id="invoice-look" className="divide-y">
         <div className="space-y-2 px-5 py-4">
           <p className="text-label">Theme</p>
@@ -307,6 +307,7 @@ export function LookSection({ draft, set, errors, readOnly }: SectionProps) {
 
 // ── 3. Logo ─────────────────────────────────────────────────────────────────
 
+/** The logo upload. It lives on Store profile, the one place the logo is set. */
 export function LogoSection({
   logoUrl,
   uploaded,
@@ -316,7 +317,7 @@ export function LogoSection({
   onRemove,
 }: {
   logoUrl: string;
-  /** False when the logo is a link typed on Store profile: PDFs print only an uploaded file. */
+  /** False for a logo saved earlier as a web link: PDFs print only an uploaded file. */
   uploaded: boolean;
   readOnly: boolean;
   busy: "uploading" | "removing" | null;
@@ -327,24 +328,53 @@ export function LogoSection({
     <SectionCard title="Logo" icon={<ImageIcon className="size-4 text-muted-foreground" />}>
       <div className="space-y-3 p-5">
         <ImageUpload
-          id="invoice-logo"
+          id="store-logo-file"
           noun="logo"
           imageUrl={logoUrl || null}
           maxBytes={1024 * 1024}
           minWidth={300}
-          hint="PNG or JPG, at least 300 px wide, up to 1 MB. Also used on receipts and packing slips."
+          hint="PNG or JPG, at least 300 px wide, up to 1 MB. Printed on invoices, receipts and packing slips."
           readOnly={readOnly}
           busy={busy}
           onUpload={onUpload}
           onRemove={onRemove}
         />
         {logoUrl && !uploaded && (
-          <p className="flex items-start gap-1.5 rounded-lg bg-warning-subtle px-3 py-2 text-caption text-warning-strong">
+          <p className="flex items-start gap-1.5 rounded-lg bg-warning-subtle px-3 py-2 text-caption text-warning-text">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-            This logo is a web link from Store profile. Invoices can only print an uploaded file, so they show your store
-            name until you upload one.
+            This logo was saved as a web link. Invoices can only print an uploaded file, so they show your store
+            name until you upload it here.
           </p>
         )}
+      </div>
+    </SectionCard>
+  );
+}
+
+/** The logo as invoices print it, set on Store profile. */
+export function LogoFromStoreProfile({ logoUrl, uploaded }: { logoUrl: string; uploaded: boolean }) {
+  const [broken, setBroken] = useState(false);
+  const shown = uploaded && logoUrl && !broken;
+  return (
+    <SectionCard
+      title="Logo"
+      icon={<ImageIcon className="size-4 text-muted-foreground" />}
+      description="Your one logo, set in Store profile. Printed on invoices, receipts and packing slips."
+    >
+      <div className="flex flex-wrap items-center gap-3 p-5">
+        <div className="grid h-16 w-40 shrink-0 place-items-center overflow-hidden rounded-lg border bg-muted/40">
+          {shown ? (
+            <img src={logoUrl} alt="Your logo" className="max-h-14 max-w-36 object-contain" onError={() => setBroken(true)} />
+          ) : (
+            <span className="flex items-center gap-1.5 text-caption text-muted-foreground">
+              <ImageIcon className="size-4" />
+              {logoUrl && !uploaded ? "Not on invoices yet" : "No logo yet"}
+            </span>
+          )}
+        </div>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/settings/store-profile#store-logo">{shown ? "Change in Store profile" : "Upload in Store profile"}</Link>
+        </Button>
       </div>
     </SectionCard>
   );
@@ -540,7 +570,7 @@ export function TermsSection({ draft, set, errors, readOnly }: SectionProps) {
             onChange={(e) => set("terms", e.target.value)}
           />
         </Field>
-        <Field id="invoice-return-policy" label="Return policy" hint="Printed on invoices and till receipts.">
+        <Field id="invoice-return-policy" label="Return policy" hint="Printed on invoices and point of sale receipts.">
           <Textarea
             id="invoice-return-policy"
             rows={2}
@@ -743,7 +773,7 @@ export function PaymentsSection({
               id="invoice-upi"
               label="UPI ID"
               error={upiError ?? undefined}
-              hint={draft.upiQr === "unpaid" && !upiId.trim() ? "Add a UPI ID for the QR to print. The till uses it too." : "The till uses it too."}
+              hint={draft.upiQr === "unpaid" && !upiId.trim() ? "Add a UPI ID for the QR to print. Point of sale uses it too." : "Point of sale uses it too."}
             >
               <Input
                 id="invoice-upi"
@@ -770,7 +800,7 @@ export function PaymentsSection({
 
 export function ReceiptSection({ draft, set, readOnly }: SectionProps) {
   return (
-    <SectionCard title="Till receipt" icon={<Printer className="size-4 text-muted-foreground" />}>
+    <SectionCard title="Point of sale receipt" icon={<Printer className="size-4 text-muted-foreground" />}>
       <div id="invoice-receipt" className="divide-y">
         <Choices
           label="QR code"

@@ -505,8 +505,8 @@ function TriggerForm({ config, set, ctx }: { config: Config; set: (p: Config) =>
         <label className="flex items-start gap-2 text-body">
           <Checkbox checked={!!config.skipPos} disabled={ro} onCheckedChange={(v) => set({ skipPos: v === true })} />
           <span>
-            Skip till (point-of-sale) sales
-            <span className="block text-micro text-muted-foreground">Sales rung up at your shop’s till, and their invoices, don’t start it.</span>
+            Skip sales billed at point of sale
+            <span className="block text-micro text-muted-foreground">Sales billed at your shop’s point of sale, and their invoices, don’t start it.</span>
           </span>
         </label>
       )}
@@ -1144,7 +1144,7 @@ export function StepEditor({ step, onChange, ctx }: { step: AutomationStep; onCh
           {c.method === "whatsapp_pay" ? (
             <>
               <p className="rounded-lg border border-dashed p-2 text-caption text-muted-foreground">
-                Sends a “Review and Pay” bill with the order’s items. Only within 24 hours of the customer’s last message (right after a cart, or after “Wait for a reply”), and the order needs a delivery address in India. Turn it on per number in Campaigns → Catalog.
+                Sends a “Review and Pay” bill with the order’s items. Only within 24 hours of the customer’s last message (right after a cart, or after “Wait for a reply”), and the order needs a delivery address in India. Turn it on per number in Campaigns → Catalogue.
               </p>
               <Field label="Message" hint="Optional; the bill’s items and total are shown either way." htmlFor="pl-wp-text">
                 <TextWithVariables id="pl-wp-text" rows={2} value={c.message ?? ""} onChange={(message) => set({ message })} ctx={ctx} maxLength={1024} placeholder="Thanks {{first_name}}! Review your order and pay below." />

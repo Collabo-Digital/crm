@@ -8,6 +8,7 @@ import { ImpersonationBanner } from "~/components/app/impersonation-banner";
 import { Button } from "~/components/ui/button";
 import { AuthGuard } from "~/components/guards/auth-guard";
 import { useMembershipSync, useSectionAccess } from "~/hooks/use-section-access";
+import { SUPPORT_EMAIL, supportEmailLink } from "~/lib/support";
 import { cn } from "~/lib/utils";
 import { useNewMessageAlerts } from "~/hooks/use-new-message-alerts";
 import { useAuthStore } from "~/stores/auth.store";
@@ -159,7 +160,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
               description={
                 notFound
                   ? "This link is mistyped, or the page it pointed to has moved or been removed."
-                  : "Reload to try again. If it keeps happening, let us know which page and what you clicked."
+                  : `Reload to try again. If it keeps happening, email ${SUPPORT_EMAIL} with the page and what you clicked.`
               }
               action={
                 <div className="flex flex-wrap justify-center gap-2">
@@ -167,6 +168,11 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
                   <Button variant="outline" size="sm" asChild>
                     <Link to={landingPath}>Go to your workspace</Link>
                   </Button>
+                  {!notFound && (
+                    <Button variant="ghost" size="sm" asChild>
+                      <a href={supportEmailLink(`A page in Collabo broke: ${window.location.pathname}`)}>Email support</a>
+                    </Button>
+                  )}
                 </div>
               }
             />

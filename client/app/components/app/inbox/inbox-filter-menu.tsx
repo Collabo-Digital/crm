@@ -48,9 +48,10 @@ export function InboxFilterMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="xs" className="text-muted-foreground" aria-label="Filter conversations">
+        <Button variant="ghost" size="xs" className="text-muted-foreground" aria-label="Filter conversations" title="Filter">
           <ListFilter className="size-3" />
-          Filter
+          {/* The desktop column is narrow: the icon says it there. */}
+          <span className="md:hidden">Filter</span>
           {active > 0 && <span className="tabular-nums text-foreground">{active}</span>}
         </Button>
       </DropdownMenuTrigger>

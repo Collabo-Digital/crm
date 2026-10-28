@@ -13,6 +13,7 @@ import { TrendingUp, TrendingDown, Loader2 } from "lucide-react";
 import { useSalesAndProfit } from "~/hooks/use-dashboard-queries";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { cn, formatCurrency } from "~/lib/utils";
+import { unconvertedNote } from "~/lib/unconverted";
 import type { DashboardQueryParams } from "~/types/api";
 
 const SERIES_LABEL: Record<string, string> = {
@@ -197,8 +198,7 @@ export function ProfitBarChart({
               )}
               {unconvertedOrders > 0 && (
                 <span className="whitespace-nowrap text-warning-text">
-                  excludes {unconvertedOrders} order
-                  {unconvertedOrders === 1 ? "" : "s"} with no exchange rate
+                  {unconvertedNote(unconvertedOrders)}
                 </span>
               )}
             </div>

@@ -192,7 +192,7 @@ function sentOptions(payload: Record<string, unknown>): Array<{ icon: LucideIcon
         : payload.type === "product_carousel"
           ? ((payload.productRetailerIds as string[] | undefined) ?? []).length
           : 1;
-    const label = payload.type === "catalog" ? "Catalog" : payload.type === "product" ? "Product card" : payload.type === "product_carousel" ? `${count} product cards` : `${count} products`;
+    const label = payload.type === "catalog" ? "Catalogue" : payload.type === "product" ? "Product card" : payload.type === "product_carousel" ? `${count} product cards` : `${count} products`;
     return [{ icon: ShoppingCart, label }];
   }
   // WhatsApp shows the customer its own "Allow calls" buttons under this text.

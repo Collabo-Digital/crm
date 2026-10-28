@@ -213,7 +213,7 @@ function FulfillmentRow({
             onClick={onCancel}
             disabled={busy}
             className="rounded-md p-1.5 text-muted-foreground hover:bg-red-50 dark:hover:bg-red-900/30 hover:text-red-600 disabled:opacity-50"
-            title="Cancel fulfillment"
+            title="Cancel fulfilment"
           >
             <XCircle className="size-3.5" />
           </button>
@@ -224,7 +224,8 @@ function FulfillmentRow({
 }
 
 // ─── Fulfill Dialog ─────────────────────────────────────────────────────────
-// Triggered from the Actions menu when the order has fulfillable items.
+// The one way to fulfil items on the order page: the line items card's
+// Fulfil items button, and every group and row "Fulfil…" entry, open it.
 
 type SelectedItem = {
   lineItemId: string;
@@ -279,9 +280,15 @@ export function mergeSelections(
 
 export function FulfillDialog({
   order,
+  preselect,
   onClose,
 }: {
   order: OrderDetail;
+  /**
+   * The lines to tick when the dialog opens: a group's or a row's when it is
+   * started there. Everything still to ship when omitted.
+   */
+  preselect?: ReadonlyArray<string>;
   onClose: () => void;
 }) {
   const isShopify = order.channel.platform === "SHOPIFY";
@@ -303,14 +310,14 @@ export function FulfillDialog({
       for (const li of fo.lineItems) {
         map.set(li.lineItemId, {
           lineItemId: li.lineItemId,
-          selected: true,
+          selected: preselect ? preselect.includes(li.lineItemId) : true,
           quantity: li.remainingQuantity,
           maxQuantity: li.remainingQuantity,
         });
       }
     }
     return map;
-  }, [data]);
+  }, [data, preselect]);
 
   // Edits only — never a copy of the server's numbers, so they cannot go stale.
   const [edits, setEdits] = useState<Map<string, SelectionEdit>>(new Map());
@@ -331,6 +338,7 @@ export function FulfillDialog({
   }
 
   const selectedCount = Array.from(merged.values()).filter((s) => s.selected).length;
+  const hasTracking = Boolean(tracking.number?.trim() || tracking.url?.trim());
   const noFulfillable =
     !isLoading && data && data.fulfillmentOrders.every((fo) => fo.lineItems.length === 0);
 
@@ -368,7 +376,7 @@ export function FulfillDialog({
 
   return (
     <ModalShell
-      title="Fulfill items"
+      title="Fulfil items"
       subtitle={`Order ${order.name}`}
       onClose={onClose}
       maxWidthClass="max-w-lg"
@@ -383,7 +391,7 @@ export function FulfillDialog({
         {error && (
           <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 dark:bg-red-900/20 px-3 py-2 text-xs text-red-700 dark:text-red-300">
             <AlertCircle className="size-4 shrink-0" />
-            <span>Couldn't load fulfillable items. Try closing and re-opening.</span>
+            <span>Couldn't load the items to fulfil. Try closing and re-opening.</span>
           </div>
         )}
 
@@ -434,15 +442,27 @@ export function FulfillDialog({
                 checked={notifyCustomer}
                 onChange={setNotifyCustomer}
                 label="Email customer"
-                help="Shopify sends the shipping confirmation email."
+                help={
+                  hasTracking
+                    ? "Shopify sends the shipping confirmation email with the tracking link."
+                    : "Shopify sends the shipping confirmation email now, with no tracking link."
+                }
               />
             )}
+
+            {/* Said before the click: these items are marked shipped as
+                soon as this is confirmed. */}
+            <p className="text-caption text-muted-foreground">
+              {hasTracking
+                ? "The ticked items are marked as shipped with this tracking."
+                : "The ticked items are marked as shipped with no tracking number. You can add one later from the shipment."}
+            </p>
           </>
         )}
       </div>
 
       <DialogFooter
-        confirmLabel={`Fulfill ${selectedCount} item${selectedCount === 1 ? "" : "s"}`}
+        confirmLabel={`Fulfil ${selectedCount} item${selectedCount === 1 ? "" : "s"}`}
         onConfirm={handleSubmit}
         onClose={onClose}
         pending={mutation.isPending}
@@ -645,14 +665,14 @@ function CancelFulfillmentDialog({
   }
 
   return (
-    <ModalShell title="Cancel fulfillment?" onClose={onClose}>
+    <ModalShell title="Cancel fulfilment?" onClose={onClose}>
       <p className="px-6 py-4 text-xs text-muted-foreground">
         This will mark the fulfillment as cancelled and re-open its line items so
         they can be fulfilled again. For Shopify orders the cancellation also flows
         to Shopify.
       </p>
       <DialogFooter
-        confirmLabel="Cancel fulfillment"
+        confirmLabel="Cancel fulfilment"
         confirmTone="destructive"
         onConfirm={handleConfirm}
         onClose={onClose}

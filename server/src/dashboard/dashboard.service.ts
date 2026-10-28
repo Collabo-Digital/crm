@@ -5,7 +5,14 @@ import {
   rangeToWindow,
   windowStart,
 } from './dto/query-dashboard.dto';
-import { Prisma } from '@prisma/client';
+import {
+  AutomationStatus,
+  ChannelPlatform,
+  ChannelStatus,
+  InviteStatus,
+  Prisma,
+  UserRole,
+} from '@prisma/client';
 import { Parser } from 'json2csv';
 import { neutraliseCsvRow } from '../common/utils/csv-formula.util';
 import {
@@ -28,6 +35,7 @@ import {
   type SalesProfitRow,
 } from './profit.util';
 import { lowStockVariantRows, toLowStockEntry } from './low-stock.util';
+import { setupProgress, type SetupProgress } from './setup-progress';
 
 /** Most order rows one CSV / JSON download will carry, newest first. */
 export const REPORT_ROW_CAP = 10_000;
@@ -72,6 +80,53 @@ function splitOf(rows: InStoreSplitRow[], posSale: boolean) {
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) { }
+
+  /** The owner's "Get started" checklist. Counts only; see setup-progress.ts. */
+  async getSetupProgress(orgId: string): Promise<SetupProgress> {
+    const org = { organizationId: orgId };
+    const connected = { in: [ChannelStatus.CONNECTED, ChannelStatus.SYNCING] };
+    const [
+      organization,
+      settings,
+      whatsappChannels,
+      shopifyChannels,
+      products,
+      gstins,
+      members,
+      pendingInvites,
+      recommendedAutomationsOn,
+    ] = await Promise.all([
+      this.prisma.organization.findUnique({ where: { id: orgId }, select: { gstEnabled: true } }),
+      this.prisma.organizationSettings.findUnique({ where: org, select: { storeProfileSettings: true } }),
+      this.prisma.channel.count({ where: { ...org, platform: ChannelPlatform.WHATSAPP, status: connected } }),
+      this.prisma.channel.count({ where: { ...org, platform: ChannelPlatform.SHOPIFY, status: connected } }),
+      this.prisma.product.count({ where: { ...org, deletedAt: null } }),
+      this.prisma.organizationGstin.findMany({ where: { ...org, isActive: true }, select: { address: true } }),
+      this.prisma.organizationMember.count({ where: { ...org, isActive: true, role: { not: UserRole.INFLUENCER } } }),
+      this.prisma.teamInvite.count({
+        where: { ...org, status: InviteStatus.PENDING, expiresAt: { gt: new Date() }, role: { not: UserRole.INFLUENCER } },
+      }),
+      this.prisma.automation.count({
+        where: {
+          ...org,
+          packKey: { not: null },
+          archivedAt: null,
+          OR: [{ status: AutomationStatus.ACTIVE }, { activateWhenReady: true }],
+        },
+      }),
+    ]);
+    return setupProgress({
+      whatsappChannels,
+      shopifyChannels,
+      products,
+      storeProfileSettings: settings?.storeProfileSettings ?? null,
+      gstEnabled: organization?.gstEnabled ?? false,
+      gstinAddresses: gstins.map((g) => g.address),
+      members,
+      pendingInvites,
+      recommendedAutomationsOn,
+    });
+  }
 
   /**
    * `sharedWindow` lets one caller (the JSON export) compute this and the

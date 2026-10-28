@@ -412,7 +412,7 @@ export default function PosPage() {
    */
   const staffRefused = (error: unknown) => {
     if (!isAxiosError(error) || error.response?.status !== 403 || !(settings?.requireStaffPin || staff)) return false;
-    const text = serverMessage(error, "Unlock the till with a staff PIN first.");
+    const text = serverMessage(error, "Unlock point of sale with a staff PIN first.");
     lock();
     setApproval(null);
     setPinError((p) => ({ text, key: p.key }));
@@ -542,7 +542,7 @@ export default function PosPage() {
   } else if (!data) {
     body = (
       <div className="flex flex-1 items-center justify-center">
-        <QueryErrorState resource="the till" onRetry={() => void setup.refetch()} />
+        <QueryErrorState resource="point of sale" onRetry={() => void setup.refetch()} />
       </div>
     );
   } else if (stores.length === 0) {
@@ -572,7 +572,7 @@ export default function PosPage() {
         {data.staff.length === 0 ? (
           <div className="max-w-sm space-y-3 text-center">
             <Lock className="mx-auto size-8 text-muted-foreground" />
-            <h2 className="font-heading text-subhead">No staff can unlock this till yet</h2>
+            <h2 className="font-heading text-subhead">No staff can unlock point of sale yet</h2>
             <p className="text-caption text-muted-foreground">
               Staff PINs are switched on, but no one has a PIN.{" "}
               {canManage ? "Add your team in POS settings." : "Ask a manager to add you in POS settings."}

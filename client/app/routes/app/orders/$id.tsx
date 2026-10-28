@@ -11,7 +11,6 @@ import {
   Plus,
   Printer,
   Receipt,
-  Truck,
   X,
 } from "lucide-react";
 import { useOrder, useAdjacentOrders } from "~/hooks/use-order-queries";
@@ -27,6 +26,7 @@ import {
   useOrderActionGates,
 } from "~/components/app/order-actions";
 import { OrderFulfillmentsSection, FulfillDialog } from "~/components/app/order-fulfillments";
+import { MessageBuyerButton } from "~/components/app/message-buyer-button";
 import {
   OrderItemsFulfillment,
   type LineGroupKey,
@@ -40,6 +40,7 @@ import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
 import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import { cn, formatCurrency } from "~/lib/utils";
+import { formatDate, formatDayMonth } from "~/lib/format-date";
 import {
   FINANCIAL_CLASSES,
   FINANCIAL_LABELS_FULL,
@@ -110,6 +111,13 @@ function OwnerOrderDetail({ id }: { id: string }) {
   const { data: orgMembers } = useOrgMembers(org?.id);
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
   const [dialog, setDialog] = useState<"fulfill" | "capture" | "cancel" | null>(null);
+  // The lines the fulfil dialog opens with: a group's or a row's, or every
+  // line still to ship from the card's own button.
+  const [fulfilLines, setFulfilLines] = useState<string[] | undefined>(undefined);
+  function openFulfil(lineIds?: string[]) {
+    setFulfilLines(lineIds);
+    setDialog("fulfill");
+  }
   // Same gates the Actions menu uses, so the rail below can't offer a button
   // the menu deliberately hides.
   const { canManage, canCapture, canCancel, canFulfill, canActOnItems, canEdit } =
@@ -369,9 +377,14 @@ function OwnerOrderDetail({ id }: { id: string }) {
             <StatusRow label="Shipping">
               <StatusPill className={shippingState.className}>{shippingState.label}</StatusPill>
             </StatusRow>
+            {/* Only a till bill is an in-store sale: that is what Store
+                reports and the dashboard's in-store split count. Any other
+                order made in Collabo is a manual order. */}
             {source === "offline" && (
               <StatusRow label="Source">
-                <StatusPill className="bg-info-subtle text-info">In-Store</StatusPill>
+                <StatusPill className={order.posSale ? STATUS_TONE_CLASSES.info : STATUS_TONE_CLASSES.neutral}>
+                  {order.posSale ? "Point of sale" : "Manual order"}
+                </StatusPill>
               </StatusRow>
             )}
           </div>
@@ -410,20 +423,19 @@ function OwnerOrderDetail({ id }: { id: string }) {
             canActOnItems={canActOnItems}
             canCreateFulfillment={canFulfill}
             groupCaptions={lineGroupCaptions}
+            onFulfil={openFulfil}
             headerAction={
-              /* Labelled for what it does — this opens FulfillDialog, not the
-                 Actions menu's Edit details dialog.
+              /* The one Fulfil items button, and the page's main action while
+                 anything is left to ship. It and every group or row "Fulfil…"
+                 entry open the same dialog, where tracking and the customer
+                 email are chosen before anything is marked shipped.
 
                  A standalone Restock button used to sit beside it, permanently
                  disabled — there is no restock endpoint. Restocking is real,
                  but it is a checkbox on Cancel order, which is where it
-                 belongs; a dead control is worse than no control.
-
-                 Gated: this and the rail button below both used to render
-                 unconditionally while only the third entry point checked
-                 `canFulfill`, so a VIEWER got two buttons that could only 403. */
+                 belongs; a dead control is worse than no control. */
               canFulfill ? (
-                <Button variant="accent" size="sm" onClick={() => setDialog("fulfill")}>
+                <Button size="sm" onClick={() => openFulfil()}>
                   Fulfil items
                 </Button>
               ) : null
@@ -506,19 +518,6 @@ function OwnerOrderDetail({ id }: { id: string }) {
                     Every item on this order has been fulfilled.
                   </p>
                 )}
-                {/* `canFulfill` already requires outstanding units, so this is
-                    absent rather than present-but-dead once everything ships. */}
-                {canFulfill && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={() => setDialog("fulfill")}
-                  >
-                    <Truck className="size-3.5" />
-                    Create fulfilment
-                  </Button>
-                )}
               </div>
             </div>
           </section>
@@ -544,9 +543,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
                       </p>
                       {r.reason && <p className="text-micro text-muted-foreground">{r.reason}</p>}
                     </div>
-                    <p className="text-micro text-muted-foreground">
-                      {new Date(r.createdAt).toLocaleDateString("en-IN")}
-                    </p>
+                    <p className="text-micro text-muted-foreground">{formatDate(r.createdAt)}</p>
                   </li>
                 ))}
               </ul>
@@ -562,8 +559,15 @@ function OwnerOrderDetail({ id }: { id: string }) {
             {/* No Fulfil items button here on purpose — fulfilment belongs to the
                 Line Items card, which groups by state and can act per line. This
                 rail carried a third copy of the same setDialog("fulfill") call. */}
+            {/* One lime button per page: the next step. Fulfil items while
+                anything is left to ship, then Capture payment, then the
+                GST invoice. */}
             {canCapture && (
-              <Button variant="brand" className="w-full" onClick={() => setDialog("capture")}>
+              <Button
+                variant={canFulfill ? "outline" : "default"}
+                className="w-full"
+                onClick={() => setDialog("capture")}
+              >
                 Capture payment
               </Button>
             )}
@@ -579,7 +583,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
                  and handed a VIEWER or AGENT a guaranteed 403. */
               canManage && (
                 <Button
-                  variant="brand"
+                  variant={canFulfill || canCapture || !gstEnabled ? "outline" : "default"}
                   className="w-full"
                   disabled={!gstEnabled}
                   title={gstEnabled ? undefined : "GST is not enabled for this organization"}
@@ -632,7 +636,9 @@ function OwnerOrderDetail({ id }: { id: string }) {
       </div>
 
       {/* Dialogs — all reused from the actions menu so behaviour stays identical. */}
-      {dialog === "fulfill" && <FulfillDialog order={order} onClose={() => setDialog(null)} />}
+      {dialog === "fulfill" && (
+        <FulfillDialog order={order} preselect={fulfilLines} onClose={() => setDialog(null)} />
+      )}
       {dialog === "capture" && (
         <CapturePaymentDialog order={order} onClose={() => setDialog(null)} />
       )}
@@ -657,9 +663,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
  * — dropped rather than left as a second source of truth.)
  */
 /** "27 Aug" — for group captions, where the year is noise. */
-function shortDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-}
+const shortDate = formatDayMonth;
 
 /** "28 Aug, 11:30 am". */
 function shortDateTime(iso: string): string {
@@ -1098,10 +1102,24 @@ function CustomerRail({
     ? `${order.customer.firstName ?? ""} ${order.customer.lastName ?? ""}`.trim()
     : "";
 
+  const ship = readAddress(order.shippingAddress);
+  const shipCountry =
+    typeof order.shippingAddress?.country_code === "string" ? order.shippingAddress.country_code : null;
+  const messageButton = (
+    <MessageBuyerButton
+      phone={phone ?? ship.phone}
+      customerId={order.customer?.id}
+      name={name || undefined}
+      customer={customer}
+      countryCode={shipCountry}
+    />
+  );
+
   if (!name) {
     return (
       <RailBlock label="Customer">
         <p className="text-caption italic text-muted-foreground">Guest order</p>
+        {ship.phone && messageButton}
       </RailBlock>
     );
   }
@@ -1112,7 +1130,6 @@ function CustomerRail({
       year: "numeric",
     })
     : null;
-  const ship = readAddress(order.shippingAddress);
   const billingMatchesShipping = sameAddress(order.shippingAddress, order.billingAddress);
 
   return (
@@ -1147,6 +1164,8 @@ function CustomerRail({
           </a>
         )}
       </div>
+
+      {messageButton}
 
       {/* Lifetime value. A failed lookup used to render the same em dash as a
           customer with no spend — "unknown" shown as "zero". */}

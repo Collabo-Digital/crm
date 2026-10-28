@@ -1503,6 +1503,8 @@ export interface Order {
    * Read it through `orderShopifySyncOf`, which handles both shapes.
    */
   shopifySync?: OrderShopifySync | null;
+  /** LIST endpoint only: the order is cash on delivery, by its payment gateway names. */
+  cashOnDelivery?: boolean;
   /**
    * Row insert time. On the DETAIL endpoint this is the local DB timestamp, not
    * when the order was placed — the list and vendor endpoints map
@@ -1727,11 +1729,18 @@ export interface AdjacentOrders {
   total: number;
 }
 
+/**
+ * The orders list's payment filter: paid, pending (unpaid, not cash on
+ * delivery), COD (unpaid cash on delivery) or refunded (fully or partly).
+ */
+export type OrderPaymentFilter = "paid" | "pending" | "cod" | "refunded";
+
 export interface OrderListParams {
   page?: number;
   limit?: number;
   financialStatus?: FinancialStatus;
   fulfillmentStatus?: FulfillmentStatus;
+  payment?: OrderPaymentFilter;
   channelId?: string;
   productId?: string;
   customerId?: string;
@@ -2440,6 +2449,10 @@ export interface UpdateCustomerRequest {
   internalNotes?: string;
   segments?: string[];
   tags?: string[];
+  /** Saved as E.164; an empty string removes it. */
+  phone?: string;
+  /** Replaces the saved default address. */
+  defaultAddress?: OrderAddressInput;
   gstin?: string;
   billingStateCode?: string;
   billingStateName?: string;
@@ -2600,6 +2613,16 @@ export interface DashboardRecentOrder {
 }
 
 /** Full dashboard overview response. */
+/** GET /dashboard/setup — the "Get started" checklist, each step read from the workspace's data. */
+export interface SetupProgress {
+  whatsapp: boolean;
+  catalogue: boolean;
+  storeProfile: boolean;
+  gst: boolean;
+  team: boolean;
+  automations: boolean;
+}
+
 export interface DashboardOverview {
   period: DashboardPeriod;
   /**

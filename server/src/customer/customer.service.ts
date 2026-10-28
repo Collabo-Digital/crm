@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { QueryCustomersDto } from './dto/query-customers.dto';
-import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { CustomerAddressDto, UpdateCustomerDto } from './dto/update-customer.dto';
+import { countryCodeOf, normalizePhone } from '../common/phone.util';
 import { pickPrefillAddress } from './prefill-address.util';
 import { contactName } from '../messaging/contact-name';
 import {
@@ -156,7 +157,11 @@ export class CustomerService {
       });
     }
 
-    const updated = await this.prisma.customer.update({ where: { id }, data: dto });
+    const { phone, defaultAddress, ...rest } = dto;
+    const updated = await this.prisma.customer.update({
+      where: { id },
+      data: { ...rest, ...contactPatch(customer.defaultAddress, { phone, defaultAddress }) },
+    });
 
     // Defensive: if a future change to UpdateCustomerDto exposes ordersCount
     // or totalSpent, the tier needs to stay in sync. Cheap to call and a no-op
@@ -316,4 +321,48 @@ export class CustomerService {
     const pct = Math.round(((current - previous) / previous) * 100);
     return { percentage: Math.abs(pct), direction: pct > 0 ? 'up' : pct < 0 ? 'down' : 'same' };
   }
+}
+
+/**
+ * The phone and address of an edit, checked and normalised. The phone is
+ * saved as E.164, read with the address's country (else India, as the order
+ * form reads it), so the inbox can start a WhatsApp chat on it and the
+ * Shopify push accepts it. An Indian PIN code must be 6 digits.
+ */
+export function contactPatch(
+  savedAddress: unknown,
+  edit: { phone?: string | null; defaultAddress?: CustomerAddressDto },
+): Prisma.CustomerUpdateInput {
+  const patch: Prisma.CustomerUpdateInput = {};
+  let address: Record<string, string> | undefined;
+
+  if (edit.defaultAddress) {
+    address = Object.fromEntries(
+      Object.entries(edit.defaultAddress)
+        .filter(([, v]) => typeof v === 'string' && v.trim() !== '')
+        .map(([k, v]) => [k, (v as string).trim()]),
+    );
+    const indian = address.country_code === 'IN' || /^india$/i.test(address.country ?? '');
+    if (indian && !/^\d{6}$/.test(address.zip ?? '')) {
+      throw new BadRequestException('An Indian PIN code is 6 digits, like 400001.');
+    }
+    if (address.phone) {
+      const e164 = normalizePhone(address.phone, countryCodeOf(address) ?? 'IN');
+      if (!e164) throw new BadRequestException('Enter a valid phone number for the address, like +91 98765 43210.');
+      address.phone = e164;
+    }
+    patch.defaultAddress = address;
+  }
+
+  if (edit.phone !== undefined) {
+    const raw = edit.phone?.trim();
+    if (!raw) {
+      patch.phone = null;
+    } else {
+      const e164 = normalizePhone(raw, countryCodeOf(address ?? savedAddress) ?? 'IN');
+      if (!e164) throw new BadRequestException('Enter a valid phone number, like +91 98765 43210.');
+      patch.phone = e164;
+    }
+  }
+  return patch;
 }

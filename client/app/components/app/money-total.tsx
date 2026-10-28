@@ -1,4 +1,5 @@
 import { formatCurrency } from "~/lib/utils";
+import { unconvertedNote } from "~/lib/unconverted";
 import type { CurrencyAmount } from "~/types/api";
 
 /**
@@ -54,8 +55,7 @@ export function MoneyTotal({
 
       {unconverted > 0 && (
         <span className="text-caption font-normal text-warning-text">
-          {unconverted} order{unconverted === 1 ? "" : "s"} excluded — no
-          exchange rate yet
+          {unconvertedNote(unconverted)}
         </span>
       )}
     </span>

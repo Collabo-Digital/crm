@@ -143,9 +143,9 @@ export function useCreateFulfillmentMutation(id: string) {
     onSuccess: () => {
       invalidateOrder(queryClient, id);
       queryClient.invalidateQueries({ queryKey: orderKeys.fulfillable(id) });
-      toast.success("Fulfillment created.");
+      toast.success("Fulfilment created.");
     },
-    onError: (error) => handleMutationError(error, "Failed to create fulfillment."),
+    onError: (error) => handleMutationError(error, "The fulfilment was not created."),
   });
 }
 
@@ -199,7 +199,7 @@ export function useUnfulfillMutation(id: string) {
       queryClient.invalidateQueries({ queryKey: orderKeys.fulfillable(id) });
       toast.success("Switched back to unfulfilled.");
     },
-    onError: (error) => handleMutationError(error, "Failed to unfulfill."),
+    onError: (error) => handleMutationError(error, "It was not switched back to unfulfilled."),
   });
 }
 
@@ -255,9 +255,9 @@ export function useCancelFulfillmentMutation(id: string) {
     onSuccess: () => {
       invalidateOrder(queryClient, id);
       queryClient.invalidateQueries({ queryKey: orderKeys.fulfillable(id) });
-      toast.success("Fulfillment cancelled.");
+      toast.success("Fulfilment cancelled.");
     },
-    onError: (error) => handleMutationError(error, "Failed to cancel fulfillment."),
+    onError: (error) => handleMutationError(error, "The fulfilment was not cancelled."),
   });
 }
 

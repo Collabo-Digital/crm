@@ -13,3 +13,16 @@ export function AppBarActions({ children }: { children: ReactNode }) {
   useEffect(() => setSlot(document.getElementById(APP_BAR_ACTIONS_ID)), []);
   return slot ? createPortal(children, slot) : null;
 }
+
+export const SECTION_BAR_ACTIONS_ID = "section-bar-actions";
+
+/**
+ * A page's own buttons on desktop, at the right of its section's tab strip,
+ * so a full-height page (the inbox) needs no title row of its own. Only for
+ * sections that have tabs.
+ */
+export function SectionBarActions({ children }: { children: ReactNode }) {
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => setSlot(document.getElementById(SECTION_BAR_ACTIONS_ID)), []);
+  return slot ? createPortal(children, slot) : null;
+}

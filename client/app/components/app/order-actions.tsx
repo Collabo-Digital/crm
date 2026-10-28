@@ -7,7 +7,6 @@ import {
   RotateCcw,
   CreditCard,
   Pencil,
-  Truck,
   UploadCloud,
   Loader2,
 } from "lucide-react";
@@ -51,7 +50,6 @@ import {
   DialogFooter,
   CheckboxRow,
 } from "~/components/app/order-dialog-primitives";
-import { FulfillDialog } from "~/components/app/order-fulfillments";
 
 type DialogKind =
   | "edit"
@@ -60,7 +58,6 @@ type DialogKind =
   | "markPaid"
   | "close"
   | "open"
-  | "fulfill"
   | null;
 
 /**
@@ -201,7 +198,7 @@ export function OrderSyncButton({ order }: { order: OrderDetail }) {
     return (
       <Button
         type="button"
-        variant="brand"
+        variant="outline"
         size="sm"
         title={shopifySyncActionLabel(orderShopifySyncOf(order))}
         disabled={syncMutation.isPending}
@@ -241,7 +238,6 @@ export function OrderActionsMenu({ order }: { order: OrderDetail }) {
     isClosed,
     canMarkPaid,
     canCapture,
-    canFulfill,
     canCancel,
     canEdit,
   } = useOrderActionGates(order);
@@ -264,14 +260,8 @@ export function OrderActionsMenu({ order }: { order: OrderDetail }) {
           )}
 
           {/* Sync to Shopify moved out of this menu to `OrderSyncButton`,
-              rendered beside it in the header. */}
-
-          {canFulfill && (
-            <DropdownMenuItem onSelect={() => setDialog("fulfill")}>
-              <Truck className="size-3.5" />
-              Fulfil items
-            </DropdownMenuItem>
-          )}
+              rendered beside it in the header. Fulfil items lives on the
+              line items card only, so there is one way to fulfil. */}
 
           {canMarkPaid && (
             <DropdownMenuItem onSelect={() => setDialog("markPaid")}>
@@ -355,9 +345,7 @@ export function OrderActionsMenu({ order }: { order: OrderDetail }) {
           onClose={() => setDialog(null)}
         />
       )}
-      {dialog === "fulfill" && (
-        <FulfillDialog order={order} onClose={() => setDialog(null)} />
-      )}
+
     </>
   );
 }

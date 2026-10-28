@@ -39,6 +39,7 @@ import { useWarehouses } from "~/hooks/use-inventory-queries";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { usePosActivity, usePosSummary } from "~/hooks/use-pos-report-queries";
 import { isString, oneOf, useSessionState } from "~/hooks/use-session-state";
+import { unconvertedNote } from "~/lib/unconverted";
 import { formatDateTime } from "~/lib/format-date";
 import { calendarDaysAgo, formatDayRange, reportingTimeZone, todayIn } from "~/lib/reporting-date";
 import { cn, formatCurrency } from "~/lib/utils";
@@ -231,11 +232,7 @@ function SalesReport({
       </div>
 
       {data && data.unconvertedOrders > 0 && (
-        <p className="text-caption text-warning">
-          {data.unconvertedOrders} {data.unconvertedOrders === 1 ? "bill is" : "bills are"} left out
-          of these figures because {data.unconvertedOrders === 1 ? "its" : "their"} exchange rate is
-          not known yet.
-        </p>
+        <p className="text-caption text-warning-text">{unconvertedNote(data.unconvertedOrders, "bill")}.</p>
       )}
 
       {isLoading || !data ? (
@@ -347,7 +344,7 @@ function StoresCard({ report, money }: { report: PosReportSummary; money: Money 
 
 function StaffCard({ report, money }: { report: PosReportSummary; money: Money }) {
   return (
-    <SectionCard title="Staff" description="Who billed what, by the PIN they unlocked the till with.">
+    <SectionCard title="Staff" description="Who billed what, by the PIN they unlocked point of sale with.">
       <ReportRows
         rows={report.byStaff}
         rowKey={(r) => r.posStaffId ?? "none"}
@@ -563,7 +560,7 @@ function ActivityLog({ from, to, periodLabel }: { from: string; to: string; peri
         ariaLabel="Show"
         behaviour="filter"
       />
-      <SectionCard title="Till activity" description={periodLabel}>
+      <SectionCard title="Point of sale activity" description={periodLabel}>
         {isError && !data ? (
           <div className="p-8">
             <QueryErrorState resource="the activity log" onRetry={() => void refetch()} />
@@ -578,7 +575,7 @@ function ActivityLog({ from, to, periodLabel }: { from: string; to: string; peri
           <div className="px-5 py-12">
             <EmptyState
               icon={CircleDot}
-              title="Nothing happened at the till in this period"
+              title="Nothing happened at point of sale in this period"
               description="Sales, approvals, wrong PINs and unlocks are logged here as they happen."
             />
           </div>
@@ -631,7 +628,7 @@ function describe(entry: PosActivityEntry): string {
     case "pin_failed":
       return "A wrong PIN was entered.";
     case "unlock":
-      return `${staff ?? "Someone"} unlocked the till.`;
+      return `${staff ?? "Someone"} unlocked point of sale.`;
     default:
       return `${humanize(entry.type)}${staff ? ` by ${staff}` : ""}.`;
   }
