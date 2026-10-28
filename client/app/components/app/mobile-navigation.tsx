@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
-import { ArrowUpRight, ChevronRight, Grid2X2, Lock, Settings, User, type LucideIcon } from "lucide-react";
+import { ArrowUpRight, ChevronRight, Grid2X2, LifeBuoy, Lock, Settings, User, type LucideIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { cn } from "~/lib/utils";
 
@@ -15,11 +15,12 @@ type MobileNavItem = {
 
 const PRIMARY_PATHS = ["/dashboard", "/orders", "/inbox", "/products"];
 
-export function MobileNavigation({ items, workspace, canAccess, lockReason }: {
+export function MobileNavigation({ items, workspace, canAccess, lockReason, onHelp }: {
   items: MobileNavItem[];
   workspace?: string;
   canAccess: (path: string) => boolean;
   lockReason: string;
+  onHelp: () => void;
 }) {
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
@@ -70,6 +71,7 @@ export function MobileNavigation({ items, workspace, canAccess, lockReason }: {
               {[{ label: "Settings", href: "/settings", icon: Settings }, { label: "My profile", href: "/profile", icon: User }].filter((item) => canAccess(item.href)).map(({ label, href, icon: Icon }) => (
                 <Link key={href} to={href} onClick={() => setOpen(false)} className="flex min-h-14 items-center gap-3 text-sm font-medium"><Icon className="size-5 text-muted-foreground" strokeWidth={1.7} />{label}<ChevronRight className="ml-auto size-4 text-muted-foreground" /></Link>
               ))}
+              <button type="button" onClick={() => { setOpen(false); onHelp(); }} className="flex min-h-14 w-full items-center gap-3 text-left text-sm font-medium"><LifeBuoy className="size-5 text-muted-foreground" strokeWidth={1.7} />Help and support<ChevronRight className="ml-auto size-4 text-muted-foreground" /></button>
             </div>
           </div>
         </DialogContent>

@@ -35,6 +35,7 @@ import { MoneyTotal } from "~/components/app/money-total";
 import { ProductsPanel } from "~/components/app/products-panel";
 import { SectionCard } from "~/components/app/section-card";
 import { InStoreVsOnlineCard } from "~/components/app/in-store-vs-online-card";
+import { GetStartedCard } from "~/components/app/get-started-card";
 import { useAuthStore } from "~/stores/auth.store";
 import { useSectionAccess } from "~/hooks/use-section-access";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
@@ -175,6 +176,9 @@ export default function DashboardPage() {
           </PageHeaderActions>
         </PageHeader>
       </div>
+
+      {/* Owners and admins: the first jobs of a new store, until done or hidden. */}
+      <GetStartedCard />
 
       <div className={cn("space-y-3 md:hidden", (overviewStale || salesStale) && "opacity-50")}>
         <section aria-label="Sales summary" className="relative overflow-hidden rounded-[26px] bg-brand-forest p-6 text-white">

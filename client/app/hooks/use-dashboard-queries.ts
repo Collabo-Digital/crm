@@ -12,7 +12,17 @@ export const dashboardKeys = {
     [...dashboardKeys.all, "sales-and-profit", params] as const,
   salesByCategory: (params?: DashboardQueryParams) =>
     [...dashboardKeys.all, "sales-by-category", params] as const,
+  setup: () => [...dashboardKeys.all, "setup"] as const,
 };
+
+/** The "Get started" checklist. Owners and admins only; the server refuses the rest. */
+export function useSetupProgress(enabled: boolean) {
+  return useQuery({
+    queryKey: dashboardKeys.setup(),
+    queryFn: () => dashboardService.getSetup(),
+    enabled,
+  });
+}
 
 /**
  * Fetch the dashboard overview (stats, top products, recent orders).

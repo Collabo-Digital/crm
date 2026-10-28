@@ -2592,6 +2592,16 @@ export interface DashboardRecentOrder {
 }
 
 /** Full dashboard overview response. */
+/** GET /dashboard/setup — the "Get started" checklist, each step read from the workspace's data. */
+export interface SetupProgress {
+  whatsapp: boolean;
+  catalogue: boolean;
+  storeProfile: boolean;
+  gst: boolean;
+  team: boolean;
+  automations: boolean;
+}
+
 export interface DashboardOverview {
   period: DashboardPeriod;
   /**

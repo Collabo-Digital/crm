@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { motion, LayoutGroup } from "framer-motion";
 import {
@@ -32,6 +32,7 @@ import {
   Target,
   Store,
   PackageCheck,
+  LifeBuoy,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
@@ -44,6 +45,7 @@ import {
 } from "~/components/ui/dropdown-menu";
 import { cn } from "~/lib/utils";
 import { MobileNavigation } from "~/components/app/mobile-navigation";
+import { HelpDialog } from "~/components/app/help-dialog";
 import { BrandLogo } from "~/components/app/brand-logo";
 import { APP_BAR_ACTIONS_ID } from "~/components/app/app-bar-actions";
 import { Tip } from "~/components/ui/tooltip";
@@ -147,6 +149,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
   const { user, organizations, currentOrgId, impersonatedBy, setCurrentOrg, setTokens, setOrganizations } =
     useAuthStore();
   const stopImpersonating = useStopImpersonating();
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const { canAccess, landingPath, lockReason } = useSectionAccess();
   const { isInfluencer } = useCurrentRole();
@@ -393,6 +396,9 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                   <Settings className="size-4" /> Settings
                 </Link>
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setHelpOpen(true)}>
+                <LifeBuoy className="size-4" /> Help and support
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onClick={handleSignOut}>
                 <LogOut className="size-4" /> Sign out
@@ -459,7 +465,8 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
       )}
 
     </header>
-    {!immersive && <MobileNavigation items={navLinks.map((item) => ({ ...item, target: pillTarget(item) }))} workspace={currentOrg?.organization.name} canAccess={canAccess} lockReason={lockReason} />}
+    {!immersive && <MobileNavigation items={navLinks.map((item) => ({ ...item, target: pillTarget(item) }))} workspace={currentOrg?.organization.name} canAccess={canAccess} lockReason={lockReason} onHelp={() => setHelpOpen(true)} />}
+    <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </>
   );
 }
