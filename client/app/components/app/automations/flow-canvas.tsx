@@ -112,7 +112,7 @@ function StepCard({ step, index, listLength, top, props }: { step: AutomationSte
         selected ? "border-brand ring-2 ring-brand/30" : issues.length ? "border-danger/50" : "hover:border-foreground/30",
       )}
     >
-      <button type="button" onClick={() => props.onSelect(step.id)} className="flex w-full items-start gap-3 rounded-xl p-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+      <button type="button" onClick={() => props.onSelect(step.id)} aria-current={selected ? "true" : undefined} className="flex w-full items-start gap-3 rounded-xl p-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
         <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg", isTrigger ? "bg-brand text-brand-foreground" : "bg-muted text-foreground")}>
           <Icon className="size-4" />
         </span>

@@ -19,9 +19,11 @@ import { useContactTags } from "~/hooks/use-inbox-queries";
 import { useShopifySegments } from "~/hooks/use-shopify-segments";
 import type { SegmentDefinition } from "~/types/api";
 import { platformLabel } from "~/lib/labels";
+import { pageTitle } from "~/lib/page-title";
 
-export function meta() {
-  return [{ title: "Segment | Collabo CRM" }];
+export function meta({ params }: { params: { id?: string } }) {
+  // One module serves /new and /:id.
+  return [{ title: pageTitle(params.id ? "Segment" : "New segment") }];
 }
 
 const START: SegmentDefinition = { match: "all", rules: [{ field: "consent", op: "is", value: "not_opted_out" }] };
@@ -64,6 +66,7 @@ export default function SegmentPage() {
       </Link>
       <PageHeader data-mobile-title>
         <PageHeaderContent>
+          {!isNew && <title>{pageTitle(segment!.name, "Segment")}</title>}
           <PageHeaderTitle>{isNew ? "New segment" : segment!.name}</PageHeaderTitle>
         </PageHeaderContent>
       </PageHeader>

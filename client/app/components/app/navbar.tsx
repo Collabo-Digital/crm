@@ -286,6 +286,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                 <Link
                   key={href}
                   to={target}
+                  aria-current={isActive ? "page" : undefined}
                   className={cn(
                     "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none p-2.5 focus-visible:outline-brand",
                     isActive
@@ -322,6 +323,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                   {badge && (
                     <span className="relative z-10 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-unread px-1 text-caption font-semibold text-unread-foreground">
                       {badge > 99 ? "99+" : badge}
+                      <span className="sr-only"> unread</span>
                     </span>
                   )}
                 </Link>

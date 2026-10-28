@@ -397,17 +397,28 @@ function VariantChildRow({
   return (
     <TableRow
       onClick={onToggle}
-      aria-expanded={isOpen}
       className={cn(
         "cursor-pointer",
         isOpen ? "bg-brand/15 hover:bg-brand/20" : "hover:bg-muted/30",
       )}
     >
       <TableCell className={cn("px-6 py-3", indented && "pl-14")}>
-        <span className="block text-body font-medium text-foreground">{label}</span>
-        {subtitle && (
-          <span className="block text-caption text-muted-foreground">{subtitle}</span>
-        )}
+        {/* The keyboard way to open this variant's editor; the row stays clickable. */}
+        <button
+          type="button"
+          aria-expanded={isOpen}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          className="block rounded-sm text-left"
+        >
+          <span className="sr-only">Edit </span>
+          <span className="block text-body font-medium text-foreground">{label}</span>
+          {subtitle && (
+            <span className="block text-caption text-muted-foreground">{subtitle}</span>
+          )}
+        </button>
         {hasGstOverride(v) && (
           <span
             className="mt-1 inline-flex rounded-full bg-warning-subtle px-1.5 py-0.5 text-micro font-medium text-warning"

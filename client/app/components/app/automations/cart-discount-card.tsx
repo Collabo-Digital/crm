@@ -54,10 +54,11 @@ export function CartDiscountCard({ discount, readOnly }: { discount: CartDiscoun
               disabled={readOnly}
               placeholder="SAVE200"
               aria-invalid={!!errors.code}
+              aria-describedby="cd-code-help"
               onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20))}
               className="font-mono"
             />
-            <p className={errors.code ? "text-micro text-danger" : "text-micro text-muted-foreground"}>{errors.code ?? "Letters and numbers, as in your store."}</p>
+            <p id="cd-code-help" className={errors.code ? "text-micro text-danger" : "text-micro text-muted-foreground"}>{errors.code ?? "Letters and numbers, as in your store."}</p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="cd-text">Discount</Label>
@@ -66,8 +67,8 @@ export function CartDiscountCard({ discount, readOnly }: { discount: CartDiscoun
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="cd-days">Valid for (days)</Label>
-            <Input id="cd-days" type="number" inputMode="numeric" min={1} max={30} value={days} disabled={readOnly} aria-invalid={!!errors.days} onChange={(e) => setDays(e.target.value)} />
-            <p className={errors.days ? "text-micro text-danger" : "text-micro text-muted-foreground"}>{errors.days ?? "From the day the reminder is sent."}</p>
+            <Input id="cd-days" type="number" inputMode="numeric" min={1} max={30} value={days} disabled={readOnly} aria-invalid={!!errors.days} aria-describedby="cd-days-help" onChange={(e) => setDays(e.target.value)} />
+            <p id="cd-days-help" className={errors.days ? "text-micro text-danger" : "text-micro text-muted-foreground"}>{errors.days ?? "From the day the reminder is sent."}</p>
           </div>
         </div>
         <p className="text-caption text-muted-foreground">Create the code in your store first: Collabo sends it, but does not create it.</p>

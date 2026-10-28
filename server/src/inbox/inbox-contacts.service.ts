@@ -14,6 +14,7 @@ import { InboxEventsService } from '../messaging/inbox-events.service';
 import { AutomationEventService } from '../messaging/automation-event.service';
 import { AutomationJobs } from '../messaging/automation-jobs';
 import { contactName } from '../messaging/contact-name';
+import { canBrowseCustomers } from '../auth/permissions';
 import { InboxViewer, canAssignOthers, canReply, seesAll, visibilityWhere } from './inbox-visibility';
 import { ASSIGNABLE_ROLES, InboxTeamService } from './inbox-team.service';
 import { UpdateContactDto } from './dto/update-contact.dto';
@@ -26,6 +27,8 @@ const fullName = (u: { firstName: string; lastName: string }) => `${u.firstName}
 
 const customerName = (c: { firstName: string | null; lastName: string | null }) =>
     [c.firstName, c.lastName].filter(Boolean).join(' ') || null;
+
+const CUSTOMERS_NEEDED = 'Finding store customers needs access to Customers or Orders. Ask an admin.';
 
 const listInclude = {
     channel: { select: { id: true, name: true } },
@@ -65,6 +68,8 @@ export class InboxContactsService {
             select: { id: true },
         });
         if (!channel) throw new BadRequestException('Connect a WhatsApp number in Settings → Channels first.');
+        // Starting from a customer is the customer page's button; the chat's number still links its customer below.
+        if (dto.customerId && !canBrowseCustomers(viewer.role, viewer.grants)) throw new ForbiddenException(CUSTOMERS_NEEDED);
         const customer = dto.customerId
             ? await this.prisma.customer.findFirst({ where: { id: dto.customerId, organizationId: orgId, deletedAt: null }, select: { id: true, defaultAddress: true } })
             : null;
@@ -234,6 +239,7 @@ export class InboxContactsService {
                 select: { id: true },
             });
             if (!customer) throw new BadRequestException('Customer not found');
+            if (dto.customerId !== contact.customerId) await this.checkCanLink(viewer, contact, dto.customerId);
         }
         await this.checkOwner(orgId, viewer, contact, dto);
         const attributes = dto.attributes
@@ -304,6 +310,7 @@ export class InboxContactsService {
         if (contact.customerId && contact.customerId !== customer.id) {
             throw new BadRequestException('This chat is linked to another store customer. Unlink it there first.');
         }
+        if (contact.customerId !== customer.id) await this.checkCanLink(viewer, contact, customer.id);
         await this.setCustomer(orgId, contact.id, customer.id);
         return { contactId: contact.id, customerId: customer.id };
     }
@@ -353,11 +360,16 @@ export class InboxContactsService {
         return { updated: contacts.length, skipped: dto.ids.length - contacts.length };
     }
 
-    /** Store customers to link this contact to: by search, or the ones sharing its number. */
+    /**
+     * Store customers to link this contact to: by search, or the ones sharing
+     * its number. Searching reads the whole customer list, so it needs the
+     * sections that open it; the number's own matches are the chat's.
+     */
     async customerCandidates(orgId: string, viewer: InboxViewer, contactId: string, q: string | undefined) {
         const contact = await this.load(orgId, viewer, contactId);
         const term = q?.trim();
         if (!term) return { results: await this.phoneMatches(contact) };
+        if (!canBrowseCustomers(viewer.role, viewer.grants)) throw new ForbiddenException(CUSTOMERS_NEEDED);
         const like = { contains: term, mode: 'insensitive' as const };
         const digits = term.replace(/[^\d]/g, '');
         const rows = await this.prisma.customer.findMany({
@@ -580,6 +592,19 @@ export class InboxContactsService {
             orderBy: { ordersCount: 'desc' },
         });
         return customers.map((c) => ({ ...c, name: customerName(c) }));
+    }
+
+    /**
+     * The chat's panel shows its customer's orders and spend, so a member who
+     * cannot open the store's customers may only link one that shares the
+     * chat's number. Otherwise any customer's history was a link away.
+     */
+    private async checkCanLink(viewer: InboxViewer, contact: ChannelContact, customerId: string) {
+        if (canBrowseCustomers(viewer.role, viewer.grants)) return;
+        const matches = await this.phoneMatches(contact);
+        if (!matches.some((m) => m.id === customerId)) {
+            throw new ForbiddenException('You can link this chat only to a store customer with the same phone number.');
+        }
     }
 
     /**

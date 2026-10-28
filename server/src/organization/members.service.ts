@@ -7,6 +7,9 @@ import { RedisService } from '../redis/redis.service';
 import { releaseMemberWork } from './member-release';
 import { resolveVendorScope } from './vendor-scope';
 
+/** Roles that look after the team, and see each teammate's email, last sign-in and access. */
+const SEES_TEAM_DETAILS: UserRole[] = [UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER];
+
 @Injectable()
 export class MembersService {
     constructor(
@@ -18,7 +21,10 @@ export class MembersService {
     // ─── LIST MEMBERS ───
     // Returns all active members with their user profile info.
     // WHY select specific user fields? We never want to expose passwords or 2FA secrets.
-    async findAll(orgId: string) {
+    // Agents and viewers get the roster (names, roles, pictures) and their
+    // own row in full: teammates' emails and sign-in times are not theirs to
+    // collect.
+    async findAll(orgId: string, caller: { userId: string; role: UserRole }) {
         const members = await this.prisma.organizationMember.findMany({
             where: { organizationId: orgId, isActive: true },
             include: {
@@ -36,13 +42,23 @@ export class MembersService {
             orderBy: { joinedAt: 'asc' },
         });
 
-        return members.map((m) => ({
-            id: m.id,
-            role: m.role,
-            permissions: extractGrants(m.permissions),
-            joinedAt: m.joinedAt,
-            user: m.user,
-        }));
+        const seesDetails = SEES_TEAM_DETAILS.includes(caller.role);
+        return members.map((m) =>
+            seesDetails || m.userId === caller.userId
+                ? {
+                    id: m.id,
+                    role: m.role,
+                    permissions: extractGrants(m.permissions),
+                    joinedAt: m.joinedAt,
+                    user: m.user,
+                }
+                : {
+                    id: m.id,
+                    role: m.role,
+                    joinedAt: m.joinedAt,
+                    user: { id: m.user.id, firstName: m.user.firstName, lastName: m.user.lastName, avatarUrl: m.user.avatarUrl },
+                },
+        );
     }
 
     // ─── UPDATE ROLE ───

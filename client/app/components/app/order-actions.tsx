@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   ChevronDown,
   CheckCircle2,
@@ -376,6 +376,7 @@ function EditOrderDialog({
   const mutation = useUpdateOrderMutation(order.id);
   const [tagsText, setTagsText] = useState((order.tags ?? []).join(", "));
   const [note, setNote] = useState(order.note ?? "");
+  const id = useId();
 
   function handleSubmit() {
     const tags = tagsText
@@ -393,14 +394,15 @@ function EditOrderDialog({
     <ModalShell title="Edit order" subtitle={`Order ${order.name}`} onClose={onClose}>
       <div className="space-y-4 px-6 py-4">
         <div>
-          <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+          <label htmlFor={`${id}-tags`} className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
             Tags (comma-separated)
           </label>
           <input
+            id={`${id}-tags`}
             value={tagsText}
             onChange={(e) => setTagsText(e.target.value)}
             placeholder="e.g. vip, retry, wholesale"
-            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </div>
 
@@ -412,15 +414,16 @@ function EditOrderDialog({
             `Customer.internalNotes` is the precedent. Same wording as the
             order detail rail; keep the two in step. */}
         <div>
-          <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+          <label htmlFor={`${id}-note`} className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
             Order note
           </label>
           <textarea
+            id={`${id}-note`}
             value={note}
             onChange={(e) => setNote(e.target.value)}
             rows={3}
             placeholder="Add a note to this order"
-            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           <p className="mt-1 text-[10px] text-gray-500 dark:text-gray-400">
             {order.channel?.platform === "SHOPIFY"
@@ -465,6 +468,7 @@ export function CancelOrderDialog({
   const [restock, setRestock] = useState(true);
   const [notifyCustomer, setNotifyCustomer] = useState(true);
   const [staffNote, setStaffNote] = useState("");
+  const id = useId();
 
   function handleSubmit() {
     mutation.mutate(
@@ -483,11 +487,11 @@ export function CancelOrderDialog({
     <ModalShell title="Cancel order" subtitle={`Order ${order.name}`} onClose={onClose}>
       <div className="space-y-4 px-6 py-4">
         <div>
-          <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+          <label id={`${id}-reason`} className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
             Reason
           </label>
           <Select value={reason} onValueChange={(v) => setReason(v as OrderCancelReason)}>
-            <SelectTrigger className="mt-1 h-9 text-xs">
+            <SelectTrigger aria-labelledby={`${id}-reason`} className="mt-1 h-9 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -528,15 +532,16 @@ export function CancelOrderDialog({
         </div>
 
         <div>
-          <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+          <label htmlFor={`${id}-note`} className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
             Staff note (optional)
           </label>
           <textarea
+            id={`${id}-note`}
             value={staffNote}
             onChange={(e) => setStaffNote(e.target.value)}
             rows={2}
             placeholder="Why this order is being cancelled"
-            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </div>
 
@@ -586,6 +591,7 @@ export function CapturePaymentDialog({
   // Matches the DTO and service default. It was `true` here — the UI defaulted
   // to closing the authorisation, the more destructive of the two.
   const [finalCapture, setFinalCapture] = useState(false);
+  const id = useId();
 
   function handleSubmit() {
     const numeric = parseFloat(amount);
@@ -607,16 +613,17 @@ export function CapturePaymentDialog({
     >
       <div className="space-y-4 px-6 py-4">
         <div>
-          <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+          <label htmlFor={`${id}-amount`} className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
             Amount ({order.currency})
           </label>
           <input
+            id={`${id}-amount`}
             type="number"
             step="0.01"
             min="0"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs tabular-nums outline-none focus:ring-1 focus:ring-[#cdff8c]"
+            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs tabular-nums outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           <p className="mt-1 text-[10px] text-muted-foreground">
             Order total, less refunds:{" "}

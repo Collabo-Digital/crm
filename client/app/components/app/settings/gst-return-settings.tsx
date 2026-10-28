@@ -96,7 +96,7 @@ export function GstReturnSettings() {
                   e.currentTarget.blur();
                 }
               }}
-              className="h-9 w-40 rounded-lg border border-input bg-transparent px-3 text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+              className="h-9 w-40 rounded-lg border border-input bg-transparent px-3 text-caption focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             {mutation.isPending && (
               <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
@@ -155,7 +155,7 @@ export function GstReturnSettings() {
                 mutation.mutate({ defaultUnitOfMeasure: next })
               }
             >
-              <SelectTrigger className="h-9 w-56 text-caption">
+              <SelectTrigger aria-label="Default unit of quantity" className="h-9 w-56 text-caption">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

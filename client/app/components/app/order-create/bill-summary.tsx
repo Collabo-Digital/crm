@@ -117,7 +117,7 @@ export function BillSummary({
             <select
               value={warehouseId ?? ""}
               onChange={(e) => onWarehouseChange(e.target.value)}
-              className="mt-1 h-8 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#CEF17B]/60"
+              className="mt-1 h-8 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             >
               {warehouses.map((w) => (
                 <option key={w.id} value={w.id}>
@@ -137,7 +137,7 @@ export function BillSummary({
             onChange={(e) =>
               onPaymentMethodChange(e.target.value as OfflinePaymentMethod)
             }
-            className="mt-1 h-8 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#CEF17B]/60"
+            className="mt-1 h-8 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           >
             <option value="CASH">Cash</option>
             <option value="CARD">Card</option>
@@ -154,7 +154,7 @@ export function BillSummary({
             value={note}
             onChange={(e) => onNoteChange(e.target.value)}
             rows={2}
-            className="mt-1 w-full rounded-lg border border-input bg-white dark:bg-gray-800 p-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#CEF17B]/60"
+            className="mt-1 w-full rounded-lg border border-input bg-white dark:bg-gray-800 p-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </label>
       </div>

@@ -360,6 +360,7 @@ function SendBillSheet({
               value={digits}
               placeholder="98470 12345"
               aria-invalid={(attempted && !valid) || undefined}
+              aria-describedby={attempted && !valid ? "pos-send-bill-phone-error" : undefined}
               onChange={(e) => {
                 let d = e.target.value.replace(/\D/g, "");
                 if (d.length > 10) d = d.replace(/^(91|0)/, "");
@@ -368,7 +369,7 @@ function SendBillSheet({
               className="min-w-0 flex-1 bg-transparent px-3 text-lg tracking-wide tabular-nums outline-none placeholder:text-muted-foreground/60"
             />
           </div>
-          {attempted && !valid && <p className="text-caption text-danger">Enter a 10-digit mobile number that starts with 6, 7, 8 or 9.</p>}
+          {attempted && !valid && <p id="pos-send-bill-phone-error" className="text-caption text-danger">Enter a 10-digit mobile number that starts with 6, 7, 8 or 9.</p>}
           {error && <p className="text-caption text-danger" role="alert">{error}</p>}
         </form>
         <DialogFooter>

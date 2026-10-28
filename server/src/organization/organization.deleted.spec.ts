@@ -1,5 +1,6 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 import { ACTIVE_MEMBERSHIP } from '../auth/active-membership';
 import { AuthService } from '../auth/auth.service';
 import { JwtStrategy } from '../auth/jwt.strategy';
@@ -10,6 +11,10 @@ import { OrganizationService } from './organization.service';
  * Every access path therefore has to treat a deleted workspace as closed —
  * members used to keep reading and changing it after it was "deleted".
  */
+/** The owner's password, hashed cheaply for tests. */
+const PASSWORD_HASH = bcrypt.hashSync('owner-password', 4);
+const CONFIRMED = { password: 'owner-password', confirmName: 'A' };
+
 describe('A deleted workspace is closed to its members', () => {
   describe('OrganizationService', () => {
     function build(deletedAt: Date | null) {
@@ -24,7 +29,11 @@ describe('A deleted workspace is closed to its members', () => {
           findUnique: jest.fn().mockResolvedValue(membership),
           findMany: jest.fn().mockResolvedValue([{ userId: 'u1' }, { userId: 'u2' }]),
         },
-        organization: { update: jest.fn().mockResolvedValue({ id: 'org-a' }) },
+        organization: {
+          update: jest.fn().mockResolvedValue({ id: 'org-a' }),
+          findUnique: jest.fn().mockResolvedValue({ name: 'A' }),
+        },
+        user: { findUnique: jest.fn().mockResolvedValue({ password: PASSWORD_HASH }) },
         apiKey: { updateMany: updateMany() },
         webhookEndpoint: { updateMany: updateMany() },
         broadcast: { updateMany: updateMany() },
@@ -68,7 +77,7 @@ describe('A deleted workspace is closed to its members', () => {
     it("drops every member's cached session when the workspace is deleted", async () => {
       const { service, prisma, redis } = build(null);
 
-      await service.delete('org-a', 'u1');
+      await service.delete('org-a', 'u1', CONFIRMED);
 
       expect(prisma.organization.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'org-a' }, data: { deletedAt: expect.any(Date) as Date } }),
@@ -80,7 +89,7 @@ describe('A deleted workspace is closed to its members', () => {
     it('switches off everything that acts for the workspace when it is deleted', async () => {
       const { service, prisma, billing, channels } = build(null);
 
-      await service.delete('org-a', 'u1');
+      await service.delete('org-a', 'u1', CONFIRMED);
 
       expect(billing.cancelOrganizationSubscription).toHaveBeenCalledWith('org-a');
       // Releases the WhatsApp number and Shopify store, and stops their webhooks.
@@ -112,7 +121,7 @@ describe('A deleted workspace is closed to its members', () => {
       const { service, prisma, billing, channels } = build(null);
       billing.cancelOrganizationSubscription.mockRejectedValue(new Error('Razorpay down'));
 
-      await expect(service.delete('org-a', 'u1')).rejects.toThrow('Razorpay down');
+      await expect(service.delete('org-a', 'u1', CONFIRMED)).rejects.toThrow('Razorpay down');
 
       expect(channels.disconnectAllForOrg).not.toHaveBeenCalled();
       expect(prisma.organization.update).not.toHaveBeenCalled();
@@ -126,8 +135,33 @@ describe('A deleted workspace is closed to its members', () => {
         organization: { id: 'org-a', deletedAt: null },
       });
 
-      await expect(service.delete('org-a', 'u1')).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(service.delete('org-a', 'u1', CONFIRMED)).rejects.toBeInstanceOf(ForbiddenException);
       expect(billing.cancelOrganizationSubscription).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['no name', { password: 'owner-password', confirmName: '' }, BadRequestException],
+      ['another name', { password: 'owner-password', confirmName: 'B' }, BadRequestException],
+      ['the name in other letters', { password: 'owner-password', confirmName: 'a' }, BadRequestException],
+      ['a wrong password', { password: 'guess', confirmName: 'A' }, ForbiddenException],
+      ['no password', { password: '', confirmName: 'A' }, ForbiddenException],
+    ])('does not delete it with %s, and changes nothing', async (_label, confirm, error) => {
+      const { service, prisma, billing, channels } = build(null);
+
+      await expect(service.delete('org-a', 'u1', confirm)).rejects.toBeInstanceOf(error);
+
+      expect(billing.cancelOrganizationSubscription).not.toHaveBeenCalled();
+      expect(channels.disconnectAllForOrg).not.toHaveBeenCalled();
+      expect(prisma.organization.update).not.toHaveBeenCalled();
+    });
+
+    it("checks the password of the owner asking, and takes the name with spaces trimmed", async () => {
+      const { service, prisma } = build(null);
+
+      await service.delete('org-a', 'u1', { password: 'owner-password', confirmName: '  A ' });
+
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { id: 'u1' }, select: { password: true } });
+      expect(prisma.organization.update).toHaveBeenCalled();
     });
   });
 

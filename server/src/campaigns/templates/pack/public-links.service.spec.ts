@@ -40,7 +40,7 @@ describe('the order link', () => {
         const link = await service.order(storeLinkToken(key, 'order', ORDER));
         expect(link).toEqual({
             storeName: 'Acme Store',
-            order: { name: '#1042', status: 'shipped', carrier: 'Delhivery', trackingNumber: 'AWB77', trackingUrl: 'https://track.example/AWB77' },
+            order: { name: '#1042', status: 'shipped', carrier: 'Delhivery', trackingNumber: 'AWB77', trackingUrl: 'https://track.example/AWB77', knownCourier: false },
         });
         expect((prisma.order.findFirst.mock.calls[0] as any)[0].where).toEqual({ id: ORDER, deletedAt: null });
         expect(JSON.stringify((prisma.order.findFirst.mock.calls[0] as any)[0].select)).not.toMatch(/customer|phone|address|email/i);
@@ -65,7 +65,19 @@ describe('the order link', () => {
             fulfillments: [shipment({ trackingUrl: 'javascript:alert(1)', trackingCompany: '', trackingNumber: '' })],
         }));
         const link = await service.order(storeLinkToken(key, 'order', ORDER));
-        expect(link).toEqual({ storeName: 'Acme Org', order: { name: '#1042', status: 'shipped', carrier: null, trackingNumber: null, trackingUrl: null } });
+        expect(link).toEqual({ storeName: 'Acme Org', order: { name: '#1042', status: 'shipped', carrier: null, trackingNumber: null, trackingUrl: null, knownCourier: false } });
+    });
+
+    it.each([
+        ['https://www.delhivery.com/track/package/AWB77', true],
+        ['https://shiprocket.co/tracking/AWB77', true],
+        ['https://delhivery.com.track-help.in/AWB77', false],
+        ['https://pay-cod-fee.example/AWB77', false],
+        ['http://www.delhivery.com/track/package/AWB77', false],
+    ])('opens %s at once only if it is a known courier on https (%s)', async (trackingUrl, known) => {
+        const { service } = build(anOrder({ fulfillments: [shipment({ trackingUrl })] }));
+        const link = await service.order(storeLinkToken(key, 'order', ORDER));
+        expect(link.order).toMatchObject({ trackingUrl, knownCourier: known });
     });
 
     it.each([

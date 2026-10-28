@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -131,6 +132,7 @@ import { Switch } from "~/components/ui/switch";
 import { Separator } from "~/components/ui/separator";
 import { Item, ItemMedia } from "~/components/ui/item";
 import { motion } from "framer-motion";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Product Detail | Collabo CRM" }];
@@ -1107,6 +1109,7 @@ export default function ProductDetailPage() {
 
             <div className="min-w-0 flex-1 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
+                <title>{pageTitle(product.title, "Product")}</title>
                 <h1 className="text-[24px] font-bold text-gray-900 dark:text-gray-100">
                   {product.title}
                 </h1>
@@ -1612,7 +1615,7 @@ export default function ProductDetailPage() {
                             value={dv?.weightUnit ?? "kg"}
                             onChange={(e) => setDv({ weightUnit: e.target.value })}
                             disabled={!defaultVariant}
-                            className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                            className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                           >
                             <option value="g">g</option>
                             <option value="kg">kg</option>
@@ -1888,7 +1891,7 @@ export default function ProductDetailPage() {
                   value={gstRate}
                   onChange={(e) => setGstRate(e.target.value)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Not set</option>
                   {GST_RATE_OPTIONS.map((rate) => (
@@ -1910,7 +1913,7 @@ export default function ProductDetailPage() {
                   value={unitOfMeasure}
                   onChange={(e) => setUnitOfMeasure(e.target.value)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Default (NOS)</option>
                   {COMMON_UQC.map((u) => (
@@ -1932,7 +1935,7 @@ export default function ProductDetailPage() {
                   value={supplyType}
                   onChange={(e) => setSupplyType(e.target.value as GstSupplyType)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   {GST_SUPPLY_TYPES.map((t) => (
                     <option key={t.value} value={t.value}>
@@ -1954,7 +1957,7 @@ export default function ProductDetailPage() {
           </Section>
 
           <Section title="Product Organization">
-            <dl className="space-y-3 text-xs">
+            <div className="space-y-3 text-xs">
               <ComboboxField
                 label="Product Type"
                 items={typeItems}
@@ -1977,7 +1980,7 @@ export default function ProductDetailPage() {
                 onChange={setTags}
               />
 
-            </dl>
+            </div>
           </Section>
 
 
@@ -2280,6 +2283,7 @@ function TagsComboboxField({
   placeholder?: string;
 }) {
   const anchor = useComboboxAnchor();
+  const labelId = useId();
   const createInputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [createMode, setCreateMode] = useState(false);
@@ -2323,7 +2327,7 @@ function TagsComboboxField({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
-        <dt className="text-muted-foreground text-[12px]">{label}</dt>
+        <span id={labelId} className="text-muted-foreground text-[12px]">{label}</span>
         <button
           type="button"
           onMouseDown={(e) => {
@@ -2356,7 +2360,7 @@ function TagsComboboxField({
           </svg>
         </button>
       </div>
-      <dd>
+      <div>
         <Combobox
           multiple
           autoHighlight
@@ -2373,7 +2377,7 @@ function TagsComboboxField({
                   {values.map((tag: string) => (
                     <ComboboxChip key={tag}>{tag}</ComboboxChip>
                   ))}
-                  <ComboboxChipsInput placeholder={placeholder} />
+                  <ComboboxChipsInput placeholder={placeholder} aria-labelledby={labelId} />
                 </>
               )}
             </ComboboxValue>
@@ -2420,7 +2424,7 @@ function TagsComboboxField({
             </ComboboxList>
           </ComboboxContent>
         </Combobox>
-      </dd>
+      </div>
     </div>
   );
 }
@@ -2442,6 +2446,7 @@ function ComboboxField({
   disabled?: boolean;
   hideAddButton?: boolean;
 }) {
+  const labelId = useId();
   const createInputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [createMode, setCreateMode] = useState(false);
@@ -2486,7 +2491,7 @@ function ComboboxField({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
-        <dt className="text-muted-foreground text-[12px]">{label}</dt>
+        <span id={labelId} className="text-muted-foreground text-[12px]">{label}</span>
         {!hideAddButton && !disabled && (
           <button
             type="button"
@@ -2521,7 +2526,7 @@ function ComboboxField({
           </button>
         )}
       </div>
-      <dd>
+      <div>
         <Combobox
           items={items}
           value={value || null}
@@ -2530,7 +2535,7 @@ function ComboboxField({
           open={open}
           onOpenChange={handleOpenChange}
         >
-          <ComboboxInput placeholder={placeholder} />
+          <ComboboxInput placeholder={placeholder} aria-labelledby={labelId} />
           <ComboboxContent>
             {createMode && (
               <div
@@ -2573,7 +2578,7 @@ function ComboboxField({
             </ComboboxList>
           </ComboboxContent>
         </Combobox>
-      </dd>
+      </div>
     </div>
   );
 }

@@ -9,10 +9,11 @@ import {
     Query,
     Sse,
     UploadedFile,
+    UseGuards,
     UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { SkipThrottle, Throttle } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import { UserRole } from '@prisma/client';
 import { Observable, interval, map, merge, takeUntil, tap } from 'rxjs';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -20,6 +21,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { RequireSection } from '../auth/decorators/require-section.decorator';
 import type { SessionPayload } from '../auth/interfaces/jwt-payload.interface';
 import { InboxEventsService } from '../messaging/inbox-events.service';
+import { UPLOAD_THROTTLE, UploadQuotaGuard } from '../messaging/media/upload-quota';
 import { InboxService } from './inbox.service';
 import type { UploadedFile as InboxUpload } from './inbox.service';
 import { InboxTeamService } from './inbox-team.service';
@@ -36,6 +38,8 @@ export const INBOX_ROLES = [UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, Us
 const HEARTBEAT_MS = 25_000;
 /// The live inbox refetches these as events stream in, and a member's tabs share one budget.
 const LIVE_READ_LIMIT = { default: { ttl: 60_000, limit: 300 } };
+/// Streams a member may open a minute: tabs reconnect with backoff, so this is only reached on purpose.
+const STREAM_OPENS = { default: { ttl: 60_000, limit: 30 } };
 
 /**
  * The shared inbox: WhatsApp, Messenger and Instagram conversations in one
@@ -138,8 +142,11 @@ export class InboxController {
         return this.inbox.addNote(user.orgId!, await this.teams.viewer(user), id, dto);
     }
 
+    /** Limited per member a minute, and per workspace a day (UploadQuotaService). */
     @Post('uploads')
     @Roles(UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.AGENT)
+    @Throttle(UPLOAD_THROTTLE)
+    @UseGuards(UploadQuotaGuard)
     @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 100 * 1024 * 1024 } }))
     upload(@CurrentUser() user: SessionPayload, @UploadedFile() file: InboxUpload, @Body('voice') voice?: string) {
         return this.inbox.upload(user.orgId!, file, { voice: voice === 'true' });
@@ -149,16 +156,17 @@ export class InboxController {
      * Live inbox changes for this organization. The client reads it with a
      * streamed fetch (the access token is a Bearer header, which EventSource
      * cannot send) and refetches what each event names. While it is open the
-     * member counts as present for routing and the team list.
+     * member counts as present for routing and the team list. A member may
+     * hold MAX_STREAMS_PER_USER open at once (InboxEventsService).
      */
     @Sse('stream')
-    @SkipThrottle()
+    @Throttle(STREAM_OPENS)
     stream(@CurrentUser() user: SessionPayload): Observable<MessageEvent> {
         const orgId = user.orgId!;
         const present = () => void this.teams.touchPresence(orgId, user.sub).catch(() => undefined);
         present();
         return merge(
-            this.events.stream(orgId).pipe(map((event) => ({ type: event.type, data: event }) as MessageEvent)),
+            this.events.stream(orgId, user.sub).pipe(map((event) => ({ type: event.type, data: event }) as MessageEvent)),
             interval(HEARTBEAT_MS).pipe(
                 tap(present),
                 map(() => ({ type: 'ping', data: {} }) as MessageEvent),
