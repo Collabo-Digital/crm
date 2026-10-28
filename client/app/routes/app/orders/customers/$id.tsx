@@ -29,8 +29,8 @@ import { ChannelBadge } from "~/components/app/channel-badge";
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { CustomerGstDialog } from "~/components/app/customer-gst-dialog";
+import { CustomerAddressDialog, CustomerPhoneDialog } from "~/components/app/customer-contact-dialogs";
 import { CustomerOrdersPanel } from "~/components/app/customer-orders-panel";
-import { NotYet } from "~/components/app/not-yet";
 import { ContactSearchDialog, PlatformIcon, chatHandle } from "~/components/app/inbox/contact-search-dialog";
 import { useCustomer } from "~/hooks/use-customer-queries";
 import { useLinkChatMutation, useUnlinkChatMutation, useUpdateCustomerMutation } from "~/hooks/use-customer-mutations";
@@ -86,6 +86,7 @@ export default function CustomerDetailPage() {
   const navigate = useNavigate();
   const startChat = useStartChatMutation();
   const { canAccess } = useSectionAccess();
+  const { role } = useCurrentRole();
   const { data: org } = useCurrentOrg();
   const gstEnabled = org?.gstEnabled ?? false;
   const orgCurrency = org?.currency ?? "USD";
@@ -114,6 +115,33 @@ export default function CustomerDetailPage() {
   // No numeric customer number exists — ids are cuids. Shopify's own id is the
   // closest thing to the mockup's "#56578"; the cuid tail is the fallback.
   const displayId = customer.externalId || customer.id.slice(-8);
+
+  // A linked WhatsApp chat opens as it is (latest first), even when the
+  // customer record has no phone; otherwise the inbox starts one on the
+  // customer's number. Viewers can read a chat but not start one.
+  const linkedChat = customer.chats.find((chat) => chat.platform === "WHATSAPP" && chat.conversationId);
+  const canStartChat = role !== "VIEWER" && Boolean(customer.phone);
+  const messageBlocked = !canAccess("/inbox")
+    ? "You do not have access to the inbox."
+    : linkedChat || canStartChat
+      ? null
+      : customer.phone
+        ? "Viewers can open a chat but not start one."
+        : "Add a phone number to message this customer.";
+  function sendMessage() {
+    if (linkedChat) {
+      navigate(`/inbox?c=${linkedChat.conversationId}`);
+      return;
+    }
+    startChat.mutate(
+      {
+        phone: customer!.phone!,
+        customerId: customer!.id,
+        name: [customer!.firstName, customer!.lastName].filter(Boolean).join(" ") || undefined,
+      },
+      { onSuccess: (r) => navigate(`/inbox?c=${r.conversationId}`) },
+    );
+  }
 
   return (
     // `items-start` is load-bearing: without it the grid stretches both columns
@@ -193,15 +221,11 @@ export default function CustomerDetailPage() {
               <Button
                 variant="brand"
                 size="action"
-                disabled={!customer.phone || !canAccess("/inbox") || startChat.isPending}
-                title={!customer.phone ? "This customer has no phone number." : !canAccess("/inbox") ? "You do not have access to the inbox." : undefined}
-                onClick={() =>
-                  startChat.mutate(
-                    { phone: customer.phone!, customerId: customer.id, name: [customer.firstName, customer.lastName].filter(Boolean).join(" ") || undefined },
-                    { onSuccess: (r) => navigate(`/inbox?c=${r.conversationId}`) },
-                  )
-                }
+                disabled={Boolean(messageBlocked) || startChat.isPending}
+                title={messageBlocked ?? undefined}
+                onClick={sendMessage}
               >
+                {startChat.isPending && <Loader2 className="size-3.5 animate-spin" />}
                 Send Message
               </Button>
 
@@ -353,14 +377,18 @@ function RailRow({
   );
 }
 
-/** Pencil affordance for a field the API cannot update. */
-function DisabledPencil({ title }: { title: string }) {
+/** Customer edits go through PATCH /customers/:id, which is ORG_OPERATORS. */
+function useCanEditCustomer(): boolean {
+  const { role } = useCurrentRole();
+  return role === "OWNER" || role === "ADMIN" || role === "MANAGER" || role === "AGENT";
+}
+
+/** The pencil beside a rail section's title. */
+function EditPencil({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <NotYet title={title}>
-      <Button variant="ghost" size="icon-xs" disabled aria-label={title}>
-        <Pencil className="size-3.5" />
-      </Button>
-    </NotYet>
+    <Button variant="ghost" size="icon-xs" aria-label={label} title={label} onClick={onClick}>
+      <Pencil className="size-3.5" />
+    </Button>
   );
 }
 
@@ -403,6 +431,8 @@ function CustomerDetailsSection({
 }
 
 function ShippingAddressSection({ customer }: { customer: CustomerDetail }) {
+  const canEdit = useCanEditCustomer();
+  const [editing, setEditing] = useState(false);
   const address = readAddress(
     customer.defaultAddress ?? customer.addresses?.[0],
   );
@@ -413,8 +443,9 @@ function ShippingAddressSection({ customer }: { customer: CustomerDetail }) {
   return (
     <RailSection
       title="Shipping Address"
-      action={<DisabledPencil title="Editing addresses isn't supported yet" />}
+      action={canEdit && <EditPencil label="Edit shipping address" onClick={() => setEditing(true)} />}
     >
+      {editing && <CustomerAddressDialog customer={customer} onClose={() => setEditing(false)} />}
       {address.hasAddress ? (
         <>
           {/* The muted box sits behind the iframe, so a blank or throttled embed
@@ -464,16 +495,17 @@ function ShippingAddressSection({ customer }: { customer: CustomerDetail }) {
 }
 
 function ContactSection({ customer }: { customer: CustomerDetail }) {
+  const canEdit = useCanEditCustomer();
+  const [editing, setEditing] = useState(false);
   const chip =
     "inline-flex w-fit items-center rounded-full bg-brand/20 px-3 py-1 text-caption text-brand-strong hover:bg-brand/35";
 
   return (
     <RailSection
       title="Contact Information"
-      action={
-        <DisabledPencil title="Editing contact details isn't supported yet" />
-      }
+      action={canEdit && <EditPencil label="Edit phone number" onClick={() => setEditing(true)} />}
     >
+      {editing && <CustomerPhoneDialog customer={customer} onClose={() => setEditing(false)} />}
       {/* Stacked one per row, matching the design rather than wrapping inline. */}
       <div className="flex flex-col items-start gap-2">
         {customer.email && (

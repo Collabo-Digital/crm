@@ -2441,6 +2441,10 @@ export interface UpdateCustomerRequest {
   internalNotes?: string;
   segments?: string[];
   tags?: string[];
+  /** Saved as E.164; an empty string removes it. */
+  phone?: string;
+  /** Replaces the saved default address. */
+  defaultAddress?: OrderAddressInput;
   gstin?: string;
   billingStateCode?: string;
   billingStateName?: string;
