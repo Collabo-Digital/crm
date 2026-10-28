@@ -32,9 +32,12 @@ async function bootstrap() {
   const trustProxy = Number(process.env.TRUST_PROXY);
   if (trustProxy > 0) app.set('trust proxy', trustProxy);
 
-  // Security
+  // Security. API responses (JSON, files, PDFs) carry no page policy. The web
+  // app's Content-Security-Policy comes with its build (client/public/_headers):
+  // Cloudflare sends it, and with SERVE_STATIC=true so does the SPA mount in
+  // app.module.ts, for the app's pages and files only.
   app.use(helmet({
-    contentSecurityPolicy: false, // Vite build injects inline scripts/styles
+    contentSecurityPolicy: false,
   }));
   app.use(cookieParser());
 

@@ -14,7 +14,7 @@ import { AppService } from './app.service';
 import configuration from './config/configuration';
 import { validationSchema } from './config/validation.schema';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
-import { SPA_FALLBACK_EXCLUDE } from './common/utils/spa-fallback.util';
+import { spaStaticOptions } from './common/utils/spa-headers.util';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { PrismaModule } from './prisma/prisma.module';
@@ -78,13 +78,9 @@ import { PackingModule } from './packing/packing.module';
     // Set SERVE_STATIC=true on full-stack deploys (Render/Railway).
     // Leave unset on API-only deploys (DigitalOcean Droplet) so the server
     // doesn't try to serve a non-existent client/build/client/ directory.
+    // Its pages carry the build's _headers, Content-Security-Policy included.
     ...(process.env.SERVE_STATIC === 'true'
-      ? [
-        ServeStaticModule.forRoot({
-          rootPath: join(__dirname, '..', '..', '..', 'client', 'build', 'client'),
-          exclude: SPA_FALLBACK_EXCLUDE,
-        }),
-      ]
+      ? [ServeStaticModule.forRoot(spaStaticOptions(join(__dirname, '..', '..', '..', 'client', 'build', 'client')))]
       : []),
     // Always mount /uploads (product images, future attachments). Local image
     // storage writes here; the path matches LocalImageStorage's URL builder.

@@ -7,7 +7,7 @@
     "dev": "react-router dev",
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc",
-    "test": "node --test \"app/**/*.test.ts\""
+    "test": "node --test \"app/**/*.test.ts\" \"*.test.ts\""
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
