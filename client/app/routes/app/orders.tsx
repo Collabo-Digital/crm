@@ -258,8 +258,9 @@ export default function OrdersPage() {
               until its file arrives or fails. */}
           {!isVendor && (
             <div className="hidden items-center gap-2 md:flex">
+              {/* Outline: Create Order is this page's one primary action. */}
               <Button
-                variant="brand"
+                variant="outline"
                 size="action"
                 disabled={activeDownload !== null}
                 aria-busy={activeDownload === "report"}

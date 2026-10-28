@@ -80,7 +80,7 @@ export function VariantEditor({
     <>
       <div className="overflow-x-auto rounded-lg border border-input">
         <table className="w-full text-xs">
-          <thead className="bg-gray-50/60 dark:bg-gray-800/60 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <thead className="bg-gray-50/60 dark:bg-gray-800/60 text-micro uppercase tracking-wider text-muted-foreground">
             <tr>
               <th className="w-6 px-2 py-2"></th>
               <th className="px-2 py-2 text-left font-medium">Title</th>
@@ -200,7 +200,7 @@ export function VariantEditor({
                     stockHidden ? (
                       <td colSpan={stockColumns.length} className="px-2 py-2 text-right">
                         <span
-                          className="text-[10px] italic text-muted-foreground"
+                          className="text-caption italic text-muted-foreground"
                           title="Inventory tracking is off for this variant"
                         >
                           Untracked
@@ -227,7 +227,7 @@ export function VariantEditor({
                     <td className="px-2 py-2 text-right">
                       {stockHidden ? (
                         <span
-                          className="text-[10px] italic text-muted-foreground"
+                          className="text-caption italic text-muted-foreground"
                           title="Inventory tracking is off for this variant"
                         >
                           Untracked
@@ -368,7 +368,7 @@ function VariantDetailPanel({
       >
         <header className="flex items-center justify-between border-b px-5 py-3">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <p className="text-micro font-semibold uppercase tracking-wider text-muted-foreground">
               Variant details
             </p>
             <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
@@ -410,7 +410,7 @@ function VariantDetailPanel({
                 onChange={(v) => onChange({ cost: v === "" ? undefined : parseFloat(v) })}
               />
               <div className="flex flex-col">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   Profit / margin
                 </span>
                 <p className="mt-1 h-9 flex items-center text-xs font-medium text-gray-900 dark:text-gray-100">
@@ -450,7 +450,7 @@ function VariantDetailPanel({
                   )
                 ) : stockReadOnly ? (
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                    <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                       Stock on hand
                     </span>
                     {/* See product-form-dialog: the destination is a link so
@@ -509,7 +509,7 @@ function VariantDetailPanel({
                   }
                 />
                 <label className="block">
-                  <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                  <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                     Weight unit
                   </span>
                   <select
@@ -563,13 +563,13 @@ function VariantDetailPanel({
               onChange={(checked) => onChange({ taxable: checked })}
               disabled={isVendor}
             />
-            <p className="text-[10px] text-gray-500 dark:text-gray-400">
+            <p className="text-caption text-gray-500 dark:text-gray-400">
               GST override — leave blank to use the product&apos;s HSN, rate, unit
               and supply type. Set only when this variant is classified differently.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <label className="block">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   HSN / SAC override
                 </span>
                 <input
@@ -581,7 +581,7 @@ function VariantDetailPanel({
                 />
               </label>
               <label className="block">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   GST rate override
                 </span>
                 <select
@@ -603,7 +603,7 @@ function VariantDetailPanel({
                 </select>
               </label>
               <label className="block">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   Unit of measure override
                 </span>
                 <select
@@ -621,7 +621,7 @@ function VariantDetailPanel({
                 </select>
               </label>
               <label className="block">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   Supply type override
                 </span>
                 <select
@@ -655,7 +655,7 @@ function VariantDetailPanel({
           >
             Done
           </button>
-          <p className="mt-1.5 text-[10px] text-muted-foreground text-center">
+          <p className="mt-1.5 text-caption text-muted-foreground text-center">
             Changes save when you click "Save changes" / "Create product".
           </p>
         </footer>
@@ -673,7 +673,7 @@ function PanelSection({
 }) {
   return (
     <div className="space-y-2">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <p className="text-micro font-semibold uppercase tracking-wider text-muted-foreground">
         {title}
       </p>
       <div className="space-y-2">{children}</div>
@@ -702,7 +702,7 @@ function PanelField({
 }) {
   return (
     <label className="block">
-      <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+      <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
         {label}
       </span>
       <input
@@ -716,7 +716,7 @@ function PanelField({
         }`}
       />
       {hint && (
-        <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground">
+        <span className="mt-1 block text-caption leading-relaxed text-muted-foreground">
           {hint}
         </span>
       )}
@@ -757,7 +757,7 @@ function PanelToggle({
           {label}
         </span>
         {hint && (
-          <p className="mt-0.5 text-[10px] text-muted-foreground">{hint}</p>
+          <p className="mt-0.5 text-caption text-muted-foreground">{hint}</p>
         )}
       </div>
     </label>
