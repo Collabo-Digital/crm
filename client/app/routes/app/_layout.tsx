@@ -78,9 +78,12 @@ export default function AppLayout() {
   const isMobileThread = location.pathname === "/inbox" && new URLSearchParams(location.search).has("c");
 
   // Phone screens that bring their own header and drop the app bar, section
-  // tabs and bottom tab bar: an open chat, and the till (which has its own
-  // bottom bar with Charge).
-  const immersive = isMobileThread || matches.some((m) => m.id === "routes/app/orders/pos");
+  // tabs and bottom tab bar: an open chat, the till (which has its own bottom
+  // bar with Charge), and packing an order, so the camera and the line being
+  // packed fit and no tab sits beside Scan and Finish. The chat and the till
+  // also run edge to edge.
+  const edgeToEdge = isMobileThread || matches.some((m) => m.id === "routes/app/orders/pos");
+  const immersive = edgeToEdge || matches.some((m) => m.id === "routes/app/orders/packing/$orderId");
 
   const isFullWidth = matches.some((m) => FULL_WIDTH_ROUTE_IDS.includes(m.id));
 
@@ -106,7 +109,9 @@ export default function AppLayout() {
             !isFullWidth && "max-w-screen-xl",
             isFullHeight && "min-h-0 flex-1 overflow-hidden",
             isFullHeight && !immersive && "app-main-contained",
-            immersive && "max-md:p-0",
+            edgeToEdge && "max-md:p-0",
+            // Without the app bar, the page itself clears the phone's status bar.
+            immersive && !edgeToEdge && "max-md:pt-[max(16px,env(safe-area-inset-top))]",
           )}
         >
           {redirectTo ? <Navigate to={redirectTo} replace /> : <Outlet />}

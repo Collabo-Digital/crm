@@ -537,6 +537,8 @@ html.dark { color-scheme: dark; }
   /* Same badge as the desktop bar's (navbar.tsx): red, white, 12px semibold. */
   .mobile-unread { position: absolute; right: 0; top: -2px; min-width: 18px; height: 18px; border-radius: 10px; background: var(--unread); color: var(--unread-foreground); font-size: 12px; font-weight: 600; line-height: 1; display: grid; place-items: center; padding-inline: 4px; box-shadow: 0 0 0 1.5px var(--card); }
   .mobile-action-dock { bottom: var(--mobile-nav-height); }
+  /* A full-screen page has no tab bar, so its dock sits on the screen's edge. */
+  .app-shell-immersive .mobile-action-dock { bottom: 0; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
   .mobile-action-dock [role="group"] { border-radius: 18px; }
   .mobile-action-dock button { min-height: 44px; min-width: 44px; }
   [data-slot="page-header"] { gap: 16px; }
