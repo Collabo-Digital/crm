@@ -688,7 +688,10 @@ the customer's number, which is what Collabo matches.
   earlier STOP; each code works once. With confirming off, the typed number
   is opted in at once the same way, unless it opted out. Either way the
   contact gets the pop-up's tag and starts "Someone signs up on your website"
-  automations, which must send a template. CORS for
+  automations, which must send a template. One visitor address (an IPv4
+  address, or an IPv6 /64) may sign up 5 numbers an hour at a store, so a few
+  scripts cannot fill the store's own hourly limit (1,000 waiting sign-ups,
+  or 200 with confirming off) and turn real visitors away. CORS for
   `/api/v1/widget/*` accepts any origin without credentials (like the
   storefront pixel); the rest of the API stays locked to the CRM.
 
