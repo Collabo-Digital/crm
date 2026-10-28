@@ -3,6 +3,7 @@
  * and the automations that send them. Pure.
  */
 import type { AutomationPackState, PackSet, PackSlotKey, PackSlotState, TemplatePackView } from "~/types/api";
+import { toneClasses } from "./status-tone.ts";
 
 /**
  * Each slot's title and category, as the server's pack registry
@@ -45,13 +46,13 @@ export const PACK_SLOT_STATE_LABEL: Record<PackSlotState, string> = {
   not_created: "Not created",
 };
 
-export const PACK_SLOT_STATE_CLASS: Record<PackSlotState, string> = {
-  approved: "bg-success-subtle text-success",
-  pending: "bg-info-subtle text-info",
-  paused: "bg-warning-subtle text-warning",
-  attention: "bg-danger-subtle text-danger",
-  not_created: "bg-muted text-muted-foreground",
-};
+export const PACK_SLOT_STATE_CLASS = toneClasses<PackSlotState>({
+  approved: "success",
+  pending: "info",
+  paused: "attention",
+  attention: "critical",
+  not_created: "neutral",
+});
 
 export const PACK_STATE_LABEL: Record<AutomationPackState, string> = {
   live: "Live",
@@ -62,14 +63,14 @@ export const PACK_STATE_LABEL: Record<AutomationPackState, string> = {
   duplicate: "Held back",
 };
 
-export const PACK_STATE_CLASS: Record<AutomationPackState, string> = {
-  live: "bg-success-subtle text-success",
-  waiting: "bg-info-subtle text-info",
-  ready: "bg-brand/30 text-brand-strong",
-  off: "bg-muted text-muted-foreground",
-  attention: "bg-danger-subtle text-danger",
-  duplicate: "bg-warning-subtle text-warning",
-};
+export const PACK_STATE_CLASS = toneClasses<AutomationPackState>({
+  live: "success",
+  waiting: "info",
+  ready: "info",
+  off: "neutral",
+  attention: "critical",
+  duplicate: "attention",
+});
 
 /**
  * Pack automations that stay off until the merchant turns them on, even on a

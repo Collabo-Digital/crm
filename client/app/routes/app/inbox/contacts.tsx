@@ -136,13 +136,13 @@ export default function InboxContactsPage() {
         width: 120,
         cell: (row) =>
           row.blocked ? (
-            <StatusPill className="bg-danger-subtle text-danger">Blocked</StatusPill>
+            <StatusPill tone="critical">Blocked</StatusPill>
           ) : row.optedOut ? (
-            <StatusPill className="bg-warning-subtle text-warning">Opted out</StatusPill>
+            <StatusPill tone="attention">Opted out</StatusPill>
           ) : row.optedIn ? (
-            <StatusPill className="bg-success-subtle text-success">Opted in</StatusPill>
+            <StatusPill tone="success">Opted in</StatusPill>
           ) : (
-            <StatusPill className="bg-muted text-muted-foreground">No opt-in</StatusPill>
+            <StatusPill tone="neutral">No opt-in</StatusPill>
           ),
       },
       {

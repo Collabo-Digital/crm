@@ -1,4 +1,5 @@
 import type { DraftOrderStatus } from "~/types/api";
+import { toneClasses } from "./status-tone.ts";
 
 /**
  * Canonical draft-status pill styling and labels.
@@ -11,11 +12,11 @@ import type { DraftOrderStatus } from "~/types/api";
  * Same shape as `order-status.ts`, for the same reason.
  */
 
-export const DRAFT_STATUS_CLASSES: Record<DraftOrderStatus, string> = {
-  OPEN: "bg-info-subtle text-info",
-  INVOICE_SENT: "bg-warning-subtle text-warning",
-  COMPLETED: "bg-brand/30 text-brand-strong",
-};
+export const DRAFT_STATUS_CLASSES = toneClasses<DraftOrderStatus>({
+  OPEN: "info",
+  INVOICE_SENT: "attention",
+  COMPLETED: "success",
+});
 
 export const DRAFT_STATUS_LABELS: Record<DraftOrderStatus, string> = {
   OPEN: "Open",

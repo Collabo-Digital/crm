@@ -41,6 +41,7 @@ import { useOrganizationSettings } from "~/hooks/use-settings-queries";
 import { useInventoryStatus } from "~/hooks/use-inventory-queries";
 import { STOCK_TERMS } from "~/lib/inventory-vocabulary";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
+import { toneClasses } from "~/lib/status-tone";
 import { calcMargin, cn, formatCurrency } from "~/lib/utils";
 import { formatDate, formatDateTime } from "~/lib/format-date";
 import { handleMutationError } from "~/lib/handle-mutation-error";
@@ -135,11 +136,11 @@ export function meta() {
   return [{ title: "Product Detail | Collabo CRM" }];
 }
 
-const STATUS_CLASS: Record<string, string> = {
-  ACTIVE: "bg-[#CEF17B]/30 text-[#084734]",
-  DRAFT: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
-  ARCHIVED: "bg-orange-100 text-orange-700",
-};
+const STATUS_CLASS: Record<string, string> = toneClasses({
+  ACTIVE: "success",
+  DRAFT: "neutral",
+  ARCHIVED: "neutral",
+});
 
 const STATUS_OPTIONS = ["Active", "Draft", "Archived"] as const;
 

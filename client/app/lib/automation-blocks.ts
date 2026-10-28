@@ -28,6 +28,7 @@ import type {
   AutomationStep,
 } from "~/types/api";
 import { packSlotTitle } from "~/lib/template-pack";
+import { toneClasses } from "~/lib/status-tone";
 
 // ─── Blocks ─────────────────────────────────────────────────────────────────
 
@@ -387,13 +388,13 @@ export const AUTOMATION_STATUS_LABEL: Record<AutomationStatus, string> = {
   ARCHIVED: "Archived",
 };
 
-export const AUTOMATION_STATUS_CLASS: Record<AutomationStatus, string> = {
-  DRAFT: "bg-muted text-muted-foreground",
-  ACTIVE: "bg-success-subtle text-success",
-  PAUSED: "bg-warning-subtle text-warning",
-  ERROR: "bg-danger-subtle text-danger",
-  ARCHIVED: "bg-muted text-muted-foreground",
-};
+export const AUTOMATION_STATUS_CLASS = toneClasses<AutomationStatus>({
+  DRAFT: "neutral",
+  ACTIVE: "success",
+  PAUSED: "attention",
+  ERROR: "critical",
+  ARCHIVED: "neutral",
+});
 
 export const RUN_STATUS_LABEL: Record<AutomationRunStatus, string> = {
   PENDING: "Starting",
@@ -405,15 +406,15 @@ export const RUN_STATUS_LABEL: Record<AutomationRunStatus, string> = {
   CANCELLED: "Cancelled",
 };
 
-export const RUN_STATUS_CLASS: Record<AutomationRunStatus, string> = {
-  PENDING: "bg-info-subtle text-info",
-  RUNNING: "bg-info-subtle text-info",
-  WAITING: "bg-brand/30 text-brand-strong",
-  COMPLETED: "bg-success-subtle text-success",
-  FAILED: "bg-danger-subtle text-danger",
-  SKIPPED: "bg-muted text-muted-foreground",
-  CANCELLED: "bg-muted text-muted-foreground",
-};
+export const RUN_STATUS_CLASS = toneClasses<AutomationRunStatus>({
+  PENDING: "info",
+  RUNNING: "info",
+  WAITING: "info",
+  COMPLETED: "success",
+  FAILED: "critical",
+  SKIPPED: "neutral",
+  CANCELLED: "neutral",
+});
 
 export const SKIP_REASON_LABEL: Record<string, string> = {
   once_per_contact: "Already went through it",
