@@ -48,6 +48,7 @@ import { cn } from "~/lib/utils";
 import { automationsService } from "~/services/automations.service";
 import type { AutomationDetail, AutomationIssue, AutomationSettings, AutomationStep } from "~/types/api";
 import { pageTitle } from "~/lib/page-title";
+import { scrollBehavior } from "~/lib/motion";
 
 export function meta() {
   return [{ title: "Automation | Collabo CRM" }];
@@ -364,7 +365,7 @@ export default function AutomationPage() {
                 onSelect={(sid) => {
                   setSelectedId(sid);
                   // On one-column layouts the form sits below the flow.
-                  if (window.innerWidth < 1024) requestAnimationFrame(() => document.getElementById("step-editor")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+                  if (window.innerWidth < 1024) requestAnimationFrame(() => document.getElementById("step-editor")?.scrollIntoView({ behavior: scrollBehavior(), block: "start" }));
                 }}
                 onInsert={(slot, type) => {
                   const step = newStep(type, channel);

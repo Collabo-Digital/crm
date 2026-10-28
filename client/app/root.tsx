@@ -20,6 +20,7 @@ import "./app.css";
 import { META_SDK_VERSION } from "~/lib/meta-sdk";
 import { loginPath } from "~/lib/return-path";
 import { RouteAnnouncer } from "~/components/app/route-announcer";
+import { MotionConfig } from "framer-motion";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", sizes: "32x32" },
@@ -140,11 +141,15 @@ export default function App() {
   return (
     <QueryProvider>
       <TooltipProvider>
-        <ThemeInit />
-        <LogoutRedirect />
-        <MetaSdkInit />
-        <Outlet />
-        <RouteAnnouncer />
+        {/* Framer Motion ignores the device's reduce-motion setting unless
+            told: with it on, nothing slides, shakes or grows. */}
+        <MotionConfig reducedMotion="user">
+          <ThemeInit />
+          <LogoutRedirect />
+          <MetaSdkInit />
+          <Outlet />
+          <RouteAnnouncer />
+        </MotionConfig>
       </TooltipProvider>
     </QueryProvider>
   );
