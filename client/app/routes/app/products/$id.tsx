@@ -1802,9 +1802,6 @@ export default function ProductDetailPage() {
                   value={product.tags?.length ? product.tags.join(", ") : "—"}
                 />
               </dl>
-              <p className="mt-3 text-xs text-muted-foreground italic">
-                Advanced SEO fields coming soon.
-              </p>
             </Section>
           )}
         </div>

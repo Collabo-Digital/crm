@@ -22,7 +22,6 @@ import { DateRangeFilter } from "~/components/app/date-range-filter";
 import { ChannelBadge } from "~/components/app/channel-badge";
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
-import { NotYet } from "~/components/app/not-yet";
 import { useChannels } from "~/hooks/use-channel-queries";
 import { useDebounced } from "~/hooks/use-debounced";
 import { useOrder, useOrders } from "~/hooks/use-order-queries";
@@ -362,16 +361,6 @@ function OrderCard({ order, currency }: { order: Order; currency: string }) {
         <Button asChild variant="outline" size="sm">
           <Link to={`/orders/${order.id}`}>View order</Link>
         </Button>
-        <NotYet title="Reordering isn't available yet">
-          <Button variant="outline" size="sm" disabled>
-            Reorder items
-          </Button>
-        </NotYet>
-        <NotYet title="Issuing refunds isn't available yet">
-          <Button variant="destructive" size="sm" disabled>
-            Refund
-          </Button>
-        </NotYet>
       </div>
     </div>
   );

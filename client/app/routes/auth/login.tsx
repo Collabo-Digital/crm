@@ -9,10 +9,14 @@ import { loginSchema } from "~/lib/schemas/auth.schemas";
 import type { LoginFormValues } from "~/lib/schemas/auth.schemas";
 import { useLoginMutation } from "~/hooks/use-auth-mutations";
 import { withNext } from "~/lib/return-path";
+import { AUTH_INPUT } from "~/lib/auth-ui";
+import { PRIVACY_URL, TERMS_URL } from "~/lib/support";
+import { Button } from "~/components/ui/button";
+import { Input } from "~/components/ui/input";
 
 export function meta() {
   return [
-    { title: "Log In | Collabo CRM" },
+    { title: "Sign in | Collabo CRM" },
     { name: "description", content: "Log in to your Collabo CRM account" },
   ];
 }
@@ -52,69 +56,64 @@ export default function LoginPage() {
     <div>
       {/* Heading */}
       <div className="mb-7">
-
-        <p className="text-[38px] font-bold text-gray-900">Welcome back</p>
-        <p className="mt-1.5 text-[14px] text-sm text-gray-500">
+        <h1 className="text-[38px] font-bold text-foreground">Welcome back</h1>
+        <p className="mt-1.5 text-sm text-muted-foreground">
           Sign in to your Collabo account to continue.
         </p>
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         {/* Email */}
-        <div className="">
-          <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2.5">
+        <div>
+          <label htmlFor="email" className="mb-2.5 block text-sm font-medium text-foreground">
             Email address
           </label>
-          <input
+          <Input
             id="email"
             type="email"
             placeholder="john@example.com"
             autoComplete="email"
             aria-invalid={!!errors.email}
             {...register("email")}
-            className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+            className={AUTH_INPUT}
           />
           {errors.email && (
-            <p className="text-xs text-red-500">{errors.email.message}</p>
+            <p className="mt-1 text-xs text-danger-text">{errors.email.message}</p>
           )}
         </div>
 
         {/* Password */}
-        <div className="">
-          <div className="flex items-center justify-between mb-2.5">
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-              Password
-            </label>
-
-          </div>
+        <div>
+          <label htmlFor="password" className="mb-2.5 block text-sm font-medium text-foreground">
+            Password
+          </label>
           <div className="relative">
-            <input
+            <Input
               id="password"
               type={showPassword ? "text" : "password"}
               placeholder="Enter your password"
               autoComplete="current-password"
               aria-invalid={!!errors.password}
               {...register("password")}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+              className={`${AUTH_INPUT} pr-10`}
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => setShowPassword((visible) => !visible)}
               tabIndex={-1}
               aria-label={showPassword ? "Hide password" : "Show password"}
             >
               {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
-
           </div>
           {errors.password && (
-            <p className="text-xs text-red-500">{errors.password.message}</p>
+            <p className="mt-1 text-xs text-danger-text">{errors.password.message}</p>
           )}
           <div className="flex justify-end mt-4">
             <Link
               to="/auth/forgot-password"
-              className="text-xs font-medium text-[#084734] hover:text-[#3d6000] transition-colors"
+              className="text-xs font-medium text-brand-strong hover:text-brand-strong-hover transition-colors"
             >
               Forgot password?
             </Link>
@@ -123,40 +122,37 @@ export default function LoginPage() {
 
         {/* Server error */}
         {serverError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-            <p className="text-sm text-red-600">{serverError}</p>
+          <div role="alert" className="rounded-lg bg-danger-subtle px-4 py-3">
+            <p className="text-sm text-danger-text">{serverError}</p>
           </div>
         )}
 
-        {/* Submit */}
-        <button
-          type="submit"
-          disabled={login.isPending}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#000000] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#2e2e2e] disabled:cursor-not-allowed disabled:opacity-60"
-        >
+        <Button type="submit" size="lg" disabled={login.isPending} className="h-11 w-full font-semibold">
           {login.isPending ? (
             <>
-              <Loader2 className="size-4 animate-spin" />
+              <Loader2 className="animate-spin" />
               Signing in…
             </>
           ) : (
             "Sign in"
           )}
-        </button>
+        </Button>
       </form>
 
       {/* Footer */}
-      <p className="mt-6 text-center text-sm text-gray-500">
+      <p className="mt-6 text-center text-sm text-muted-foreground">
         Don&apos;t have an account?{" "}
         <Link
           to={withNext("/auth/signup", next)}
-          className="font-semibold text-[#084734] hover:text-[#3d6000] transition-colors"
+          className="font-semibold text-brand-strong hover:text-brand-strong-hover transition-colors"
         >
           Create one
         </Link>
       </p>
-      <p className="mt-6 text-center text-[14px] text-gray-500 ">
-        By logging , you agree to  <Link to="https://grow100x.app/terms-and-conditions.html" className="text-[#084734] hover:text-[#3d6000] transition-colors">Terms of service</Link> and <Link to="https://grow100x.app/privacy-policy.html" className="text-[#084734] hover:text-[#3d6000] transition-colors">Privacy policy</Link>
+      <p className="mt-6 text-center text-sm text-muted-foreground">
+        By signing in, you agree to the{" "}
+        <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong hover:text-brand-strong-hover transition-colors">Terms of service</a> and{" "}
+        <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong hover:text-brand-strong-hover transition-colors">Privacy policy</a>.
       </p>
     </div>
   );

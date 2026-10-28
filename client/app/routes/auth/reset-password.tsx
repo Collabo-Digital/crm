@@ -7,6 +7,7 @@ import { isAxiosError } from "axios";
 import { Eye, EyeOff, Loader2, KeyRound, ArrowLeft } from "lucide-react";
 
 import { useResetPasswordMutation } from "~/hooks/use-auth-mutations";
+import { Button } from "~/components/ui/button";
 
 export function meta() {
   return [
@@ -63,16 +64,16 @@ export default function ResetPasswordPage() {
   if (!token) {
     return (
       <div className="text-center">
-        <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-red-100">
-          <KeyRound className="size-6 text-red-500" />
+        <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-danger-subtle">
+          <KeyRound className="size-6 text-danger" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">Invalid link</h2>
-        <p className="mt-2 text-sm text-gray-500">
+        <h2 className="text-2xl font-bold text-foreground">Invalid link</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
           This reset link is missing or invalid. Please request a new one.
         </p>
         <Link
           to="/auth/forgot-password"
-          className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-[#CEF17B] px-5 py-2.5 text-sm font-semibold text-gray-900 shadow-sm transition hover:bg-[#BADE6F]"
+          className="mt-6 inline-flex h-11 items-center gap-1.5 rounded-lg bg-brand px-5 text-sm font-semibold text-brand-foreground shadow-sm transition hover:bg-brand-hover"
         >
           Request a new link
         </Link>
@@ -84,11 +85,11 @@ export default function ResetPasswordPage() {
     <div>
       {/* Heading */}
       <div className="mb-7">
-        <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
-          <KeyRound className="size-5 text-[#084734]" />
+        <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-brand/30">
+          <KeyRound className="size-5 text-brand-strong" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">Set a new password</h2>
-        <p className="mt-1.5 text-sm text-gray-500">
+        <h2 className="text-2xl font-bold text-foreground">Set a new password</h2>
+        <p className="mt-1.5 text-sm text-muted-foreground">
           Choose a strong password you haven't used before.
         </p>
       </div>
@@ -96,7 +97,7 @@ export default function ResetPasswordPage() {
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         {/* New password */}
         <div className="space-y-1.5">
-          <label htmlFor="newPassword" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="newPassword" className="block text-sm font-medium text-foreground">
             New password
           </label>
           <div className="relative">
@@ -107,11 +108,11 @@ export default function ResetPasswordPage() {
               autoComplete="new-password"
               aria-invalid={!!errors.newPassword}
               {...register("newPassword")}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+              className="h-11 w-full rounded-lg border border-input bg-card px-3.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground shadow-sm transition aria-[invalid=true]:border-destructive"
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => setShowNewPassword((visible) => !visible)}
               tabIndex={-1}
             >
@@ -119,13 +120,13 @@ export default function ResetPasswordPage() {
             </button>
           </div>
           {errors.newPassword && (
-            <p className="text-xs text-red-500">{errors.newPassword.message}</p>
+            <p className="text-xs text-danger-text">{errors.newPassword.message}</p>
           )}
         </div>
 
         {/* Confirm password */}
         <div className="space-y-1.5">
-          <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="confirmPassword" className="block text-sm font-medium text-foreground">
             Confirm new password
           </label>
           <div className="relative">
@@ -136,11 +137,11 @@ export default function ResetPasswordPage() {
               autoComplete="new-password"
               aria-invalid={!!errors.confirmPassword}
               {...register("confirmPassword")}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+              className="h-11 w-full rounded-lg border border-input bg-card px-3.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground shadow-sm transition aria-[invalid=true]:border-destructive"
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => setShowConfirmPassword((visible) => !visible)}
               tabIndex={-1}
             >
@@ -148,29 +149,25 @@ export default function ResetPasswordPage() {
             </button>
           </div>
           {errors.confirmPassword && (
-            <p className="text-xs text-red-500">{errors.confirmPassword.message}</p>
+            <p className="text-xs text-danger-text">{errors.confirmPassword.message}</p>
           )}
         </div>
 
         {/* Password hints */}
-        <ul className="space-y-1 text-xs text-gray-400">
+        <ul className="space-y-1 text-xs text-muted-foreground">
           <li>• At least 8 characters long</li>
           <li>• Mix of letters, numbers, and symbols recommended</li>
         </ul>
 
         {/* Server error */}
         {serverError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-            <p className="text-sm text-red-600">{serverError}</p>
+          <div className="rounded-lg bg-danger-subtle px-4 py-3">
+            <p className="text-sm text-danger-text">{serverError}</p>
           </div>
         )}
 
         {/* Submit */}
-        <button
-          type="submit"
-          disabled={reset.isPending}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#CEF17B] px-4 py-2.5 text-sm font-semibold text-gray-900 shadow-sm transition hover:bg-[#BADE6F] disabled:cursor-not-allowed disabled:opacity-60"
-        >
+        <Button type="submit" size="lg" disabled={reset.isPending} className="h-11 w-full font-semibold">
           {reset.isPending ? (
             <>
               <Loader2 className="size-4 animate-spin" />
@@ -179,14 +176,14 @@ export default function ResetPasswordPage() {
           ) : (
             "Reset password"
           )}
-        </button>
+        </Button>
       </form>
 
       {/* Back */}
       <div className="mt-6 flex justify-center">
         <Link
           to="/auth/login"
-          className="inline-flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-700 transition-colors"
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="size-3.5" /> Back to sign in
         </Link>

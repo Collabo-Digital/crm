@@ -10,7 +10,6 @@ import {
   Loader2,
   MessageCircle,
   MoreHorizontal,
-  Pencil,
   Plus,
   Receipt,
   Unlink,
@@ -30,7 +29,6 @@ import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { CustomerGstDialog } from "~/components/app/customer-gst-dialog";
 import { CustomerOrdersPanel } from "~/components/app/customer-orders-panel";
-import { NotYet } from "~/components/app/not-yet";
 import { ContactSearchDialog, PlatformIcon, chatHandle } from "~/components/app/inbox/contact-search-dialog";
 import { useCustomer } from "~/hooks/use-customer-queries";
 import { useLinkChatMutation, useUnlinkChatMutation, useUpdateCustomerMutation } from "~/hooks/use-customer-mutations";
@@ -353,17 +351,6 @@ function RailRow({
   );
 }
 
-/** Pencil affordance for a field the API cannot update. */
-function DisabledPencil({ title }: { title: string }) {
-  return (
-    <NotYet title={title}>
-      <Button variant="ghost" size="icon-xs" disabled aria-label={title}>
-        <Pencil className="size-3.5" />
-      </Button>
-    </NotYet>
-  );
-}
-
 function CustomerDetailsSection({
   customer,
   currency,
@@ -413,7 +400,6 @@ function ShippingAddressSection({ customer }: { customer: CustomerDetail }) {
   return (
     <RailSection
       title="Shipping Address"
-      action={<DisabledPencil title="Editing addresses isn't supported yet" />}
     >
       {address.hasAddress ? (
         <>
@@ -470,9 +456,6 @@ function ContactSection({ customer }: { customer: CustomerDetail }) {
   return (
     <RailSection
       title="Contact Information"
-      action={
-        <DisabledPencil title="Editing contact details isn't supported yet" />
-      }
     >
       {/* Stacked one per row, matching the design rather than wrapping inline. */}
       <div className="flex flex-col items-start gap-2">

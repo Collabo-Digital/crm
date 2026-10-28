@@ -37,9 +37,9 @@ export function meta() {
 /**
  * Pixel-first analytics dashboard.
  *
- * Channel filter (All / Shopify / Instagram / WhatsApp) scopes the read to
- * that platform's snapshot rows. Only Shopify writes data today — the other
- * filters return an empty-but-valid shape until their pipelines land.
+ * Only the Shopify storefront writes data today, so there is no channel
+ * filter: Instagram and WhatsApp options could only ever show nothing. The
+ * service still takes a channel for when another pipeline lands.
  */
 export default function AnalyticsPage() {
   const [range, setRange] = useSessionState<AnalyticsRange>(
@@ -47,11 +47,7 @@ export default function AnalyticsPage() {
     "7d",
     oneOf(["7d", "30d", "6m", "12m"]),
   );
-  const [channel, setChannel] = useSessionState<AnalyticsChannelFilter>(
-    "analytics.channel",
-    "all",
-    oneOf(["all", "shopify", "instagram", "whatsapp"]),
-  );
+  const channel: AnalyticsChannelFilter = "all";
 
   const { data, isLoading, isFetching, isError, isPlaceholderData, refetch } =
     useAnalyticsDashboard({ range, channel });
@@ -71,9 +67,9 @@ export default function AnalyticsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Analytics</h1>
+          <h1 className="font-heading text-page-title text-foreground">Analytics</h1>
           <p className="text-sm text-muted-foreground">
-            Storefront behaviour tracked by the Web Pixel.
+            What shoppers do on your Shopify store: visits, product views, carts and checkouts.
             {data?.meta.lastRefreshedAt ? (
               <span className="ml-2 text-xs">
                 · Last refreshed {formatLastRefreshed(data.meta.lastRefreshedAt)}
@@ -81,21 +77,7 @@ export default function AnalyticsPage() {
             ) : null}
           </p>
         </div>
-        <div className="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:w-auto">
-          <Select
-            value={channel}
-            onValueChange={(v) => setChannel(v as AnalyticsChannelFilter)}
-          >
-            <SelectTrigger aria-label="Channel" className="h-8 w-full min-w-0 rounded-lg border border-input bg-card px-3 text-caption text-muted-foreground shadow-sm sm:w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Channels</SelectItem>
-              <SelectItem value="shopify">Shopify</SelectItem>
-              <SelectItem value="instagram">Instagram</SelectItem>
-              <SelectItem value="whatsapp">WhatsApp</SelectItem>
-            </SelectContent>
-          </Select>
+        <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:w-auto">
           <Select value={range} onValueChange={(v) => setRange(v as AnalyticsRange)}>
             <SelectTrigger aria-label="Period" className="h-8 w-full min-w-0 rounded-lg border border-input bg-card px-3 text-caption text-muted-foreground shadow-sm sm:w-36">
               <SelectValue />
@@ -320,8 +302,8 @@ function TopList({
           ))
         ) : rows.length === 0 ? (
           <div className="px-5 py-6 text-xs text-muted-foreground">
-            No data for this period yet. Data appears after the Web Pixel
-            starts sending events and Refresh (or the hourly rollup) runs.
+            No data for this period yet. It appears once shoppers visit your
+            Shopify store; Collabo updates it every hour, or press Refresh.
           </div>
         ) : (
           rows.map((row) => (

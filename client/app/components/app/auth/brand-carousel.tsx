@@ -1,7 +1,7 @@
 import { useState, useEffect, type ReactNode } from "react";
 
 export interface BrandSlide {
-    /** Title — pass plain string OR JSX (use <span className="text-[#CEF17B]">…</span> for accent). */
+    /** Title — pass plain string OR JSX (use <span className="text-brand">…</span> for accent). */
     title: ReactNode;
     /** Subtitle copy beneath the title. */
     subtitle: string;
@@ -21,34 +21,36 @@ import { AutomatedWorkflowIllustration } from "./illustrations/automated-workflo
 import { CustomerProfileIllustration } from "./illustrations/customer-profile";
 import { UnifiedCommerceIllustration } from "./illustrations/unified-commerce";
 
+// What launches: Shopify, the counter (point of sale), WhatsApp and GST
+// invoices. Nothing here may promise a channel the product doesn't have.
 const DEFAULT_SLIDES: BrandSlide[] = [
     {
         title: (
             <>
                 Unified Commerce,
                 <br />
-                <span className="text-[#CEF17B]">Simplified.</span>
+                <span className="text-brand">Simplified.</span>
             </>
         ),
         subtitle:
-            "One platform for orders, customers, marketing, and conversations — across every channel you sell on.",
+            "Shopify orders, counter sales, WhatsApp chats and GST invoices, in one place.",
         illustration: <UnifiedCommerceIllustration />,
     },
     {
         title: "Automated workflows",
-        subtitle: "Reduce manual tasks so you can focus on growth.",
+        subtitle: "Order updates, cash-on-delivery checks and cart reminders go out on WhatsApp by themselves.",
         illustration: <AutomatedWorkflowIllustration />,
     },
     {
         title: (
             <>
-                All Channels,
+                Every order,
                 <br />
-                <span className="text-[#CEF17B]">One View.</span>
+                <span className="text-brand">One View.</span>
             </>
         ),
         subtitle:
-            "Shopify, Amazon, and offline orders sync into a single dashboard you can manage from anywhere.",
+            "Shopify and in-store orders land in one dashboard you can run from anywhere.",
         illustration: <CustomerProfileIllustration />,
     },
     {
@@ -56,11 +58,11 @@ const DEFAULT_SLIDES: BrandSlide[] = [
             <>
                 Conversations,
                 <br />
-                <span className="text-[#CEF17B]">Centralised.</span>
+                <span className="text-brand">Centralised.</span>
             </>
         ),
         subtitle:
-            "Email, chat, WhatsApp and social messages in one inbox — never miss a customer touchpoint.",
+            "Every WhatsApp chat in one shared inbox, with the customer's orders beside it.",
         illustration: <CustomerProfileIllustration />,
     },
 ];
@@ -90,8 +92,8 @@ export function BrandCarousel({
             className={`relative flex flex-col  p-10 ${className}`}
         >
             {/* Decorative glow blobs */}
-            <div className="pointer-events-none absolute -top-32 -left-32 size-96 rounded-full bg-[#CEF17B]/10 blur-3xl" />
-            <div className="pointer-events-none absolute -bottom-32 -right-16 size-72 rounded-full bg-[#CEF17B]/8 blur-3xl" />
+            <div className="pointer-events-none absolute -top-32 -left-32 size-96 rounded-full bg-brand/10 blur-3xl" />
+            <div className="pointer-events-none absolute -bottom-32 -right-16 size-72 rounded-full bg-brand/8 blur-3xl" />
 
             {/* Dash indicators */}
             <div className="relative flex items-center justify-center gap-2">
@@ -115,10 +117,10 @@ export function BrandCarousel({
                 key={activeIndex}
                 className="relative flex flex-1 flex-col items-center justify-center px-4 text-center"
             >
-                <h1 className="animate-in fade-in slide-in-from-bottom-2 duration-700 text-3xl font-bold leading-tight text-white md:text-4xl">
+                <h2 className="animate-in fade-in slide-in-from-bottom-2 duration-700 text-3xl font-bold leading-tight text-white md:text-4xl">
                     {slide.title}
-                </h1>
-                <p className="animate-in fade-in slide-in-from-bottom-2 duration-700 mt-4 max-w-sm text-sm leading-relaxed text-gray-400">
+                </h2>
+                <p className="animate-in fade-in slide-in-from-bottom-2 duration-700 mt-4 max-w-sm text-sm leading-relaxed text-white/70">
                     {slide.subtitle}
                 </p>
 

@@ -9,10 +9,14 @@ import { signupSchema } from "~/lib/schemas/auth.schemas";
 import type { SignupFormValues } from "~/lib/schemas/auth.schemas";
 import { useSignupMutation } from "~/hooks/use-auth-mutations";
 import { withNext } from "~/lib/return-path";
+import { AUTH_INPUT } from "~/lib/auth-ui";
+import { PRIVACY_URL, TERMS_URL } from "~/lib/support";
+import { Button } from "~/components/ui/button";
+import { Input } from "~/components/ui/input";
 
 export function meta() {
   return [
-    { title: "Sign Up | Collabo CRM" },
+    { title: "Create your account | Collabo CRM" },
     { name: "description", content: "Create your Collabo CRM account" },
   ];
 }
@@ -51,87 +55,86 @@ export default function SignupPage() {
     <div>
       {/* Heading */}
       <div className="mb-7">
-        <h2 className="text-[38px] font-bold text-gray-900">Get Started</h2>
-        <p className="mt-1.5 text-[14px] text-gray-500">
-          Start managing your commerce operations
-          from one unified platform.
+        <h1 className="text-[38px] font-bold text-foreground">Get started</h1>
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          Run your orders, WhatsApp chats and GST invoices from one place.
         </p>
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         {/* Name row */}
         <div className="grid grid-cols-2 gap-3">
-          <div className="">
-            <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-1.5">
+          <div>
+            <label htmlFor="firstName" className="mb-1.5 block text-sm font-medium text-foreground">
               First name
             </label>
-            <input
+            <Input
               id="firstName"
               placeholder="John"
               autoComplete="given-name"
               aria-invalid={!!errors.firstName}
               {...register("firstName")}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+              className={AUTH_INPUT}
             />
             {errors.firstName && (
-              <p className="text-xs text-red-500">{errors.firstName.message}</p>
+              <p className="mt-1 text-xs text-danger-text">{errors.firstName.message}</p>
             )}
           </div>
-          <div className="">
-            <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-1.5">
+          <div>
+            <label htmlFor="lastName" className="mb-1.5 block text-sm font-medium text-foreground">
               Last name
             </label>
-            <input
+            <Input
               id="lastName"
               placeholder="Doe"
               autoComplete="family-name"
               aria-invalid={!!errors.lastName}
               {...register("lastName")}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+              className={AUTH_INPUT}
             />
             {errors.lastName && (
-              <p className="text-xs text-red-500">{errors.lastName.message}</p>
+              <p className="mt-1 text-xs text-danger-text">{errors.lastName.message}</p>
             )}
           </div>
         </div>
 
         {/* Email */}
-        <div className="">
-          <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1.5">
+        <div>
+          <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-foreground">
             Email address
           </label>
-          <input
+          <Input
             id="email"
             type="email"
             placeholder="john@example.com"
             autoComplete="email"
             aria-invalid={!!errors.email}
             {...register("email")}
-            className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+            className={AUTH_INPUT}
           />
           {errors.email && (
-            <p className="text-xs text-red-500">{errors.email.message}</p>
+            <p className="mt-1 text-xs text-danger-text">{errors.email.message}</p>
           )}
         </div>
 
         {/* Password */}
-        <div className="">
-          <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1.5">
+        <div>
+          <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-foreground">
             Password
           </label>
           <div className="relative">
-            <input
+            <Input
               id="password"
               type={showPassword ? "text" : "password"}
               placeholder="Min. 8 characters"
               autoComplete="new-password"
               aria-invalid={!!errors.password}
               {...register("password")}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+              className={`${AUTH_INPUT} pr-10`}
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => setShowPassword((visible) => !visible)}
               tabIndex={-1}
               aria-label={showPassword ? "Hide password" : "Show password"}
@@ -140,55 +143,44 @@ export default function SignupPage() {
             </button>
           </div>
           {errors.password && (
-            <p className="text-xs text-red-500">{errors.password.message}</p>
+            <p className="mt-1 text-xs text-danger-text">{errors.password.message}</p>
           )}
         </div>
 
         {/* Server error */}
         {serverError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-            <p className="text-sm text-red-600">{serverError}</p>
+          <div role="alert" className="rounded-lg bg-danger-subtle px-4 py-3">
+            <p className="text-sm text-danger-text">{serverError}</p>
           </div>
         )}
 
-        {/* T&C note */}
-        {/* <p className="text-[11px] text-gray-400">
-          By creating an account you agree to our{" "}
-          <a href="#" className="underline hover:text-gray-600">Terms of Service</a>
-          {" "}and{" "}
-          <a href="#" className="underline hover:text-gray-600">Privacy Policy</a>.
-        </p> */}
-
-        {/* Submit */}
-        <button
-          type="submit"
-          disabled={signup.isPending}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#000000] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#2e2e2e] disabled:cursor-not-allowed disabled:opacity-60 mt-4"
-        >
+        <Button type="submit" size="lg" disabled={signup.isPending} className="mt-4 h-11 w-full font-semibold">
           {signup.isPending ? (
             <>
-              <Loader2 className="size-4 animate-spin" />
+              <Loader2 className="animate-spin" />
               Creating account…
             </>
           ) : (
             "Create account"
           )}
-        </button>
+        </Button>
       </form>
 
       {/* Footer */}
-      <p className="mt-3 text-center text-sm text-gray-500">
+      <p className="mt-3 text-center text-sm text-muted-foreground">
         Already have an account?{" "}
         <Link
           to={withNext("/auth/login", next)}
-          className="font-semibold text-[#084734] hover:text-[#3d6000] transition-colors"
+          className="font-semibold text-brand-strong hover:text-brand-strong-hover transition-colors"
         >
           Sign in
         </Link>
       </p>
 
-      <p className="mt-3 text-center text-[14px] text-gray-500 ">
-        By creating an account, you agree to  <Link to="https://grow100x.app/terms-and-conditions.html" className="text-[#084734] hover:text-[#3d6000] transition-colors">Terms of service</Link> and <Link to="https://grow100x.app/privacy-policy.html" className="text-[#084734] hover:text-[#3d6000] transition-colors">Privacy policy</Link>
+      <p className="mt-3 text-center text-sm text-muted-foreground">
+        By creating an account, you agree to the{" "}
+        <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong hover:text-brand-strong-hover transition-colors">Terms of service</a> and{" "}
+        <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" className="text-brand-strong hover:text-brand-strong-hover transition-colors">Privacy policy</a>.
       </p>
     </div>
   );
