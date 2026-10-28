@@ -2,6 +2,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { BadRequestException } from '@nestjs/common';
 import { guardedRequest } from '../automation/engine/http-request';
 import { ApiKeysService } from './api-keys.service';
+import { PublicApiController } from './public-api.controller';
 import { WebhooksService, webhookSignature } from './webhooks.service';
 
 jest.mock('../automation/engine/http-request', () => ({ guardedRequest: jest.fn() }));
@@ -117,5 +118,47 @@ describe('webhook delivery', () => {
         await expect(create('http://hooks.example.com/x')).rejects.toBeInstanceOf(BadRequestException);
         await expect(create('https://user:pass@hooks.example.com/x')).rejects.toBeInstanceOf(BadRequestException);
         await expect(service.create('org_1', { url: 'https://hooks.example.com/x', events: ['everything'] })).rejects.toBeInstanceOf(BadRequestException);
+    });
+});
+
+describe('webhook subscriptions through the public API', () => {
+    const at = new Date('2026-10-24T00:00:00Z');
+    const endpoint = (id: string, organizationId: string, apiKeyId: string | null) => ({
+        id, organizationId, apiKeyId, url: `https://hooks.example.com/${id}?token=secret-${id}`, description: null, events: ['order.paid'],
+        enabled: true, consecutiveFailures: 0, disabledReason: null, lastDeliveryAt: null, createdAt: at,
+    });
+    const rows = [
+        endpoint('by_key_a', 'org_1', 'key_a'),
+        endpoint('by_key_b', 'org_1', 'key_b'),
+        endpoint('from_settings', 'org_1', null),
+        endpoint('other_org', 'org_2', 'key_c'),
+    ];
+    function build() {
+        const prisma = {
+            webhookEndpoint: {
+                findMany: jest.fn(({ where }: { where: { organizationId: string; apiKeyId?: string } }) =>
+                    Promise.resolve(rows.filter((r) => r.organizationId === where.organizationId && (where.apiKeyId === undefined || r.apiKeyId === where.apiKeyId))),
+                ),
+            },
+        };
+        const webhooks = new WebhooksService(prisma as never, {} as never, { onOrder: jest.fn(), onPayment: jest.fn() } as never, {} as never, { get: () => undefined } as never);
+        return { webhooks, api: new PublicApiController({} as never, webhooks) };
+    }
+
+    it('lists only the calling key’s own subscriptions, not other integrations’ receiving URLs', async () => {
+        const { api } = build();
+        const listed = await api.subscriptions({ keyId: 'key_a', organizationId: 'org_1', scopes: ['webhooks:manage'] });
+        expect(listed.map((w) => w.id)).toEqual(['by_key_a']);
+        expect(JSON.stringify(listed)).not.toContain('secret-by_key_b');
+    });
+
+    it('lists nothing for a key that made no subscriptions', async () => {
+        const { api } = build();
+        await expect(api.subscriptions({ keyId: 'key_new', organizationId: 'org_1', scopes: ['webhooks:manage'] })).resolves.toEqual([]);
+    });
+
+    it('still lists every webhook of the organization in Settings', async () => {
+        const { webhooks } = build();
+        expect((await webhooks.list('org_1')).map((w) => w.id)).toEqual(['by_key_a', 'by_key_b', 'from_settings']);
     });
 });
