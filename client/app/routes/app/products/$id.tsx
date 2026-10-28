@@ -131,6 +131,7 @@ import { Switch } from "~/components/ui/switch";
 import { Separator } from "~/components/ui/separator";
 import { Item, ItemMedia } from "~/components/ui/item";
 import { motion } from "framer-motion";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Product Detail | Collabo CRM" }];
@@ -1106,6 +1107,7 @@ export default function ProductDetailPage() {
 
             <div className="min-w-0 flex-1 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
+                <title>{pageTitle(product.title, "Product")}</title>
                 <h1 className="text-[24px] font-bold text-gray-900 dark:text-gray-100">
                   {product.title}
                 </h1>

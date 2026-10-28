@@ -71,6 +71,7 @@ import type {
   UpdateWarehouseRequest,
   Warehouse,
 } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 /** Mirrors `GSTIN_REGEX` on the server; the server is still the authority. */
 const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
@@ -82,6 +83,10 @@ const NEW_KIND_PARAM: Record<string, LocationKind> = {
 };
 
 const NO_SHOPIFY_LOCATION = "none";
+
+export function meta() {
+  return [{ title: pageTitle("Locations", "Inventory") }];
+}
 
 /**
  * Stores and warehouses. Either kind can share stock with one Shopify

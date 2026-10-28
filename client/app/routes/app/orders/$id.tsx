@@ -60,6 +60,7 @@ import type {
   OrderFulfillment,
 } from "~/types/api";
 import { orderShopifySyncOf } from "~/lib/shopify-sync";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Order Detail | Collabo CRM" }];
@@ -292,6 +293,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
 
   return (
     <div className="space-y-5">
+      <title>{pageTitle(`Order ${order.name}`)}</title>
       {/* Breadcrumb + prev/next rail */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <nav aria-label="Breadcrumb" className="flex w-full items-center gap-1.5 text-caption sm:w-auto">

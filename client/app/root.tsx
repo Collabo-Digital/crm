@@ -19,6 +19,7 @@ import { useEffect, useRef } from "react";
 import "./app.css";
 import { META_SDK_VERSION } from "~/lib/meta-sdk";
 import { loginPath } from "~/lib/return-path";
+import { RouteAnnouncer } from "~/components/app/route-announcer";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", sizes: "32x32" },
@@ -143,6 +144,7 @@ export default function App() {
         <LogoutRedirect />
         <MetaSdkInit />
         <Outlet />
+        <RouteAnnouncer />
       </TooltipProvider>
     </QueryProvider>
   );

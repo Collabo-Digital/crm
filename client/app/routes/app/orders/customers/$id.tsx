@@ -42,6 +42,7 @@ import { mapsEmbedUrl, mapsUrl, readAddress } from "~/lib/address";
 import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import { cn, formatCurrency } from "~/lib/utils";
 import type { CustomerDetail } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Customer | Collabo CRM" }];
@@ -119,6 +120,7 @@ export default function CustomerDetailPage() {
     // `items-start` is load-bearing: without it the grid stretches both columns
     // to equal height and the sticky rail has nothing to scroll against.
     <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+      <title>{pageTitle(name === "—" ? null : name, "Customer")}</title>
       <div className="min-w-0 space-y-5 lg:flex-2">
         {/* Header: identity + tabs */}
         <header className="rounded-xl bg-card p-5 shadow-sm ring-1 ring-border">

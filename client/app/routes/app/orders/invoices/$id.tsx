@@ -33,6 +33,7 @@ import {
 } from "~/lib/invoice-status";
 import { cn } from "~/lib/utils";
 import type { InvoiceDetail, UpdateInvoiceRequest } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Invoice | Collabo CRM" }];
@@ -165,6 +166,11 @@ export default function InvoicePage() {
 
   return (
     <div className="space-y-4">
+      <title>{pageTitle(`${label} ${current.invoiceNumber}`)}</title>
+      {/* The number shows in the breadcrumb; this is the page's heading. */}
+      <h1 className="sr-only">
+        {label} {current.invoiceNumber}
+      </h1>
       {/* Breadcrumb + actions */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption">

@@ -76,9 +76,12 @@ import { InvoiceSettingsTab } from "~/components/app/settings/invoice-settings-t
 import { TaxSchemeSetting } from "~/components/app/settings/tax-scheme-setting";
 import { platformOffered } from "~/lib/channel-providers";
 import { roleLabel } from "~/lib/labels";
+import { pageTitle } from "~/lib/page-title";
 
-export function meta() {
-  return [{ title: "Settings | Collabo CRM" }];
+export function meta({ params }: { params: { tab?: string } }) {
+  // Each tab gets its own title, so tabs and screen readers can tell them apart.
+  const tab = TABS.find((t) => t.id === params.tab);
+  return [{ title: pageTitle(tab?.label, "Settings") }];
 }
 
 // ── Sidebar tabs ─────────────────────────────────────────────────────────────

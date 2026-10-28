@@ -32,6 +32,7 @@ import {
   CheckboxRow,
 } from "~/components/app/order-dialog-primitives";
 import type { OfflinePaymentMethod } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Draft | Collabo CRM" }];
@@ -110,6 +111,7 @@ export default function DraftDetailPage() {
       {/* Title */}
       <div className="space-y-1">
         <div className="flex items-center gap-3">
+          <title>{pageTitle(/^draft\b/i.test(draftName) ? draftName : `Draft ${draftName}`)}</title>
           <h1 className="text-subhead text-foreground">{draftName}</h1>
           <span
             className={cn(
