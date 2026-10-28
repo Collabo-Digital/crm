@@ -1112,27 +1112,27 @@ export default function ProductDetailPage() {
                 </h1>
                 <span
                   className={cn(
-                    "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                    "rounded-full px-2 py-0.5 text-caption font-medium",
                     STATUS_CLASS[product.status] ?? "bg-gray-100 text-gray-600",
                   )}
                 >
                   {product.status}
                 </span>
                 {isManual ? (
-                  <span className="inline-flex items-center rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300">
+                  <span className="inline-flex items-center rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-caption font-medium text-blue-700 dark:text-blue-300">
                     CRM (Manual)
                   </span>
                 ) : (
                   // Source only — the sync state is its own pill below. This
                   // used to read "Synced from SHOPIFY" in green even while the
                   // product had unpushed edits or a failed push.
-                  <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-gray-800 px-2 py-0.5 text-[10px] font-medium text-gray-700 dark:text-gray-300">
+                  <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-gray-800 px-2 py-0.5 text-caption font-medium text-gray-700 dark:text-gray-300">
                     From {product.channel?.platform === "SHOPIFY" ? "Shopify" : product.channel?.platform}
                   </span>
                 )}
                 <ShopifySyncStatusPill sync={sync} />
                 {product.status === "DRAFT" && product.publishedAt && new Date(product.publishedAt) > new Date() && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-caption font-medium text-blue-700 dark:text-blue-300">
                     <Calendar className="size-3" />
                     Publishes on {formatDateTime(product.publishedAt)}
                   </span>
@@ -1408,7 +1408,7 @@ export default function ProductDetailPage() {
                           <FieldLabel className="text-[13px]" htmlFor="product-taxable">
                             Charge tax on this product
                           </FieldLabel>
-                          <FieldDescription className="text-[10px]">
+                          <FieldDescription className="text-caption">
                             Applies your store&apos;s default tax rate.
                           </FieldDescription>
                         </FieldContent>
@@ -1467,7 +1467,7 @@ export default function ProductDetailPage() {
                             Track quantity
                           </FieldLabel>
                           {trackForced && (
-                            <FieldDescription className="text-[11px] text-amber-700 dark:text-amber-300">
+                            <FieldDescription className="text-caption text-amber-700 dark:text-amber-300">
                               Forced ON for all products in{" "}
                               <Link to="/settings" className="underline">Settings → Sync</Link>.
                             </FieldDescription>
@@ -1490,7 +1490,7 @@ export default function ProductDetailPage() {
                             Continue selling when out of stock
                           </FieldLabel>
                           {oversellForced && (
-                            <FieldDescription className="text-[11px] text-amber-700 dark:text-amber-300">
+                            <FieldDescription className="text-caption text-amber-700 dark:text-amber-300">
                               Forced ON for all products in{" "}
                               <Link to="/settings" className="underline">Settings → Sync</Link>.
                               Shopify receives "continue" regardless of this switch.
@@ -1567,7 +1567,7 @@ export default function ProductDetailPage() {
                         <FieldLabel className="text-[13px]" htmlFor="product-physical">
                           This is a physical product
                         </FieldLabel>
-                        <FieldDescription className="text-[11px]">
+                        <FieldDescription className="text-caption">
                           Off for digital downloads, services, etc.
                         </FieldDescription>
                       </FieldContent>
@@ -1663,7 +1663,7 @@ export default function ProductDetailPage() {
                         }
                         disabled={!defaultVariant}
                       />
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-caption text-muted-foreground">
                         Two-letter ISO code
                       </span>
                     </div>
@@ -1748,7 +1748,7 @@ export default function ProductDetailPage() {
                           <p className="text-xs font-medium text-gray-900 dark:text-gray-100">
                             {o.name}
                           </p>
-                          <p className="text-[10px] text-muted-foreground">
+                          <p className="text-caption text-muted-foreground">
                             {o.customer
                               ? `${o.customer.firstName ?? ""} ${o.customer.lastName ?? ""}`.trim() || "Guest"
                               : "Guest"}{" "}
@@ -1941,12 +1941,12 @@ export default function ProductDetailPage() {
                   ))}
                 </select>
               </div>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-caption text-muted-foreground">
                 Applies to every variant unless a variant sets its own override
                 in the variant editor.
               </p>
               {isVendor && (
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-caption text-muted-foreground">
                   Tax fields are managed by the store owner.
                 </p>
               )}
@@ -2061,7 +2061,7 @@ export default function ProductDetailPage() {
 }
 
 const PILL_BASE =
-  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium";
+  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-caption font-medium";
 
 /** Title-row pill for the states that need attention; nothing otherwise. */
 function ShopifySyncStatusPill({
@@ -2198,7 +2198,7 @@ function ShopifySyncCard({
         <span className={cn(PILL_BASE, "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300")}>
           Not synced yet
         </span>
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-caption text-muted-foreground">
           Use Sync to Shopify at the top of the page to push this product.
         </p>
       </div>
@@ -2212,7 +2212,7 @@ function ShopifySyncCard({
           Synced
         </span>
         {sync.shopifyProductId && (
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-caption text-muted-foreground">
             Shopify ID: <span className="font-mono">{sync.shopifyProductId}</span>
           </p>
         )}
@@ -2223,7 +2223,7 @@ function ShopifySyncCard({
     return (
       <div className="space-y-2 text-xs">
         <ShopifySyncStatusPill sync={sync} />
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-caption text-muted-foreground">
           This sync never finished. Use Retry sync at the top of the page.
         </p>
       </div>
@@ -2241,7 +2241,7 @@ function ShopifySyncCard({
     return (
       <div className="space-y-2 text-xs">
         <ShopifySyncStatusPill sync={sync} />
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-caption text-muted-foreground">
           Saved edits haven't been pushed yet. Use Sync to Shopify at the top of the page.
         </p>
       </div>
@@ -2250,7 +2250,7 @@ function ShopifySyncCard({
   return (
     <div className="space-y-2 text-xs">
       <ShopifySyncStatusPill sync={sync} />
-      {sync.error && <p className="text-[10px] text-red-700 dark:text-red-400">{sync.error}</p>}
+      {sync.error && <p className="text-caption text-red-700 dark:text-red-400">{sync.error}</p>}
     </div>
   );
 }
