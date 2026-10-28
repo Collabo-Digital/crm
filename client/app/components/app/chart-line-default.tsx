@@ -17,9 +17,13 @@ export interface SparklinePoint {
     value: number
 }
 
-/** Approved chart tones. Add a case here rather than passing a raw color. */
+/**
+ * Approved chart tones. Add a case here rather than passing a raw color.
+ * `brand` draws in --chart-1 (forest on light, lime on dark): lime itself is
+ * 1.3:1 on a white card, too faint for a line.
+ */
 const CHART_TONE = {
-    brand: "var(--brand)",
+    brand: "var(--chart-1)",
     forest: "var(--brand-forest)",
     success: "var(--success)",
     warning: "var(--warning)",
