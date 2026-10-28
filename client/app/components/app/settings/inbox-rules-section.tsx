@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Clock, Loader2, Plus, Route, ShieldBan, Trash2 } from "lucide-react";
 
+import { SaveBar } from "~/components/app/save-bar";
 import { SectionCard } from "~/components/app/section-card";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
@@ -11,7 +12,6 @@ import { Textarea } from "~/components/ui/textarea";
 import { useSaveInboxRulesMutation } from "~/hooks/use-automation-mutations";
 import { useInboxRules } from "~/hooks/use-automation-queries";
 import { useChannels } from "~/hooks/use-channel-queries";
-import { cn } from "~/lib/utils";
 import type { AutomationPlatform, InboxAutoReply, InboxRoutingRule, InboxRulesSettings } from "~/types/api";
 import { platformOffered } from "~/lib/channel-providers";
 
@@ -341,18 +341,13 @@ export function InboxRulesSection({ canManage, members, teams }: { canManage: bo
       </SectionCard>
 
       {canManage && (
-        <div className={cn("sticky bottom-[calc(var(--mobile-nav-height)+1rem)] md:bottom-4 flex justify-end", !dirty && "hidden")}>
-          <div className="flex items-center gap-3 rounded-full border bg-background px-4 py-2 shadow-lg">
-            <span className="text-caption text-muted-foreground">Unsaved changes</span>
-            <Button variant="ghost" size="sm" onClick={() => setS((({ organizationTimeZone: _tz, ...rest }) => rest)(data))}>
-              Discard
-            </Button>
-            <Button variant="accent" size="sm" disabled={save.isPending} onClick={() => save.mutate(s)}>
-              {save.isPending && <Loader2 className="animate-spin" />}
-              Save rules
-            </Button>
-          </div>
-        </div>
+        <SaveBar
+          dirty={dirty}
+          saving={save.isPending}
+          onSave={() => save.mutate(s)}
+          onDiscard={() => setS((({ organizationTimeZone: _tz, ...rest }) => rest)(data))}
+          what="the inbox rules"
+        />
       )}
     </div>
   );

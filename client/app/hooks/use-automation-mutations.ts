@@ -176,11 +176,11 @@ export function useCatalogMutation(channelId: string) {
       queryClient.setQueryData(automationKeys.catalog(channelId), result.view);
       if (action.kind === "sync" && "sync" in result && result.sync) {
         const r = result.sync;
-        toast.success(`Catalog updated: ${r.sent} sent, ${r.removed} removed${r.skipped ? `, ${r.skipped} need attention` : ""}${r.errors ? `, ${r.errors} refused by Meta` : ""}.`);
-      } else if (action.kind === "connect") toast.success("Catalog connected.");
+        toast.success(`Catalogue updated: ${r.sent} sent, ${r.removed} removed${r.skipped ? `, ${r.skipped} need attention` : ""}${r.errors ? `, ${r.errors} refused by Meta` : ""}.`);
+      } else if (action.kind === "connect") toast.success("Catalogue connected.");
       void queryClient.invalidateQueries({ queryKey: ["commerce", "products"] });
     },
-    onError: (error) => handleMutationError(error, "The catalog was not updated."),
+    onError: (error) => handleMutationError(error, "The catalogue was not updated."),
   });
 }
 

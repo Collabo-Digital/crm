@@ -18,10 +18,10 @@ import { formatDateTime } from "~/lib/format-date";
 import { cn } from "~/lib/utils";
 
 export function meta() {
-  return [{ title: "Catalog | Collabo CRM" }];
+  return [{ title: "Catalogue | Collabo CRM" }];
 }
 
-const STATUS_LABEL: Record<string, string> = { SYNCED: "In the catalog", SKIPPED: "Need attention", ERROR: "Refused by Meta", REMOVED: "Removed" };
+const STATUS_LABEL: Record<string, string> = { SYNCED: "In the catalogue", SKIPPED: "Need attention", ERROR: "Refused by Meta", REMOVED: "Removed" };
 
 /**
  * A WhatsApp number's catalog: which Meta catalog it uses, whether customers
@@ -45,7 +45,7 @@ export default function CatalogPage() {
     <div className="space-y-6">
       <PageHeader>
         <PageHeaderContent>
-          <PageHeaderTitle>WhatsApp catalog</PageHeaderTitle>
+          <PageHeaderTitle>WhatsApp catalogue</PageHeaderTitle>
           <PageHeaderDescription>Let customers browse your products and send carts in WhatsApp, and share products from the inbox and automations.</PageHeaderDescription>
         </PageHeaderContent>
       </PageHeader>
@@ -71,7 +71,7 @@ export default function CatalogPage() {
           )}
 
           {isError ? (
-            <p className="text-caption text-danger">The catalog could not be loaded.</p>
+            <p className="text-caption text-danger">The catalogue could not be loaded.</p>
           ) : isLoading || !data ? (
             <Skeleton className="h-72 w-full rounded-xl" />
           ) : (
@@ -79,18 +79,18 @@ export default function CatalogPage() {
               {data.onBusinessApp && (
                 <p className="flex items-start gap-2 rounded-lg bg-warning-subtle p-3 text-caption text-warning lg:col-span-2">
                   <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                  This number is shared with the WhatsApp Business app. Meta does not let numbers like this send catalog messages through the API, so products from the inbox go as links. The catalog itself still works in the Business app.
+                  This number is shared with the WhatsApp Business app. Meta does not let numbers like this send catalogue messages through the API, so products from the inbox go as links. The catalogue itself still works in the Business app.
                 </p>
               )}
 
-              <SectionCard title="Catalog" icon={<ShoppingBag className="size-4 text-muted-foreground" />}>
+              <SectionCard title="Catalogue" icon={<ShoppingBag className="size-4 text-muted-foreground" />}>
                 <div className="space-y-4 p-5">
                   {data.catalog ? (
                     <>
                       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-caption">
                         <dt className="text-muted-foreground">Name</dt>
                         <dd>{data.catalog.name ?? "—"}</dd>
-                        <dt className="text-muted-foreground">Catalog id</dt>
+                        <dt className="text-muted-foreground">Catalogue ID</dt>
                         <dd className="font-mono">{data.catalog.catalogId}</dd>
                         <dt className="text-muted-foreground">Items at Meta</dt>
                         <dd>{data.catalog.productCount ?? "—"}</dd>
@@ -98,7 +98,7 @@ export default function CatalogPage() {
                         <dd>{formatDateTime(data.catalog.connectedAt)}</dd>
                       </dl>
                       {canManage && (
-                        <Button variant="outline" size="sm" disabled={act.isPending} onClick={() => window.confirm("Stop using this catalog here? Products stay in it at Meta.") && act.mutate({ kind: "disconnect" })}>
+                        <Button variant="outline" size="sm" disabled={act.isPending} onClick={() => window.confirm("Stop using this catalogue here? Products stay in it at Meta.") && act.mutate({ kind: "disconnect" })}>
                           <Unlink />
                           Disconnect
                         </Button>
@@ -107,9 +107,9 @@ export default function CatalogPage() {
                   ) : (
                     <>
                       <ol className="list-decimal space-y-1 pl-4 text-caption text-muted-foreground">
-                        <li>Create a catalog in Meta Commerce Manager, or use the one you have.</li>
-                        <li>Connect it to this WhatsApp account in WhatsApp Manager (one catalog per account).</li>
-                        <li>Paste its catalog id here.</li>
+                        <li>Create a catalogue in Meta Commerce Manager, or use the one you have.</li>
+                        <li>Connect it to this WhatsApp account in WhatsApp Manager (one catalogue per account).</li>
+                        <li>Paste its catalogue ID here.</li>
                       </ol>
                       {canManage && (
                         <form
@@ -120,7 +120,7 @@ export default function CatalogPage() {
                           }}
                         >
                           <Label htmlFor="catalog-id" className="sr-only">
-                            Catalog id
+                            Catalogue ID
                           </Label>
                           <Input id="catalog-id" value={catalogId} onChange={(e) => setCatalogId(e.target.value)} placeholder="Catalog id, e.g. 1234567890123456" inputMode="numeric" />
                           <Button type="submit" variant="accent" disabled={!catalogId.trim() || act.isPending}>
@@ -140,7 +140,7 @@ export default function CatalogPage() {
                     <>
                       <div className="flex items-start justify-between gap-4">
                         <Label htmlFor="cat-visible" className="flex flex-col items-start gap-0.5 font-normal">
-                          <span className="text-body font-medium">Show the catalog</span>
+                          <span className="text-body font-medium">Show the catalogue</span>
                           <span className="text-micro text-muted-foreground">A storefront button in the chat header.</span>
                         </Label>
                         <Switch id="cat-visible" checked={data.commerce.catalogVisible} disabled={!canManage || act.isPending} onCheckedChange={(v) => act.mutate({ kind: "settings", catalogVisible: v })} />
@@ -162,7 +162,7 @@ export default function CatalogPage() {
               <SectionCard
                 className="lg:col-span-2"
                 title="Products"
-                description="Active store products, one catalog item per variant. Unchanged items are not sent again."
+                description="Active store products, one catalogue item per variant. Unchanged items are not sent again."
                 action={
                   canManage &&
                   data.catalog && (
@@ -187,7 +187,7 @@ export default function CatalogPage() {
                       Last sync {formatDateTime(data.catalog.lastSync.at)}: {data.catalog.lastSync.sent} sent, {data.catalog.lastSync.removed} removed.
                     </p>
                   )}
-                  {!data.catalog && <p className="text-caption text-muted-foreground">Connect a catalog to sync products.</p>}
+                  {!data.catalog && <p className="text-caption text-muted-foreground">Connect a catalogue to sync products.</p>}
                   {data.problems.length > 0 && (
                     <ul className="divide-y rounded-lg border">
                       {data.problems.map((p) => (

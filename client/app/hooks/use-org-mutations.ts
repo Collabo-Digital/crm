@@ -18,6 +18,7 @@ import type {
   UpdateMemberPermissionsRequest,
   SendInviteRequest,
   InviteInfluencerRequest,
+  OrgResponse,
 } from "~/types/api";
 
 // ─── Organization Mutations ─────────────────────────────────────────────────
@@ -107,10 +108,13 @@ export function useUpdateOrganizationMutation(orgId: string) {
 
   return useMutation({
     mutationFn: (data: UpdateOrganizationRequest) => orgService.update(orgId, data),
-    onSuccess: () => {
+    onSuccess: (_org, saved) => {
+      // The page shows the saved values at once rather than after the refetch,
+      // so a form's "unsaved changes" clears the moment the save lands.
+      queryClient.setQueryData<OrgResponse>(orgKeys.detail(orgId), (previous) => (previous ? { ...previous, ...saved } : previous));
       queryClient.invalidateQueries({ queryKey: orgKeys.detail(orgId) });
       queryClient.invalidateQueries({ queryKey: orgKeys.list() });
-      toast.success("Organization updated successfully.");
+      toast.success("Settings saved.");
     },
     onError: (error) => handleMutationError(error, "Failed to update organization."),
   });

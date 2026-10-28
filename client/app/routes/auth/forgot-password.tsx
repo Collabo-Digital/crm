@@ -7,6 +7,7 @@ import { isAxiosError } from "axios";
 import { Loader2, Mail, ArrowLeft, CheckCircle2 } from "lucide-react";
 
 import { useForgotPasswordMutation } from "~/hooks/use-auth-mutations";
+import { Button } from "~/components/ui/button";
 
 export function meta() {
   return [
@@ -55,20 +56,20 @@ export default function ForgotPasswordPage() {
   if (submitted) {
     return (
       <div className="text-center">
-        <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
-          <CheckCircle2 className="size-6 text-[#084734]" />
+        <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-brand/30">
+          <CheckCircle2 className="size-6 text-brand-strong" />
         </div>
-        <h1 className="text-2xl font-bold text-gray-900">Check your email</h1>
-        <p className="mt-2 text-sm text-gray-500">
+        <h1 className="text-2xl font-bold text-foreground">Check your email</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
           We sent a password reset link to{" "}
-          <span className="font-semibold text-gray-700">{sentEmail}</span>.
+          <span className="font-semibold text-foreground">{sentEmail}</span>.
           <br />
           The link expires in 30 minutes.
         </p>
 
-        <div className="mt-6 rounded-xl border border-gray-100 bg-white px-6 py-4 shadow-sm text-left space-y-2">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Didn't get it?</p>
-          <ul className="space-y-1 text-sm text-gray-500">
+        <div className="mt-6 rounded-xl border border-border bg-card px-6 py-4 shadow-sm text-left space-y-2">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Didn't get it?</p>
+          <ul className="space-y-1 text-sm text-muted-foreground">
             <li>• Check your spam / junk folder</li>
             <li>• Make sure the email address above is correct</li>
             <li>
@@ -76,7 +77,7 @@ export default function ForgotPasswordPage() {
               <button
                 type="button"
                 onClick={() => setSubmitted(false)}
-                className="font-semibold text-[#084734] hover:text-[#3d6000] transition-colors"
+                className="font-semibold text-brand-strong hover:text-brand-strong-hover transition-colors"
               >
                 Try again with a different email
               </button>
@@ -86,7 +87,7 @@ export default function ForgotPasswordPage() {
 
         <Link
           to="/auth/login"
-          className="mt-6 inline-flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-700 transition-colors"
+          className="mt-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="size-3.5" /> Back to sign in
         </Link>
@@ -99,11 +100,11 @@ export default function ForgotPasswordPage() {
     <div>
       {/* Heading */}
       <div className="mb-7">
-        <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
-          <Mail className="size-5 text-[#084734]" />
+        <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-brand/30">
+          <Mail className="size-5 text-brand-strong" />
         </div>
-        <h1 className="text-2xl font-bold text-gray-900">Forgot your password?</h1>
-        <p className="mt-1.5 text-sm text-gray-500">
+        <h1 className="text-2xl font-bold text-foreground">Forgot your password?</h1>
+        <p className="mt-1.5 text-sm text-muted-foreground">
           No problem. Enter your email and we'll send you a reset link.
         </p>
       </div>
@@ -111,7 +112,7 @@ export default function ForgotPasswordPage() {
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         {/* Email */}
         <div className="space-y-1.5">
-          <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="email" className="block text-sm font-medium text-foreground">
             Email address
           </label>
           <input
@@ -122,26 +123,22 @@ export default function ForgotPasswordPage() {
             aria-invalid={!!errors.email}
             aria-describedby={errors.email ? "email-error" : undefined}
             {...register("email")}
-            className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition aria-[invalid=true]:border-red-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
+            className="h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm text-foreground placeholder:text-muted-foreground shadow-sm outline-none transition aria-[invalid=true]:border-destructive focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           {errors.email && (
-            <p id="email-error" className="text-xs text-red-700">{errors.email.message}</p>
+            <p id="email-error" className="text-xs text-danger-text">{errors.email.message}</p>
           )}
         </div>
 
         {/* Server error */}
         {serverError && (
-          <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-            <p className="text-sm text-red-600">{serverError}</p>
+          <div role="alert" className="rounded-lg bg-danger-subtle px-4 py-3">
+            <p className="text-sm text-danger-text">{serverError}</p>
           </div>
         )}
 
         {/* Submit */}
-        <button
-          type="submit"
-          disabled={forgot.isPending}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#CEF17B] px-4 py-2.5 text-sm font-semibold text-gray-900 shadow-sm transition hover:bg-[#BADE6F] disabled:cursor-not-allowed disabled:opacity-60"
-        >
+        <Button type="submit" size="lg" disabled={forgot.isPending} className="h-11 w-full font-semibold">
           {forgot.isPending ? (
             <>
               <Loader2 className="size-4 animate-spin" />
@@ -150,14 +147,14 @@ export default function ForgotPasswordPage() {
           ) : (
             "Send reset link"
           )}
-        </button>
+        </Button>
       </form>
 
       {/* Back */}
       <div className="mt-6 flex justify-center">
         <Link
           to="/auth/login"
-          className="inline-flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-700 transition-colors"
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="size-3.5" /> Back to sign in
         </Link>

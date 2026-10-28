@@ -13,10 +13,10 @@ const SCHEMES: Record<Scheme, { label: string; hint: string; confirm: string; po
   composition: {
     label: "Composition scheme",
     hint:
-      "For sellers registered under the composition scheme, who can't charge GST. Invoices and till bills become Bills of Supply with no GST on them, and sales to another state are refused, because the scheme doesn't allow them.",
+      "For sellers registered under the composition scheme, who can't charge GST. Invoices and point of sale bills become Bills of Supply with no GST on them, and sales to another state are refused, because the scheme doesn't allow them.",
     confirm: "Turn on the composition scheme?",
     points: [
-      "Every invoice and till bill is a Bill of Supply, with no GST charged.",
+      "Every invoice and point of sale bill is a Bill of Supply, with no GST charged.",
       "Sales to customers in another state are refused.",
       "Your GST returns are CMP-08 and GSTR-4, not GSTR-1 and GSTR-3B.",
       "Invoices already issued don't change.",

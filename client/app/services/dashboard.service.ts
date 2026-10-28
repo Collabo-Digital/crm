@@ -4,6 +4,7 @@ import type {
   DashboardOverview,
   DashboardPeriod,
   DashboardQueryParams,
+  SetupProgress,
   StatMetric,
   CurrencyAmount,
 } from "~/types/api";
@@ -101,6 +102,8 @@ function exportBlob(response: { data: Blob; headers: unknown }): Blob {
 }
 
 export const dashboardService = {
+  getSetup: () => apiClient.get<SetupProgress>("/dashboard/setup").then((response) => response.data),
+
   getOverview: (params?: DashboardQueryParams) =>
     apiClient
       .get<DashboardOverview>("/dashboard", { params })

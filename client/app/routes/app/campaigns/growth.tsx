@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Copy, Download, Link2, Loader2, MonitorSmartphone, QrCode, Trash2 } from "lucide-react";
 
 import { ChannelBadge } from "~/components/app/channel-badge";
+import { SaveBar } from "~/components/app/save-bar";
 import { SectionCard } from "~/components/app/section-card";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -20,7 +21,7 @@ import { messagingChannelWords } from "~/lib/channel-providers";
 import { platformLabel } from "~/lib/labels";
 
 export function meta() {
-  return [{ title: "Growth tools | Collabo CRM" }];
+  return [{ title: "Links & widget | Collabo CRM" }];
 }
 
 const selectClass = "h-9 w-full rounded-md border bg-background px-2 text-sm";
@@ -30,6 +31,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <Button
+      type="button"
       size="xs"
       variant="ghost"
       aria-label={label}
@@ -206,16 +208,25 @@ function WebsiteWidget({ canManage }: { canManage: boolean }) {
   const [enabled, setEnabled] = useState(false);
   const [channelId, setChannelId] = useState("");
   const [domains, setDomains] = useState("");
-  useEffect(() => {
+  const savedChannelId = data?.channelId ?? numbers[0]?.id ?? "";
+  function reset() {
     if (!data) return;
     setSettings(data.settings);
     setEnabled(data.enabled);
-    setChannelId(data.channelId ?? numbers[0]?.id ?? "");
+    setChannelId(savedChannelId);
     setDomains(data.allowedDomains.join(", "));
+  }
+  useEffect(() => {
+    reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
   if (isLoading || !data || !settings) return <Skeleton className="h-96 w-full rounded-xl" />;
+  const dirty =
+    enabled !== data.enabled ||
+    channelId !== savedChannelId ||
+    domains !== data.allowedDomains.join(", ") ||
+    JSON.stringify(settings) !== JSON.stringify(data.settings);
   const b = settings.button;
   const p = settings.popup;
   const setButton = (patch: Partial<WidgetSettings["button"]>) => setSettings({ ...settings, button: { ...b, ...patch } });
@@ -224,6 +235,14 @@ function WebsiteWidget({ canManage }: { canManage: boolean }) {
   const ro = !canManage;
 
   return (
+    <form
+      className="space-y-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!dirty || !channelId) return;
+        save.mutate({ channelId, enabled, settings, allowedDomains: domains.split(",").map((d) => d.trim()).filter(Boolean) });
+      }}
+    >
     <SectionCard
       title="Website chat button and pop-up"
       icon={<MonitorSmartphone className="size-4 text-muted-foreground" />}
@@ -329,16 +348,6 @@ function WebsiteWidget({ canManage }: { canManage: boolean }) {
           <Input id="w-domains" value={domains} disabled={ro} placeholder="shop.example.com" onChange={(e) => setDomains(e.target.value)} />
         </Field>
 
-        {canManage && (
-          <Button
-            disabled={save.isPending || !channelId}
-            onClick={() => save.mutate({ channelId, enabled, settings, allowedDomains: domains.split(",").map((d) => d.trim()).filter(Boolean) })}
-          >
-            {save.isPending && <Loader2 className="animate-spin" />}
-            Save
-          </Button>
-        )}
-
         {snippet && (
           <div className="space-y-1.5">
             <p className="text-caption font-medium">Paste this before &lt;/body&gt; on every page, or in Shopify: Online Store → Themes → Edit code → theme.liquid.</p>
@@ -350,10 +359,12 @@ function WebsiteWidget({ canManage }: { canManage: boolean }) {
         )}
       </div>
     </SectionCard>
+    {canManage && <SaveBar dirty={dirty} saving={save.isPending} invalid={!channelId} onDiscard={reset} what="the website widget" />}
+    </form>
   );
 }
 
-/** Campaigns → Growth: ways to start chats from outside the inbox. */
+/** Campaigns → Links & widget: ways to start chats from outside the inbox. */
 export default function GrowthPage() {
   const { can } = useCurrentRole();
   const canManage = can("campaigns.manage");
@@ -361,7 +372,7 @@ export default function GrowthPage() {
     <div className="space-y-6">
       <PageHeader>
         <PageHeaderContent>
-          <PageHeaderTitle>Growth tools</PageHeaderTitle>
+          <PageHeaderTitle>Links & widget</PageHeaderTitle>
           <PageHeaderDescription>Start more chats: links and QR codes for anywhere, and a WhatsApp button and sign-up pop-up for your website.</PageHeaderDescription>
         </PageHeaderContent>
       </PageHeader>

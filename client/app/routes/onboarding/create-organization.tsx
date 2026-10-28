@@ -21,6 +21,7 @@ import { useAuthStore } from "~/stores/auth.store";
 import { orgKeys } from "~/hooks/use-org-queries";
 import type { OrganizationMembership } from "~/types/api";
 import { authService } from "~/services/auth.service";
+import { OnboardingSteps } from "~/components/app/onboarding/onboarding-steps";
 
 /* ── Select field option lists ───────────────────────────── */
 
@@ -182,19 +183,7 @@ export default function CreateOrganizationPage() {
 
   return (
     <div>
-      {/* Step indicator */}
-      <div className="mb-8 flex items-center justify-center gap-2">
-        <div className="flex items-center gap-1.5">
-          <div className="size-2 rounded-full bg-gray-300" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-300" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-[#CEF17B]" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-200" />
-        </div>
-        <span className="ml-2 text-xs text-gray-400">Step 3 of 4</span>
-      </div>
+      <OnboardingSteps current={2} />
 
       {/* Heading */}
       <div className="mb-8 text-center">

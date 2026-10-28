@@ -19,6 +19,7 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
+import { readableVariables } from "./automation-variables.ts";
 import type {
   AutomationBlockType,
   AutomationChannelKey,
@@ -116,7 +117,7 @@ export const EVENTS: Record<AutomationChannelKey, Array<{ value: string; label: 
   ],
   whatsapp: [
     { value: "message", label: "Someone sends a message", hint: "Any message, or one with a keyword." },
-    { value: "cart", label: "Someone sends a cart from your catalog", hint: "Turn it into a draft order with a checkout link." },
+    { value: "cart", label: "Someone sends a cart from your catalogue", hint: "Turn it into a draft order with a checkout link." },
     { value: "ad_message", label: "Someone messages you from an ad", hint: "A click-to-WhatsApp ad: any, or the ads you name. {{ad.headline}} and {{ad.body}} are the ad’s text." },
     { value: "order_created", label: "An order is placed", hint: "In Shopify or in Collabo." },
     { value: "order_paid", label: "An order is paid", hint: "" },
@@ -128,7 +129,7 @@ export const EVENTS: Record<AutomationChannelKey, Array<{ value: string; label: 
     { value: "order_cancelled", label: "An order is cancelled", hint: "" },
     { value: "order_refunded", label: "An order is refunded", hint: "Each refund with an amount, when it is issued. The amount is in {{refund.amount}}." },
     { value: "checkout_abandoned", label: "A checkout is left unfinished", hint: "30 minutes after a Shopify checkout with a phone number goes quiet." },
-    { value: "website_signup", label: "Someone signs up on your website", hint: "From the pop-up in Campaigns → Growth, with their consent. {{signup.name}} and {{signup.page}} are filled in." },
+    { value: "website_signup", label: "Someone signs up on your website", hint: "From the pop-up in Campaigns → Links & widget, with their consent. {{signup.name}} and {{signup.page}} are filled in." },
     { value: "sheet_row", label: "A row is added to a Google sheet", hint: "A form response, or a lead your team types in. Each cell is in {{sheet.<column>}}; rows already there when you publish are left alone." },
     { value: "tag_added", label: "A contact gets a tag", hint: "A chat link’s tag too, when a chat starts from it." },
     { value: "webhook", label: "Another app calls a URL", hint: "For example your order tool, with the customer’s phone number." },
@@ -284,7 +285,7 @@ export function triggerSummary(config: AutomationStep["config"]): string {
     case "webhook":
       return "A call to this automation’s URL";
     case "cart":
-      return "A cart from the catalog";
+      return "A cart from the catalogue";
     case "checkout_abandoned":
       return "An unfinished checkout";
     case "order_created":
@@ -318,7 +319,11 @@ export function triggerSummary(config: AutomationStep["config"]): string {
 
 export function stepSummary(step: AutomationStep, templateName?: (id: string) => string | undefined): string {
   const c = step.config;
-  const clip = (text: string, n = 90) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
+  // Summaries are read, not edited: placeholders show as words.
+  const clip = (text: string, n = 90) => {
+    const readable = readableVariables(text);
+    return readable.length > n ? `${readable.slice(0, n - 1)}…` : readable;
+  };
   // A step that sends one of Collabo's recommended templates names the slot, not a template.
   const managed = c.templateSlot && !c.templateId ? `Collabo’s “${packSlotTitle(c.templateSlot)}” template` : null;
   switch (step.type) {

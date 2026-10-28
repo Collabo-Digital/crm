@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { CheckSquare, Search, X } from "lucide-react";
 
 import { CHANNEL_LABEL } from "~/components/app/channel-badge";
@@ -21,7 +22,7 @@ import { BulkActionBar } from "./bulk-action-bar";
 import { ConversationListRow } from "./conversation-list-row";
 import { ConversationListSkeleton } from "./conversation-skeletons";
 import { InboxFilterMenu } from "./inbox-filter-menu";
-import { InboxFolderMenu, folderLabel } from "./inbox-folder-menu";
+import { InboxFolderMenu, VIEWS, folderLabel } from "./inbox-folder-menu";
 
 /** A removable chip for one active narrowing filter. */
 function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
@@ -123,27 +124,44 @@ export function ConversationList({
   const assignee = members.find((m) => m.id === filters.assigneeId);
   const knownTags = [...new Set([...conversations.flatMap((c) => c.contact.tags), ...(filters.tag ? [filters.tag] : [])])].sort();
 
+  // The folder, when it isn't one of the tabs: a team, a saved view, or snoozed / closed.
+  const builtIn = !team && !savedView;
   const chips = [
+    savedView && { key: "saved", label: savedView.name, clear: { view: "all" }, replace: true },
+    team && { key: "team", label: team.name, clear: { view: "all", teamId: undefined }, replace: true },
+    !savedView && status !== "open" && { key: "status", label: status === "snoozed" ? "Snoozed" : "Closed", clear: { status: undefined } },
     filters.unread && { key: "unread", label: "Unread", clear: { unread: undefined } },
     filters.comments && { key: "comments", label: "Comments", clear: { comments: undefined } },
     channel && { key: "channel", label: channel.name || CHANNEL_LABEL[channel.platform], clear: { channelId: undefined } },
     filters.tag && { key: "tag", label: `#${filters.tag}`, clear: { tag: undefined } },
     assignee && { key: "assignee", label: assignee.name, clear: { assigneeId: undefined } },
-  ].filter(Boolean) as Array<{ key: string; label: string; clear: Partial<InboxFilters> }>;
+  ].filter(Boolean) as Array<{ key: string; label: string; clear: Partial<InboxFilters>; replace?: boolean }>;
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
-      <div className="shrink-0 space-y-2.5 border-b border-border/60 px-4 pt-4 pb-2 md:px-3 md:py-3">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground md:left-2.5 md:size-3.5" />
-          <Input
-            type="search"
-            value={filters.search ?? ""}
-            onChange={(event) => onFiltersChange({ search: event.target.value || undefined })}
-            placeholder="Search conversations"
-            aria-label="Search conversations"
-            className="h-12 rounded-2xl border-transparent bg-muted/70 pl-11 text-base shadow-none md:h-9 md:rounded-md md:border-input md:bg-transparent md:pl-8 md:text-caption"
-          />
+      <div className="shrink-0 space-y-2 border-b border-border/60 px-4 pt-3 pb-2 md:px-3 md:py-2.5">
+        <div className="flex items-center gap-1.5 max-md:[&_button]:min-h-11 max-md:[&_button]:min-w-11 max-md:[&_button]:rounded-xl">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground md:left-2.5 md:size-3.5" />
+            <Input
+              type="search"
+              value={filters.search ?? ""}
+              onChange={(event) => onFiltersChange({ search: event.target.value || undefined })}
+              placeholder="Search conversations"
+              aria-label="Search conversations"
+              className="h-11 rounded-2xl border-transparent bg-muted/70 pl-11 text-base shadow-none md:h-8 md:rounded-md md:border-input md:bg-transparent md:pl-8 md:text-caption"
+            />
+          </div>
+          <Button
+            variant={selecting ? "secondary" : "ghost"}
+            size="icon-xs"
+            onClick={onToggleSelecting}
+            aria-pressed={selecting}
+            aria-label="Select conversations"
+            title="Select"
+          >
+            <CheckSquare />
+          </Button>
         </div>
 
         {checkedIds.size > 0 ? (
@@ -158,24 +176,48 @@ export function ConversationList({
             onClear={onToggleSelecting}
           />
         ) : (
-          <div className="flex items-center justify-between gap-2 max-md:[&_button]:min-h-11 max-md:[&_button]:min-w-11 max-md:[&_button]:rounded-xl">
-            <InboxFolderMenu
-              counts={counts}
-              view={view}
-              status={status}
-              teamId={filters.teamId ?? null}
-              teams={teams}
-              savedViews={savedViews}
-              activeViewId={activeViewId}
-              label={folderLabel({ savedView, team, view, status })}
-              onView={(next) => onFiltersChange({ view: next, teamId: undefined }, true)}
-              onStatus={(next) => onFiltersChange({ status: next })}
-              onTeam={(teamId) => onFiltersChange({ view: "all", teamId }, true)}
-              onSavedView={onSavedView}
-              onSaveCurrent={onSaveView}
-              onDeleteView={onDeleteView}
-            />
-            <div className="flex shrink-0 items-center">
+          <div className="flex items-center gap-1 max-md:[&_button]:min-h-11 max-md:[&_button]:rounded-xl">
+            {/* Whose work: always in view, rather than inside the folder menu. */}
+            <div role="tablist" aria-label="Whose conversations" className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted p-0.5">
+              {VIEWS.map((item) => {
+                const active = builtIn && view === item.view;
+                const count = status === "open" ? (counts?.[item.count] as number | undefined) : undefined;
+                return (
+                  <button
+                    key={item.view}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => onFiltersChange({ view: item.view, teamId: undefined }, true)}
+                    className={cn(
+                      "flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-caption font-medium transition-colors",
+                      active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <span>{item.view === "all" ? "All" : item.view === "mine" ? "Mine" : "Unassigned"}</span>
+                    {!!count && <span className="tabular-nums text-muted-foreground">{count}</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="ml-auto flex shrink-0 items-center">
+              <InboxFolderMenu
+                compact
+                counts={counts}
+                view={view}
+                status={status}
+                teamId={filters.teamId ?? null}
+                teams={teams}
+                savedViews={savedViews}
+                activeViewId={activeViewId}
+                label={folderLabel({ savedView, team, view, status })}
+                onView={(next) => onFiltersChange({ view: next, teamId: undefined }, true)}
+                onStatus={(next) => onFiltersChange({ status: next })}
+                onTeam={(teamId) => onFiltersChange({ view: "all", teamId }, true)}
+                onSavedView={onSavedView}
+                onSaveCurrent={onSaveView}
+                onDeleteView={onDeleteView}
+              />
               <InboxFilterMenu
                 filters={filters}
                 channels={channels}
@@ -184,16 +226,6 @@ export function ConversationList({
                 showAssignee={seesOthers}
                 onChange={(patch) => onFiltersChange(patch)}
               />
-              <Button
-                variant={selecting ? "secondary" : "ghost"}
-                size="icon-xs"
-                onClick={onToggleSelecting}
-                aria-pressed={selecting}
-                aria-label="Select conversations"
-                title="Select"
-              >
-                <CheckSquare />
-              </Button>
             </div>
           </div>
         )}
@@ -201,7 +233,7 @@ export function ConversationList({
         {chips.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {chips.map((chip) => (
-              <FilterChip key={chip.key} label={chip.label} onClear={() => onFiltersChange(chip.clear)} />
+              <FilterChip key={chip.key} label={chip.label} onClear={() => onFiltersChange(chip.clear, chip.replace)} />
             ))}
           </div>
         )}
@@ -216,7 +248,11 @@ export function ConversationList({
           <ConversationListSkeleton />
         ) : conversations.length === 0 ? (
           <p className="p-6 text-center text-caption text-muted-foreground">
-            {filters.search ? `No conversations match “${filters.search}”.` : "Nothing here right now."}
+            {filters.search
+              ? `No conversations match “${filters.search}”.`
+              : channels.length === 0
+                ? <>No chats yet. <Link to="/settings/channels" className="font-medium text-brand-strong underline-offset-2 hover:underline">Connect your WhatsApp number</Link> and new chats arrive here.</>
+                : "No conversations here. New chats arrive here as customers message you."}
           </p>
         ) : (
           <div
@@ -235,6 +271,7 @@ export function ConversationList({
                 isSelected={conversation.id === selectedId}
                 isChecked={checkedIds.has(conversation.id)}
                 selecting={selecting}
+                showOwner={!builtIn || view === "all"}
                 now={now}
                 onSelect={onSelect}
                 onCheck={onCheck}

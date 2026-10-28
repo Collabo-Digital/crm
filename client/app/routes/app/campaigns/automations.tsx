@@ -140,7 +140,8 @@ export default function AutomationsPage() {
                   <p className="mt-0.5 flex items-center gap-2 truncate text-caption text-muted-foreground">
                     {a.packKey && <span className="shrink-0">Recommended by Collabo</span>}
                     <ChannelBadge platform={a.channel?.platform ?? a.platform} name={a.channel?.name} size={11} />
-                    {a.version > 0 && <span>v{a.version}</span>}
+                    {/* Only once it has been changed and republished; "v1" means nothing to a store owner. */}
+                    {a.version > 1 && <span>Version {a.version}</span>}
                   </p>
                   {a.packNote && <p className="mt-0.5 text-caption text-muted-foreground">{a.packNote}</p>}
                 </div>

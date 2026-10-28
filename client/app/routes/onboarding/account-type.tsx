@@ -4,13 +4,14 @@ import { User, Users, ArrowRight, Loader2, Sparkles } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { useAuthStore } from "~/stores/auth.store";
 import { useCreatePersonalMutation } from "~/hooks/use-org-mutations";
+import { OnboardingSteps } from "~/components/app/onboarding/onboarding-steps";
 
 export function meta() {
   return [{ title: "Choose Account Type | Collabo CRM" }];
 }
 
 /**
- * Onboarding step 2: account type selection.
+ * Onboarding step 1 (the plan step is hidden): account type selection.
  * Users choose between a personal (solo) workspace or a team organization.
  */
 export default function AccountTypePage() {
@@ -37,30 +38,18 @@ export default function AccountTypePage() {
 
   return (
     <div>
-      {/* Step indicator */}
-      <div className="mb-8 flex items-center justify-center gap-2">
-        <div className="flex items-center gap-1.5">
-          <div className="size-2 rounded-full bg-gray-300" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-[#CEF17B]" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-200" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-200" />
-        </div>
-        <span className="ml-2 text-xs text-gray-400">Step 2 of 4</span>
-      </div>
+      <OnboardingSteps current={1} />
 
       {/* Heading */}
       <div className="mb-8 text-center">
         <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
           <Sparkles className="size-5 text-[#084734]" />
         </div>
-        <h1 className="text-2xl font-bold text-gray-900">
+        <h1 className="text-2xl font-bold text-foreground">
           Welcome, {firstName}!
         </h1>
-        <p className="mt-1.5 text-sm text-gray-500">
-          How would you like to use Collabo CRM?
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          Who will use Collabo?
         </p>
       </div>
 
@@ -92,9 +81,9 @@ export default function AccountTypePage() {
           </div>
 
           <div className="space-y-1.5">
-            <h3 className="text-base font-bold text-gray-900">Just me</h3>
-            <p className="text-sm text-gray-500 leading-relaxed">
-              Solo workspace for individual use. Perfect for freelancers and solopreneurs.
+            <h3 className="text-base font-bold text-foreground">Just me</h3>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              For running your store on your own. You can invite a team any time.
             </p>
           </div>
 
@@ -120,19 +109,19 @@ export default function AccountTypePage() {
           </div>
 
           <div className="space-y-1.5">
-            <h3 className="text-base font-bold text-gray-900">My team</h3>
-            <p className="text-sm text-gray-500 leading-relaxed">
-              Team workspace with collaboration features. Invite members and manage roles.
+            <h3 className="text-base font-bold text-foreground">My team</h3>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              For a store with staff. Invite packers, agents and managers, and choose what each can do.
             </p>
           </div>
 
           <div className="mt-auto inline-flex items-center gap-1.5 rounded-full bg-[#CEF17B]/20 px-3 py-1 text-xs font-semibold text-[#084734] transition group-hover:bg-[#CEF17B]/40">
-            Create organization <ArrowRight className="size-3.5" />
+            Set up my team <ArrowRight className="size-3.5" />
           </div>
         </button>
       </div>
 
-      <p className="mt-6 text-center text-xs text-gray-400">
+      <p className="mt-6 text-center text-xs text-muted-foreground">
         You can always create more workspaces later from your settings.
       </p>
     </div>

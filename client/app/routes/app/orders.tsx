@@ -245,67 +245,51 @@ export default function OrdersPage() {
         <PageHeaderContent>
           <PageHeaderTitle>Orders</PageHeaderTitle>
           <PageHeaderDescription>
-            Track sales, payments, and fulfillment.
+            Track sales, payments and fulfilment.
           </PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions className="w-full justify-end md:w-auto">
-          {/* "Download Report" is the dashboard's order CSV for the chosen
-              date range. "Export JSON" is the same orders as a JSON file via
-              the orders export route. Both take the date range only — the
-              search box is deliberately not applied, so the request does not
-              claim a filter the file lacks.
+          {/* "Download report" is the dashboard's order CSV for the chosen
+              date range; the JSON file is the same orders for developers,
+              via the orders export route, so it waits in the menu. Both
+              take the date range only — the search box is deliberately not
+              applied, so the request does not claim a filter the file lacks.
               Both lock while either runs; the clicked one shows progress
               until its file arrives or fails. */}
           {!isVendor && (
-            <div className="hidden items-center gap-2 md:flex">
-              {/* Outline: Create Order is this page's one primary action. */}
-              <Button
-                variant="outline"
-                size="action"
-                disabled={activeDownload !== null}
-                aria-busy={activeDownload === "report"}
-                onClick={downloadReport}
-              >
-                {activeDownload === "report" ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Download className="size-3.5" />
-                )}
-                {activeDownload === "report" ? "Preparing…" : "Download Report"}
-              </Button>
-              <Button
-                variant="outline"
-                size="action"
-                disabled={activeDownload !== null}
-                aria-busy={activeDownload === "json"}
-                onClick={exportOrders}
-              >
-                {activeDownload === "json" ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Upload className="size-3.5" />
-                )}
-                {activeDownload === "json" ? "Exporting…" : "Export JSON"}
-              </Button>
-            </div>
+            <Button
+              variant="outline"
+              size="action"
+              className="hidden md:inline-flex"
+              disabled={activeDownload !== null}
+              aria-busy={activeDownload === "report"}
+              onClick={downloadReport}
+            >
+              {activeDownload === "report" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Download className="size-3.5" />
+              )}
+              {activeDownload === "report" ? "Preparing…" : "Download report"}
+            </Button>
           )}
           {!isVendor && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="mr-auto size-11 rounded-xl md:hidden" aria-label="More order actions">
+                <Button variant="outline" className="mr-auto size-11 rounded-xl md:mr-0 md:size-9 md:rounded-full" aria-label="More order actions">
                   <MoreHorizontal className="size-5" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuItem onSelect={downloadReport} disabled={activeDownload !== null}><Download /> Download report</DropdownMenuItem>
-                <DropdownMenuItem onSelect={exportOrders} disabled={activeDownload !== null}><Upload /> Export JSON</DropdownMenuItem>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem className="md:hidden" onSelect={downloadReport} disabled={activeDownload !== null}><Download /> Download report</DropdownMenuItem>
+                <DropdownMenuItem onSelect={exportOrders} disabled={activeDownload !== null}><Upload /> {activeDownload === "json" ? "Preparing…" : "Raw data for developers (JSON)"}</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
           <Button asChild variant="brand" size="action" className="h-11 rounded-xl px-5 md:h-8 md:rounded-lg md:px-3">
             <Link to="/orders/new">
               <Plus className="size-3.5" />
-              Create Order
+              Create order
             </Link>
           </Button>
         </PageHeaderActions>

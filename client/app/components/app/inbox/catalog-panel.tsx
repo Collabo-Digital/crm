@@ -139,7 +139,7 @@ export function CatalogPanel({
           <span className="block truncate text-micro text-muted-foreground">
             {formatPrice(v)}
             {!v.inStock && <span className="text-warning"> · out of stock</span>}
-            {asCards && !v.inCatalog && " · not in the catalog, goes as a link"}
+            {asCards && !v.inCatalog && " · not in the catalogue, goes as a link"}
           </span>
         </span>
         {actions(drop, name)}
@@ -177,7 +177,7 @@ export function CatalogPanel({
         <p className="text-micro text-muted-foreground">
           {blockedReason ??
             (data
-              ? `${asCards ? "Products go as WhatsApp product cards from your catalog." : data.catalog ? "This number shares the WhatsApp Business app, so products go as links." : "Products go as a message with each product’s link."}${canDrag ? " Drag one into the chat to add it to your reply." : ""}`
+              ? `${asCards ? "Products go as WhatsApp product cards from your catalogue." : data.catalog ? "This number shares the WhatsApp Business app, so products go as links." : "Products go as a message with each product’s link."}${canDrag ? " Drag one into the chat to add it to your reply." : ""}`
               : " ")}
         </p>
       </div>

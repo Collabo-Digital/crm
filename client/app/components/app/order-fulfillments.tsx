@@ -213,7 +213,7 @@ function FulfillmentRow({
             onClick={onCancel}
             disabled={busy}
             className="rounded-md p-1.5 text-muted-foreground hover:bg-red-50 dark:hover:bg-red-900/30 hover:text-red-600 disabled:opacity-50"
-            title="Cancel fulfillment"
+            title="Cancel fulfilment"
           >
             <XCircle className="size-3.5" />
           </button>
@@ -391,7 +391,7 @@ export function FulfillDialog({
         {error && (
           <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 dark:bg-red-900/20 px-3 py-2 text-xs text-red-700 dark:text-red-300">
             <AlertCircle className="size-4 shrink-0" />
-            <span>Couldn't load fulfillable items. Try closing and re-opening.</span>
+            <span>Couldn't load the items to fulfil. Try closing and re-opening.</span>
           </div>
         )}
 
@@ -665,14 +665,14 @@ function CancelFulfillmentDialog({
   }
 
   return (
-    <ModalShell title="Cancel fulfillment?" onClose={onClose}>
+    <ModalShell title="Cancel fulfilment?" onClose={onClose}>
       <p className="px-6 py-4 text-xs text-muted-foreground">
         This will mark the fulfillment as cancelled and re-open its line items so
         they can be fulfilled again. For Shopify orders the cancellation also flows
         to Shopify.
       </p>
       <DialogFooter
-        confirmLabel="Cancel fulfillment"
+        confirmLabel="Cancel fulfilment"
         confirmTone="destructive"
         onConfirm={handleConfirm}
         onClose={onClose}

@@ -17,6 +17,7 @@ import { AVAILABLE_SECTIONS, isSectionScopedRole } from "~/lib/sections";
 import { accessGrants, DEFAULT_CAPABILITIES } from "~/components/app/settings/section-access-picker";
 import { takeAfterOnboarding } from "~/lib/return-path";
 import type { UserRole } from "~/types/api";
+import { OnboardingSteps } from "~/components/app/onboarding/onboarding-steps";
 
 export function meta() {
   return [{ title: "Invite Your Team | Collabo CRM" }];
@@ -156,19 +157,7 @@ export default function InviteTeamPage() {
 
   return (
     <div>
-      {/* Step indicator */}
-      <div className="mb-8 flex items-center justify-center gap-2">
-        <div className="flex items-center gap-1.5">
-          <div className="size-2 rounded-full bg-gray-300" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-300" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-300" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-[#CEF17B]" />
-        </div>
-        <span className="ml-2 text-xs text-gray-400">Step 4 of 4</span>
-      </div>
+      <OnboardingSteps current={3} />
 
       {/* Heading */}
       <div className="mb-8 text-center">

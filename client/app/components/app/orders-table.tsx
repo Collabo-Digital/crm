@@ -305,7 +305,7 @@ export function useOrderColumns({
         : []),
       {
         key: "fulfillment",
-        label: "Fulfillment",
+        label: "Fulfilment",
         width: 120,
         cell: (order) => (
           <StatusPill className={FULFILLMENT_CLASSES[order.fulfillmentStatus]}>

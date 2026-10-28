@@ -115,7 +115,6 @@ export default function CustomerDetailPage() {
   const isActive = customer.state !== "DISABLED";
   // No numeric customer number exists — ids are cuids. Shopify's own id is the
   // closest thing to the mockup's "#56578"; the cuid tail is the fallback.
-  const displayId = customer.externalId || customer.id.slice(-8);
 
   // A linked WhatsApp chat opens as it is (latest first), even when the
   // customer record has no phone; otherwise the inbox starts one on the
@@ -188,9 +187,12 @@ export default function CustomerDetailPage() {
                     {VIP_LABELS[customer.vipLevel]}
                   </span>
                 </div>
-                <p className="mt-0.5 text-caption text-muted-foreground">
-                  Customer ID {displayId}
-                </p>
+                {/* Shopify's id helps find them there; Collabo's own id is for developers. */}
+                {customer.externalId && (
+                  <p className="mt-0.5 text-caption text-muted-foreground">
+                    Shopify customer {customer.externalId}
+                  </p>
+                )}
               </div>
             </div>
 
