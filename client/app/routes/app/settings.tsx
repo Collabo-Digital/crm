@@ -1618,7 +1618,7 @@ export default function SettingsPage() {
       {!tab && <div className="space-y-5 md:hidden">
         <div className="flex items-center gap-4 rounded-3xl bg-brand/35 p-5"><span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-card"><Building2 className="size-6 text-brand-strong" strokeWidth={1.7} /></span><div className="min-w-0"><p className="text-xs text-muted-foreground">Your workspace</p><p className="mt-1 truncate text-base font-semibold">{org?.name || "Workspace settings"}</p></div></div>
         {TAB_GROUPS.map((group) => {
-          const entries = visibleTabs.filter((item) => group.ids.includes(item.id));
+          const entries = group.ids.flatMap((id) => visibleTabs.filter((item) => item.id === id));
           if (!entries.length) return null;
           return <section key={group.label}><h2 className="mb-2.5 px-1 text-xs font-medium text-muted-foreground">{group.label}</h2><div className="divide-y divide-border/60 overflow-hidden rounded-3xl bg-card px-4">{entries.map(({ id, label, icon: Icon }) => <Link key={id} to={`/settings/${id}`} className="flex min-h-16 items-center gap-3 py-3"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-surface-sunken"><Icon className="size-[18px] text-brand-strong" strokeWidth={1.7} /></span><span className="text-sm font-medium">{label}</span><ChevronRight className="ml-auto size-4 text-muted-foreground" /></Link>)}</div></section>;
         })}
@@ -1629,7 +1629,7 @@ export default function SettingsPage() {
         <aside className="hidden w-52 shrink-0 md:block">
           <nav aria-label="Settings" className="space-y-2 rounded-xl bg-card p-2 shadow-sm ring-1 ring-border">
             {TAB_GROUPS.map((group) => {
-              const entries = visibleTabs.filter((item) => group.ids.includes(item.id));
+              const entries = group.ids.flatMap((id) => visibleTabs.filter((item) => item.id === id));
               if (!entries.length) return null;
               return (
                 <div key={group.label}>
