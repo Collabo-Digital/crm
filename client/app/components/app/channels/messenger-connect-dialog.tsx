@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, MessagesSquare } from "lucide-react";
 import {
   Dialog,
@@ -31,6 +31,12 @@ export function MessengerConnectDialog({
   const [launching, setLaunching] = useState(false);
   const startInstall = useMessengerInstallMutation();
   const completeInstall = useCompleteMessengerInstallMutation();
+
+  // Meta's SDK loads only here, as the dialog opens: a popup opens only close
+  // to the click, so the click should not also wait for the download.
+  useEffect(() => {
+    if (open) void ensureMetaSdk();
+  }, [open]);
 
   async function handleConnect() {
     setLaunching(true);

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BarChart3, Loader2, Megaphone, Unlink } from "lucide-react";
 
 import { ChannelBadge } from "~/components/app/channel-badge";
@@ -44,6 +44,13 @@ function AdAccountCard({ report, canManage }: { report: AdsReport; canManage: bo
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const account = report.account;
+
+  // Meta's SDK loads only where it is used: here, once connecting is offered,
+  // so the click does not also wait for the download before the popup.
+  const offerConnect = canManage && !account.connected;
+  useEffect(() => {
+    if (offerConnect) void ensureMetaSdk();
+  }, [offerConnect]);
 
   const connect = async () => {
     setError(null);
