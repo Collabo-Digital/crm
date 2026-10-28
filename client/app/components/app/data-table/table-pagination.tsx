@@ -56,7 +56,7 @@ export function TablePagination({
                 type="button"
                 aria-haspopup="listbox"
                 aria-label="Rows per page"
-                className="inline-flex h-11 items-center gap-1.5 rounded-xl bg-card pl-3 pr-2.5 text-label font-medium tabular-nums text-foreground ring-1 ring-border transition-colors hover:bg-muted aria-expanded:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 md:h-7 md:rounded-md md:pl-2.5 md:pr-2"
+                className="inline-flex h-11 items-center gap-1.5 rounded-xl bg-card pl-3 pr-2.5 text-label font-medium tabular-nums text-foreground ring-1 ring-border transition-colors hover:bg-muted aria-expanded:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:h-7 md:rounded-md md:pl-2.5 md:pr-2"
               >
                 {limit}
                 <span className="font-normal text-muted-foreground md:hidden">/ page</span>
@@ -123,7 +123,7 @@ function PageButton({ className, ...props }: React.ComponentProps<"button">) {
     <button
       type="button"
       className={cn(
-        "flex h-11 min-w-11 items-center justify-center rounded-xl bg-muted/60 text-label text-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 md:h-7 md:min-w-7 md:rounded-md md:bg-transparent",
+        "flex h-11 min-w-11 items-center justify-center rounded-xl bg-muted/60 text-label text-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:h-7 md:min-w-7 md:rounded-md md:bg-transparent",
         className,
       )}
       {...props}
