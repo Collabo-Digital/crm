@@ -63,7 +63,7 @@ export class TemplatesController {
     @Roles(...CAMPAIGN_EDITORS)
     @RequirePermissions('templates.manage')
     write(@CurrentUser() user: SessionPayload, @Body() dto: WriteTemplateDto) {
-        return this.writer.write(user.orgId!, dto);
+        return this.writer.write(user.orgId!, user.sub, dto);
     }
 
     @Post('templates/sync')
