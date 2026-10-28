@@ -32,6 +32,7 @@ import {
   Target,
   Store,
   PackageCheck,
+  ChevronLeft,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
@@ -56,6 +57,8 @@ import { useCurrentRole } from "~/hooks/use-current-role";
 import { useInboxCounts } from "~/hooks/use-inbox-queries";
 import { toast } from "sonner";
 import { roleLabel } from "~/lib/labels";
+import { LIST_QUERY_KEYS, parentScreen, withQuery, type Screen } from "~/lib/app-bar";
+import { isString, readSessionState } from "~/hooks/use-session-state";
 
 type NavChild = { label: string; href: string; icon: typeof LayoutDashboard };
 type NavItem = {
@@ -127,6 +130,13 @@ const NAV_LINKS: NavItem[] = [
   { label: "Analytics", href: "/analytics", icon: BarChart3, children: ANALYTICS_CHILDREN },
 ];
 
+/** Every screen a phone's back arrow can return to: the sections, their tabs and Settings. */
+const SCREENS: Screen[] = [
+  ...NAV_LINKS,
+  ...NAV_LINKS.flatMap((item) => item.children ?? []).filter((child) => !NAV_LINKS.some((item) => item.href === child.href)),
+  { href: "/settings", label: "Settings" },
+].map(({ href, label }) => ({ href, label }));
+
 /**
  * The nav entry owning `pathname`, longest matching href first — so
  * /orders/drafts/<id> selects "Drafts" rather than "All orders". Matching on a
@@ -186,6 +196,12 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
     location.pathname === "/dashboard"
       ? null
       : (activeTop?.label ?? SCREEN_TITLES[location.pathname.split("/")[1] ?? ""] ?? null);
+  // A page under another screen (an order, a new draft, a settings tab) gets a
+  // back arrow to it on a phone, in place of the title and section tabs. A
+  // list comes back as it was left: its filters, search and page.
+  const parent = parentScreen(location.pathname, SCREENS);
+  const queryKey = parent ? LIST_QUERY_KEYS[parent.href] : undefined;
+  const backTo = parent && withQuery(parent.href, queryKey ? readSessionState(queryKey, "", isString) : "");
   // On a phone the section tabs scroll sideways; keep the current one in view.
   const sectionNavRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -231,7 +247,16 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
         <Link to={landingPath} className={cn("shrink-0 items-center", mobileTitle ? "hidden md:flex" : "flex")}>
           <BrandLogo className="h-6 md:h-7" />
         </Link>
-        {mobileTitle && (
+        {parent && backTo ? (
+          <Link
+            to={backTo}
+            aria-label={`Back to ${parent.label}`}
+            className="-ml-2.5 flex min-h-11 min-w-0 items-center gap-0.5 rounded-full pr-3 text-foreground md:hidden"
+          >
+            <ChevronLeft className="size-6 shrink-0" />
+            <span className="truncate font-heading text-[19px] font-semibold tracking-tight">{parent.label}</span>
+          </Link>
+        ) : mobileTitle && (
           <span className="min-w-0 truncate font-heading text-[22px] font-semibold tracking-tight text-foreground md:hidden">{mobileTitle}</span>
         )}
 
@@ -406,7 +431,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
       {/* ── Section sub-nav — only for a section that has children ─── */}
       {sectionChildren && (
         <LayoutGroup id="section-nav">
-          <div ref={sectionNavRef} className="mobile-section-nav mx-auto max-w-screen-xl overflow-x-auto px-1 max-md:border-b max-md:border-border/70 md:mt-3 md:px-6 md:pb-3">
+          <div ref={sectionNavRef} className={cn("mobile-section-nav mx-auto max-w-screen-xl overflow-x-auto px-1 max-md:border-b max-md:border-border/70 md:mt-3 md:px-6 md:pb-3", parent && "max-md:hidden")}>
             <nav
               aria-label={`${activeTop?.label} section`}
               className="inline-flex min-w-max items-center gap-0.5 md:rounded-full md:bg-white md:px-1.5 md:py-1 md:shadow-sm md:ring-1 md:ring-black/[0.06] md:dark:bg-gray-900 md:dark:ring-gray-700"

@@ -10,7 +10,7 @@ import {
   Building2, Lock, Bell, Palette, Users, Shield, Smartphone,
   Check, ChevronRight, AlertTriangle, Loader2, Plus, X, Mail, Trash2,
   Sun, Moon, Monitor, Receipt, Star, MapPin, Package, ShoppingBag, Layers, MessageSquare,
-  Pencil, Store, ArrowLeft, ReceiptText,
+  Pencil, Store, ReceiptText,
 } from "lucide-react";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -1662,9 +1662,8 @@ export default function SettingsPage() {
   return (
     <div className="settings-page space-y-6">
       <div className="space-y-2">
-        {tab && <Link to="/settings" className="-ml-2 mb-3 inline-flex min-h-11 items-center gap-2 rounded-full px-2 text-sm text-muted-foreground md:hidden"><ArrowLeft className="size-4" />Settings</Link>}
         <h1 className="text-[27px] font-semibold tracking-tight text-foreground md:text-xl md:font-bold"><span className="md:hidden">{tab ? visibleTabs.find((item) => item.id === activeTab)?.label ?? "Settings" : "Settings"}</span><span className="hidden md:inline">Settings</span></h1>
-        <p className="text-sm leading-relaxed text-muted-foreground">Make Collabo work your way.</p>
+        <p className={cn("text-sm leading-relaxed text-muted-foreground", tab && "max-md:hidden")}>Make Collabo work your way.</p>
       </div>
 
       {!tab && <div className="space-y-5 md:hidden">

@@ -294,17 +294,17 @@ function OwnerOrderDetail({ id }: { id: string }) {
     <div className="space-y-5">
       {/* Breadcrumb + prev/next rail */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <nav aria-label="Breadcrumb" className="flex w-full items-center gap-1.5 text-caption sm:w-auto">
+        {/* On a phone the app bar's back arrow does this job. */}
+        <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption max-md:hidden">
           <Link to={ordersPath} className="text-muted-foreground hover:text-foreground">
             Orders
           </Link>
           <ChevronRight className="size-3 text-muted-foreground" />
           <span className="font-medium text-foreground">{order.name}</span>
-          {adjacent && adjacent.total > 0 && <span className="ml-auto text-muted-foreground sm:hidden">{adjacent.position} of {adjacent.total}</span>}
         </nav>
-        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+        <div className="flex w-full flex-wrap items-center gap-2 md:w-auto">
           {adjacent && adjacent.total > 0 && (
-            <span className="hidden text-caption text-muted-foreground sm:inline">
+            <span className="text-caption text-muted-foreground max-md:mr-auto">
               {adjacent.position} of {adjacent.total}
             </span>
           )}

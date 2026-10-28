@@ -253,7 +253,6 @@ const SMALL_TEXT_ALLOWANCE: Record<string, number> = {
   "components/billing/plan-cards.tsx": 4,
   "routes/app/admin/user-detail.tsx": 2,
   "routes/app/orders/$id.tsx": 1,
-  "routes/app/orders/new.tsx": 1,
   "routes/app/products/$id.tsx": 18,
   "routes/app/products/inventory.tsx": 5,
   "routes/app/products/inventory/warehouses.tsx": 6,
