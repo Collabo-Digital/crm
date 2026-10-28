@@ -82,7 +82,15 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
             // Redis down — fall through to DB
         }
 
-        // Cache miss — load from DB
+        // Cache miss — load from DB. The revision is read first, so what is
+        // loaded is cached only if no role change or removal evicted the
+        // session meanwhile (see RedisService.setSession).
+        let revision: string | null = null;
+        try {
+            revision = await this.redis.sessionRevision(payload.sub);
+        } catch {
+            // Redis down — answer from the DB without caching
+        }
         const user = await this.prisma.user.findFirst({
             where: { id: payload.sub, deletedAt: null },
             include: {
@@ -125,7 +133,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         };
 
         // Cache for subsequent requests (ignore errors)
-        this.redis.setSession(user.id, session as unknown as Record<string, unknown>).catch(() => {});
+        if (revision !== null) {
+            this.redis.setSession(user.id, session as unknown as Record<string, unknown>, revision).catch(() => {});
+        }
 
         return { ...session, ...flags };
     }

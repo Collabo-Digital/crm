@@ -1,9 +1,18 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomBytes } from 'crypto';
 import Redis from 'ioredis';
 import { REDIS_PREFIX, REDIS_KEYS, REDIS_TTL, LOGIN_RATE_LIMIT, EMAIL_SEND_LIMIT, VERIFY_CODE_LIMIT } from './redis.constants';
 
 const REFRESH_ROTATION_PENDING = 'pending';
+
+/** KEYS[1] session, KEYS[2] its revision; ARGV[1] revision read first, ARGV[2] TTL (s), ARGV[3] session. */
+const SET_SESSION_IF_CURRENT_LUA = `
+if (redis.call('GET', KEYS[2]) or '') ~= ARGV[1] then
+    return 0
+end
+redis.call('SET', KEYS[1], ARGV[3], 'EX', ARGV[2])
+return 1`;
 
 /** KEYS[1] refresh token, KEYS[2] rotation marker, ARGV[1] marker TTL (s). */
 const CONSUME_REFRESH_TOKEN_LUA = `
@@ -98,13 +107,31 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
 
     // ─── SESSION CACHE ───
+    // A cached session is built from database reads, so a write can carry
+    // authorization that a change committed in the meantime revoked: a
+    // refill that read a member's role just before their removal committed,
+    // but wrote just after the removal evicted the cache, served that role
+    // again for the full TTL. Every eviction therefore replaces the user's
+    // session revision, and a write lands only if the revision is still the
+    // one its writer read before going to the database.
 
-    async setSession(userId: string, data: Record<string, unknown>): Promise<void> {
-        await this.client.setex(
+    /** Read BEFORE loading what will be cached, and pass to `setSession`. */
+    async sessionRevision(userId: string): Promise<string> {
+        return (await this.client.get(this.key(REDIS_KEYS.SESSION_REVISION, userId))) ?? '';
+    }
+
+    /** Cache the session unless it was evicted since `revision` was read. Returns whether it was written. */
+    async setSession(userId: string, data: Record<string, unknown>, revision: string): Promise<boolean> {
+        const written = await this.client.eval(
+            SET_SESSION_IF_CURRENT_LUA,
+            2,
             this.key(REDIS_KEYS.SESSION, userId),
+            this.key(REDIS_KEYS.SESSION_REVISION, userId),
+            revision,
             REDIS_TTL.SESSION,
             JSON.stringify(data),
         );
+        return written === 1;
     }
 
     async getSession<T>(userId: string): Promise<T | null> {
@@ -113,7 +140,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
 
     async deleteSession(userId: string): Promise<void> {
-        await this.client.del(this.key(REDIS_KEYS.SESSION, userId));
+        await this.client
+            .multi()
+            .set(this.key(REDIS_KEYS.SESSION_REVISION, userId), randomBytes(8).toString('hex'), 'EX', REDIS_TTL.SESSION_REVISION)
+            .del(this.key(REDIS_KEYS.SESSION, userId))
+            .exec();
     }
 
     // ─── LOGIN RATE LIMITING ───

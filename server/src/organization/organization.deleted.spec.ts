@@ -177,6 +177,7 @@ describe('A deleted workspace is closed to its members', () => {
       const redis = {
         isAuthSessionActive: jest.fn().mockResolvedValue(true),
         getSession: jest.fn().mockResolvedValue(null),
+        sessionRevision: jest.fn().mockResolvedValue(''),
       };
       const strategy = new JwtStrategy({ get: () => 'secret' } as never, redis as never, prisma as never);
 
@@ -209,6 +210,7 @@ describe('A deleted workspace is closed to its members', () => {
       const redis = {
         consumeRefreshToken: jest.fn().mockResolvedValue({ userId: 'u1', orgId: 'org-a', sid: 's1' }),
         clearRefreshRotation: jest.fn().mockResolvedValue(undefined),
+        sessionRevision: jest.fn().mockResolvedValue(''),
       };
       const service = new AuthService(
         prisma as never,

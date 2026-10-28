@@ -36,7 +36,8 @@ describe('AuthService.rotateRefreshToken — organization is preserved', () => {
       clearRefreshRotation: jest.fn().mockResolvedValue(undefined),
       setRefreshToken: jest.fn().mockResolvedValue(undefined),
       trackUserToken: jest.fn().mockResolvedValue(undefined),
-      setSession: jest.fn().mockResolvedValue(undefined),
+      sessionRevision: jest.fn().mockResolvedValue('rev-1'),
+      setSession: jest.fn().mockResolvedValue(true),
       setAuthSession: jest.fn().mockResolvedValue(undefined),
       deleteAuthSession: jest.fn().mockResolvedValue(undefined),
     };
@@ -77,6 +78,7 @@ describe('AuthService.rotateRefreshToken — organization is preserved', () => {
           expect.objectContaining({ orgId: 'org-b' }),
         ]),
       }),
+      'rev-1',
     );
   });
 

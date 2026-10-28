@@ -74,7 +74,8 @@ describe('AuthService — accounts', () => {
       setAuthSession: jest.fn().mockResolvedValue(undefined),
       setRefreshToken: jest.fn().mockResolvedValue(undefined),
       trackUserToken: jest.fn().mockResolvedValue(undefined),
-      setSession: jest.fn().mockResolvedValue(undefined),
+      sessionRevision: jest.fn().mockResolvedValue('rev-1'),
+      setSession: jest.fn().mockResolvedValue(true),
       deleteSession: jest.fn().mockResolvedValue(undefined),
     };
     const service = new AuthService(

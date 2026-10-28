@@ -194,6 +194,8 @@ export class AuthService {
     }
 
     const userId = await this.userService.findIdByEmail(dto.email);
+    // Read before the memberships, as for every session write (RedisService.setSession).
+    const revision = userId ? await this.redis.sessionRevision(userId) : '';
     const user = userId
       ? await this.prisma.user.findUnique({
           where: { id: userId },
@@ -259,6 +261,7 @@ export class AuthService {
     await this.redis.setSession(
       user.id,
       buildSessionPayload(user, membership, user.memberships, { isSuperAdmin: user.isSuperAdmin }),
+      revision,
     );
 
     return {
@@ -288,6 +291,7 @@ export class AuthService {
 
   async switchOrg(userId: string, orgId: string, sid?: string, impersonation?: ImpersonationOrigin) {
     const impersonatedBy = impersonation?.impersonatedBy;
+    const revision = await this.redis.sessionRevision(userId);
     // Verify user is an active member of this org
     const membership = await this.prisma.organizationMember.findUnique({
       where: { organizationId_userId: { organizationId: orgId, userId } },
@@ -332,6 +336,7 @@ export class AuthService {
         isSuperAdmin: impersonatedBy ? false : user.isSuperAdmin,
         impersonatedBy,
       }),
+      revision,
     );
 
     return {
@@ -733,6 +738,7 @@ export class AuthService {
     userAgent?: string,
     ipAddress?: string,
   ): Promise<TokenPair> {
+    const revision = await this.redis.sessionRevision(tokenData.userId);
     const user = await this.prisma.user.findUnique({
       where: { id: tokenData.userId },
       include: { memberships: { where: ACTIVE_MEMBERSHIP, orderBy: { createdAt: 'asc' } } },
@@ -814,6 +820,7 @@ export class AuthService {
     await this.redis.setSession(
       user.id,
       buildSessionPayload(user, membership, user.memberships, { isSuperAdmin, impersonatedBy }),
+      revision,
     );
 
     return { accessToken, refreshToken };
@@ -892,6 +899,7 @@ export class AuthService {
       throw new BadRequestException('Cannot impersonate yourself');
     }
 
+    const revision = await this.redis.sessionRevision(targetUserId);
     const target = await this.prisma.user.findUnique({
       where: { id: targetUserId },
       include: { memberships: { where: ACTIVE_MEMBERSHIP, include: { organization: true } } },
@@ -923,6 +931,7 @@ export class AuthService {
         isSuperAdmin: false,
         impersonatedBy: superAdminId,
       }),
+      revision,
     );
 
     // Write audit row (best-effort — don't block token issue on audit failures).
@@ -981,6 +990,7 @@ export class AuthService {
     impersonatedByUserId: string,
     impersonation?: { sid?: string; targetUserId: string; impersonatorSid?: string },
   ) {
+    const revision = await this.redis.sessionRevision(impersonatedByUserId);
     const superAdmin = await this.prisma.user.findUnique({
       where: { id: impersonatedByUserId },
       include: { memberships: { where: ACTIVE_MEMBERSHIP, include: { organization: true } } },
@@ -1031,6 +1041,7 @@ export class AuthService {
     await this.redis.setSession(
       superAdmin.id,
       buildSessionPayload(superAdmin, membership, superAdmin.memberships, { isSuperAdmin: true }),
+      revision,
     );
 
     return {

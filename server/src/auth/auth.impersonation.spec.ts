@@ -56,7 +56,8 @@ describe('AuthService — impersonation survives refresh and workspace switch', 
       clearRefreshRotation: jest.fn().mockResolvedValue(undefined),
       setRefreshToken: jest.fn().mockResolvedValue(undefined),
       trackUserToken: jest.fn().mockResolvedValue(undefined),
-      setSession: jest.fn().mockResolvedValue(undefined),
+      sessionRevision: jest.fn().mockResolvedValue('rev-1'),
+      setSession: jest.fn().mockResolvedValue(true),
       setAuthSession: jest.fn().mockResolvedValue(undefined),
       touchAuthSession: jest.fn().mockResolvedValue(true),
       isAuthSessionActive: jest.fn().mockResolvedValue(opts.adminSessionLive ?? true),
@@ -109,7 +110,7 @@ describe('AuthService — impersonation survives refresh and workspace switch', 
       expect.any(String),
       expect.objectContaining({ impersonatedBy: ADMIN, impersonatorSid: 'admin-sid', sid: 's1' }),
     );
-    expect(redis.setSession).toHaveBeenCalledWith('u1', expect.objectContaining({ impersonatedBy: ADMIN }));
+    expect(redis.setSession).toHaveBeenCalledWith('u1', expect.objectContaining({ impersonatedBy: ADMIN }), 'rev-1');
   });
 
   it('ends the session at refresh once the admin is off the super-admin allowlist', async () => {
@@ -201,6 +202,6 @@ describe('AuthService — impersonation survives refresh and workspace switch', 
       expect.any(String),
       expect.objectContaining({ impersonatedBy: ADMIN, impersonatorSid: 'admin-sid' }),
     );
-    expect(redis.setSession).toHaveBeenCalledWith('u1', expect.objectContaining({ impersonatedBy: ADMIN }));
+    expect(redis.setSession).toHaveBeenCalledWith('u1', expect.objectContaining({ impersonatedBy: ADMIN }), 'rev-1');
   });
 });

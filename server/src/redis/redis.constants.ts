@@ -2,6 +2,8 @@ export const REDIS_PREFIX = 'crm:';
 
 export const REDIS_KEYS = {
     SESSION: 'session:',
+    /// Replaced whenever a user's cached session is evicted (see RedisService.setSession).
+    SESSION_REVISION: 'session_rev:',
     LOGIN_ATTEMPTS: 'login_attempts:',
     /// Tries at an account's current email verification code.
     VERIFY_ATTEMPTS: 'verify_attempts:',
@@ -34,6 +36,7 @@ export const REDIS_KEYS = {
 
 export const REDIS_TTL = {
     SESSION: 900,           // 15 minutes (matches access token)
+    SESSION_REVISION: 86400, // outlives any session write in flight
     LOGIN_ATTEMPTS: 900,    // 15 minute window
     REFRESH_TOKEN: 604800,  // 7 days
     REFRESH_ROTATION: 10,   // grace for a duplicate of a just-spent refresh token
