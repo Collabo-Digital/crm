@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
@@ -107,12 +107,19 @@ export class UserService {
   }
 
   /**
-   * Close an account. Refused while it owns a live workspace: there is no
-   * ownership transfer, so the workspace would be left running with nobody
-   * able to manage or delete it. Its memberships end (releasing their
-   * conversations), and the address is freed so it can sign up again.
+   * Close an account, confirmed with its password: a signed-in session alone
+   * (a stolen token, an unlocked phone) cannot. Refused while it owns a live
+   * workspace: there is no ownership transfer, so the workspace would be left
+   * running with nobody able to manage or delete it. Its memberships end
+   * (releasing their conversations), and the address is freed so it can sign
+   * up again.
    */
-  async softDelete(id: string) {
+  async softDelete(id: string, password: string) {
+    const account = await this.prisma.user.findUnique({ where: { id }, select: { password: true } });
+    if (!account || !(await bcrypt.compare(password, account.password))) {
+      throw new ForbiddenException('That password is not right.');
+    }
+
     const owned = await this.prisma.organizationMember.findFirst({
       where: { userId: id, role: UserRole.OWNER, ...ACTIVE_MEMBERSHIP },
       select: { organization: { select: { name: true } } },

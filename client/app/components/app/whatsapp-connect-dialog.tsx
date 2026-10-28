@@ -14,7 +14,8 @@ import {
   useWhatsAppInstallMutation,
   useCompleteWhatsAppInstallMutation,
 } from "~/hooks/use-whatsapp-mutations";
-import { ensureMetaSdk, readEmbeddedSignupMessage, type EmbeddedSignupEvent } from "~/lib/meta-sdk";
+import { ensureMetaSdk } from "~/lib/meta-sdk";
+import { readEmbeddedSignupMessage, type EmbeddedSignupEvent } from "~/lib/embedded-signup";
 import type { WhatsAppInstallResponse } from "~/types/api";
 
 interface WhatsAppConnectDialogProps {
