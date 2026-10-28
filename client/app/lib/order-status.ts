@@ -1,4 +1,5 @@
 import type { FinancialStatus, FulfillmentStatus } from "~/types/api";
+import { STATUS_TONE_CLASSES, toneClasses, type StatusTone } from "./status-tone.ts";
 
 /**
  * Canonical order-status pill styling and labels.
@@ -7,24 +8,30 @@ import type { FinancialStatus, FulfillmentStatus } from "~/types/api";
  * The detail-page copy drifted: it used raw hex instead of tokens and rendered
  * the bare enum, so the page read "PARTIALLY_PAID" where the table read
  * "Partial". One source now, imported by both.
+ *
+ * Colours come from the shared palette in status-tone.ts: every done state is
+ * success green, every waiting-on-you state is attention amber.
  */
 
-export const FINANCIAL_CLASSES: Record<FinancialStatus, string> = {
-  PAID: "bg-brand/30 text-brand-strong",
-  PARTIALLY_PAID: "bg-info-subtle text-info",
-  PENDING: "bg-warning-strong-subtle text-warning-strong",
-  AUTHORIZED: "bg-info-subtle text-info",
-  PARTIALLY_REFUNDED: "bg-warning-subtle text-warning",
-  REFUNDED: "bg-muted text-muted-foreground",
-  VOIDED: "bg-danger-subtle text-danger",
+export const FINANCIAL_TONES: Record<FinancialStatus, StatusTone> = {
+  PAID: "success",
+  PARTIALLY_PAID: "info",
+  PENDING: "attention",
+  AUTHORIZED: "info",
+  PARTIALLY_REFUNDED: "attention",
+  REFUNDED: "neutral",
+  VOIDED: "critical",
 };
 
-export const FULFILLMENT_CLASSES: Record<FulfillmentStatus, string> = {
-  FULFILLED: "bg-brand/30 text-brand-strong",
-  PARTIAL: "bg-info-subtle text-info",
-  UNFULFILLED: "bg-warning-strong-subtle text-warning-strong",
-  RESTOCKED: "bg-muted text-muted-foreground",
+export const FULFILLMENT_TONES: Record<FulfillmentStatus, StatusTone> = {
+  FULFILLED: "success",
+  PARTIAL: "info",
+  UNFULFILLED: "attention",
+  RESTOCKED: "neutral",
 };
+
+export const FINANCIAL_CLASSES = toneClasses(FINANCIAL_TONES);
+export const FULFILLMENT_CLASSES = toneClasses(FULFILLMENT_TONES);
 
 /** Short labels — for the list table, where the column is narrow. */
 export const FINANCIAL_LABELS: Record<FinancialStatus, string> = {
@@ -60,16 +67,16 @@ export const FULFILLMENT_LABELS_FULL: Record<FulfillmentStatus, string> = {
  * Per-line fulfilment state. The API returns a lowercase free-form string:
  * null | 'fulfilled' | 'delivered' | 'on_hold' | 'in_progress'.
  */
-export const LINE_STATUS_CLASSES: Record<string, string> = {
-  fulfilled: "bg-brand/30 text-brand-strong",
-  delivered: "bg-success-subtle text-success",
-  in_progress: "bg-info-subtle text-info",
-  on_hold: "bg-muted text-muted-foreground",
+export const LINE_STATUS_CLASSES: Record<string, string> = toneClasses({
+  fulfilled: "success",
+  delivered: "success",
+  in_progress: "info",
+  on_hold: "neutral",
   // Amber, matching the "Partly shipped" group on the order detail page. It was
   // blue, which made it indistinguishable from in_progress — two different
   // things (units already gone out vs. being prepared).
-  partial: "bg-warning-subtle text-warning",
-};
+  partial: "attention",
+});
 
 export const LINE_STATUS_LABELS: Record<string, string> = {
   fulfilled: "Fulfilled",
@@ -86,8 +93,8 @@ export function lineStatusLabel(status: string | null): string {
 }
 
 export function lineStatusClass(status: string | null): string {
-  if (!status) return "bg-warning-strong-subtle text-warning-strong";
-  return LINE_STATUS_CLASSES[status] ?? "bg-muted text-muted-foreground";
+  if (!status) return STATUS_TONE_CLASSES.attention;
+  return LINE_STATUS_CLASSES[status] ?? STATUS_TONE_CLASSES.neutral;
 }
 
 /** A line counts as done when it is fulfilled or already delivered — matches the server predicate. */
@@ -232,13 +239,13 @@ export function fulfillmentStatusLabel(status: string | null | undefined): strin
 }
 
 /** A failed Shopify fulfilment must not wear the success colour. */
-export const SHIPMENT_STATE_CLASSES: Record<ShipmentStateKey, string> = {
-  pending: "bg-warning-strong-subtle text-warning-strong",
-  fulfilled: "bg-brand/30 text-brand-strong",
-  delivered: "bg-success-subtle text-success",
-  cancelled: "bg-muted text-muted-foreground",
-  failed: "bg-danger-subtle text-danger",
-};
+export const SHIPMENT_STATE_CLASSES = toneClasses<ShipmentStateKey>({
+  pending: "attention",
+  fulfilled: "success",
+  delivered: "success",
+  cancelled: "neutral",
+  failed: "critical",
+});
 
 /** The minimum a shipment has to expose for the predicates below. */
 export type ShipmentState = { status: string; deliveredAt?: string | null };

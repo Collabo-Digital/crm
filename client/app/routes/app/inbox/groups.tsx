@@ -14,6 +14,7 @@ import { useCurrentRole } from "~/hooks/use-current-role";
 import { useCreateGroup, useGroup, useGroupAction, useGroups } from "~/hooks/use-groups";
 import { downloadBlob } from "~/lib/download-blob";
 import { formatDateTime } from "~/lib/format-date";
+import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import { cn } from "~/lib/utils";
 import { groupsService } from "~/services/groups.service";
 import type { WhatsAppGroupStatus, WhatsAppGroupSummary } from "~/types/api";
@@ -26,12 +27,12 @@ const MAX_PEOPLE = 8;
 const selectClass = "h-9 w-full min-w-0 rounded-lg border bg-background px-2 text-body";
 
 const STATUS: Record<WhatsAppGroupStatus, { label: string; tone: string }> = {
-  CREATING: { label: "Creating…", tone: "bg-muted text-muted-foreground" },
-  ACTIVE: { label: "Active", tone: "bg-success/15 text-success" },
-  SUSPENDED: { label: "Suspended by WhatsApp", tone: "bg-warning/15 text-warning" },
-  DELETING: { label: "Deleting…", tone: "bg-muted text-muted-foreground" },
-  DELETED: { label: "Deleted", tone: "bg-muted text-muted-foreground" },
-  FAILED: { label: "Not created", tone: "bg-destructive/10 text-destructive" },
+  CREATING: { label: "Creating…", tone: STATUS_TONE_CLASSES.neutral },
+  ACTIVE: { label: "Active", tone: STATUS_TONE_CLASSES.success },
+  SUSPENDED: { label: "Suspended by WhatsApp", tone: STATUS_TONE_CLASSES.attention },
+  DELETING: { label: "Deleting…", tone: STATUS_TONE_CLASSES.neutral },
+  DELETED: { label: "Deleted", tone: STATUS_TONE_CLASSES.neutral },
+  FAILED: { label: "Not created", tone: STATUS_TONE_CLASSES.critical },
 };
 
 function CopyButton({ text, label }: { text: string; label: string }) {

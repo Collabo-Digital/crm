@@ -1,13 +1,14 @@
-import { StatusPill } from "~/components/app/data-table";
+import { StatusBadge } from "~/components/ui/status-badge";
 import type { BadgeTone, PackingBadge } from "~/lib/packing";
+import type { StatusTone } from "~/lib/status-tone";
 import { cn } from "~/lib/utils";
 
-const TONE: Record<BadgeTone, string> = {
-  neutral: "bg-muted text-foreground",
-  info: "bg-info-subtle text-info",
-  success: "bg-success-subtle text-success",
-  warning: "bg-warning-subtle text-warning",
-  danger: "bg-danger-subtle text-danger",
+const TONE: Record<BadgeTone, StatusTone> = {
+  neutral: "neutral",
+  info: "info",
+  success: "success",
+  warning: "attention",
+  danger: "critical",
 };
 
 export function PackingBadges({ badges, className }: { badges: PackingBadge[]; className?: string }) {
@@ -15,9 +16,9 @@ export function PackingBadges({ badges, className }: { badges: PackingBadge[]; c
   return (
     <span className={cn("flex min-w-0 flex-wrap items-center gap-1", className)}>
       {badges.map((b) => (
-        <StatusPill key={b.label} className={TONE[b.tone]}>
+        <StatusBadge key={b.label} tone={TONE[b.tone]}>
           {b.label}
-        </StatusPill>
+        </StatusBadge>
       ))}
     </span>
   );

@@ -38,6 +38,7 @@ import { VendorOrderDetail } from "~/components/app/vendor-order-detail";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
+import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import { cn, formatCurrency } from "~/lib/utils";
 import {
   FINANCIAL_CLASSES,
@@ -708,9 +709,9 @@ function StatusPill({ className, children }: { className?: string; children: Rea
  * is still open to refunds, notes and archiving until someone closes it.
  */
 function deriveOrderState(order: OrderDetail): { label: string; className: string } {
-  if (order.cancelledAt) return { label: "Cancelled", className: "bg-danger-subtle text-danger" };
-  if (order.closedAt) return { label: "Archived", className: "bg-muted text-muted-foreground" };
-  return { label: "Processing", className: "bg-muted text-muted-foreground" };
+  if (order.cancelledAt) return { label: "Cancelled", className: STATUS_TONE_CLASSES.critical };
+  if (order.closedAt) return { label: "Archived", className: STATUS_TONE_CLASSES.neutral };
+  return { label: "Processing", className: STATUS_TONE_CLASSES.neutral };
 }
 
 /**
@@ -728,14 +729,14 @@ function deriveShippingState(fulfillments: OrderFulfillment[]): {
   className: string;
 } {
   const live = fulfillments.filter((f) => !isShipmentCancelled(f));
-  if (live.length === 0) return { label: "Pending", className: "bg-warning-subtle text-warning" };
+  if (live.length === 0) return { label: "Pending", className: STATUS_TONE_CLASSES.attention };
   if (live.some(isShipmentDelivered)) {
-    return { label: "Delivered", className: "bg-brand/30 text-brand-strong" };
+    return { label: "Delivered", className: STATUS_TONE_CLASSES.success };
   }
   if (live.some(isShipmentShipped)) {
-    return { label: "In transit", className: "bg-info-subtle text-info" };
+    return { label: "In transit", className: STATUS_TONE_CLASSES.info };
   }
-  return { label: "Packed", className: "bg-muted text-muted-foreground" };
+  return { label: "Packed", className: STATUS_TONE_CLASSES.neutral };
 }
 
 /** Grams per unit for the free-form `weightUnit` string. Unknown units are skipped. */

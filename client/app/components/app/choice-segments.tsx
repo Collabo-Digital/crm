@@ -31,7 +31,7 @@ export function ChoiceSegments<T extends string>({
           onClick={() => onChange(option.value)}
           className={cn(
             "min-h-11 rounded-md px-2 text-caption font-medium leading-tight transition-colors md:min-h-8",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-45",
+            "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-45",
             value === option.value
               ? "bg-card text-foreground shadow-sm ring-1 ring-border"
               : "text-muted-foreground hover:text-foreground",

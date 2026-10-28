@@ -15,6 +15,7 @@ import { useJudgemeAccount, useJudgemeMutation, useReviews } from "~/hooks/use-r
 import { PLAYBOOKS } from "~/lib/automation-blocks";
 import { formatDateTime } from "~/lib/format-date";
 import { canEditAutomations } from "~/lib/permissions";
+import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import { cn } from "~/lib/utils";
 import type { ProductReviewStatus, ProductReviewView } from "~/types/api";
 
@@ -25,9 +26,9 @@ export function meta() {
 const selectClass = "h-8 rounded-lg border bg-background px-2 text-body";
 
 const STATUS: Record<ProductReviewStatus, { label: string; className: string }> = {
-  POSTED: { label: "Published to Judge.me", className: "bg-success-subtle text-success" },
-  SAVED: { label: "Kept in Collabo", className: "bg-muted text-muted-foreground" },
-  FAILED: { label: "Not published", className: "bg-danger-subtle text-danger" },
+  POSTED: { label: "Published to Judge.me", className: STATUS_TONE_CLASSES.success },
+  SAVED: { label: "Kept in Collabo", className: STATUS_TONE_CLASSES.neutral },
+  FAILED: { label: "Not published", className: STATUS_TONE_CLASSES.critical },
 };
 
 const REVIEW_PLAYBOOK = PLAYBOOKS.find((p) => p.key === "review_request") ?? null;

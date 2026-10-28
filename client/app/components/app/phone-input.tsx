@@ -181,7 +181,7 @@ export function PhoneInput({
           "mt-1 flex h-8 w-full items-stretch overflow-hidden rounded-lg border bg-white dark:bg-gray-800 focus-within:ring-1",
           invalid
             ? "border-destructive focus-within:ring-destructive/40"
-            : "border-input focus-within:ring-[#CEF17B]/60",
+            : "border-input focus-within:border-ring focus-within:ring-ring",
         )}
       >
         <Popover

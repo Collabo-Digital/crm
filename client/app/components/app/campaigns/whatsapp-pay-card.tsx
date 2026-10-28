@@ -7,6 +7,7 @@ import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { useWhatsAppPay, useWhatsAppPayMutation } from "~/hooks/use-payments";
+import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import { cn } from "~/lib/utils";
 
 const selectClass = "h-9 rounded-md border bg-background px-2 text-sm";
@@ -61,7 +62,7 @@ export function WhatsAppPayCard({ channelId, className }: { channelId: string; c
                     <li key={c.name} className="flex flex-wrap items-center gap-2 px-3 py-2 text-caption">
                       <span className="font-medium">{c.name}</span>
                       <span className="text-muted-foreground">{c.provider ?? "UPI"}</span>
-                      <span className={cn("rounded-full px-1.5 py-0.5 text-micro font-medium", c.active ? "bg-success-subtle text-success" : "bg-warning-subtle text-warning-strong")}>
+                      <span className={cn("rounded-full px-1.5 py-0.5 text-micro font-medium", c.active ? STATUS_TONE_CLASSES.success : STATUS_TONE_CLASSES.attention)}>
                         {c.active ? "Active" : c.status.replace("_", " ")}
                       </span>
                       {canManage && (

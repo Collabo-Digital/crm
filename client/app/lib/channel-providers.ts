@@ -3,6 +3,7 @@ import type {
   ChannelConnectionState,
   ChannelPlatform,
 } from "~/types/api";
+import { STATUS_TONE_CLASSES } from "./status-tone.ts";
 
 /**
  * The channel registry: what the Channels settings page can connect, and how.
@@ -136,19 +137,19 @@ export const CONNECTION_STATE_META: Record<
 > = {
   CONNECTED: {
     label: "Connected",
-    className: "bg-success-subtle text-success",
+    className: STATUS_TONE_CLASSES.success,
   },
   ERROR: {
     label: "Connection error",
-    className: "bg-danger-subtle text-danger",
+    className: STATUS_TONE_CLASSES.critical,
   },
   EXPIRED: {
     label: "Expired",
-    className: "bg-warning-subtle text-warning-strong",
+    className: STATUS_TONE_CLASSES.attention,
   },
   DISCONNECTED: {
     label: "Not connected",
-    className: "bg-muted text-muted-foreground",
+    className: STATUS_TONE_CLASSES.neutral,
   },
 };
 

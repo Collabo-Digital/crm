@@ -53,7 +53,7 @@ export function MoneyTotal({
       )}
 
       {unconverted > 0 && (
-        <span className="text-caption font-normal text-warning">
+        <span className="text-caption font-normal text-warning-text">
           {unconverted} order{unconverted === 1 ? "" : "s"} excluded — no
           exchange rate yet
         </span>

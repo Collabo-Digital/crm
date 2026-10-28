@@ -249,7 +249,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                       role="link"
                       aria-disabled="true"
                       tabIndex={0}
-                      className="flex shrink-0 cursor-not-allowed items-center gap-1 rounded-full p-2.5 text-sm font-medium text-background/40 select-none dark:text-gray-600"
+                      className="flex shrink-0 cursor-not-allowed items-center gap-1 rounded-full p-2.5 text-sm font-medium text-background/40 select-none focus-visible:outline-brand dark:text-gray-600"
                     >
                       <Lock className="size-3" />
                       {label}
@@ -262,9 +262,9 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                   key={href}
                   to={target}
                   className={cn(
-                    "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none p-2.5",
+                    "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none p-2.5 focus-visible:outline-brand",
                     isActive
-                      ? "font-semibold text-gray-900 dark:text-gray-900"
+                      ? "font-semibold text-brand-foreground"
                       : "font-medium text-background hover:text-background/70 dark:text-gray-400 dark:hover:text-gray-200"
                   )}
                 >
@@ -272,7 +272,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                     <motion.span
                       layoutId="nav-pill"
                       initial={false}
-                      className="absolute inset-0 rounded-full bg-[#CEF17B]"
+                      className="absolute inset-0 rounded-full bg-brand"
                       transition={{
                         type: "spring",
                         stiffness: 380,
@@ -293,14 +293,10 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
 
                   <span className="relative z-10">{label}</span>
 
+                  {/* Same badge as the phone tab bar's (.mobile-unread in app.css). */}
                   {badge && (
-                    <span
-                      className={cn(
-                        "relative z-10 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white",
-                        isActive ? "bg-gray-800" : "bg-red-500"
-                      )}
-                    >
-                      {badge}
+                    <span className="relative z-10 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-unread px-1 text-caption font-semibold text-unread-foreground">
+                      {badge > 99 ? "99+" : badge}
                     </span>
                   )}
                 </Link>
@@ -327,7 +323,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
               <button aria-label="Account and workspace" className="flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full transition-colors md:justify-start md:bg-white md:py-1.5 md:pl-1.5 md:pr-3 md:shadow-sm md:ring-1 md:ring-black/[0.06] md:hover:bg-gray-50 md:dark:bg-gray-900 md:dark:ring-gray-700 md:dark:hover:bg-gray-800">
                 <Avatar size="sm">
                   <AvatarImage src={user?.avatarUrl ?? ""} alt={user?.firstName} />
-                  <AvatarFallback className="bg-[#CEF17B] text-gray-900 text-xs font-bold">
+                  <AvatarFallback className="bg-brand text-brand-foreground text-xs font-bold">
                     {initials}
                   </AvatarFallback>
                 </Avatar>
@@ -335,7 +331,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                   <span className="text-xs font-semibold text-gray-900 dark:text-gray-100 leading-tight">
                     {user?.firstName ?? "Steve"} {user?.lastName ?? "Rogers"}
                   </span>
-                  <span className="text-[10px] text-gray-400 leading-tight">
+                  <span className="text-caption text-muted-foreground">
                     {impersonatedBy
                       ? "Impersonating"
                       : user?.isSuperAdmin
@@ -343,7 +339,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                         : roleLabel(currentOrg?.role)}
                   </span>
                 </div>
-                <ChevronDown className="hidden size-3.5 text-gray-400 md:block" />
+                <ChevronDown className="hidden size-3.5 text-muted-foreground md:block" />
               </button>
             </DropdownMenuTrigger>
 
@@ -353,7 +349,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                   <DropdownMenuItem
                     onClick={() => stopImpersonating.mutate()}
                     disabled={stopImpersonating.isPending}
-                    className="font-semibold text-amber-700 focus:text-amber-800"
+                    className="font-semibold text-warning-text focus:text-warning-text"
                   >
                     <ArrowLeftRight className="size-4" />
                     {stopImpersonating.isPending ? "Switching back..." : "Switch back to my account"}
@@ -379,7 +375,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                     <DropdownMenuItem
                       key={membership.organization.id}
                       onClick={() => handleSwitchOrg(membership.organization.id)}
-                      className={cn(membership.organization.id === currentOrgId && "bg-[#CEF17B]/20 text-[#084734]")}
+                      className={cn(membership.organization.id === currentOrgId && "bg-brand/20 text-brand-strong")}
                     >
                       {membership.organization.name}
                     </DropdownMenuItem>
@@ -440,15 +436,15 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                     className={cn(
                       "relative flex min-h-11 items-center gap-1.5 px-3 py-2.5 text-sm select-none md:min-h-0 md:rounded-full md:p-2.5 md:text-xs",
                       isActive
-                        ? "font-semibold text-foreground md:text-gray-900"
-                        : "font-medium text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
+                        ? "font-semibold text-foreground md:text-brand-foreground"
+                        : "font-medium text-muted-foreground hover:text-foreground"
                     )}
                   >
                     {isActive && (
                       <motion.span
                         layoutId="section-nav-pill"
                         initial={false}
-                        className="absolute inset-x-3 bottom-0 h-[3px] rounded-full bg-foreground md:inset-0 md:h-auto md:bg-[#CEF17B]"
+                        className="absolute inset-x-3 bottom-0 h-[3px] rounded-full bg-foreground md:inset-0 md:h-auto md:bg-brand"
                         transition={{ type: "spring", stiffness: 380, damping: 32, mass: 1 }}
                       />
                     )}
