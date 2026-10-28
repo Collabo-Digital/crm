@@ -1,4 +1,5 @@
 import { rateFor } from '../../campaigns/broadcasts/broadcast-audience';
+import { neutraliseCsvFormula } from '../../common/utils/csv-formula.util';
 
 /**
  * The arithmetic behind the messaging dashboard. Pure, so every figure can be
@@ -113,7 +114,7 @@ export function csvLine(values: Array<string | number | null | undefined>): stri
         .map((v) => {
             const s = v === null || v === undefined ? '' : String(v);
             // A leading = + - @ (or a tab or CR before one) would run as a formula in a spreadsheet.
-            const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+            const safe = neutraliseCsvFormula(s);
             // A bare CR is a line break to some spreadsheets, so it is quoted like a newline.
             return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
         })

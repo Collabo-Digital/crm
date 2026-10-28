@@ -498,6 +498,12 @@ export interface CreatePersonalRequest {
   billingInterval: BillingInterval;
 }
 
+/** What the owner types to delete a workspace: their password, and the workspace's name as shown. */
+export interface DeleteOrganizationRequest {
+  password: string;
+  confirmName: string;
+}
+
 /** Payload for updating an existing organization's settings. */
 export interface UpdateOrganizationRequest {
   name?: string;
@@ -546,11 +552,13 @@ export interface OrgMember {
   joinedAt: string;
   user: {
     id: string;
-    email: string;
+    /** Sent to owners, admins and managers, and for the member's own row. */
+    email?: string;
     firstName: string;
     lastName: string;
     avatarUrl: string | null;
-    lastLoginAt: string | null;
+    /** As `email`. */
+    lastLoginAt?: string | null;
   };
 }
 
@@ -5733,6 +5741,8 @@ export interface PublicOrderLink {
     carrier: string | null;
     trackingNumber: string | null;
     trackingUrl: string | null;
+    /** The tracking address is a known courier's https page, which opens at once. */
+    knownCourier?: boolean;
   };
 }
 

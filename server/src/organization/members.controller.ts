@@ -17,14 +17,14 @@ export class MembersController {
         private readonly orgService: OrganizationService,
     ) { }
 
-    // GET — any org member can see the team list
+    // GET — any org member can see the team list; how much of it depends on their role
     @Get()
     async findAll(@Param('orgId') orgId: string, @CurrentUser() user: JwtPayload) {
         // Verify the requesting user is a member of this org (any role)
-        await this.orgService.requireRole(orgId, user.sub, [
+        const membership = await this.orgService.requireRole(orgId, user.sub, [
             UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.AGENT, UserRole.VIEWER,
         ]);
-        return this.membersService.findAll(orgId);
+        return this.membersService.findAll(orgId, { userId: user.sub, role: membership.role });
     }
 
     // PATCH — only OWNER and ADMIN can change roles

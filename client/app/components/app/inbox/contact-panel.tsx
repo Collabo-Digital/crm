@@ -18,6 +18,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover
 import { useDebounced } from "~/hooks/use-debounced";
 import { useRecordConsentMutation, useSamePersonMutation, useUpdateContactMutation } from "~/hooks/use-inbox-mutations";
 import { useCustomerCandidates } from "~/hooks/use-inbox-queries";
+import { useSectionAccess } from "~/hooks/use-section-access";
 import { formatBubbleTime, formatDateTime, formatRowTime, noteAuthor } from "~/lib/inbox-format";
 import { FINANCIAL_CLASSES, FINANCIAL_LABELS, FULFILLMENT_LABELS } from "~/lib/order-status";
 import { cn, formatCurrency } from "~/lib/utils";
@@ -74,7 +75,11 @@ function InlineAdd({ placeholder, label, onAdd }: { placeholder: string; label: 
   );
 }
 
-/** Search the store's customers and link one; matches by phone show first. */
+/**
+ * Search the store's customers and link one; matches by phone show first.
+ * Searching needs the Customers or Orders section (the server refuses it
+ * otherwise), so other members pick from the matches by phone only.
+ */
 function LinkCustomer({
   contactId,
   phoneMatches,
@@ -86,9 +91,12 @@ function LinkCustomer({
   onLink: (customer: InboxCustomerMatch) => void;
   disabled: boolean;
 }) {
+  const { canAccess } = useSectionAccess();
+  const canSearch = canAccess("/orders/customers") || canAccess("/orders");
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
-  const debounced = useDebounced(q.trim());
+  const typed = useDebounced(q.trim());
+  const debounced = canSearch ? typed : "";
   const search = useCustomerCandidates(contactId, debounced, open && debounced.length >= 2);
   const results = debounced.length >= 2 ? (search.data?.results ?? []) : phoneMatches;
 
@@ -101,11 +109,19 @@ function LinkCustomer({
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 space-y-2 p-3">
-        <Input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Name, email or phone" aria-label="Search customers" autoFocus />
+        {canSearch ? (
+          <Input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Name, email or phone" aria-label="Search customers" autoFocus />
+        ) : (
+          <p className="px-1 text-caption text-muted-foreground">Store customers with this chat's number:</p>
+        )}
         <div className="max-h-64 space-y-1 overflow-y-auto">
           {results.length === 0 ? (
             <p className="px-1 py-2 text-caption text-muted-foreground">
-              {debounced.length >= 2 ? (search.isFetching ? "Searching…" : "No customers match.") : "Type at least two characters."}
+              {!canSearch
+                ? "No store customer has this number."
+                : debounced.length >= 2
+                  ? (search.isFetching ? "Searching…" : "No customers match.")
+                  : "Type at least two characters."}
             </p>
           ) : (
             results.map((customer) => (

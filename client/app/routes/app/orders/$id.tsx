@@ -61,6 +61,7 @@ import type {
   OrderFulfillment,
 } from "~/types/api";
 import { orderShopifySyncOf } from "~/lib/shopify-sync";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Order Detail | Collabo CRM" }];
@@ -300,6 +301,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
 
   return (
     <div className="space-y-5">
+      <title>{pageTitle(`Order ${order.name}`)}</title>
       {/* Breadcrumb + prev/next rail */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <nav aria-label="Breadcrumb" className="flex w-full items-center gap-1.5 text-caption sm:w-auto">
@@ -927,7 +929,7 @@ function OrderTags({ order, canEdit }: { order: OrderDetail; canEdit: boolean })
             }
           }}
           placeholder="Tag name"
-          className="h-6 w-24 rounded-full border border-border bg-background px-2 text-micro outline-none focus:ring-1 focus:ring-brand"
+          className="h-6 w-24 rounded-full border border-border bg-background px-2 text-micro outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
       ) : (
         <button

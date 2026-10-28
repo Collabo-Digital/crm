@@ -4,6 +4,7 @@ import type {
   CreateOrganizationRequest,
   CreatePersonalRequest,
   UpdateOrganizationRequest,
+  DeleteOrganizationRequest,
   UpgradeToOrganizationRequest,
   OrgMember,
   UpdateMemberRoleRequest,
@@ -46,8 +47,9 @@ export const orgService = {
       .post<OrgResponse>(`/organizations/${orgId}/upgrade-to-organization`, data)
       .then((response) => response.data),
 
-  delete: (orgId: string) =>
-    apiClient.delete<{ message: string }>(`/organizations/${orgId}`).then((response) => response.data),
+  /** The server checks the owner's password and the typed name before deleting. */
+  delete: (orgId: string, confirm: DeleteOrganizationRequest) =>
+    apiClient.delete<{ message: string }>(`/organizations/${orgId}`, { data: confirm }).then((response) => response.data),
 
   // ─── Members ───
 

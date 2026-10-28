@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { ChevronRight, Loader2, MoreHorizontal, Package, Receipt, UploadCloud } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { ShopifySyncCell } from "~/components/app/shopify-sync-cell";
@@ -117,9 +117,12 @@ export function OrdersTable({ orders, currency, onViewDetail }: OrdersTableProps
             <TableRow
               key={order.id}
               className="cursor-pointer"
-              onClick={() =>
-                onViewDetail ? onViewDetail(order.id) : navigate(`/orders/${order.id}`)
-              }
+              onClick={(event) => {
+                // The order link in the first cell navigates by itself.
+                if ((event.target as HTMLElement).closest("a")) return;
+                if (onViewDetail) onViewDetail(order.id);
+                else navigate(`/orders/${order.id}`);
+              }}
             >
               <TableCell>
                 <div className="flex items-center gap-3">
@@ -128,8 +131,10 @@ export function OrdersTable({ orders, currency, onViewDetail }: OrdersTableProps
                   </span>
                   <div className="min-w-0">
                     <p className="truncate text-caption font-semibold text-foreground">
-                      {name}
-                      <span className="font-normal text-muted-foreground"> · {order.name}</span>
+                      <Link to={`/orders/${order.id}`} className="hover:underline">
+                        {name}
+                        <span className="font-normal text-muted-foreground"> · {order.name}</span>
+                      </Link>
                     </p>
                     <p className="flex items-center gap-1 text-micro text-muted-foreground">
                       <ChannelBadge platform={platform} name={orderSourceLabel(order)} /> · {order.itemCount} item
@@ -201,10 +206,12 @@ export function OrderMobileSummary({ order, currency }: { order: OrderRow; curre
 /**
  * Column definitions for the orders list.
  *
- * Payment sits beside Fulfilment so the day's triage (COD to confirm, unpaid,
- * not shipped) reads straight off the list, in the Packing screen's words.
- * Shopify is last, so a Collabo-created order can be pushed from the list
- * without opening it.
+ * Payment is a pill in words beside Fulfilment, so the day's triage (COD to
+ * confirm, unpaid, not shipped) reads straight off the list, in the Packing
+ * screen's words. It was a small tick beside paid order numbers, with nothing
+ * at all on unpaid ones, which said nothing to a screen reader and little at
+ * a glance. Shopify is last, so a Collabo-created order can be pushed from
+ * the list without opening it.
  */
 export function useOrderColumns({
   currency,

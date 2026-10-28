@@ -66,7 +66,7 @@ export default function ResetPasswordPage() {
         <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-red-100">
           <KeyRound className="size-6 text-red-500" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">Invalid link</h2>
+        <h1 className="text-2xl font-bold text-gray-900">Invalid link</h1>
         <p className="mt-2 text-sm text-gray-500">
           This reset link is missing or invalid. Please request a new one.
         </p>
@@ -87,7 +87,7 @@ export default function ResetPasswordPage() {
         <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
           <KeyRound className="size-5 text-[#084734]" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">Set a new password</h2>
+        <h1 className="text-2xl font-bold text-gray-900">Set a new password</h1>
         <p className="mt-1.5 text-sm text-gray-500">
           Choose a strong password you haven't used before.
         </p>
@@ -106,20 +106,21 @@ export default function ResetPasswordPage() {
               placeholder="Min. 8 characters"
               autoComplete="new-password"
               aria-invalid={!!errors.newPassword}
+              aria-describedby={errors.newPassword ? "newPassword-error" : undefined}
               {...register("newPassword")}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition aria-[invalid=true]:border-red-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-gray-500 hover:text-gray-700 transition-colors"
               onClick={() => setShowNewPassword((visible) => !visible)}
-              tabIndex={-1}
+              aria-label={showNewPassword ? "Hide password" : "Show password"}
             >
               {showNewPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
           </div>
           {errors.newPassword && (
-            <p className="text-xs text-red-500">{errors.newPassword.message}</p>
+            <p id="newPassword-error" className="text-xs text-red-700">{errors.newPassword.message}</p>
           )}
         </div>
 
@@ -135,20 +136,21 @@ export default function ResetPasswordPage() {
               placeholder="Re-enter your password"
               autoComplete="new-password"
               aria-invalid={!!errors.confirmPassword}
+              aria-describedby={errors.confirmPassword ? "confirmPassword-error" : undefined}
               {...register("confirmPassword")}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition aria-[invalid=true]:border-red-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-gray-500 hover:text-gray-700 transition-colors"
               onClick={() => setShowConfirmPassword((visible) => !visible)}
-              tabIndex={-1}
+              aria-label={showConfirmPassword ? "Hide password" : "Show password"}
             >
               {showConfirmPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
           </div>
           {errors.confirmPassword && (
-            <p className="text-xs text-red-500">{errors.confirmPassword.message}</p>
+            <p id="confirmPassword-error" className="text-xs text-red-700">{errors.confirmPassword.message}</p>
           )}
         </div>
 
@@ -160,7 +162,7 @@ export default function ResetPasswordPage() {
 
         {/* Server error */}
         {serverError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+          <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
             <p className="text-sm text-red-600">{serverError}</p>
           </div>
         )}

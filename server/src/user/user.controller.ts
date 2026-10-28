@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Post, Delete, Body } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Delete, Body, HttpCode } from '@nestjs/common';
 
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -57,6 +57,17 @@ export class UserController {
     // The session that made the change stays signed in; every other one ends.
     await this.authService.revokeAllUserTokens(user.sub, user.sid);
     return { message: 'Password changed. All other sessions have been revoked.' };
+  }
+
+  // Settings › Security, for a lost or shared phone: every other session of
+  // this account ends at once; the one asking stays signed in.
+  @Post('me/sign-out-other-devices')
+  @HttpCode(200)
+  @AllowVendor()
+  @AllowInfluencer()
+  async signOutOtherDevices(@CurrentUser() user: JwtPayload) {
+    await this.authService.revokeAllUserTokens(user.sub, user.sid);
+    return { message: 'Signed out of every other device.' };
   }
 
   @Delete('me')

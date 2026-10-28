@@ -12,6 +12,7 @@
 // per-variant tax overrides, gift-card flag.
 
 import { sanitizeProductHtml } from '../../common/utils/sanitize-product-html.util';
+import { neutraliseCsvFormula, restoreCsvFormulaText } from '../../common/utils/csv-formula.util';
 
 export const SHOPIFY_CSV_HEADERS = [
   'Handle',
@@ -51,10 +52,14 @@ export type ShopifyCsvRow = Record<(typeof SHOPIFY_CSV_HEADERS)[number], string>
 
 // ─── Encode (CSV writer) ───────────────────────────────────────────────────
 
-/** Quote a value if it contains a comma, quote, or newline. RFC 4180 escaping. */
+/**
+ * Quote a value if it contains a comma, quote, or newline. RFC 4180 escaping.
+ * A value that would run as a spreadsheet formula gets a leading apostrophe,
+ * which `parseShopifyCsv` takes off again.
+ */
 function csvEscape(value: string | null | undefined): string {
   if (value === null || value === undefined) return '';
-  const s = String(value);
+  const s = neutraliseCsvFormula(String(value));
   if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
     return `"${s.replace(/"/g, '""')}"`;
   }
@@ -283,7 +288,7 @@ export function parseShopifyCsv(text: string): Array<Record<string, string>> {
     const obj: Record<string, string> = {};
     for (let c = 0; c < headers.length; c++) {
       const key = headers[c];
-      const val = row[c] ?? '';
+      const val = restoreCsvFormulaText(row[c] ?? '');
       if (val !== '') obj[key] = val;
     }
     out.push(obj);

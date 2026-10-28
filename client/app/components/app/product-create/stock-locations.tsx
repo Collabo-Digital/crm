@@ -105,7 +105,7 @@ export function StockLocationRows({
                 value={quantities[index] ?? ""}
                 onChange={(e) => onQuantityChange(index, e.target.value)}
                 aria-label={`Stock at ${name}`}
-                className="h-9 w-20 shrink-0 rounded-lg border border-input bg-white px-3 text-right text-xs tabular-nums sm:w-24 focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 dark:bg-gray-800"
+                className="h-9 w-20 shrink-0 rounded-lg border border-input bg-white px-3 text-right text-xs tabular-nums sm:w-24 dark:bg-gray-800 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
               />
             )}
             {index > 0 ? (

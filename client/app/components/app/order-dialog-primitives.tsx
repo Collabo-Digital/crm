@@ -1,9 +1,68 @@
+import { useId, useState } from "react";
 import { Loader2, X } from "lucide-react";
+import { Dialog as DialogPrimitive } from "radix-ui";
+
+/**
+ * What had focus when a pop-up opened, so it can be given back on close. A
+ * menu item is gone by then, so a pop-up opened from a menu returns to the
+ * menu's button instead.
+ */
+function opener(): HTMLElement | null {
+  const active = document.activeElement as HTMLElement | null;
+  const menuButtonId = active?.closest('[role="menu"]')?.getAttribute("aria-labelledby");
+  return (menuButtonId && document.getElementById(menuButtonId)) || active;
+}
+
+/**
+ * A pop-up that behaves as a dialog around a panel the caller styles: screen
+ * readers hear it open under its title, Tab stays inside it, focus returns
+ * when it closes, and Escape or a click on the backdrop calls `onClose`.
+ * Render it while open and drop it to close. The panel must hold a
+ * `ModalTitle`; `describedBy` is the id of the line that explains it, if any.
+ */
+export function ModalFrame({
+  onClose,
+  className,
+  overlayClassName = "fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4",
+  describedBy,
+  children,
+}: {
+  onClose: () => void;
+  className?: string;
+  overlayClassName?: string;
+  describedBy?: string;
+  children: React.ReactNode;
+}) {
+  const [returnFocusTo] = useState(opener);
+  return (
+    <DialogPrimitive.Root open onOpenChange={(open) => !open && onClose()}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className={overlayClassName}>
+          <DialogPrimitive.Content
+            aria-describedby={describedBy}
+            className={className}
+            onCloseAutoFocus={(event) => {
+              // Radix would focus a Dialog.Trigger, which these pop-ups don't use.
+              event.preventDefault();
+              if (returnFocusTo?.isConnected) returnFocusTo.focus();
+            }}
+          >
+            {children}
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Overlay>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  );
+}
+
+/** The heading a `ModalFrame` is announced by (an h2). */
+export const ModalTitle = DialogPrimitive.Title;
 
 /**
  * Centered modal shell used by every order action dialog.
- * Click on the backdrop or the X button to dismiss. Body content is rendered
- * as children so each caller controls its own padding and layout.
+ * Click on the backdrop, press Escape or use the X button to dismiss. Body
+ * content is rendered as children so each caller controls its own padding
+ * and layout.
  */
 export function ModalShell({
   title,
@@ -18,32 +77,31 @@ export function ModalShell({
   children: React.ReactNode;
   maxWidthClass?: string;
 }) {
+  const subtitleId = useId();
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
+    <ModalFrame
+      onClose={onClose}
+      describedBy={subtitle ? subtitleId : undefined}
+      className={`w-full ${maxWidthClass} rounded-xl bg-white dark:bg-gray-900 shadow-xl max-h-[90vh] overflow-y-auto outline-none`}
     >
-      <div
-        className={`w-full ${maxWidthClass} rounded-xl bg-white dark:bg-gray-900 shadow-xl max-h-[90vh] overflow-y-auto`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b px-6 py-4 sticky top-0 bg-white dark:bg-gray-900">
-          <div>
-            <h2 className="text-sm font-bold text-gray-900 dark:text-gray-100">{title}</h2>
-            {subtitle && (
-              <p className="text-[10px] text-muted-foreground">{subtitle}</p>
-            )}
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800"
-          >
-            <X className="size-4" />
-          </button>
+      <div className="flex items-center justify-between border-b px-6 py-4 sticky top-0 bg-white dark:bg-gray-900">
+        <div>
+          <ModalTitle className="text-sm font-bold text-gray-900 dark:text-gray-100">{title}</ModalTitle>
+          {subtitle && (
+            <p id={subtitleId} className="text-[10px] text-muted-foreground">{subtitle}</p>
+          )}
         </div>
-        {children}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="rounded-md p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800"
+        >
+          <X className="size-4" />
+        </button>
       </div>
-    </div>
+      {children}
+    </ModalFrame>
   );
 }
 

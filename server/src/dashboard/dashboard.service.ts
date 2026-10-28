@@ -7,6 +7,7 @@ import {
 } from './dto/query-dashboard.dto';
 import { Prisma } from '@prisma/client';
 import { Parser } from 'json2csv';
+import { neutraliseCsvRow } from '../common/utils/csv-formula.util';
 import {
   SALES_FINANCIAL_STATUSES,
   placedBetween,
@@ -345,7 +346,8 @@ export class DashboardService {
       'total', 'currency', 'financialStatus', 'fulfillmentStatus',
     ];
     const parser = new Parser({ fields });
-    return parser.parse(data);
+    // Buyer names and emails are typed by shoppers; keep them from running as formulas.
+    return parser.parse(data.map(neutraliseCsvRow));
   }
 
   // ─── SALES & GROSS PROFIT (feeds the stat cards AND the bar chart) ───

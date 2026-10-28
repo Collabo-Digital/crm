@@ -87,6 +87,7 @@ export function ImageUpload({ id, noun, imageUrl, maxBytes, minWidth, hint, read
               accept="image/png,image/jpeg"
               className="sr-only"
               tabIndex={-1}
+              aria-label={`Upload ${noun}`}
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 e.target.value = "";

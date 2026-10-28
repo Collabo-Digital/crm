@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Search } from "lucide-react";
 import {
   AsYouType,
@@ -99,6 +99,7 @@ export function PhoneInput({
   const [national, setNational] = useState(initial.national);
   const [touched, setTouched] = useState(false);
   const [open, setOpen] = useState(false);
+  const errorId = useId();
   const [query, setQuery] = useState("");
 
   // Re-sync only when the value changes from OUTSIDE (form reset, prefill);
@@ -256,6 +257,7 @@ export function PhoneInput({
           autoComplete="tel"
           aria-label={label}
           aria-invalid={invalid || undefined}
+          aria-describedby={invalid ? errorId : undefined}
           value={national}
           onChange={(e) => handleType(e.target.value)}
           onBlur={handleBlur}
@@ -263,7 +265,7 @@ export function PhoneInput({
         />
       </div>
       {invalid && (
-        <p className="mt-1 text-[10px] text-destructive">
+        <p id={errorId} className="mt-1 text-[10px] text-destructive">
           Enter a valid phone number for {countryName(country)}.
         </p>
       )}

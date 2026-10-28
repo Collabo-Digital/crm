@@ -242,7 +242,7 @@ export function UpgradeOrganizationDialog({
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Acme Co."
                   maxLength={100}
-                  className="h-10 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                  className="h-10 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
               </FormField>
 
@@ -259,7 +259,7 @@ export function UpgradeOrganizationDialog({
                       setLogoBroken(false);
                     }}
                     placeholder="https://"
-                    className="h-10 flex-1 rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                    className="h-10 flex-1 rounded-lg border border-input bg-transparent px-3 text-sm focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                   <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-dashed border-border bg-muted/40">
                     {logo && !logoBroken ? (
@@ -304,7 +304,7 @@ export function UpgradeOrganizationDialog({
                   value={website}
                   onChange={(e) => setWebsite(e.target.value)}
                   placeholder="https://yourstore.com"
-                  className="h-10 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                  className="h-10 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
               </FormField>
 
@@ -405,7 +405,7 @@ function ChoiceCard({
   return (
     <button
       onClick={onClick}
-      className="group block w-full rounded-xl border bg-white dark:bg-gray-900 p-4 text-left transition-all hover:border-[#CEF17B] hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/40"
+      className="group block w-full rounded-xl border bg-white dark:bg-gray-900 p-4 text-left transition-all hover:border-[#CEF17B] hover:shadow-md focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
     >
       <div className="flex items-start gap-3">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[#CEF17B]/30 text-[#084734]">

@@ -166,6 +166,30 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         return sentThisHour <= EMAIL_SEND_LIMIT.MAX_PER_HOUR;
     }
 
+    // ─── UPLOAD QUOTA ───
+
+    private uploadKey(orgId: string): string {
+        return this.key(REDIS_KEYS.UPLOAD_BYTES, `${orgId}:${new Date().toISOString().slice(0, 10)}`);
+    }
+
+    async uploadedBytesToday(orgId: string): Promise<number> {
+        return Number(await this.client.get(this.uploadKey(orgId))) || 0;
+    }
+
+    /**
+     * Add `bytes` to the workspace's uploads today, unless that passes `limit`:
+     * then nothing is added and the answer is false. INCRBY first, so two
+     * uploads at once cannot both slip under the limit.
+     */
+    async addUploadedBytes(orgId: string, bytes: number, limit: number): Promise<boolean> {
+        const key = this.uploadKey(orgId);
+        const total = await this.client.incrby(key, bytes);
+        if (total === bytes) await this.client.expire(key, 2 * 86400);
+        if (total <= limit) return true;
+        await this.client.decrby(key, bytes);
+        return false;
+    }
+
     // ─── REFRESH TOKENS ───
 
     async setRefreshToken(token: string, data: Record<string, unknown>): Promise<void> {

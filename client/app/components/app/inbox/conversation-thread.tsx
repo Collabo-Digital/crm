@@ -10,6 +10,7 @@ import type { InboxMessage, InboxNote } from "~/types/api";
 
 import { MessageBubble, type CommentReplyMode } from "./message-bubble";
 import { ThreadNote } from "./thread-note";
+import { scrollBehavior } from "~/lib/motion";
 
 /**
  * Which run a message belongs to: one side, and on our side or in a group one
@@ -123,7 +124,7 @@ export function ConversationThread({
     const container = containerRef.current;
     if (!container || heightBeforeEarlier.current !== null) return;
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    if (distanceFromBottom < 160) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (distanceFromBottom < 160) bottomRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: "end" });
   }, [newestId, notes.length]);
 
   // After older messages land above, hold the view where the reader was.

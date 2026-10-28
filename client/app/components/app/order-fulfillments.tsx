@@ -549,7 +549,7 @@ function LineItemRow({
               ),
             })
           }
-          className="w-14 rounded-md border bg-white dark:bg-gray-800 px-2 py-1 text-xs text-right tabular-nums outline-none focus:ring-1 focus:ring-[#cdff8c] disabled:opacity-50"
+          className="w-14 rounded-md border bg-white dark:bg-gray-800 px-2 py-1 text-xs text-right tabular-nums outline-none disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
         <span className="text-[10px] text-muted-foreground">/{state.maxQuantity}</span>
       </div>
@@ -708,7 +708,7 @@ function TextField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         list={listId}
-        className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+        className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
       />
       {listId && <CarrierDatalist id={listId} />}
     </div>

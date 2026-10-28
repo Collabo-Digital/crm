@@ -51,7 +51,7 @@ export default function SignupPage() {
     <div>
       {/* Heading */}
       <div className="mb-7">
-        <h2 className="text-[38px] font-bold text-gray-900">Get Started</h2>
+        <h1 className="text-[38px] font-bold text-gray-900">Get Started</h1>
         <p className="mt-1.5 text-[14px] text-gray-500">
           Start managing your commerce operations
           from one unified platform.
@@ -70,11 +70,12 @@ export default function SignupPage() {
               placeholder="John"
               autoComplete="given-name"
               aria-invalid={!!errors.firstName}
+              aria-describedby={errors.firstName ? "firstName-error" : undefined}
               {...register("firstName")}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition aria-[invalid=true]:border-red-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             {errors.firstName && (
-              <p className="text-xs text-red-500">{errors.firstName.message}</p>
+              <p id="firstName-error" className="text-xs text-red-700">{errors.firstName.message}</p>
             )}
           </div>
           <div className="">
@@ -86,11 +87,12 @@ export default function SignupPage() {
               placeholder="Doe"
               autoComplete="family-name"
               aria-invalid={!!errors.lastName}
+              aria-describedby={errors.lastName ? "lastName-error" : undefined}
               {...register("lastName")}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition aria-[invalid=true]:border-red-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             {errors.lastName && (
-              <p className="text-xs text-red-500">{errors.lastName.message}</p>
+              <p id="lastName-error" className="text-xs text-red-700">{errors.lastName.message}</p>
             )}
           </div>
         </div>
@@ -106,11 +108,12 @@ export default function SignupPage() {
             placeholder="john@example.com"
             autoComplete="email"
             aria-invalid={!!errors.email}
+            aria-describedby={errors.email ? "email-error" : undefined}
             {...register("email")}
-            className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+            className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition aria-[invalid=true]:border-red-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           {errors.email && (
-            <p className="text-xs text-red-500">{errors.email.message}</p>
+            <p id="email-error" className="text-xs text-red-700">{errors.email.message}</p>
           )}
         </div>
 
@@ -126,27 +129,27 @@ export default function SignupPage() {
               placeholder="Min. 8 characters"
               autoComplete="new-password"
               aria-invalid={!!errors.password}
+              aria-describedby={errors.password ? "password-error" : undefined}
               {...register("password")}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition aria-[invalid=true]:border-red-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-gray-500 hover:text-gray-700 transition-colors"
               onClick={() => setShowPassword((visible) => !visible)}
-              tabIndex={-1}
               aria-label={showPassword ? "Hide password" : "Show password"}
             >
               {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
           </div>
           {errors.password && (
-            <p className="text-xs text-red-500">{errors.password.message}</p>
+            <p id="password-error" className="text-xs text-red-700">{errors.password.message}</p>
           )}
         </div>
 
         {/* Server error */}
         {serverError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+          <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
             <p className="text-sm text-red-600">{serverError}</p>
           </div>
         )}
@@ -188,7 +191,7 @@ export default function SignupPage() {
       </p>
 
       <p className="mt-3 text-center text-[14px] text-gray-500 ">
-        By creating an account, you agree to  <Link to="https://grow100x.app/terms-and-conditions.html" className="text-[#084734] hover:text-[#3d6000] transition-colors">Terms of service</Link> and <Link to="https://grow100x.app/privacy-policy.html" className="text-[#084734] hover:text-[#3d6000] transition-colors">Privacy policy</Link>
+        By creating an account, you agree to  <Link to="https://grow100x.app/terms-and-conditions.html" className="text-[#084734] underline underline-offset-2 hover:text-[#3d6000] transition-colors">Terms of service</Link> and <Link to="https://grow100x.app/privacy-policy.html" className="text-[#084734] underline underline-offset-2 hover:text-[#3d6000] transition-colors">Privacy policy</Link>
       </p>
     </div>
   );

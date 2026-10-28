@@ -576,13 +576,13 @@ export function OrderItemsFulfillment({
           value={tNumber}
           onChange={(e) => setTNumber(e.target.value)}
           placeholder="Tracking number"
-          className="min-w-[10rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+          className="min-w-[10rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
         <CarrierInput
           value={tCompany}
           onChange={setTCompany}
           listId="carriers-line"
-          className="min-w-[8rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+          className="min-w-[8rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
         {/* Tracking URL must be present here too: the endpoint is a FULL
             REPLACE (order.service.ts writes `trackingUrl: dto.tracking.url ??
@@ -592,7 +592,7 @@ export function OrderItemsFulfillment({
           value={tUrl}
           onChange={(e) => setTUrl(e.target.value)}
           placeholder="Tracking URL"
-          className="min-w-[10rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+          className="min-w-[10rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
         <Button
           variant="brand"
@@ -634,19 +634,19 @@ export function OrderItemsFulfillment({
             value={trackingNumber}
             onChange={(e) => setTrackingNumber(e.target.value)}
             placeholder="Tracking number (optional)"
-            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           <CarrierInput
             value={trackingCompany}
             onChange={setTrackingCompany}
             listId="carriers-bulk"
-            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           <input
             value={trackingUrl}
             onChange={(e) => setTrackingUrl(e.target.value)}
             placeholder="Tracking URL (optional)"
-            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </div>
         )}
@@ -654,7 +654,7 @@ export function OrderItemsFulfillment({
           value={holdReason}
           onChange={(e) => setHoldReason(e.target.value)}
           placeholder="Reason for hold (optional)"
-          className="w-full rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+          className="w-full rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
         <div className="flex flex-wrap items-center gap-2">
           {isDetail && (

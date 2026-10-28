@@ -129,7 +129,7 @@ export function CreditNoteDialog({
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="Goods returned"
-              className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+              className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
           </div>
 
@@ -179,10 +179,11 @@ export function CreditNoteDialog({
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 aria-invalid={amountInvalid}
-                className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+                aria-describedby={amountInvalid ? "cn-amount-error" : undefined}
+                className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
               />
               {amountInvalid && (
-                <p className="mt-1 text-micro text-destructive">
+                <p id="cn-amount-error" className="mt-1 text-micro text-destructive">
                   Enter an amount between 0 and{" "}
                   {formatCurrency(invoiceTotal, currency)}.
                 </p>
@@ -206,15 +207,16 @@ export function CreditNoteDialog({
                 value={tax}
                 onChange={(e) => setTax(e.target.value)}
                 aria-invalid={taxInvalid}
+                aria-describedby="cn-tax-help"
                 placeholder="Work it out from the invoice"
-                className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+                className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
               />
               {taxInvalid ? (
-                <p className="mt-1 text-micro text-destructive">
+                <p id="cn-tax-help" className="mt-1 text-micro text-destructive">
                   The GST cannot be negative or more than the amount.
                 </p>
               ) : (
-                <p className="mt-1 text-micro text-muted-foreground">
+                <p id="cn-tax-help" className="mt-1 text-micro text-muted-foreground">
                   Blank credits the items first, at the invoice's GST rates,
                   then any untaxed shipping.
                 </p>
