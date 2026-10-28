@@ -506,6 +506,20 @@ export class InstagramOAuthService {
         if (decision.kind === 'blocked') {
             throw new ConflictException(decision.message);
         }
+        const label = candidate.username ? `@${candidate.username}` : 'This Instagram account';
+        // Keep the words "another organization" for the genuine cross-org
+        // case — classifyMetaCallbackError matches on them to pick the
+        // `account_taken` redirect reason.
+        const takenElsewhere = (holder: { organizationId: string; organization: { name: string } | null }) =>
+            `${label} is already connected to another organization ("${holder.organization?.name ?? holder.organizationId}"). Disconnect it there first.`;
+        // Webhooks are routed by account id alone, so it may belong to one
+        // organization only. Checked here rather than left to the unique
+        // index, which a database with older duplicates does not have.
+        const heldElsewhere = await this.prisma.channel.findFirst({
+            where: { platform: ChannelPlatform.INSTAGRAM, externalStoreId: candidate.igUserId, organizationId: { not: orgId } },
+            select: { organizationId: true, organization: { select: { name: true } } },
+        });
+        if (heldElsewhere) throw new ConflictException(takenElsewhere(heldElsewhere));
 
         // Reconnect UPDATES an existing row, so its metadata has to be merged
         // into rather than replaced — overwriting it would drop whatever else
@@ -625,16 +639,12 @@ export class InstagramOAuthService {
                         organization: { select: { name: true } },
                     },
                 });
-                const label = candidate.username ? `@${candidate.username}` : 'This Instagram account';
-                // Keep the words "another organization" for the genuine cross-org
-                // case — classifyMetaCallbackError matches on them to pick the
-                // `account_taken` redirect reason.
                 throw new ConflictException(
                     !holder
                         ? `${label} is already connected. Disconnect it first.`
                         : holder.organizationId === orgId
                           ? `${label} is already connected in this organization as "${holder.name}". Disconnect that channel first.`
-                          : `${label} is already connected to another organization ("${holder.organization?.name ?? holder.organizationId}"). Disconnect it there first.`,
+                          : takenElsewhere(holder),
                 );
             }
             throw error;

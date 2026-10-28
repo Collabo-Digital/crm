@@ -21,6 +21,7 @@ describe('WhatsAppOAuthService.handleSignupCallback', () => {
             },
             channel: {
                 findMany: jest.fn().mockResolvedValue(opts.rows ?? []),
+                findFirst: jest.fn().mockResolvedValue(null),
                 findUnique: jest.fn().mockResolvedValue(null),
                 create: jest.fn().mockImplementation(({ data }) => {
                     created.push(data);
@@ -202,6 +203,23 @@ describe('WhatsAppOAuthService.handleSignupCallback', () => {
         await settle();
 
         expect(result).toMatchObject({ channelId: 'ch_new', setup: { webhooks: 'ok' } });
+        expect(packQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('refuses a WABA another organization holds, whether or not the database has the unique index', async () => {
+        const { service, prisma, packQueue } = build();
+        prisma.channel.findFirst.mockResolvedValue({ id: 'ch_elsewhere' });
+
+        await expect(
+            service.handleSignupCallback('code', state, 'org1', 'u1', { wabaId: '1029', phoneNumberId: 'pn1' }),
+        ).rejects.toThrow('already connected to another organization');
+
+        expect(prisma.channel.findFirst).toHaveBeenCalledWith({
+            where: { platform: ChannelPlatform.WHATSAPP, externalStoreId: '1029', organizationId: { not: 'org1' } },
+            select: { id: true },
+        });
+        expect(prisma.channel.create).not.toHaveBeenCalled();
+        expect(prisma.channel.update).not.toHaveBeenCalled();
         expect(packQueue.add).not.toHaveBeenCalled();
     });
 

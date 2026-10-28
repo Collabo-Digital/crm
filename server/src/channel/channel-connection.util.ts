@@ -219,6 +219,34 @@ export function resolveConnectTarget(
     return { kind: 'create' };
 }
 
+// ─── WEBHOOK ROUTING ─────────────────────────────────────────────────────────
+
+/**
+ * The row an inbound Meta webhook belongs to, among the rows claiming its
+ * account id.
+ *
+ * The webhook is signed with the app's secret, which names no tenant, so the
+ * account id is the only tenant selector. The (platform, external_store_id)
+ * unique index leaves at most one row; a database that could not build it may
+ * hold more, and then the choice must not fall to row order: a CONNECTED row
+ * before an errored one, then the longest connected. A disconnected row is
+ * never chosen.
+ */
+export function pickRoutingChannel<T extends { id: string; status: ChannelStatus; connectedAt: Date | null }>(
+    rows: T[],
+): T | null {
+    const since = (r: T) => r.connectedAt?.getTime() ?? Number.POSITIVE_INFINITY;
+    const [first] = rows
+        .filter((r) => isActive(r.status))
+        .sort(
+            (a, b) =>
+                Number(b.status === ChannelStatus.CONNECTED) - Number(a.status === ChannelStatus.CONNECTED) ||
+                since(a) - since(b) ||
+                (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        );
+    return first ?? null;
+}
+
 /**
  * What the merchant sees as the connection's health.
  *

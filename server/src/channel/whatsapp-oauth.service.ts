@@ -62,6 +62,9 @@ export interface WhatsAppSignupSession {
     businessId?: string;
 }
 
+const TAKEN_ELSEWHERE =
+    'This WhatsApp Business account is already connected to another organization. Disconnect it there first.';
+
 export interface WhatsAppSetupOutcome {
     webhooks: 'ok' | 'failed';
     webhooksError?: string;
@@ -124,6 +127,15 @@ export class WhatsAppOAuthService {
                 error: err instanceof Error ? err.message : String(err),
             };
         }
+    }
+
+    /** Whether a channel of another organization holds this WABA. */
+    private async heldByAnotherOrg(wabaId: string, orgId: string): Promise<boolean> {
+        const holder = await this.prisma.channel.findFirst({
+            where: { platform: ChannelPlatform.WHATSAPP, externalStoreId: wabaId, organizationId: { not: orgId } },
+            select: { id: true },
+        });
+        return !!holder;
     }
 
     /** The org's WhatsApp rows, in the shape the decision helpers want. */
@@ -294,6 +306,12 @@ export class WhatsAppOAuthService {
         if (decision.kind === 'blocked') {
             throw new ConflictException(decision.message);
         }
+        // Webhooks are routed by WABA id alone, so it may belong to one
+        // organization only. Checked here rather than left to the unique
+        // index, which a database with older duplicates does not have.
+        if (await this.heldByAnotherOrg(wabaId, stateData.orgId)) {
+            throw new ConflictException(TAKEN_ELSEWHERE);
+        }
 
         // Reconnect UPDATES an existing row, so merge into its metadata rather
         // than replacing it — the same rule ChannelService.disconnect follows.
@@ -372,9 +390,7 @@ export class WhatsAppOAuthService {
                 // (platform, external_store_id) is unique table-wide, so this
                 // WABA belongs to another organization. The per-org partial
                 // unique should already have been caught by resolveConnectTarget.
-                throw new ConflictException(
-                    'This WhatsApp Business account is already connected to another organization. Disconnect it there first.',
-                );
+                throw new ConflictException(TAKEN_ELSEWHERE);
             }
             throw error;
         }

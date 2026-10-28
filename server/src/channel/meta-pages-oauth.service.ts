@@ -35,6 +35,8 @@ export const PAGE_SUBSCRIBED_FIELDS = [
     'feed',
 ].join(',');
 
+const TAKEN_ELSEWHERE = 'Already connected to another organization. Disconnect it there first.';
+
 interface MetaPage {
     id: string;
     name?: string;
@@ -234,6 +236,14 @@ export class MetaPagesOAuthService {
         });
         const decision = resolveConnectTarget(rows, platform, externalId);
         if (decision.kind === 'blocked') return { skipped: decision.message };
+        // Webhooks are routed by Page or Instagram account id alone, so it may
+        // belong to one organization only, whether or not the database has
+        // the unique index that would also refuse it.
+        const heldElsewhere = await this.prisma.channel.findFirst({
+            where: { platform, externalStoreId: externalId, organizationId: { not: orgId } },
+            select: { id: true },
+        });
+        if (heldElsewhere) return { skipped: TAKEN_ELSEWHERE };
 
         const existingMeta =
             decision.kind === 'reconnect'
@@ -267,7 +277,7 @@ export class MetaPagesOAuthService {
             return { channelId: row.id, platform, account };
         } catch (error) {
             if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-                return { skipped: 'Already connected to another organization. Disconnect it there first.' };
+                return { skipped: TAKEN_ELSEWHERE };
             }
             throw error;
         }

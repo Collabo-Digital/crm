@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ChannelPlatform, MessageSource, MessageStatus, Prisma } from '@prisma/client';
+import { ChannelPlatform, ChannelStatus, MessageSource, MessageStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { patchChannelMetadataSql, recordHistoryChunkSql, setChannelMetadataSql } from '../../../channel/channel-metadata.util';
+import { pickRoutingChannel } from '../../../channel/channel-connection.util';
 import { IngestChannel, MessageIngestService, StatusBeforeMessage } from '../../../messaging/message-ingest.service';
 import { TemplatesService } from '../../../campaigns/templates/templates.service';
 import { ContactRef } from '../../../messaging/contact-identity.service';
@@ -77,13 +78,17 @@ export class WhatsAppWebhookHandler {
 
         let early = 0;
         for (const [wabaId, list] of byWaba) {
-            const channel = await this.prisma.channel.findFirst({
-                where: { platform: ChannelPlatform.WHATSAPP, externalStoreId: wabaId },
-                select: { id: true, organizationId: true, externalStoreId: true, credentials: true },
+            const claims = await this.prisma.channel.findMany({
+                where: { platform: ChannelPlatform.WHATSAPP, externalStoreId: wabaId, status: { not: ChannelStatus.DISCONNECTED } },
+                select: { id: true, organizationId: true, externalStoreId: true, credentials: true, status: true, connectedAt: true },
             });
+            const channel = pickRoutingChannel(claims);
             if (!channel) {
                 this.logger.warn(`WhatsApp webhook for WABA ${wabaId}: no connected channel (${list.length} events dropped)`);
                 continue;
+            }
+            if (claims.length > 1) {
+                this.logger.warn(`WhatsApp webhook for WABA ${wabaId}: ${claims.length} channels claim it; routed to ${channel.id} (org ${channel.organizationId})`);
             }
             const phoneNumberId = readPhoneNumberId(channel.credentials);
             // A WABA can hold several numbers; only the connected one is ours.

@@ -1,4 +1,4 @@
-import { ChannelStatus, Prisma } from '@prisma/client';
+import { ChannelPlatform, ChannelStatus, Prisma } from '@prisma/client';
 import { accountUpdateEffect, channelChange } from './whatsapp-account-update.util';
 import { WhatsAppWebhookHandler } from './whatsapp-webhook.handler';
 import { parseWhatsAppDelivery } from './whatsapp-webhook.parser';
@@ -11,13 +11,20 @@ import { parseWhatsAppDelivery } from './whatsapp-webhook.parser';
  */
 
 const WABA = '102290129340398';
-const CHANNEL = { id: 'ch_wa', organizationId: 'org_1', externalStoreId: WABA, credentials: { phoneNumberId: '106540352242922' } };
+const CHANNEL = {
+    id: 'ch_wa',
+    organizationId: 'org_1',
+    externalStoreId: WABA,
+    credentials: { phoneNumberId: '106540352242922' },
+    status: ChannelStatus.CONNECTED as ChannelStatus,
+    connectedAt: new Date('2026-01-01T00:00:00Z') as Date | null,
+};
 
 function build(current: { status: ChannelStatus; lastError: string | null } = { status: ChannelStatus.CONNECTED, lastError: null }) {
     const sql: Prisma.Sql[] = [];
     const prisma = {
         channel: {
-            findFirst: jest.fn(async () => CHANNEL),
+            findMany: jest.fn(async () => [CHANNEL]),
             findUnique: jest.fn(async () => current),
             update: jest.fn(async () => ({})),
         },
@@ -78,16 +85,39 @@ describe('WhatsAppWebhookHandler: account restrictions', () => {
     });
 });
 
+const templateApproved = () =>
+    parseWhatsAppDelivery({
+        object: 'whatsapp_business_account',
+        entry: [{ id: WABA, time: 1751247548, changes: [{ field: 'message_template_status_update', value: { event: 'APPROVED', message_template_id: 991, message_template_name: 'collabo_order_shipped_v1', message_template_language: 'en' } }] }],
+    });
+
 describe('WhatsAppWebhookHandler: template events', () => {
     it('passes when Meta sent the event on to TemplatesService', async () => {
         const { handler, templates } = build();
-        await handler.handle(parseWhatsAppDelivery({
-            object: 'whatsapp_business_account',
-            entry: [{ id: WABA, time: 1751247548, changes: [{ field: 'message_template_status_update', value: { event: 'APPROVED', message_template_id: 991, message_template_name: 'collabo_order_shipped_v1', message_template_language: 'en' } }] }],
-        }));
+        await handler.handle(templateApproved());
         expect(templates.applyWebhook).toHaveBeenCalledWith(
             expect.objectContaining({ id: 'ch_wa', organizationId: 'org_1' }),
             expect.objectContaining({ templateId: '991', event: 'APPROVED', at: new Date(1751247548 * 1000) }),
         );
+    });
+});
+
+describe('WhatsAppWebhookHandler: which workspace', () => {
+    it('applies a WABA that several rows claim to one of them only: the connected row connected first', async () => {
+        const { handler, prisma, templates } = build();
+        jest.spyOn(handler['logger'], 'warn').mockImplementation(() => undefined);
+        prisma.channel.findMany.mockResolvedValue([
+            { ...CHANNEL, id: 'ch_later', organizationId: 'org_2', connectedAt: new Date('2026-10-01T00:00:00Z') },
+            { ...CHANNEL, id: 'ch_errored', organizationId: 'org_3', status: ChannelStatus.ERROR, connectedAt: new Date('2025-01-01T00:00:00Z') },
+            CHANNEL,
+        ]);
+
+        await handler.handle(templateApproved());
+
+        expect(prisma.channel.findMany.mock.calls[0]).toEqual([
+            expect.objectContaining({ where: { platform: ChannelPlatform.WHATSAPP, externalStoreId: WABA, status: { not: ChannelStatus.DISCONNECTED } } }),
+        ]);
+        expect(templates.applyWebhook).toHaveBeenCalledTimes(1);
+        expect(templates.applyWebhook).toHaveBeenCalledWith(expect.objectContaining({ id: 'ch_wa', organizationId: 'org_1' }), expect.anything());
     });
 });
