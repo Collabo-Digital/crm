@@ -39,6 +39,7 @@ import { useWarehouses } from "~/hooks/use-inventory-queries";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { usePosActivity, usePosSummary } from "~/hooks/use-pos-report-queries";
 import { isString, oneOf, useSessionState } from "~/hooks/use-session-state";
+import { unconvertedNote } from "~/lib/unconverted";
 import { formatDateTime } from "~/lib/format-date";
 import { calendarDaysAgo, formatDayRange, reportingTimeZone, todayIn } from "~/lib/reporting-date";
 import { cn, formatCurrency } from "~/lib/utils";
@@ -231,11 +232,7 @@ function SalesReport({
       </div>
 
       {data && data.unconvertedOrders > 0 && (
-        <p className="text-caption text-warning">
-          {data.unconvertedOrders} {data.unconvertedOrders === 1 ? "bill is" : "bills are"} left out
-          of these figures because {data.unconvertedOrders === 1 ? "its" : "their"} exchange rate is
-          not known yet.
-        </p>
+        <p className="text-caption text-warning-text">{unconvertedNote(data.unconvertedOrders, "bill")}.</p>
       )}
 
       {isLoading || !data ? (

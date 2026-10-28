@@ -36,6 +36,7 @@ import { reportingTimeZone, todayIn } from "~/lib/reporting-date";
 import { useOrders, useOrderStats } from "~/hooks/use-order-queries";
 import { useChannels } from "~/hooks/use-channel-queries";
 import { FULFILLMENT_FILTER_OPTIONS, PAYMENT_FILTER_OPTIONS } from "~/lib/order-status";
+import { comparedChange, comparedLabel, type TrendGoodWhen } from "~/lib/trend";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { orderService } from "~/services/order.service";
@@ -72,9 +73,11 @@ const STAT_CARDS: ReadonlyArray<{
   icon: React.ReactNode;
   /** Renders the value through formatCurrency instead of toLocaleString. */
   currency?: boolean;
+  /** A growing backlog is bad news, so its rise is red. */
+  goodWhen?: TrendGoodWhen;
 }> = [
   { key: "totalNewOrders", label: "Total New Orders", icon: <ShoppingBag className="size-4" /> },
-  { key: "pendingOrders", label: "Pending Orders", icon: <Package className="size-4" /> },
+  { key: "pendingOrders", label: "Pending Orders", icon: <Package className="size-4" />, goodWhen: "down" },
   { key: "totalSales", label: "Total Sales", icon: <Target className="size-4" />, currency: true },
   { key: "totalProductsSold", label: "Products Sold", icon: <Box className="size-4" /> },
 ];
@@ -220,10 +223,6 @@ export default function OrdersPage() {
         )
       : undefined;
 
-  function formatChange(direction: "up" | "down" | "same", percentage: number) {
-    return direction === "down" ? -percentage : percentage;
-  }
-
   const downloadReport = () => startDownload(
     "report",
     () => dashboardService.exportCsv(statsParams),
@@ -321,7 +320,7 @@ export default function OrdersPage() {
             </div>
           ))
         ) : stats ? (
-          STAT_CARDS.map(({ key, label, icon, currency }, i, arr) => {
+          STAT_CARDS.map(({ key, label, icon, currency, goodWhen }, i, arr) => {
             const metric = stats[key];
             return (
               <div key={key} className="flex min-w-0 items-center gap-4">
@@ -340,12 +339,9 @@ export default function OrdersPage() {
                       Number(metric.current).toLocaleString()
                     )
                   }
-                  {...(metric.change
-                    ? {
-                      change: formatChange(metric.change.direction, metric.change.percentage),
-                      changeLabel: "vs previous period",
-                    }
-                    : {})}
+                  change={comparedChange(metric)}
+                  goodWhen={goodWhen}
+                  changeLabel={comparedLabel(metric)}
                   icon={icon}
                   className="flex-1"
                 />
@@ -356,9 +352,7 @@ export default function OrdersPage() {
             );
           })
         ) : (
-          /* No `change` here — passing 0 renders a GREEN "0%" up-trend badge
-             (the card treats `change >= 0` as positive), so a failed stats
-             request comes out looking like four healthy metrics. */
+          /* No `change` here: a failed stats request has no trend to show. */
           STAT_CARDS.map(({ key, label, icon }) => (
             <StatCard key={key} variant="inline" label={label} value="—" icon={icon} />
           ))

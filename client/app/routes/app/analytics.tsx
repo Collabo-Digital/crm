@@ -150,8 +150,10 @@ export default function AnalyticsPage() {
                 variant="inline"
                 label={label}
                 value={value.toLocaleString()}
-                change={change}
-                changeLabel={changeLabel}
+                change={change ?? undefined}
+                // Fewer abandoned carts is the good news.
+                goodWhen={key === "totalAbandonedCarts" ? "down" : "up"}
+                changeLabel={change === null ? "None in the previous period" : changeLabel}
                 sparklineData={sparklineFor(key, trend)}
                 className="flex-1"
               />

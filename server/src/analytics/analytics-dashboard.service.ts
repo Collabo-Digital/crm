@@ -18,7 +18,8 @@ export interface DashboardStat {
   label: string;
   value: number;
   /// Percent change vs the previous comparable window. Positive = up.
-  change: number;
+  /// Null when the previous window had none to compare with.
+  change: number | null;
   changeLabel: string;
 }
 
@@ -203,9 +204,12 @@ export class AnalyticsDashboardService {
     prevValue: number,
     changeLabel: string,
   ): DashboardStat {
-    // 0 when there's no previous data — a flat trend beats a misleading
-    // "+100%" during cold start.
-    const change = prevValue > 0 ? Math.round(((value - prevValue) / prevValue) * 100) : 0;
+    // Nothing in the previous window means there is no rate of change: null,
+    // not "+100%", and not the flat 0% this used to send, which the cards
+    // showed beside a real rise (Total Checkout 4, "0%"). Zero against zero
+    // really is no change.
+    const change =
+      prevValue > 0 ? Math.round(((value - prevValue) / prevValue) * 100) : value > 0 ? null : 0;
     return { key, label, value, change, changeLabel };
   }
 

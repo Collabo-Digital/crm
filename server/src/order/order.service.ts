@@ -71,7 +71,12 @@ import {
   uniqueViolationTargets,
 } from '../common/utils/serialization-retry.util';
 import { mergeJsonMetadata } from '../common/utils/jsonb-merge.util';
-import { placedBetween } from '../common/utils/order-window.util';
+import {
+  PLACED_AT,
+  SALES_FINANCIAL_STATUSES,
+  placedBetween,
+  salesOrderWhere,
+} from '../common/utils/order-window.util';
 import { extractOrderShopifySync } from './order-shopify-sync.util';
 import { countryCodeOf, phoneLookupVariants } from '../common/phone.util';
 import { defaultCountryFor, toShopifyAddress } from '../channel/shopify-address.util';
@@ -608,13 +613,22 @@ export class OrderService {
   }
 
   async getComparison(orgId: string, query: QueryDashboardDto) {
-    const periods = this.comparisonPeriods(
-      query,
-      await this.reportingTimeZone(orgId),
-    );
+    // What the converted figures are denominated in, and the zone dates are
+    // read in. Uppercased like the dashboard's window currency, so both
+    // screens test an order's rate against the same code.
+    const org = await this.prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { timezone: true, currency: true },
+    });
+    const currency = (org?.currency || 'USD').toUpperCase();
+    const periods = this.comparisonPeriods(query, resolveReportingTimeZone(org ?? {}));
     const { currentStart, currentEnd, previousStart, previousEnd } = periods;
 
     const channelFilter = query.channelId ? { channelId: query.channelId } : {};
+    // "When was it placed" by the list's own rule (`externalCreatedAt`, else
+    // `createdAt`), so the tiles count the orders the table below lists. The
+    // ends here are inclusive and `placedBetween` takes an exclusive one.
+    const placedIn = (from: Date, to: Date) => placedBetween(from, new Date(to.getTime() + 1));
 
     const [
       currentOrders,
@@ -626,20 +640,19 @@ export class OrderService {
       currentSalesByCurrency,
       currentProductsSold,
       previousProductsSold,
-      orgRow,
     ] = await Promise.all([
       // Total new orders (current period)
       this.prisma.order.count({
         where: {
           organizationId: orgId, deletedAt: null, ...channelFilter,
-          externalCreatedAt: { gte: currentStart, lte: currentEnd },
+          ...placedIn(currentStart, currentEnd),
         },
       }),
       // Total new orders (previous period)
       this.prisma.order.count({
         where: {
           organizationId: orgId, deletedAt: null, ...channelFilter,
-          externalCreatedAt: { gte: previousStart, lte: previousEnd },
+          ...placedIn(previousStart, previousEnd),
         },
       }),
 
@@ -648,7 +661,7 @@ export class OrderService {
         where: {
           organizationId: orgId, deletedAt: null, ...channelFilter,
           fulfillmentStatus: 'UNFULFILLED',
-          externalCreatedAt: { gte: currentStart, lte: currentEnd },
+          ...placedIn(currentStart, currentEnd),
         },
       }),
       // Pending orders (previous period)
@@ -656,26 +669,26 @@ export class OrderService {
         where: {
           organizationId: orgId, deletedAt: null, ...channelFilter,
           fulfillmentStatus: 'UNFULFILLED',
-          externalCreatedAt: { gte: previousStart, lte: previousEnd },
+          ...placedIn(previousStart, previousEnd),
         },
       }),
 
       // Total sales revenue, converted into the org currency at each order's
       // own stored rate (current period, then the one before it).
-      this.convertedSales(orgId, query.channelId, currentStart, currentEnd),
-      this.convertedSales(orgId, query.channelId, previousStart, previousEnd),
+      this.convertedSales(orgId, query.channelId, currency, currentStart, currentEnd),
+      this.convertedSales(orgId, query.channelId, currency, previousStart, previousEnd),
 
       // The same current-period sales, split by the currency each order was
-      // actually placed in. Supporting detail under the converted headline —
-      // the `_sum.totalPrice` aggregates above are pre-conversion and are
-      // superseded by the converted figures computed below.
+      // actually placed in. Supporting detail under the converted headline,
+      // over the dashboard's sales scope like the total itself.
       this.prisma.order.groupBy({
         by: ['currency'],
-        where: {
-          organizationId: orgId, deletedAt: null, ...channelFilter,
-          financialStatus: { in: ['PAID', 'PARTIALLY_PAID'] },
-          externalCreatedAt: { gte: currentStart, lte: currentEnd },
-        },
+        where: salesOrderWhere({
+          orgId,
+          channelId: query.channelId,
+          from: currentStart,
+          to: new Date(currentEnd.getTime() + 1),
+        }),
         _sum: { totalPrice: true },
         _count: { _all: true },
       }),
@@ -685,7 +698,7 @@ export class OrderService {
         where: {
           order: {
             organizationId: orgId, deletedAt: null, ...channelFilter,
-            externalCreatedAt: { gte: currentStart, lte: currentEnd },
+            ...placedIn(currentStart, currentEnd),
           },
         },
         _sum: { quantity: true },
@@ -695,15 +708,10 @@ export class OrderService {
         where: {
           order: {
             organizationId: orgId, deletedAt: null, ...channelFilter,
-            externalCreatedAt: { gte: previousStart, lte: previousEnd },
+            ...placedIn(previousStart, previousEnd),
           },
         },
         _sum: { quantity: true },
-      }),
-      // What the converted figures above are denominated in.
-      this.prisma.organization.findUnique({
-        where: { id: orgId },
-        select: { currency: true },
       }),
     ]);
 
@@ -713,7 +721,7 @@ export class OrderService {
       sales: {
         current: currentSalesConverted.total,
         previous: previousSalesConverted.total,
-        currency: (orgRow?.currency ?? 'USD').toUpperCase(),
+        currency,
         unconverted: currentSalesConverted.unconverted,
         byCurrency: currentSalesByCurrency
           .map((r) => ({
@@ -874,32 +882,39 @@ export class OrderService {
    * separately, so a caller can say the figure is incomplete rather than
    * quietly under-reporting. Defaulting them to 1 would book $2,545 as ₹2,545.
    *
-   * The date predicate deliberately matches the aggregates it sits beside
-   * (`external_created_at`, inclusive both ends) so the converted figure covers
-   * exactly the same orders as the counts next to it.
+   * Scoped exactly like the dashboard's Total Sales (`salesOrderWhere` and the
+   * rate guards in its `fetchProfitRows`): not cancelled, partly refunded
+   * counts, placed-at falls back to `created_at`, and a rate only counts when
+   * it converts into the org currency. The two screens used to count with
+   * different rules, so the same ₹30,375 week read "15 orders excluded" on
+   * the dashboard and "3" here. `to` is inclusive, like the counts beside it.
    */
   private async convertedSales(
     orgId: string,
     channelId: string | undefined,
+    currency: string,
     from: Date,
     to: Date,
   ): Promise<{ total: number; unconverted: number }> {
     const channelFilter = channelId
       ? Prisma.sql`AND o."channel_id" = ${channelId}`
       : Prisma.empty;
+    // Never NULL, so NOT() below also catches a missing base currency.
+    const converts = Prisma.sql`(o."exchange_rate" IS NOT NULL AND o."base_currency" IS NOT NULL AND UPPER(o."base_currency") = ${currency})`;
 
     const rows = await this.prisma.$queryRaw<
       { total: string | null; unconverted: bigint }[]
     >`
       SELECT
-        COALESCE(SUM(o."total_price" * o."exchange_rate"), 0) AS total,
-        COUNT(*) FILTER (WHERE o."exchange_rate" IS NULL)     AS unconverted
+        COALESCE(SUM(o."total_price" * o."exchange_rate") FILTER (WHERE ${converts}), 0) AS total,
+        COUNT(*) FILTER (WHERE NOT ${converts})                                         AS unconverted
       FROM "orders" o
       WHERE o."organization_id" = ${orgId}
         AND o."deleted_at" IS NULL
-        AND o."financial_status"::text IN ('PAID', 'PARTIALLY_PAID')
-        AND o."external_created_at" >= ${from}
-        AND o."external_created_at" <= ${to}
+        AND o."cancelled_at" IS NULL
+        AND o."financial_status"::text IN (${Prisma.join(SALES_FINANCIAL_STATUSES)})
+        AND ${PLACED_AT} >= ${from}
+        AND ${PLACED_AT} <= ${to}
         ${channelFilter}
     `;
 

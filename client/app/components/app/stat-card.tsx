@@ -1,8 +1,10 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Link } from "react-router";
-import { ArrowRight, TrendingUp, TrendingDown } from "lucide-react";
+import { ArrowRight, Minus, TrendingUp, TrendingDown } from "lucide-react";
 
 import { Skeleton } from "~/components/ui/skeleton";
+import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
+import { trendBadge, type TrendGoodWhen } from "~/lib/trend";
 import { cn } from "~/lib/utils";
 import type { SparklinePoint } from "./chart-line-default";
 
@@ -41,12 +43,16 @@ interface StatCardProps {
      */
     value?: ReactNode;
     /**
-     * Omit when there is no trend to show — a failed request, or a metric with
-     * no comparison period. Callers used to pass 0 in that case, which rendered
-     * a GREEN up-trend "0%" badge (`change >= 0` is true for zero), so a failed
-     * stats request looked like four healthy metrics.
+     * Signed percent change on the previous period. Omit when there is no
+     * trend to show — a failed request, or no comparison period. Zero renders
+     * a neutral "0%", never a rise.
      */
     change?: number;
+    /**
+     * Which way is good news, which decides the badge colour: a rise in sales
+     * is green, a rise in pending orders red. Defaults to "up".
+     */
+    goodWhen?: TrendGoodWhen;
     changeLabel?: string;
     /** Renders a footer link instead of a trend badge. */
     linkTo?: string;
@@ -85,6 +91,7 @@ export function StatCard({
     label,
     value,
     change,
+    goodWhen = "up",
     changeLabel,
     linkTo,
     linkLabel,
@@ -96,22 +103,23 @@ export function StatCard({
     variant = "card",
     tone = "default",
 }: StatCardProps) {
-    const hasTrend = change !== undefined;
-    const isPositive = (change ?? 0) >= 0;
     const isInverted = tone === "inverted";
+    const trend = change === undefined ? null : trendBadge(change, goodWhen);
+    const TrendIcon =
+        trend?.direction === "up" ? TrendingUp : trend?.direction === "down" ? TrendingDown : Minus;
 
-    const trendBadge = hasTrend && (
+    // Status colours, not the brand: lime is not a status, and the old ink
+    // "up" badge read as good news whatever the figure measured.
+    const trendEl = trend && (
         <span
             className={cn(
                 "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-caption font-semibold",
-                isPositive ? "bg-ink text-brand" : "bg-danger-subtle text-danger",
-                // The default positive badge is ink-on-lime, which disappears
-                // against an inverted card.
-                isInverted && isPositive && "bg-brand text-brand-foreground"
+                STATUS_TONE_CLASSES[trend.tone]
             )}
         >
-            {isPositive ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
-            {Math.abs(change!)}%
+            <TrendIcon aria-hidden className="size-3" />
+            <span aria-hidden>{trend.text}</span>
+            <span className="sr-only">{trend.label}</span>
         </span>
     );
 
@@ -126,7 +134,7 @@ export function StatCard({
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                             <p className="text-subhead text-foreground">{value ?? "—"}</p>
-                            {trendBadge}
+                            {trendEl}
                         </div>
                     </div>
                     {Boolean(sparklineData?.length) && <div className="min-w-0 flex-1">
@@ -176,7 +184,7 @@ export function StatCard({
                                 {value ?? "—"}
                             </p>
                         )}
-                        {trendBadge}
+                        {trendEl}
                     </div>
                 </div>
 
