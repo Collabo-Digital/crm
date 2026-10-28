@@ -319,12 +319,14 @@ function OwnerOrderDetail({ id }: { id: string }) {
         </div>
       </div>
 
+      {/* One column below 1024px, ordered for working the order: the summary,
+          the actions, what was bought, the customer, then the history. */}
       <div className="flex min-w-0 flex-col gap-4 lg:flex-row">
         {/* ── Left rail: order meta ─────────────────────────────────────── */}
         {/* Sticky like the right rail. It runs taller than short screens, so
             cap it to the viewport and let it scroll itself — otherwise its
             bottom (metadata) would be unreachable while pinned. */}
-        <aside className="flex min-w-0 flex-1 flex-col gap-4.5 rounded-xl bg-card p-4 lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+        <aside className="flex min-w-0 flex-1 flex-col gap-4.5 rounded-xl bg-card p-4 max-lg:order-1 lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
           {/* Header */}
           <div className="flex flex-col gap-2">
             <h1 className="text-subhead text-foreground">{order.name}</h1>
@@ -397,166 +399,170 @@ function OwnerOrderDetail({ id }: { id: string }) {
         </aside>
 
         {/* ── Center: line items, fulfilment, activity ───────────────────── */}
-        <div className="min-w-0 flex-3 space-y-5">
-          <OrderItemsFulfillment
-            orderId={order.id}
-            items={order.lineItems}
-            currency={currency}
-            variant="detail"
-            title="Line items"
-            allowInProgress
-            canActOnItems={canActOnItems}
-            canCreateFulfillment={canFulfill}
-            groupCaptions={lineGroupCaptions}
-            headerAction={
-              /* Labelled for what it does — this opens FulfillDialog, not the
-                 Actions menu's Edit details dialog.
+        <div className="min-w-0 flex-3 space-y-5 max-lg:contents">
+          <div className="min-w-0 max-lg:order-3">
+            <OrderItemsFulfillment
+              orderId={order.id}
+              items={order.lineItems}
+              currency={currency}
+              variant="detail"
+              title="Line items"
+              allowInProgress
+              canActOnItems={canActOnItems}
+              canCreateFulfillment={canFulfill}
+              groupCaptions={lineGroupCaptions}
+              headerAction={
+                /* Labelled for what it does — this opens FulfillDialog, not the
+                   Actions menu's Edit details dialog.
 
-                 A standalone Restock button used to sit beside it, permanently
-                 disabled — there is no restock endpoint. Restocking is real,
-                 but it is a checkbox on Cancel order, which is where it
-                 belongs; a dead control is worse than no control.
+                   A standalone Restock button used to sit beside it, permanently
+                   disabled — there is no restock endpoint. Restocking is real,
+                   but it is a checkbox on Cancel order, which is where it
+                   belongs; a dead control is worse than no control.
 
-                 Gated: this and the rail button below both used to render
-                 unconditionally while only the third entry point checked
-                 `canFulfill`, so a VIEWER got two buttons that could only 403. */
-              canFulfill ? (
-                <Button variant="accent" size="sm" onClick={() => setDialog("fulfill")}>
-                  Fulfil items
-                </Button>
-              ) : null
-            }
-            footer={
-              <div className="flex justify-end rounded-b-xl border-t bg-[#f5f5f5] px-5 py-3 dark:bg-muted/40">
-                {/* Order of rows matters here. Shopify's `subtotalPrice` is
-                    already NET of discounts, so printing it as "Subtotal" and
-                    then a separate "-Discounts" row read as if the discount came
-                    off twice and never reconciled to the Total. Worse, the line
-                    rows above show gross (price x qty), so on a discounted order
-                    the visible rows didn't add up to the Subtotal either — e.g.
-                    #1002: rows 785.95, subtotal 628.76, discount -157.19,
-                    total 628.76.
-
-                    Gross is derived from the order's own numbers rather than by
-                    summing the rows, so it stays exact when a line carries its
-                    own `totalDiscount`. */}
-                <dl className="flex w-full max-w-56 flex-col gap-1.5 text-caption">
-                  <TotalRow
-                    label="Subtotal"
-                    value={formatCurrency(subtotal + discounts, currency)}
-                  />
-                  {discounts > 0 && (
-                    <TotalRow
-                      label="Discounts"
-                      value={`-${formatCurrency(discounts, currency)}`}
-                      negative
-                    />
-                  )}
-                  <TotalRow
-                    label={gstRate !== null ? `GST ${gstRate}%` : "GST"}
-                    value={formatCurrency(tax, currency)}
-                  />
-                  {shipping > 0 && (
-                    <TotalRow label="Shipping" value={formatCurrency(shipping, currency)} />
-                  )}
-                  <TotalRow label="Total" value={formatCurrency(total, currency)} bold />
-                </dl>
-              </div>
-            }
-          />
-
-          {/* Fulfilment summary — carrier, progress, what is still outstanding. */}
-          <section className="rounded-xl bg-card shadow-sm ring-1 ring-border">
-            <h2 className="border-b px-5 py-3 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
-              Fulfilment · {fulfilledCount} shipped, {outstanding.length} outstanding
-            </h2>
-            <div className="grid grid-cols-1 divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
-              <div className="px-5 py-4">
-                <p className="text-caption font-medium text-foreground">{carrier ?? DASH}</p>
-                <p className="mt-0.5 font-mono text-micro text-muted-foreground">
-                  {awb ? `AWB ${awb}` : DASH}
-                </p>
-                <ShipmentStepper fulfillment={primaryFulfilment} />
-              </div>
-              <div className="space-y-2 px-5 py-4">
-                {outstanding.length > 0 ? (
-                  <ul className="space-y-1.5">
-                    {outstanding.map((li) => (
-                      <li key={li.id} className="flex items-start gap-2 text-caption">
-                        <span
-                          className={cn(
-                            "mt-1.5 size-1.5 shrink-0 rounded-full",
-                            li.fulfillmentStatus === "on_hold" ? "bg-muted-foreground" : "bg-warning",
-                          )}
-                        />
-                        <span className="min-w-0 text-foreground">
-                          <span className="truncate">{li.title}</span>
-                          <span className="text-muted-foreground">
-                            {" "}
-                            — {li.fulfillmentStatus === "on_hold" ? "on hold" : "ready to ship"}
-                          </span>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-caption text-muted-foreground">
-                    Every item on this order has been fulfilled.
-                  </p>
-                )}
-                {/* `canFulfill` already requires outstanding units, so this is
-                    absent rather than present-but-dead once everything ships. */}
-                {canFulfill && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={() => setDialog("fulfill")}
-                  >
-                    <Truck className="size-3.5" />
-                    Create fulfilment
+                   Gated: this and the rail button below both used to render
+                   unconditionally while only the third entry point checked
+                   `canFulfill`, so a VIEWER got two buttons that could only 403. */
+                canFulfill ? (
+                  <Button variant="accent" size="sm" onClick={() => setDialog("fulfill")}>
+                    Fulfil items
                   </Button>
-                )}
-              </div>
-            </div>
-          </section>
+                ) : null
+              }
+              footer={
+                <div className="flex justify-end rounded-b-xl border-t bg-[#f5f5f5] px-5 py-3 dark:bg-muted/40">
+                  {/* Order of rows matters here. Shopify's `subtotalPrice` is
+                      already NET of discounts, so printing it as "Subtotal" and
+                      then a separate "-Discounts" row read as if the discount came
+                      off twice and never reconciled to the Total. Worse, the line
+                      rows above show gross (price x qty), so on a discounted order
+                      the visible rows didn't add up to the Subtotal either — e.g.
+                      #1002: rows 785.95, subtotal 628.76, discount -157.19,
+                      total 628.76.
 
-          {/* Existing shipments, with edit-tracking / cancel. Self-nulls when empty. */}
-          <OrderFulfillmentsSection order={order} canAct={canActOnItems} />
+                      Gross is derived from the order's own numbers rather than by
+                      summing the rows, so it stays exact when a line carries its
+                      own `totalDiscount`. */}
+                  <dl className="flex w-full max-w-56 flex-col gap-1.5 text-caption">
+                    <TotalRow
+                      label="Subtotal"
+                      value={formatCurrency(subtotal + discounts, currency)}
+                    />
+                    {discounts > 0 && (
+                      <TotalRow
+                        label="Discounts"
+                        value={`-${formatCurrency(discounts, currency)}`}
+                        negative
+                      />
+                    )}
+                    <TotalRow
+                      label={gstRate !== null ? `GST ${gstRate}%` : "GST"}
+                      value={formatCurrency(tax, currency)}
+                    />
+                    {shipping > 0 && (
+                      <TotalRow label="Shipping" value={formatCurrency(shipping, currency)} />
+                    )}
+                    <TotalRow label="Total" value={formatCurrency(total, currency)} bold />
+                  </dl>
+                </div>
+              }
+            />
+          </div>
 
-          {/* Activity — `orgMembers` is already fetched above for the Owner row. */}
-          <OrderActivity order={order} currency={currency} members={orgMembers} />
-
-          {/* Refunds */}
-          {order.refunds.length > 0 && (
+          <div className="min-w-0 space-y-5 max-lg:order-5">
+            {/* Fulfilment summary — carrier, progress, what is still outstanding. */}
             <section className="rounded-xl bg-card shadow-sm ring-1 ring-border">
               <h2 className="border-b px-5 py-3 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
-                Refunds ({order.refunds.length})
+                Fulfilment · {fulfilledCount} shipped, {outstanding.length} outstanding
               </h2>
-              <ul className="divide-y">
-                {order.refunds.map((r) => (
-                  <li key={r.id} className="flex items-center justify-between px-5 py-3">
-                    <div>
-                      <p className="text-caption font-medium tabular-nums text-danger">
-                        -{formatCurrency(Number(r.amount), currency)}
-                      </p>
-                      {r.reason && <p className="text-micro text-muted-foreground">{r.reason}</p>}
-                    </div>
-                    <p className="text-micro text-muted-foreground">
-                      {new Date(r.createdAt).toLocaleDateString("en-IN")}
+              <div className="grid grid-cols-1 divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
+                <div className="px-5 py-4">
+                  <p className="text-caption font-medium text-foreground">{carrier ?? DASH}</p>
+                  <p className="mt-0.5 font-mono text-micro text-muted-foreground">
+                    {awb ? `AWB ${awb}` : DASH}
+                  </p>
+                  <ShipmentStepper fulfillment={primaryFulfilment} />
+                </div>
+                <div className="space-y-2 px-5 py-4">
+                  {outstanding.length > 0 ? (
+                    <ul className="space-y-1.5">
+                      {outstanding.map((li) => (
+                        <li key={li.id} className="flex items-start gap-2 text-caption">
+                          <span
+                            className={cn(
+                              "mt-1.5 size-1.5 shrink-0 rounded-full",
+                              li.fulfillmentStatus === "on_hold" ? "bg-muted-foreground" : "bg-warning",
+                            )}
+                          />
+                          <span className="min-w-0 text-foreground">
+                            <span className="truncate">{li.title}</span>
+                            <span className="text-muted-foreground">
+                              {" "}
+                              — {li.fulfillmentStatus === "on_hold" ? "on hold" : "ready to ship"}
+                            </span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-caption text-muted-foreground">
+                      Every item on this order has been fulfilled.
                     </p>
-                  </li>
-                ))}
-              </ul>
+                  )}
+                  {/* `canFulfill` already requires outstanding units, so this is
+                      absent rather than present-but-dead once everything ships. */}
+                  {canFulfill && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      onClick={() => setDialog("fulfill")}
+                    >
+                      <Truck className="size-3.5" />
+                      Create fulfilment
+                    </Button>
+                  )}
+                </div>
+              </div>
             </section>
-          )}
+
+            {/* Existing shipments, with edit-tracking / cancel. Self-nulls when empty. */}
+            <OrderFulfillmentsSection order={order} canAct={canActOnItems} />
+
+            {/* Activity — `orgMembers` is already fetched above for the Owner row. */}
+            <OrderActivity order={order} currency={currency} members={orgMembers} />
+
+            {/* Refunds */}
+            {order.refunds.length > 0 && (
+              <section className="rounded-xl bg-card shadow-sm ring-1 ring-border">
+                <h2 className="border-b px-5 py-3 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
+                  Refunds ({order.refunds.length})
+                </h2>
+                <ul className="divide-y">
+                  {order.refunds.map((r) => (
+                    <li key={r.id} className="flex items-center justify-between px-5 py-3">
+                      <div>
+                        <p className="text-caption font-medium tabular-nums text-danger">
+                          -{formatCurrency(Number(r.amount), currency)}
+                        </p>
+                        {r.reason && <p className="text-micro text-muted-foreground">{r.reason}</p>}
+                      </div>
+                      <p className="text-micro text-muted-foreground">
+                        {new Date(r.createdAt).toLocaleDateString("en-IN")}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+          </div>
         </div>
 
         {/* ── Right rail: money, actions, customer, note ─────────────────── */}
-        <aside className="flex flex-1 flex-col gap-1.5 rounded-xl bg-card p-4 lg:sticky lg:top-6 lg:self-start">
+        <aside className="flex flex-1 flex-col gap-1.5 rounded-xl bg-card p-4 max-lg:contents lg:sticky lg:top-6 lg:self-start">
           {/* The order total lives in the left rail now — this rail opens with
               the actions rather than repeating the same figure. */}
-          <div className="space-y-2">
+          <div className="space-y-2 max-lg:order-2 max-lg:rounded-xl max-lg:bg-card max-lg:p-4">
             {/* No Fulfil items button here on purpose — fulfilment belongs to the
                 Line Items card, which groups by state and can act per line. This
                 rail carried a third copy of the same setDialog("fulfill") call. */}
@@ -593,7 +599,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
                 on the invoices tab meant the one place you would look — the
                 order itself — said nothing. */}
             {!invoice && order.invoiceError && (
-              <p className="flex items-start gap-1.5 rounded-lg bg-warning-subtle px-3 py-2 text-[10px] leading-relaxed text-warning">
+              <p className="flex items-start gap-1.5 rounded-lg bg-warning-subtle px-3 py-2 text-caption text-warning-text">
                 <AlertTriangle className="mt-px size-3 shrink-0" />
                 <span>{order.invoiceError}</span>
               </p>
@@ -616,16 +622,18 @@ function OwnerOrderDetail({ id }: { id: string }) {
             )}
           </div>
 
-          <CustomerRail
-            order={order}
-            customer={customer}
-            customerError={customerError}
-            onRetryCustomer={refetchCustomer}
-            currency={currency}
-            phone={phone}
-          />
+          <div className="flex min-w-0 flex-col gap-1.5 max-lg:order-4 max-lg:rounded-xl max-lg:bg-card max-lg:p-4">
+            <CustomerRail
+              order={order}
+              customer={customer}
+              customerError={customerError}
+              onRetryCustomer={refetchCustomer}
+              currency={currency}
+              phone={phone}
+            />
 
-          <InternalNote key={order.id} order={order} canEdit={canEdit} />
+            <InternalNote key={order.id} order={order} canEdit={canEdit} />
+          </div>
         </aside>
       </div>
 
@@ -1134,13 +1142,13 @@ function CustomerRail({
         {order.customer?.email && (
           <a
             href={`mailto:${order.customer.email}`}
-            className="truncate text-caption text-info hover:underline"
+            className="truncate text-caption text-info hover:underline max-md:py-3.5"
           >
             {order.customer.email}
           </a>
         )}
         {phone && (
-          <a href={`tel:${phone}`} className="truncate text-caption text-info hover:underline">
+          <a href={`tel:${phone}`} className="truncate text-caption text-info hover:underline max-md:py-3.5">
             {phone}
           </a>
         )}
@@ -1169,7 +1177,7 @@ function CustomerRail({
       {order.customer && (
         <Link
           to={`/orders/customers/${order.customer.id}`}
-          className=" pt-3 text-center text-caption font-medium text-foreground hover:underline"
+          className="pt-3 text-center text-caption font-medium text-foreground hover:underline max-md:py-3.5"
         >
           View customer →
         </Link>
