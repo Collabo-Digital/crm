@@ -1,4 +1,5 @@
 import type { FinancialStatus, GstType, Invoice, InvoiceStatus } from "~/types/api";
+import { STATUS_TONE_DOTS, toneClasses, type StatusTone } from "./status-tone.ts";
 
 /**
  * Canonical invoice-status pill styling, labels and derived display state.
@@ -20,13 +21,15 @@ import type { FinancialStatus, GstType, Invoice, InvoiceStatus } from "~/types/a
  */
 export type InvoiceDisplayStatus = InvoiceStatus | "UNPAID";
 
-export const INVOICE_STATUS_CLASSES: Record<InvoiceDisplayStatus, string> = {
-  ISSUED: "bg-brand/30 text-brand-strong",
-  UNPAID: "bg-warning-strong-subtle text-warning-strong",
-  DRAFT: "bg-muted text-muted-foreground",
-  CANCELLED: "bg-danger-subtle text-danger",
-  CREDIT_NOTE: "bg-info-subtle text-info",
+export const INVOICE_STATUS_TONES: Record<InvoiceDisplayStatus, StatusTone> = {
+  ISSUED: "success",
+  UNPAID: "attention",
+  DRAFT: "neutral",
+  CANCELLED: "critical",
+  CREDIT_NOTE: "info",
 };
+
+export const INVOICE_STATUS_CLASSES = toneClasses(INVOICE_STATUS_TONES);
 
 export const INVOICE_STATUS_LABELS: Record<InvoiceDisplayStatus, string> = {
   ISSUED: "Issued",
@@ -101,11 +104,7 @@ export function effectiveGstRate(invoice: {
   return Math.round((totalTax / subtotal) * 100);
 }
 
-/** Leading row dot. Same semantics as the pill, just the fill on its own. */
-export const INVOICE_STATUS_DOTS: Record<InvoiceDisplayStatus, string> = {
-  ISSUED: "bg-brand",
-  UNPAID: "bg-warning-strong",
-  DRAFT: "bg-muted-foreground/40",
-  CANCELLED: "bg-danger",
-  CREDIT_NOTE: "bg-info",
-};
+/** Leading row dot. Same tone as the pill, just the fill on its own. */
+export const INVOICE_STATUS_DOTS = Object.fromEntries(
+  Object.entries(INVOICE_STATUS_TONES).map(([status, tone]) => [status, STATUS_TONE_DOTS[tone]]),
+) as Record<InvoiceDisplayStatus, string>;

@@ -1,19 +1,20 @@
 import type { ChannelMessagingStatus } from "~/types/api";
+import { STATUS_TONE_CLASSES } from "./status-tone.ts";
 
 /** WhatsApp number quality, as Meta rates it, with the badge tone to show. */
 export function qualityMeta(quality: string | null): { label: string; className: string } | null {
   switch (quality?.toUpperCase()) {
     case "GREEN":
-      return { label: "High", className: "bg-success-subtle text-success" };
+      return { label: "High", className: STATUS_TONE_CLASSES.success };
     case "YELLOW":
-      return { label: "Medium", className: "bg-warning-subtle text-warning-strong" };
+      return { label: "Medium", className: STATUS_TONE_CLASSES.attention };
     case "RED":
-      return { label: "Low", className: "bg-danger-subtle text-danger" };
+      return { label: "Low", className: STATUS_TONE_CLASSES.critical };
     case "UNKNOWN":
     case undefined:
       return null;
     default:
-      return { label: quality!, className: "bg-muted text-muted-foreground" };
+      return { label: quality!, className: STATUS_TONE_CLASSES.neutral };
   }
 }
 

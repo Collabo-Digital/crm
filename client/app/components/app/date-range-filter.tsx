@@ -93,7 +93,7 @@ export function DateRangeFilter<T extends string>({
         type="button"
         aria-haspopup="dialog"
         aria-expanded={open}
-        className="flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full bg-transparent pl-2.5 pr-2 text-label focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+        className="flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full bg-transparent pl-2.5 pr-2 text-label focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
         <CalendarDays className="size-3.5" />
         <span className="font-medium">Date:</span>
@@ -104,7 +104,7 @@ export function DateRangeFilter<T extends string>({
       <button
         type="button"
         className={cn(
-          "flex h-8 items-center gap-1.5 rounded-lg border border-input bg-card px-2.5 text-caption font-medium whitespace-nowrap shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50",
+          "flex h-8 items-center gap-1.5 rounded-lg border border-input bg-card px-2.5 text-caption font-medium whitespace-nowrap shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
           className,
         )}
       >

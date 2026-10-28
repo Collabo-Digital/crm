@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { Link } from "react-router";
 import { PaymentsCard } from "~/components/app/settings/payments-card";
+import { Switch } from "~/components/ui/switch";
 import {
   useOrganizationSettings,
 } from "~/hooks/use-settings-queries";
@@ -113,7 +114,7 @@ function VendorMetafieldRow({
           <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
             Identify vendor by product metafield
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
+          <p className="mt-1 text-caption text-muted-foreground leading-relaxed">
             When ON, product sync reads the metafield below into each product's vendor key, which is
             used to scope vendor accounts (their products + order lines). The built-in Shopify "Vendor"
             field is the fallback for untagged products. Re-sync products after enabling. Default OFF.
@@ -206,7 +207,7 @@ function LowStockThresholdRow() {
         <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
           Low-stock alert threshold
         </p>
-        <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
+        <p className="mt-1 text-caption text-muted-foreground leading-relaxed">
           Variants whose stock is at or below this number are flagged as "low
           stock" on the dashboard, in the Low-stock panel, and in the products
           list "Low stock" filter. Out-of-stock items (≤ 0) are counted
@@ -404,7 +405,7 @@ function SkuPrefixRow({
         >
           SKU prefix
         </label>
-        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+        <p className="mt-1 text-caption leading-relaxed text-muted-foreground">
           The code generated SKUs begin with — enter SJ and a saree becomes
           SJ-SAR-001. Letters and digits only, up to 10. Leave it empty to use a
           short code derived from your business name. Existing SKUs are not
@@ -436,7 +437,7 @@ function SkuPrefixRow({
         )}
       </div>
       {invalid && (
-        <p className="text-[10px] text-red-600">
+        <p className="text-caption text-danger-text">
           Letters and digits only, with no spaces or punctuation.
         </p>
       )}
@@ -476,7 +477,7 @@ function SettingsToggleRow({
           {label}
         </p>
         {help && (
-          <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
+          <p className="mt-1 text-caption text-muted-foreground leading-relaxed">
             {help}
           </p>
         )}
@@ -499,22 +500,5 @@ function ToggleSwitch({
   disabled?: boolean;
   onChange: (next: boolean) => void;
 }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#cdff8c] disabled:cursor-not-allowed disabled:opacity-50 ${
-        checked ? "bg-[#cdff8c]" : "bg-gray-200 dark:bg-gray-700"
-      }`}
-    >
-      <span
-        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition-transform ${
-          checked ? "translate-x-4" : "translate-x-0"
-        }`}
-      />
-    </button>
-  );
+  return <Switch checked={checked} disabled={disabled} onCheckedChange={onChange} />;
 }

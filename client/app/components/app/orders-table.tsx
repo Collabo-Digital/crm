@@ -89,7 +89,7 @@ export function OrdersTable({ orders, currency, onViewDetail }: OrdersTableProps
           key={order.id}
           type="button"
           onClick={() => onViewDetail ? onViewDetail(order.id) : navigate(`/orders/${order.id}`)}
-          className="flex w-full items-start gap-3 px-1 py-4 text-left active:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-strong/50"
+          className="flex w-full items-start gap-3 px-1 py-4 text-left active:bg-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         >
           <div className="min-w-0 flex-1"><OrderMobileSummary order={order} currency={currency} /></div>
           <ChevronRight aria-hidden className="mt-1 size-4 shrink-0 text-muted-foreground/60" />
@@ -178,14 +178,14 @@ export function OrderMobileSummary({ order, currency }: { order: OrderRow; curre
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
-        <StatusPill className={cn("h-6 px-2.5 text-[11px]", FINANCIAL_CLASSES[order.financialStatus])}>
+        <StatusPill className={cn("h-6 px-2.5", FINANCIAL_CLASSES[order.financialStatus])}>
           {FINANCIAL_LABELS[order.financialStatus]}
         </StatusPill>
-        <StatusPill className={cn("h-6 px-2.5 text-[11px]", FULFILLMENT_CLASSES[order.fulfillmentStatus])}>
+        <StatusPill className={cn("h-6 px-2.5", FULFILLMENT_CLASSES[order.fulfillmentStatus])}>
           {FULFILLMENT_LABELS[order.fulfillmentStatus]}
         </StatusPill>
       </div>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted-foreground">
         <span>{order.itemCount} item{order.itemCount !== 1 ? "s" : ""}</span>
         <span aria-hidden>·</span>
         <DateCell value={order.createdAt} />
@@ -231,7 +231,7 @@ export function useOrderColumns({
             {order.financialStatus === "PAID" && (
               <span
                 title="Paid"
-                className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-brand/30 text-[10px] leading-none text-brand-strong"
+                className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-success-subtle text-caption leading-none text-success-text"
               >
                 ✓
               </span>

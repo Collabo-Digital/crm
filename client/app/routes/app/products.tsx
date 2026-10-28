@@ -22,6 +22,7 @@ import {
   type ColumnDef,
   type FilterDef,
 } from "~/components/app/data-table";
+import { toneClasses } from "~/lib/status-tone";
 import { cn, formatCurrency } from "~/lib/utils";
 import { useProducts, useProductTypes, useProductStats, useProductVendors } from "~/hooks/use-product-queries";
 import { useCodeStatus } from "~/hooks/use-inventory-queries";
@@ -66,11 +67,11 @@ const STAT_CARDS = [
   icon: React.ReactNode;
 }>;
 
-const STATUS_CLASS: Record<ProductStatus, string> = {
-  ACTIVE: "bg-brand/30 text-brand-strong",
-  DRAFT: "bg-muted text-muted-foreground",
-  ARCHIVED: "bg-warning-strong-subtle text-warning-strong",
-};
+const STATUS_CLASS = toneClasses<ProductStatus>({
+  ACTIVE: "success",
+  DRAFT: "neutral",
+  ARCHIVED: "neutral",
+});
 
 /** Filter chip options carry the API value, so the URL and the request agree. */
 const STATUS_OPTIONS: ReadonlyArray<{ value: ProductStatus; label: string }> = [

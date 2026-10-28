@@ -22,8 +22,8 @@ html.dark { color-scheme: dark; }
   --font-family-heading: var(--font-family-sans);
   --font-family-mono:    ui-monospace, 'Courier New', Courier, monospace;
 
-  /* ── Type scale ─────────────────────────────────────────────────────────── */
-  --font-size-2xs:  10px;   --line-height-2xs:  14px;
+  /* ── Type scale ─ 12px is the floor for anything people read. ───────────── */
+  --font-size-2xs:  12px;   --line-height-2xs:  16px;
   --font-size-xs:   12px;   --line-height-xs:   16px;
   --font-size-sm:   13px;   --line-height-sm:   18px;
   --font-size-md:   14px;   --line-height-md:   20px;
@@ -49,17 +49,29 @@ html.dark { color-scheme: dark; }
   /* Fixed white, to pair with the fixed-black `ink` in both themes. */
   --ink-foreground: #ffffff;
 
-  /* ── Status ─────────────────────────────────────────────────────────────── */
+  /* ── Status ─ the plain colour is for dots, icons and fills; it is too pale
+        for text. Text uses the -text shade, which passes 4.5:1 on the -subtle
+        tint and on every page surface. ── */
   --success:               oklch(0.627 0.194 149.214);  /* green-600  */
   --success-subtle:        oklch(0.962 0.044 156.743);  /* green-100  */
+  --success-text:          oklch(0.448 0.119 151.328);  /* green-800  */
   --warning:               oklch(0.666 0.179 58.318);   /* amber-600  */
   --warning-subtle:        oklch(0.987 0.022 95.277);   /* amber-50   */
+  --warning-text:          oklch(0.555 0.163 48.998);   /* amber-700  */
   --warning-strong:        oklch(0.646 0.222 41.116);   /* orange-600 */
   --warning-strong-subtle: oklch(0.98 0.016 73.684);    /* orange-50  */
+  --warning-strong-text:   oklch(0.553 0.195 38.402);   /* orange-700 */
   --danger:                oklch(0.577 0.245 27.325);   /* red-600    */
   --danger-subtle:         oklch(0.936 0.032 17.717);   /* red-100    */
+  --danger-text:           oklch(0.505 0.213 27.518);   /* red-700    */
   --info:                  oklch(0.546 0.245 262.881);  /* blue-600   */
   --info-subtle:           oklch(0.97 0.014 254.604);   /* blue-50    */
+  --info-text:             oklch(0.488 0.243 264.376);  /* blue-700   */
+
+  /* The unread-count badge, desktop and phone. Fixed in both themes: white on
+     red-600 is 4.8:1, and red stands out on the black bar and the white tab bar. */
+  --unread:            oklch(0.577 0.245 27.325);       /* red-600 */
+  --unread-foreground: #ffffff;
 
   /* ── shadcn base (unchanged) ────────────────────────────────────────────── */
   --background: oklch(1 0 0);
@@ -73,18 +85,23 @@ html.dark { color-scheme: dark; }
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  /* 5.5:1 on muted and on surface-sunken. */
+  --muted-foreground: oklch(0.5 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: var(--danger);
   --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  /* Edges of fields, checkboxes, radios and the off switch: 3:1 or better
+     against every surface. --border stays the soft line for cards. */
+  --input: oklch(0.62 0 0);
+  /* The keyboard focus ring: forest here, lime in dark. */
+  --ring: var(--brand-strong);
+  /* Series colours, all 3:1 or better against the card. */
+  --chart-1: var(--brand-strong);              /* the main series */
+  --chart-2: oklch(0.62 0 0);                  /* a comparison series */
+  --chart-3: oklch(0.546 0.245 262.881);       /* blue-600   */
+  --chart-4: oklch(0.555 0.163 48.998);        /* amber-700  */
+  --chart-5: oklch(0.558 0.288 302.321);       /* purple-600 */
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -132,14 +149,19 @@ html.dark { color-scheme: dark; }
   /* ── Status ─ /30% alpha reproduces today's dark:bg-*-950/30 exactly ────── */
   --success:               oklch(0.792 0.209 151.711);        /* green-400     */
   --success-subtle:        oklch(0.266 0.065 152.934 / 30%);  /* green-950/30  */
+  --success-text:          oklch(0.792 0.209 151.711);        /* green-400     */
   --warning:               oklch(0.828 0.189 84.429);         /* amber-400     */
   --warning-subtle:        oklch(0.279 0.077 45.635 / 30%);   /* amber-950/30  */
+  --warning-text:          oklch(0.828 0.189 84.429);         /* amber-400     */
   --warning-strong:        oklch(0.75 0.183 55.934);          /* orange-400    */
   --warning-strong-subtle: oklch(0.266 0.079 36.259 / 30%);   /* orange-950/30 */
+  --warning-strong-text:   oklch(0.75 0.183 55.934);          /* orange-400    */
   --danger:                oklch(0.704 0.191 22.216);         /* red-400       */
   --danger-subtle:         oklch(0.258 0.092 26.042 / 30%);   /* red-950/30    */
+  --danger-text:           oklch(0.704 0.191 22.216);         /* red-400       */
   --info:                  oklch(0.707 0.165 254.624);        /* blue-400      */
   --info-subtle:           oklch(0.282 0.091 267.935 / 30%);  /* blue-950/30   */
+  --info-text:             oklch(0.707 0.165 254.624);        /* blue-400      */
 
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
@@ -159,13 +181,14 @@ html.dark { color-scheme: dark; }
   --accent-foreground: oklch(0.985 0 0);
   --destructive: var(--danger);
   --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  /* 3.8:1 on the card. Field fills use bg-input/10 (4% white). */
+  --input: oklch(1 0 0 / 40%);
+  --ring: var(--brand-strong);
+  --chart-1: var(--brand-strong);              /* lime       */
+  --chart-2: oklch(0.6 0 0);
+  --chart-3: oklch(0.707 0.165 254.624);       /* blue-400   */
+  --chart-4: oklch(0.828 0.189 84.429);        /* amber-400  */
+  --chart-5: oklch(0.714 0.203 305.504);       /* purple-400 */
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
@@ -213,7 +236,7 @@ html.dark { color-scheme: dark; }
         font-weight isn't reachable either. Tailwind's own xs/sm/base/lg/xl/2xl
         are deliberately NOT overridden — they still render 12/14/16/18/20/24
         for the ~70 files not yet migrated. ── */
-  --text-micro:      var(--font-size-2xs);    /* 10px — badge / dot labels */
+  --text-micro:      var(--font-size-2xs);    /* 12px — badge / pill labels */
   --text-micro--line-height: var(--line-height-2xs);
 
   --text-caption:    var(--font-size-xs);     /* 12px — helper / meta text */
@@ -261,14 +284,21 @@ html.dark { color-scheme: dark; }
   /* ── Status ── */
   --color-success:               var(--success);
   --color-success-subtle:        var(--success-subtle);
+  --color-success-text:          var(--success-text);
   --color-warning:               var(--warning);
   --color-warning-subtle:        var(--warning-subtle);
+  --color-warning-text:          var(--warning-text);
   --color-warning-strong:        var(--warning-strong);
   --color-warning-strong-subtle: var(--warning-strong-subtle);
+  --color-warning-strong-text:   var(--warning-strong-text);
   --color-danger:                var(--danger);
   --color-danger-subtle:         var(--danger-subtle);
+  --color-danger-text:           var(--danger-text);
   --color-info:                  var(--info);
   --color-info-subtle:           var(--info-subtle);
+  --color-info-text:             var(--info-text);
+  --color-unread:                var(--unread);
+  --color-unread-foreground:     var(--unread-foreground);
 
   /* ── Inbox chat ── */
   --color-chat-wallpaper:         var(--chat-wallpaper);
@@ -339,7 +369,14 @@ html.dark { color-scheme: dark; }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring;
+  }
+  /* The keyboard focus ring for anything that does not draw its own: 2px of
+     solid --ring with a 2px gap, 3:1 or better on every surface. */
+  :focus-visible {
+    outline-style: solid;
+    outline-width: 2px;
+    outline-offset: 2px;
   }
   body {
     @apply bg-background text-foreground;
@@ -489,7 +526,7 @@ html.dark { color-scheme: dark; }
     gap: 3px;
     border-radius: 14px;
     color: var(--muted-foreground);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
   }
   .mobile-nav-icon { position: relative; display: grid; place-items: center; width: 48px; height: 34px; border-radius: 14px; transition: background-color .18s; }
@@ -497,7 +534,8 @@ html.dark { color-scheme: dark; }
   .mobile-nav-item[aria-current="page"] .mobile-nav-icon, .mobile-nav-item.is-active .mobile-nav-icon { background: var(--brand); color: var(--brand-foreground); }
   .mobile-nav-item:focus-visible { outline: 2px solid var(--brand-strong); outline-offset: -2px; }
   .mobile-nav-item:active .mobile-nav-icon { transform: scale(.94); }
-  .mobile-unread { position: absolute; right: 2px; top: 0; min-width: 16px; height: 16px; border-radius: 10px; background: var(--brand-forest); color: white; font-size: 9px; display: grid; place-items: center; padding-inline: 3px; border: 1.5px solid var(--card); }
+  /* Same badge as the desktop bar's (navbar.tsx): red, white, 12px semibold. */
+  .mobile-unread { position: absolute; right: 0; top: -2px; min-width: 18px; height: 18px; border-radius: 10px; background: var(--unread); color: var(--unread-foreground); font-size: 12px; font-weight: 600; line-height: 1; display: grid; place-items: center; padding-inline: 4px; box-shadow: 0 0 0 1.5px var(--card); }
   .mobile-action-dock { bottom: var(--mobile-nav-height); }
   .mobile-action-dock [role="group"] { border-radius: 18px; }
   .mobile-action-dock button { min-height: 44px; min-width: 44px; }

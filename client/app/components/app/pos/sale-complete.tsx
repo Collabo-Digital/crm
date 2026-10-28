@@ -103,10 +103,10 @@ export function SaleComplete({
 const STATUS: Record<PosBillDelivery["status"], { label: string; tone: string }> = {
   sending: { label: "Sending…", tone: "text-muted-foreground" },
   sent: { label: "Sent", tone: "text-foreground" },
-  delivered: { label: "Delivered", tone: "text-success" },
-  read: { label: "Read", tone: "text-info" },
-  not_sent: { label: "Not sent", tone: "text-danger" },
-  failed: { label: "Not sent", tone: "text-danger" },
+  delivered: { label: "Delivered", tone: "text-success-text" },
+  read: { label: "Read", tone: "text-info-text" },
+  not_sent: { label: "Not sent", tone: "text-danger-text" },
+  failed: { label: "Not sent", tone: "text-danger-text" },
 };
 
 const failed = (d: PosBillDelivery) => d.status === "not_sent" || d.status === "failed";

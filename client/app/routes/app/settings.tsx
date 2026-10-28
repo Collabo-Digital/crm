@@ -16,6 +16,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "~/components/ui/select";
 import { Button } from "~/components/ui/button";
+import { Switch } from "~/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { cn } from "~/lib/utils";
 import { useAuthStore } from "~/stores/auth.store";
@@ -153,26 +154,7 @@ const AVATAR_COLORS = [
 
 /** A small toggle switch used for boolean settings (e.g. notification channels). */
 function Toggle({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={enabled}
-      aria-label="Enable notification"
-      onClick={onChange}
-      className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200",
-        enabled ? "bg-[#CEF17B]" : "bg-gray-200"
-      )}
-    >
-      <span
-        className={cn(
-          "pointer-events-none inline-block size-4 rounded-full bg-white shadow-sm ring-0 transition-transform duration-200",
-          enabled ? "translate-x-4" : "translate-x-0"
-        )}
-      />
-    </button>
-  );
+  return <Switch checked={enabled} onCheckedChange={() => onChange()} aria-label="Enable notification" />;
 }
 
 /** A card wrapper that groups related settings with a title and optional description. */
@@ -194,7 +176,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:items-start">
       <div>
         <p className="text-xs font-medium text-gray-700 dark:text-gray-300">{label}</p>
-        {hint && <p className="mt-0.5 text-xs md:text-[10px] text-muted-foreground leading-snug">{hint}</p>}
+        {hint && <p className="mt-0.5 text-caption text-muted-foreground leading-snug">{hint}</p>}
       </div>
       <div className="sm:col-span-2">{children}</div>
     </div>
@@ -209,15 +191,15 @@ function NotifRow({ label, hint, email, push }: { label: string; hint: string; e
     <div className="flex items-center justify-between gap-4 py-3">
       <div className="min-w-0 flex-1">
         <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{label}</p>
-        <p className="text-xs md:text-[10px] text-muted-foreground">{hint}</p>
+        <p className="text-caption text-muted-foreground">{hint}</p>
       </div>
       <div className="flex items-center gap-6 shrink-0">
         <div className="flex flex-col items-center gap-1">
-          <span className="text-xs md:text-[10px] text-muted-foreground">Email</span>
+          <span className="text-caption text-muted-foreground">Email</span>
           <Toggle enabled={emailEnabled} onChange={() => setEmailEnabled((prev) => !prev)} />
         </div>
         <div className="flex flex-col items-center gap-1">
-          <span className="text-xs md:text-[10px] text-muted-foreground">Push</span>
+          <span className="text-caption text-muted-foreground">Push</span>
           <Toggle enabled={pushEnabled} onChange={() => setPushEnabled((prev) => !prev)} />
         </div>
       </div>
@@ -554,7 +536,7 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
           })}
 
           <div className="flex items-center justify-between gap-3 border-t pt-4">
-            <p className="text-xs md:text-[10px] text-muted-foreground">
+            <p className="text-caption text-muted-foreground">
               Saving changes only stores the new thresholds — click "Recompute tiers" to apply them to existing customers.
             </p>
             <button
@@ -574,7 +556,7 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
         description="Re-evaluates every customer's tier against the current thresholds. Run this after changing thresholds or the metric."
       >
         <div className="flex items-center justify-between gap-4">
-          <p className="text-xs md:text-[10px] text-muted-foreground">
+          <p className="text-caption text-muted-foreground">
             {isDirty
               ? "Save your thresholds first before recomputing."
               : "New orders sync their customer's tier automatically. Use this for a one-time catch-up across all customers."}
@@ -662,12 +644,12 @@ function PlacesOfBusiness({
       <p className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">
         Places of business
       </p>
-      <p className="text-xs md:text-[10px] text-muted-foreground">
+      <p className="text-caption text-muted-foreground">
         <span className="text-gray-600 dark:text-gray-400">Principal:</span>{" "}
         {principal.hasAddress ? principal.lines.join(", ") : "No registered address"}
       </p>
       {additional.map((w) => (
-        <p key={w.id} className="text-xs md:text-[10px] text-muted-foreground">
+        <p key={w.id} className="text-caption text-muted-foreground">
           <LocationKindBadge kind={w.kind} className="mr-1 align-middle" />
           <span className="text-gray-600 dark:text-gray-400">{w.name}:</span>{" "}
           {readAddress(w.address).lines.join(", ") || "No address"}
@@ -804,7 +786,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs font-medium text-gray-700 dark:text-gray-300">Enable GST</p>
-            <p className="text-xs md:text-[10px] text-muted-foreground">When enabled, you can register GSTINs and generate GST invoices.</p>
+            <p className="text-caption text-muted-foreground">When enabled, you can register GSTINs and generate GST invoices.</p>
           </div>
           <Toggle enabled={gstEnabled} onChange={handleGstToggle} />
         </div>
@@ -848,12 +830,12 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                           </span>
                         )}
                       </div>
-                      <p className="text-xs md:text-[10px] text-muted-foreground mt-0.5">
+                      <p className="text-caption text-muted-foreground mt-0.5">
                         {g.legalName} {g.tradeName ? `(${g.tradeName})` : ""}
                       </p>
                       <div className="flex items-center gap-1 mt-0.5">
                         <MapPin className="size-2.5 text-muted-foreground" />
-                        <p className="text-xs md:text-[10px] text-muted-foreground">
+                        <p className="text-caption text-muted-foreground">
                           {g.stateName} ({g.stateCode})
                         </p>
                       </div>
@@ -895,7 +877,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
               {(unlinkedWarehouses > 0 || undeclaredWarehouses > 0) && (
                 <div className="mt-3 space-y-1">
                   {unlinkedWarehouses > 0 && (
-                    <p className="text-xs md:text-[10px] text-muted-foreground">
+                    <p className="text-caption text-muted-foreground">
                       {unlinkedWarehouses} warehouse{unlinkedWarehouses === 1 ? " is" : "s are"} not linked to a GST registration.{" "}
                       <Link to="/products/inventory/warehouses" className="underline hover:text-gray-900 dark:hover:text-gray-100">
                         Link them
@@ -903,7 +885,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                     </p>
                   )}
                   {undeclaredWarehouses > 0 && (
-                    <p className="text-xs md:text-[10px] text-muted-foreground">
+                    <p className="text-caption text-muted-foreground">
                       {undeclaredWarehouses} place{undeclaredWarehouses === 1 ? "" : "s"} of business not yet marked as declared on the GST portal.
                     </p>
                   )}
@@ -1186,7 +1168,7 @@ function StateTaxRatesSection() {
               <div key={rate.id} className="flex items-center justify-between rounded-lg border p-3">
                 <div>
                   <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{rate.stateName}</p>
-                  <p className="text-xs md:text-[10px] text-muted-foreground">State Code: {rate.stateCode}</p>
+                  <p className="text-caption text-muted-foreground">State Code: {rate.stateCode}</p>
                 </div>
                 <div className="flex items-center gap-3">
                   {/* Editable in place. The update mutation existed and was
@@ -1296,7 +1278,7 @@ function ProductTypeTaxRatesSection() {
               <div key={rate.id} className="flex items-center justify-between rounded-lg border p-3">
                 <div>
                   <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{rate.productType}</p>
-                  <p className="text-xs md:text-[10px] text-muted-foreground">Product type</p>
+                  <p className="text-caption text-muted-foreground">Product type</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="rounded-full bg-blue-50 dark:bg-blue-900/20 px-2 py-0.5 text-xs font-semibold text-blue-700 dark:text-blue-400">{Number(rate.gstRate)}%</span>
@@ -1398,7 +1380,7 @@ function CollectionOverridesSection() {
               <div key={override.id} className="flex items-center justify-between rounded-lg border p-3">
                 <div>
                   <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{override.collection?.title ?? "Unknown"}</p>
-                  <p className="text-xs md:text-[10px] text-muted-foreground">Collection override</p>
+                  <p className="text-caption text-muted-foreground">Collection override</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="rounded-full bg-purple-50 dark:bg-purple-900/20 px-2 py-0.5 text-xs font-semibold text-purple-700 dark:text-purple-400">{Number(override.gstRate)}%</span>
@@ -1492,7 +1474,7 @@ function AppearanceTab() {
                   )}>
                     {label}
                   </p>
-                  <p className="mt-0.5 text-xs md:text-[10px] text-muted-foreground leading-snug">{desc}</p>
+                  <p className="mt-0.5 text-caption text-muted-foreground leading-snug">{desc}</p>
                 </div>
 
                 {/* Checkmark */}
@@ -2066,7 +2048,7 @@ export default function SettingsPage() {
                               {member.user.firstName} {member.user.lastName}
                               {isCurrentUser && <span className="ml-1.5 text-[10px] text-gray-400">(you)</span>}
                             </p>
-                            <p className="text-xs md:text-[10px] text-muted-foreground">{member.user.email}</p>
+                            <p className="text-caption text-muted-foreground">{member.user.email}</p>
                           </div>
 
                           {hasSectionAccess && canManageAccess && (
@@ -2168,7 +2150,7 @@ export default function SettingsPage() {
                           </div>
                           <div>
                             <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{invite.email}</p>
-                            <p className="text-xs md:text-[10px] text-muted-foreground">
+                            <p className="text-caption text-muted-foreground">
                               Invited as {invite.role.toLowerCase()}
                               {isSectionScopedRole(invite.role) && ` · ${sectionAccessLabel(invite.permissions)}`} · Expires {new Date(invite.expiresAt).toLocaleDateString()}
                             </p>

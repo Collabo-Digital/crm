@@ -601,7 +601,7 @@ export function MessageComposer({
               rows={1}
               aria-label={isNoteMode ? "Write an internal note" : "Write a reply"}
               placeholder={placeholder}
-              className="max-h-40 min-h-11 min-w-0 flex-1 resize-none rounded-none border-0 bg-transparent px-2 py-2.5 text-base leading-6 shadow-none placeholder:text-chat-meta focus-visible:ring-0 md:min-h-11 md:text-[15px] md:leading-[22px] dark:bg-transparent"
+              className="max-h-40 min-h-11 min-w-0 flex-1 resize-none rounded-none border-0 bg-transparent px-2 py-2.5 text-base leading-6 shadow-none placeholder:text-chat-meta focus-visible:outline-none md:min-h-11 md:text-[15px] md:leading-[22px] dark:bg-transparent"
             />
           </div>
 

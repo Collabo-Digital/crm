@@ -15,8 +15,8 @@ export function chipClass(active: boolean, className?: string): string {
 
 /** The small round × that sits inside a chip. */
 export const CHIP_CLEAR_CLASS =
-  "mr-0.5 flex size-9 shrink-0 items-center justify-center rounded-full hover:bg-brand-strong/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 md:size-6";
+  "mr-0.5 flex size-9 shrink-0 items-center justify-center rounded-full hover:bg-brand-strong/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:size-6";
 
 /** An option row inside a chip or scope popover. */
 export const OPTION_CLASS =
-  "flex min-h-11 w-full shrink-0 items-center gap-2 rounded-md px-2 text-left text-label text-foreground hover:bg-muted focus-visible:bg-muted focus-visible:outline-none md:min-h-8";
+  "flex min-h-11 w-full shrink-0 items-center gap-2 rounded-md px-2 text-left text-label text-foreground hover:bg-muted focus-visible:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring md:min-h-8";

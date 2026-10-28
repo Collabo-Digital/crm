@@ -281,7 +281,7 @@ export function DataTable<Row>({
             <kbd
               aria-hidden
               title="Press / to search"
-              className="pointer-events-none absolute right-2 top-[7px] hidden h-[18px] min-w-[18px] items-center justify-center rounded-[4px] font-mono text-[11px] text-muted-foreground ring-1 ring-border md:flex"
+              className="pointer-events-none absolute right-2 top-[7px] hidden h-[18px] min-w-[18px] items-center justify-center rounded-[4px] font-mono text-caption text-muted-foreground ring-1 ring-border md:flex"
             >
               /
             </kbd>
@@ -451,7 +451,7 @@ export function DataTable<Row>({
               onClick={(event) => handleRowClick(row, event)}
               onKeyDown={(event) => handleRowKey(row, event)}
               className={cn(
-                "group/row border-b border-border/60 p-4 last:border-b-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-strong/50",
+                "group/row border-b border-border/60 p-4 last:border-b-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
                 selected && "bg-brand/15",
                 onRowClick && "cursor-pointer active:bg-muted/60",
               )}
@@ -473,7 +473,7 @@ export function DataTable<Row>({
                       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
                         {columns.slice(1).map((column) => (
                           <div key={column.key} className={cn("min-w-0", column.minWidth && column.minWidth > 160 && "col-span-2")}>
-                            <dt className="mb-1 text-[11px] font-medium text-muted-foreground">{column.label}</dt>
+                            <dt className="mb-1 text-caption font-medium text-muted-foreground">{column.label}</dt>
                             <dd className="flex min-w-0 flex-wrap text-sm [overflow-wrap:anywhere]">{column.cell(row)}</dd>
                           </div>
                         ))}
@@ -578,7 +578,7 @@ export function DataTable<Row>({
                           );
                         }}
                         className={cn(
-                          "-mx-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50",
+                          "-mx-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-foreground/5 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
                           column.align === "right" && "flex-row-reverse",
                           active && "text-foreground",
                         )}
@@ -624,7 +624,7 @@ export function DataTable<Row>({
                     onClick={(event) => handleRowClick(row, event)}
                     onKeyDown={(event) => handleRowKey(row, event)}
                     className={cn(
-                      "group/row grid min-h-14 items-center border-b border-border transition-[filter] hover:brightness-[0.982] dark:hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/50",
+                      "group/row grid min-h-14 items-center border-b border-border transition-[filter] hover:brightness-[0.982] dark:hover:brightness-110 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
                       selected
                         ? "bg-[color-mix(in_oklch,var(--brand)_15%,var(--card))]"
                         : "bg-card",
