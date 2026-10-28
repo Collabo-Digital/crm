@@ -82,7 +82,7 @@ export function OrderCart({
     </div>
     <div className="hidden overflow-x-auto rounded-lg border bg-white dark:bg-gray-900 sm:block">
       <table className="w-full text-xs">
-        <thead className="bg-gray-50 dark:bg-gray-800/50 text-[10px] uppercase tracking-wider text-muted-foreground">
+        <thead className="bg-gray-50 dark:bg-gray-800/50 text-caption uppercase tracking-wider text-muted-foreground">
           <tr>
             <th className="px-3 py-2 text-left font-medium">Item</th>
             <th className="px-3 py-2 text-right font-medium">Qty</th>
@@ -101,17 +101,17 @@ export function OrderCart({
                   <p className="font-medium text-gray-900 dark:text-gray-100 truncate max-w-[18rem]">
                     {l.productTitle}
                   </p>
-                  <p className="text-[10px] text-muted-foreground truncate max-w-[18rem]">
+                  <p className="text-caption text-muted-foreground truncate max-w-[18rem]">
                     {l.variantTitle}
                   </p>
                   {overflow &&
                     (l.canOversell ? (
-                      <p className="mt-1 inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400">
+                      <p className="mt-1 inline-flex items-center gap-1 text-caption text-amber-700 dark:text-amber-400">
                         <Info className="size-3" />
                         Backorder — {Math.max(0, l.inventoryQuantity)} in stock, ordering {l.quantity}
                       </p>
                     ) : (
-                      <p className="mt-1 inline-flex items-center gap-1 text-[10px] text-red-600">
+                      <p className="mt-1 inline-flex items-center gap-1 text-caption text-red-600">
                         <AlertTriangle className="size-3" />
                         Only {l.inventoryQuantity} in stock
                       </p>
