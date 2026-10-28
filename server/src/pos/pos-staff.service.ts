@@ -26,10 +26,19 @@ export const toStaffView = (s: Pick<PosStaff, 'id' | 'name' | 'role' | 'isActive
 /** Wrong PINs a signed-in member may enter in the window before the till locks. */
 export const MAX_PIN_FAILURES = 5;
 export const PIN_FAILURE_WINDOW_S = 5 * 60;
+/**
+ * PINs a signed-in member may give staff in an hour. Each one is checked
+ * against every staff member's, and "already in use" tells whose PIN it is
+ * not, so setting PINs must not be a faster way to guess one than the till.
+ */
+export const MAX_PIN_SETS = 20;
+export const PIN_SET_WINDOW_S = 3600;
 
 const COUNT_LUA = `local n = redis.call('INCR', KEYS[1])
 if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
 return n`;
+const GIVE_BACK_LUA = `if tonumber(redis.call('GET', KEYS[1]) or '0') > 0 then redis.call('DECR', KEYS[1]) end
+return 0`;
 
 /**
  * The people who bill at the counter, the PINs that unlock the till for them,
@@ -55,7 +64,8 @@ export class PosStaffService {
         return rows.map(toStaffView);
     }
 
-    async create(orgId: string, input: CreateStaffInput): Promise<PosStaffView> {
+    async create(orgId: string, userId: string, input: CreateStaffInput): Promise<PosStaffView> {
+        await this.countPinSet(orgId, userId);
         await this.assertPinFree(orgId, input.pin);
         const row = await this.prisma.posStaff.create({
             data: { organizationId: orgId, name: input.name, role: input.role, pinHash: await bcrypt.hash(input.pin, 10) },
@@ -63,12 +73,15 @@ export class PosStaffService {
         return toStaffView(row);
     }
 
-    async update(orgId: string, id: string, input: UpdateStaffInput): Promise<PosStaffView> {
+    async update(orgId: string, userId: string, id: string, input: UpdateStaffInput): Promise<PosStaffView> {
         const existing = await this.prisma.posStaff.findFirst({ where: { id, organizationId: orgId } });
         if (!existing) throw new NotFoundException('That staff member was not found.');
         // Someone switched back on keeps a PIN that can no longer be compared (only
         // its hash is stored); a clash with it is refused at unlock instead.
-        if (input.pin) await this.assertPinFree(orgId, input.pin, id);
+        if (input.pin) {
+            await this.countPinSet(orgId, userId);
+            await this.assertPinFree(orgId, input.pin, id);
+        }
         const row = await this.prisma.posStaff.update({
             where: { id },
             data: {
@@ -164,25 +177,38 @@ export class PosStaffService {
      * The active staff member whose PIN this is. Wrong PINs are counted per
      * signed-in member, and past the limit the till stays locked for the rest
      * of the window even for a right one, so a PIN cannot be guessed.
+     *
+     * Every try is counted before its PIN is compared: tries sent at once
+     * would otherwise all pass a count none of them had added to yet. A right
+     * PIN then gives its count back.
      */
     private async staffForPin(orgId: string, userId: string, pin: string, purpose: 'unlock' | 'approval'): Promise<PosStaff> {
         const key = `pos:pin_failures:${orgId}:${userId}`;
-        if (Number((await this.redis.get<number>(key)) ?? 0) > MAX_PIN_FAILURES) throw this.locked();
+        const tries = Number(await this.redis.runScript('posPinFailure', COUNT_LUA, 1, [key], [PIN_FAILURE_WINDOW_S]));
+        if (tries > MAX_PIN_FAILURES) throw this.locked();
 
         const matches = await this.matchPin(orgId, pin);
+        if (matches.length === 0) {
+            await this.log(orgId, 'pin_failed', { deviceUserId: userId, details: { purpose } });
+            throw new UnauthorizedException("That PIN doesn't match anyone here.");
+        }
+        await this.redis.runScript('posPinGiveBack', GIVE_BACK_LUA, 1, [key], []);
         if (matches.length > 1) {
             throw new ConflictException('Two staff members share this PIN. Ask a manager to give one of them a new PIN.');
         }
-        if (matches.length === 1) return matches[0];
-
-        const failures = Number(await this.redis.runScript('posPinFailure', COUNT_LUA, 1, [key], [PIN_FAILURE_WINDOW_S]));
-        await this.log(orgId, 'pin_failed', { deviceUserId: userId, details: { purpose } });
-        if (failures > MAX_PIN_FAILURES) throw this.locked();
-        throw new UnauthorizedException("That PIN doesn't match anyone here.");
+        return matches[0];
     }
 
     private locked(): HttpException {
         return new HttpException('Too many wrong PINs. Wait five minutes and try again.', HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /** Counts one PIN given to a staff member, before it is compared with anyone's. */
+    private async countPinSet(orgId: string, userId: string): Promise<void> {
+        const sets = Number(await this.redis.runScript('posPinSet', COUNT_LUA, 1, [`pos:pin_sets:${orgId}:${userId}`], [PIN_SET_WINDOW_S]));
+        if (sets > MAX_PIN_SETS) {
+            throw new HttpException('Too many PINs set in the last hour. Wait a while and try again.', HttpStatus.TOO_MANY_REQUESTS);
+        }
     }
 
     /** Every active staff member with this PIN: one, or none, unless a clash slipped in. */

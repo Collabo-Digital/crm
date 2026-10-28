@@ -1,7 +1,9 @@
 import { ConflictException, ForbiddenException, HttpStatus, UnauthorizedException } from '@nestjs/common';
 import { PosStaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { PosStaffService } from './pos-staff.service';
+import RedisMock from 'ioredis-mock';
+import { RedisService } from '../redis/redis.service';
+import { MAX_PIN_FAILURES, MAX_PIN_SETS, PosStaffService } from './pos-staff.service';
 import { posTokenKey, readPosToken, signPosToken } from './pos-tokens';
 
 /**
@@ -14,23 +16,13 @@ const ORG = 'org_1';
 const USER = 'u_device';
 const SECRET = 'a'.repeat(32);
 
-function fakeRedis() {
-    const store = new Map<string, unknown>();
-    return {
-        store,
-        get: jest.fn(async (k: string) => (store.has(k) ? store.get(k) : null)),
-        del: jest.fn(async (k: string) => void store.delete(k)),
-        acquireLock: jest.fn(async (k: string) => {
-            if (store.has(k)) return false;
-            store.set(k, 1);
-            return true;
-        }),
-        runScript: jest.fn(async (_name: string, _lua: string, _n: number, keys: string[]) => {
-            const next = Number(store.get(keys[0]) ?? 0) + 1;
-            store.set(keys[0], next);
-            return next;
-        }),
-    };
+/** RedisService over ioredis-mock, which runs the real commands and Lua, one at a time like Redis. */
+async function realRedis() {
+    const service = new RedisService({ get: () => 'redis://localhost:6379' } as never);
+    const client = new RedisMock();
+    (service as unknown as { client: unknown }).client = client;
+    await client.flushall();
+    return service;
 }
 
 async function build(staff: Array<{ id: string; name: string; role: PosStaffRole; pin: string; isActive?: boolean }>) {
@@ -48,8 +40,8 @@ async function build(staff: Array<{ id: string; name: string; role: PosStaffRole
         },
         posActivity: { create: jest.fn().mockResolvedValue(undefined) },
     };
-    const redis = fakeRedis();
-    const service = new PosStaffService(prisma, redis as any, { get: () => SECRET } as any);
+    const redis = await realRedis();
+    const service = new PosStaffService(prisma, redis, { get: () => SECRET } as any);
     return { service, prisma, redis };
 }
 
@@ -158,13 +150,13 @@ describe('PosStaffService tokens', () => {
 describe('PosStaffService staff', () => {
     it('refuses a PIN another active staff member uses', async () => {
         const { service } = await build(team);
-        await expect(service.create(ORG, { name: 'Anu', role: 'CASHIER', pin: '1234' })).rejects.toThrow(new ConflictException('Another staff member already uses this PIN.'));
-        await expect(service.update(ORG, 'st_mgr', { pin: '1234' })).rejects.toBeInstanceOf(ConflictException);
+        await expect(service.create(ORG, USER, { name: 'Anu', role: 'CASHIER', pin: '1234' })).rejects.toThrow(new ConflictException('Another staff member already uses this PIN.'));
+        await expect(service.update(ORG, USER, 'st_mgr', { pin: '1234' })).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('lets a staff member keep their own PIN, and stores only its hash', async () => {
         const { service, prisma } = await build(team);
-        await service.update(ORG, 'st_cash', { pin: '1234', name: 'Ravi K' });
+        await service.update(ORG, USER, 'st_cash', { pin: '1234', name: 'Ravi K' });
         const data = prisma.posStaff.update.mock.calls[0][0].data;
         expect(data.name).toBe('Ravi K');
         expect(data.pinHash).not.toBe('1234');
@@ -174,5 +166,78 @@ describe('PosStaffService staff', () => {
     it('a PIN two active people ended up sharing unlocks for neither', async () => {
         const { service } = await build([team[0], { id: 'st_back', name: 'Back', role: PosStaffRole.CASHIER, pin: '1234' }]);
         await expect(service.unlock(ORG, USER, '1234')).rejects.toBeInstanceOf(ConflictException);
+    });
+});
+
+/**
+ * Each PIN check reads the active staff once and compares the PIN with each
+ * of them, so the reads count the PINs that were tried.
+ */
+const pinChecks = (prisma: unknown) => (prisma as { posStaff: { findMany: jest.Mock } }).posStaff.findMany.mock.calls.length;
+const failuresLogged = (prisma: unknown) =>
+    (prisma as { posActivity: { create: jest.Mock } }).posActivity.create.mock.calls.filter(([arg]: [{ data: { type: string } }]) => arg.data.type === 'pin_failed').length;
+
+describe('PosStaffService PIN guessing', () => {
+    it('compares no more approval PINs than the lock allows when guesses arrive all at once', async () => {
+        const { service, prisma } = await build(team);
+        const guesses = Array.from({ length: 20 }, (_, i) => service.approve(ORG, USER, { pin: String(100000 + i), reason: 'discount' }));
+        const right = service.approve(ORG, USER, { pin: '987654', reason: 'discount' });
+
+        const results = await Promise.allSettled([...guesses, right]);
+
+        expect(pinChecks(prisma)).toBe(MAX_PIN_FAILURES);
+        expect(failuresLogged(prisma)).toBe(MAX_PIN_FAILURES);
+        expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(0);
+        expect(results.at(-1)).toMatchObject({ status: 'rejected', reason: { status: HttpStatus.TOO_MANY_REQUESTS } });
+    });
+
+    it('compares no more unlock PINs than the lock allows when guesses arrive all at once', async () => {
+        const { service, prisma } = await build(team);
+        const guesses = Array.from({ length: 20 }, (_, i) => service.unlock(ORG, USER, String(5000 + i)));
+        const right = service.unlock(ORG, USER, '1234');
+
+        const results = await Promise.allSettled([...guesses, right]);
+
+        expect(pinChecks(prisma)).toBe(MAX_PIN_FAILURES);
+        expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(0);
+        expect(results.at(-1)).toMatchObject({ status: 'rejected', reason: { status: HttpStatus.TOO_MANY_REQUESTS } });
+    });
+
+    it('does not count a right PIN as a wrong try', async () => {
+        const { service } = await build(team);
+        for (let i = 0; i < MAX_PIN_FAILURES - 1; i++) await expect(service.unlock(ORG, USER, '0000')).rejects.toBeInstanceOf(UnauthorizedException);
+        for (let i = 0; i < 10; i++) await expect(service.unlock(ORG, USER, '1234')).resolves.toMatchObject({ staff: { id: 'st_cash' } });
+
+        await expect(service.unlock(ORG, USER, '0000')).rejects.toBeInstanceOf(UnauthorizedException);
+        await expect(service.unlock(ORG, USER, '1234')).rejects.toMatchObject({ status: HttpStatus.TOO_MANY_REQUESTS });
+    });
+});
+
+describe('PosStaffService PIN setting', () => {
+    it('stops a member trying PIN after PIN through staff changes, before comparing it with anyone', async () => {
+        const { service, prisma } = await build(team);
+        for (let i = 0; i < MAX_PIN_SETS; i++) {
+            await expect(service.update(ORG, USER, 'st_cash', { pin: String(2000 + i) })).resolves.toMatchObject({ id: 'st_cash' });
+        }
+        const checks = pinChecks(prisma);
+
+        await expect(service.update(ORG, USER, 'st_cash', { pin: '987654' })).rejects.toMatchObject({ status: HttpStatus.TOO_MANY_REQUESTS });
+        await expect(service.create(ORG, USER, { name: 'Anu', role: 'CASHIER', pin: '987654' })).rejects.toMatchObject({ status: HttpStatus.TOO_MANY_REQUESTS });
+        expect(pinChecks(prisma)).toBe(checks);
+
+        // Changes without a PIN, and another member, are not held up.
+        await expect(service.update(ORG, USER, 'st_cash', { name: 'Ravi K' })).resolves.toMatchObject({ name: 'Ravi K' });
+        await expect(service.create(ORG, 'u_owner', { name: 'Anu', role: 'CASHIER', pin: '5555' })).resolves.toMatchObject({ name: 'Anu' });
+    });
+
+    it('compares no more new PINs than allowed when they arrive all at once', async () => {
+        const { service, prisma } = await build(team);
+
+        const results = await Promise.allSettled(
+            Array.from({ length: MAX_PIN_SETS + 10 }, (_, i) => service.create(ORG, USER, { name: `Staff ${i}`, role: 'CASHIER', pin: String(300000 + i) })),
+        );
+
+        expect(pinChecks(prisma)).toBe(MAX_PIN_SETS);
+        expect(results.filter((r) => r.status === 'rejected')).toHaveLength(10);
     });
 });

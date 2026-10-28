@@ -60,13 +60,13 @@ export class PosController {
     @Post('staff')
     @Roles(...ORG_MANAGERS)
     createStaff(@CurrentUser() user: JwtPayload, @Body() body: unknown) {
-        return this.staff.create(user.orgId!, parsePosBody(CreateStaffSchema, body, 'staff member'));
+        return this.staff.create(user.orgId!, user.sub, parsePosBody(CreateStaffSchema, body, 'staff member'));
     }
 
     @Patch('staff/:id')
     @Roles(...ORG_MANAGERS)
     updateStaff(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: unknown) {
-        return this.staff.update(user.orgId!, id, parsePosBody(UpdateStaffSchema, body, 'staff member'));
+        return this.staff.update(user.orgId!, user.sub, id, parsePosBody(UpdateStaffSchema, body, 'staff member'));
     }
 
     @Post('unlock')
