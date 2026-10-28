@@ -15,8 +15,10 @@ type MobileNavItem = {
 
 const PRIMARY_PATHS = ["/dashboard", "/orders", "/inbox", "/products"];
 
-export function MobileNavigation({ items, workspace, canAccess, lockReason, onHelp }: {
+export function MobileNavigation({ items, shortcuts, workspace, canAccess, lockReason, onHelp }: {
   items: MobileNavItem[];
+  /** Pages inside a section worth a tile of their own. */
+  shortcuts: { label: string; href: string; icon: LucideIcon }[];
   workspace?: string;
   canAccess: (path: string) => boolean;
   lockReason: string;
@@ -65,6 +67,12 @@ export function MobileNavigation({ items, workspace, canAccess, lockReason, onHe
                   <span className="flex items-center justify-between"><Icon className="size-5" /><Lock className="size-3.5" /></span>
                   <span className="text-sm">{label}<span className="block text-xs">Access required</span></span>
                 </div>
+              ))}
+              {shortcuts.map(({ href, label, icon: Icon }) => (
+                <Link key={href} to={href} onClick={() => setOpen(false)} className={cn("flex min-h-24 flex-col justify-between gap-3 rounded-2xl bg-surface-sunken p-4", matches(href) && "bg-brand/35")}>
+                  <span className="flex items-center justify-between"><Icon className="size-5 text-brand-strong" strokeWidth={1.7} /><ArrowUpRight className="size-4 text-muted-foreground" /></span>
+                  <span className="text-sm font-semibold">{label}</span>
+                </Link>
               ))}
             </div>
             <div className="divide-y divide-border rounded-2xl border border-border px-4">

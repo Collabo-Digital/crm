@@ -21,7 +21,7 @@ import { messagingChannelWords } from "~/lib/channel-providers";
 import { platformLabel } from "~/lib/labels";
 
 export function meta() {
-  return [{ title: "Growth tools | Collabo CRM" }];
+  return [{ title: "Links & widget | Collabo CRM" }];
 }
 
 const selectClass = "h-9 w-full rounded-md border bg-background px-2 text-sm";
@@ -364,7 +364,7 @@ function WebsiteWidget({ canManage }: { canManage: boolean }) {
   );
 }
 
-/** Campaigns → Growth: ways to start chats from outside the inbox. */
+/** Campaigns → Links & widget: ways to start chats from outside the inbox. */
 export default function GrowthPage() {
   const { can } = useCurrentRole();
   const canManage = can("campaigns.manage");
@@ -372,7 +372,7 @@ export default function GrowthPage() {
     <div className="space-y-6">
       <PageHeader>
         <PageHeaderContent>
-          <PageHeaderTitle>Growth tools</PageHeaderTitle>
+          <PageHeaderTitle>Links & widget</PageHeaderTitle>
           <PageHeaderDescription>Start more chats: links and QR codes for anywhere, and a WhatsApp button and sign-up pop-up for your website.</PageHeaderDescription>
         </PageHeaderContent>
       </PageHeader>

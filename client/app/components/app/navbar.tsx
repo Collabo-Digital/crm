@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { motion, LayoutGroup } from "framer-motion";
 import {
@@ -59,7 +59,13 @@ import { useInboxCounts } from "~/hooks/use-inbox-queries";
 import { toast } from "sonner";
 import { roleLabel } from "~/lib/labels";
 
-type NavChild = { label: string; href: string; icon: typeof LayoutDashboard };
+type NavChild = {
+  label: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+  /** Children sharing a group sit together, set apart from the rest, under this name. */
+  group?: string;
+};
 type NavItem = {
   label: string;
   href: string;
@@ -98,18 +104,26 @@ const INBOX_CHILDREN: NavChild[] = [
   { label: "Groups", href: "/inbox/groups", icon: Users },
 ];
 
-/** Sub-nav for Campaigns. Overview keeps the parent href, like "All orders". */
+/**
+ * Sub-nav for Campaigns, in three jobs: Automations (the messages that send
+ * themselves, next to Overview so it is never off-screen on a phone), Messages
+ * sent by hand, and Growth. Overview keeps the parent href, like "All orders".
+ * The URLs are unchanged.
+ */
 const CAMPAIGNS_CHILDREN: NavChild[] = [
   { label: "Overview", href: "/campaigns", icon: Megaphone },
-  { label: "Broadcasts", href: "/campaigns/broadcasts", icon: Send },
-  { label: "Templates", href: "/campaigns/templates", icon: LayoutTemplate },
-  { label: "Segments", href: "/campaigns/segments", icon: Filter },
-  { label: "Automations", href: "/campaigns/automations", icon: Workflow },
-  { label: "Catalog", href: "/campaigns/catalog", icon: ShoppingBag },
-  { label: "Growth", href: "/campaigns/growth", icon: QrCode },
-  { label: "Ads", href: "/campaigns/ads", icon: Target },
-  { label: "Reviews", href: "/campaigns/reviews", icon: Star },
+  { label: "Automations", href: "/campaigns/automations", icon: Workflow, group: "Automations" },
+  { label: "Broadcasts", href: "/campaigns/broadcasts", icon: Send, group: "Messages" },
+  { label: "Templates", href: "/campaigns/templates", icon: LayoutTemplate, group: "Messages" },
+  { label: "Segments", href: "/campaigns/segments", icon: Filter, group: "Messages" },
+  { label: "Catalogue", href: "/campaigns/catalog", icon: ShoppingBag, group: "Growth" },
+  { label: "Links & widget", href: "/campaigns/growth", icon: QrCode, group: "Growth" },
+  { label: "Ads", href: "/campaigns/ads", icon: Target, group: "Growth" },
+  { label: "Reviews", href: "/campaigns/reviews", icon: Star, group: "Growth" },
 ];
+
+/** Shortcuts in the phone's More sheet, for pages a section's tabs would bury. */
+const MOBILE_SHORTCUTS: NavChild[] = [{ label: "Automations", href: "/campaigns/automations", icon: Workflow }];
 
 /** Sub-nav for Analytics: the storefront, and chats. */
 const ANALYTICS_CHILDREN: NavChild[] = [
@@ -417,46 +431,61 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
               aria-label={`${activeTop?.label} section`}
               className="inline-flex min-w-max items-center gap-0.5 md:rounded-full md:bg-white md:px-1.5 md:py-1 md:shadow-sm md:ring-1 md:ring-black/[0.06] md:dark:bg-gray-900 md:dark:ring-gray-700"
             >
-              {sectionChildren.map(({ label, href, icon: Icon }) => {
+              {sectionChildren.map(({ label, href, icon: Icon, group }, index) => {
                 const isActive = activeChild?.href === href;
+                // A new group starts: a divider, and its name when it holds more than one page.
+                const startsGroup = group !== undefined && sectionChildren[index - 1]?.group !== group;
+                const groupHead = startsGroup && (
+                  <span className="flex items-center gap-1.5 pl-1.5 pr-0.5" aria-hidden>
+                    <span className="h-5 w-px bg-border" />
+                    {sectionChildren.filter((child) => child.group === group).length > 1 && (
+                      <span className="text-caption font-medium text-muted-foreground max-md:hidden">{group}</span>
+                    )}
+                  </span>
+                );
                 if (!canAccess(href)) {
                   return (
-                    <Tip key={href} text={lockReason} side="bottom">
-                      <span
-                        role="link"
-                        aria-disabled="true"
-                        tabIndex={0}
-                        className="flex cursor-not-allowed items-center gap-1.5 rounded-full p-2.5 text-xs font-medium text-gray-300 select-none dark:text-gray-600"
-                      >
-                        <Lock className="size-3.5" />
-                        {label}
-                      </span>
-                    </Tip>
+                    <Fragment key={href}>
+                      {groupHead}
+                      <Tip text={lockReason} side="bottom">
+                        <span
+                          role="link"
+                          aria-disabled="true"
+                          tabIndex={0}
+                          className="flex cursor-not-allowed items-center gap-1.5 rounded-full p-2.5 text-xs font-medium text-gray-300 select-none dark:text-gray-600"
+                        >
+                          <Lock className="size-3.5" />
+                          {label}
+                        </span>
+                      </Tip>
+                    </Fragment>
                   );
                 }
                 return (
-                  <Link
-                    key={href}
-                    to={href}
-                    aria-current={isActive ? "page" : undefined}
-                    className={cn(
-                      "relative flex min-h-11 items-center gap-1.5 px-3 py-2.5 text-sm select-none md:min-h-0 md:rounded-full md:p-2.5 md:text-xs",
-                      isActive
-                        ? "font-semibold text-foreground md:text-brand-foreground"
-                        : "font-medium text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    {isActive && (
-                      <motion.span
-                        layoutId="section-nav-pill"
-                        initial={false}
-                        className="absolute inset-x-3 bottom-0 h-[3px] rounded-full bg-foreground md:inset-0 md:h-auto md:bg-brand"
-                        transition={{ type: "spring", stiffness: 380, damping: 32, mass: 1 }}
-                      />
-                    )}
-                    <Icon className="relative z-10 size-3.5 max-md:hidden" />
-                    <span className="relative z-10">{label}</span>
-                  </Link>
+                  <Fragment key={href}>
+                    {groupHead}
+                    <Link
+                      to={href}
+                      aria-current={isActive ? "page" : undefined}
+                      className={cn(
+                        "relative flex min-h-11 items-center gap-1.5 px-3 py-2.5 text-sm select-none md:min-h-0 md:rounded-full md:p-2.5 md:text-xs",
+                        isActive
+                          ? "font-semibold text-foreground md:text-brand-foreground"
+                          : "font-medium text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {isActive && (
+                        <motion.span
+                          layoutId="section-nav-pill"
+                          initial={false}
+                          className="absolute inset-x-3 bottom-0 h-[3px] rounded-full bg-foreground md:inset-0 md:h-auto md:bg-brand"
+                          transition={{ type: "spring", stiffness: 380, damping: 32, mass: 1 }}
+                        />
+                      )}
+                      <Icon className="relative z-10 size-3.5 max-md:hidden" />
+                      <span className="relative z-10">{label}</span>
+                    </Link>
+                  </Fragment>
                 );
               })}
             </nav>
@@ -465,7 +494,16 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
       )}
 
     </header>
-    {!immersive && <MobileNavigation items={navLinks.map((item) => ({ ...item, target: pillTarget(item) }))} workspace={currentOrg?.organization.name} canAccess={canAccess} lockReason={lockReason} onHelp={() => setHelpOpen(true)} />}
+    {!immersive && (
+      <MobileNavigation
+        items={navLinks.map((item) => ({ ...item, target: pillTarget(item) }))}
+        shortcuts={isInfluencer ? [] : MOBILE_SHORTCUTS.filter((shortcut) => canAccess(shortcut.href))}
+        workspace={currentOrg?.organization.name}
+        canAccess={canAccess}
+        lockReason={lockReason}
+        onHelp={() => setHelpOpen(true)}
+      />
+    )}
     <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </>
   );

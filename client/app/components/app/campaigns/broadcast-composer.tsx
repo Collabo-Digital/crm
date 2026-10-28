@@ -169,7 +169,7 @@ export function BroadcastComposer({ broadcast }: { broadcast: BroadcastDetail })
           <Input id="bc-name" value={name} onChange={(e) => setName(e.target.value)} onBlur={() => name !== broadcast.name && update.save(() => ({ name }))} />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="bc-campaign">Campaign</Label>
+          <Label htmlFor="bc-campaign">Group</Label>
           <Input
             id="bc-campaign"
             value={campaign}
