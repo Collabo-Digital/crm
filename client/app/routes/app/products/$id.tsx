@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -1955,7 +1956,7 @@ export default function ProductDetailPage() {
           </Section>
 
           <Section title="Product Organization">
-            <dl className="space-y-3 text-xs">
+            <div className="space-y-3 text-xs">
               <ComboboxField
                 label="Product Type"
                 items={typeItems}
@@ -1978,7 +1979,7 @@ export default function ProductDetailPage() {
                 onChange={setTags}
               />
 
-            </dl>
+            </div>
           </Section>
 
 
@@ -2281,6 +2282,7 @@ function TagsComboboxField({
   placeholder?: string;
 }) {
   const anchor = useComboboxAnchor();
+  const labelId = useId();
   const createInputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [createMode, setCreateMode] = useState(false);
@@ -2324,7 +2326,7 @@ function TagsComboboxField({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
-        <dt className="text-muted-foreground text-[12px]">{label}</dt>
+        <span id={labelId} className="text-muted-foreground text-[12px]">{label}</span>
         <button
           type="button"
           onMouseDown={(e) => {
@@ -2357,7 +2359,7 @@ function TagsComboboxField({
           </svg>
         </button>
       </div>
-      <dd>
+      <div>
         <Combobox
           multiple
           autoHighlight
@@ -2374,7 +2376,7 @@ function TagsComboboxField({
                   {values.map((tag: string) => (
                     <ComboboxChip key={tag}>{tag}</ComboboxChip>
                   ))}
-                  <ComboboxChipsInput placeholder={placeholder} />
+                  <ComboboxChipsInput placeholder={placeholder} aria-labelledby={labelId} />
                 </>
               )}
             </ComboboxValue>
@@ -2421,7 +2423,7 @@ function TagsComboboxField({
             </ComboboxList>
           </ComboboxContent>
         </Combobox>
-      </dd>
+      </div>
     </div>
   );
 }
@@ -2443,6 +2445,7 @@ function ComboboxField({
   disabled?: boolean;
   hideAddButton?: boolean;
 }) {
+  const labelId = useId();
   const createInputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [createMode, setCreateMode] = useState(false);
@@ -2487,7 +2490,7 @@ function ComboboxField({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
-        <dt className="text-muted-foreground text-[12px]">{label}</dt>
+        <span id={labelId} className="text-muted-foreground text-[12px]">{label}</span>
         {!hideAddButton && !disabled && (
           <button
             type="button"
@@ -2522,7 +2525,7 @@ function ComboboxField({
           </button>
         )}
       </div>
-      <dd>
+      <div>
         <Combobox
           items={items}
           value={value || null}
@@ -2531,7 +2534,7 @@ function ComboboxField({
           open={open}
           onOpenChange={handleOpenChange}
         >
-          <ComboboxInput placeholder={placeholder} />
+          <ComboboxInput placeholder={placeholder} aria-labelledby={labelId} />
           <ComboboxContent>
             {createMode && (
               <div
@@ -2574,7 +2577,7 @@ function ComboboxField({
             </ComboboxList>
           </ComboboxContent>
         </Combobox>
-      </dd>
+      </div>
     </div>
   );
 }
