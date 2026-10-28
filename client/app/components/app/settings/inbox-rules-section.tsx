@@ -176,7 +176,7 @@ export function InboxRulesSection({ canManage, members, teams }: { canManage: bo
               </div>
               <div className="flex items-center gap-2 text-caption">
                 When
-                <select className={selectClass} value={rule.match} disabled={readOnly} onChange={(e) => setRule(i, { ...rule, match: e.target.value as "all" | "any" })}>
+                <select className={selectClass} value={rule.match} disabled={readOnly} aria-label="Conditions that must be true" onChange={(e) => setRule(i, { ...rule, match: e.target.value as "all" | "any" })}>
                   <option value="all">all</option>
                   <option value="any">any</option>
                 </select>
@@ -242,7 +242,7 @@ export function InboxRulesSection({ canManage, members, teams }: { canManage: bo
               )}
               <div className="flex flex-wrap items-center gap-2 border-t pt-2 text-caption">
                 Assign to
-                <select className={selectClass} value={rule.assign.mode} disabled={readOnly} onChange={(e) => setRule(i, { ...rule, assign: { ...rule.assign, mode: e.target.value as InboxRoutingRule["assign"]["mode"] } })}>
+                <select className={selectClass} value={rule.assign.mode} disabled={readOnly} aria-label="Assign to" onChange={(e) => setRule(i, { ...rule, assign: { ...rule.assign, mode: e.target.value as InboxRoutingRule["assign"]["mode"] } })}>
                   <option value="user">a team member</option>
                   <option value="team">a team’s queue</option>
                   <option value="round_robin">the next available agent of</option>
@@ -294,7 +294,7 @@ export function InboxRulesSection({ canManage, members, teams }: { canManage: bo
             {s.roundRobin.enabled && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/40 p-3 text-caption">
                 Among
-                <select className={selectClass} value={s.roundRobin.teamId} disabled={readOnly} onChange={(e) => setS({ ...s, roundRobin: { ...s.roundRobin, teamId: e.target.value } })}>
+                <select className={selectClass} value={s.roundRobin.teamId} disabled={readOnly} aria-label="Share out among" onChange={(e) => setS({ ...s, roundRobin: { ...s.roundRobin, teamId: e.target.value } })}>
                   <option value="">everyone who can reply</option>
                   {teams.map((t) => (
                     <option key={t.id} value={t.id}>
@@ -303,7 +303,7 @@ export function InboxRulesSection({ canManage, members, teams }: { canManage: bo
                   ))}
                 </select>
                 skipping anyone with
-                <Input type="number" min={1} max={500} className="h-7 w-16" value={s.roundRobin.maxOpenPerAgent} disabled={readOnly} onChange={(e) => setS({ ...s, roundRobin: { ...s.roundRobin, maxOpenPerAgent: Math.max(1, Number(e.target.value) || 1) } })} />
+                <Input type="number" min={1} max={500} className="h-7 w-16" aria-label="Skip anyone with this many open conversations" value={s.roundRobin.maxOpenPerAgent} disabled={readOnly} onChange={(e) => setS({ ...s, roundRobin: { ...s.roundRobin, maxOpenPerAgent: Math.max(1, Number(e.target.value) || 1) } })} />
                 open conversations
               </div>
             )}
@@ -311,7 +311,7 @@ export function InboxRulesSection({ canManage, members, teams }: { canManage: bo
             {s.autoClose.enabled && (
               <div className="flex items-center gap-2 rounded-lg bg-muted/40 p-3 text-caption">
                 After
-                <Input type="number" min={1} max={2160} className="h-7 w-20" value={s.autoClose.afterHours} disabled={readOnly} onChange={(e) => setS({ ...s, autoClose: { ...s.autoClose, afterHours: Math.max(1, Number(e.target.value) || 1) } })} />
+                <Input type="number" min={1} max={2160} className="h-7 w-20" aria-label="Hours without a message before closing" value={s.autoClose.afterHours} disabled={readOnly} onChange={(e) => setS({ ...s, autoClose: { ...s.autoClose, afterHours: Math.max(1, Number(e.target.value) || 1) } })} />
                 hours without a message
               </div>
             )}

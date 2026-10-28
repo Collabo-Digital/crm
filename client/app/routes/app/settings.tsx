@@ -152,14 +152,14 @@ const AVATAR_COLORS = [
 
 // ── Reusable components ──────────────────────────────────────────────────────
 
-/** A small toggle switch used for boolean settings (e.g. notification channels). */
-function Toggle({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
+/** A small toggle switch used for boolean settings. `label` is what screen readers call it. */
+function Toggle({ enabled, onChange, label }: { enabled: boolean; onChange: () => void; label: string }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={enabled}
-      aria-label="Enable notification"
+      aria-label={label}
       onClick={onChange}
       className={cn(
         "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200",
@@ -181,7 +181,7 @@ function Section({ title, description, children }: { title: string; description?
   return (
     <div className="rounded-2xl bg-card p-5 md:p-6 shadow-sm ring-1 ring-border">
       <div className="mb-5 border-b pb-4">
-        <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">{title}</p>
+        <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{title}</h2>
         {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
       </div>
       {children}
@@ -189,12 +189,22 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-/** A labeled form field row with an optional hint, laid out in a responsive grid. */
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+/**
+ * A labeled form field row with an optional hint, laid out in a responsive grid.
+ * `htmlFor` is the control's id; the label's id is `${htmlFor}-label`, which a
+ * Select trigger names itself with (aria-labelledby). A row that holds no
+ * single control leaves it out.
+ */
+function Field({ label, hint, htmlFor, children }: { label: string; hint?: string; htmlFor?: string; children: React.ReactNode }) {
+  const labelClass = "block text-xs font-medium text-gray-700 dark:text-gray-300";
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:items-start">
       <div>
-        <p className="text-xs font-medium text-gray-700 dark:text-gray-300">{label}</p>
+        {htmlFor ? (
+          <label htmlFor={htmlFor} id={`${htmlFor}-label`} className={labelClass}>{label}</label>
+        ) : (
+          <p className={labelClass}>{label}</p>
+        )}
         {hint && <p className="mt-0.5 text-xs md:text-[10px] text-muted-foreground leading-snug">{hint}</p>}
       </div>
       <div className="sm:col-span-2">{children}</div>
@@ -215,11 +225,11 @@ function NotifRow({ label, hint, email, push }: { label: string; hint: string; e
       <div className="flex items-center gap-6 shrink-0">
         <div className="flex flex-col items-center gap-1">
           <span className="text-xs md:text-[10px] text-muted-foreground">Email</span>
-          <Toggle enabled={emailEnabled} onChange={() => setEmailEnabled((prev) => !prev)} />
+          <Toggle enabled={emailEnabled} onChange={() => setEmailEnabled((prev) => !prev)} label={`${label} by email`} />
         </div>
         <div className="flex flex-col items-center gap-1">
           <span className="text-xs md:text-[10px] text-muted-foreground">Push</span>
-          <Toggle enabled={pushEnabled} onChange={() => setPushEnabled((prev) => !prev)} />
+          <Toggle enabled={pushEnabled} onChange={() => setPushEnabled((prev) => !prev)} label={`${label} by push notification`} />
         </div>
       </div>
     </div>
@@ -508,6 +518,7 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
           <Field
             label="Tier metric"
             hint="Which customer metric decides their tier?"
+            htmlFor="loyalty-metric"
           >
             <Select
               value={metric}
@@ -517,7 +528,7 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
                 reset({ ...watch(), loyaltyMetric: value as LoyaltyMetric }, { keepDirty: true });
               }}
             >
-              <SelectTrigger className="h-9 w-full border-input bg-white dark:bg-gray-900 text-xs">
+              <SelectTrigger id="loyalty-metric" aria-labelledby="loyalty-metric-label" className="h-9 w-full border-input bg-white dark:bg-gray-900 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -539,16 +550,20 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
                 key={name}
                 label={`${tierLabel} minimum`}
                 hint={`Customers at or above this ${unitLabel} become ${tierLabel}. (e.g. ${exampleValue})`}
+                htmlFor={name}
               >
                 <input
+                  id={name}
                   type="number"
                   // step={metric === "ORDERS" ? "1" : "0.01"}
                   min="1"
+                  aria-invalid={!!errors[name]}
+                  aria-describedby={errors[name] ? `${name}-error` : undefined}
                   {...register(name, { valueAsNumber: true })}
                   className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs text-gray-900 dark:text-gray-100 shadow-sm focus:border-[#CEF17B] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/40"
                 />
                 {errors[name] && (
-                  <p className="mt-1 text-[10px] text-red-500">{errors[name]?.message as string}</p>
+                  <p id={`${name}-error`} className="mt-1 text-[10px] text-red-500">{errors[name]?.message as string}</p>
                 )}
               </Field>
             );
@@ -809,7 +824,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
             <p className="text-xs font-medium text-gray-700 dark:text-gray-300">Enable GST</p>
             <p className="text-xs md:text-[10px] text-muted-foreground">When enabled, you can register GSTINs and generate GST invoices.</p>
           </div>
-          <Toggle enabled={gstEnabled} onChange={handleGstToggle} />
+          <Toggle enabled={gstEnabled} onChange={handleGstToggle} label="Enable GST" />
         </div>
       </Section>
 
@@ -934,8 +949,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">GSTIN *</label>
+                  <label htmlFor="gstin-form-gstin" className="text-[10px] font-medium text-gray-600 dark:text-gray-400">GSTIN *</label>
                   <input
+                    id="gstin-form-gstin"
                     value={form.gstin}
                     onChange={(e) => setForm((prev) => ({ ...prev, gstin: e.target.value.toUpperCase() }))}
                     placeholder="e.g. 27AABCU9603R1ZM"
@@ -944,9 +960,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">State *</label>
+                  <label id="gstin-form-state-label" className="text-[10px] font-medium text-gray-600 dark:text-gray-400">State *</label>
                   <Select value={form.stateCode} onValueChange={handleStateChange}>
-                    <SelectTrigger className="mt-1 h-9 text-xs">
+                    <SelectTrigger aria-labelledby="gstin-form-state-label" className="mt-1 h-9 text-xs">
                       <SelectValue placeholder="Select state" />
                     </SelectTrigger>
                     <SelectContent>
@@ -959,8 +975,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                   </Select>
                 </div>
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Legal Name *</label>
+                  <label htmlFor="gstin-form-legal-name" className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Legal Name *</label>
                   <input
+                    id="gstin-form-legal-name"
                     value={form.legalName}
                     onChange={(e) => setForm((prev) => ({ ...prev, legalName: e.target.value }))}
                     placeholder="Registered legal name"
@@ -968,8 +985,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Trade Name</label>
+                  <label htmlFor="gstin-form-trade-name" className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Trade Name</label>
                   <input
+                    id="gstin-form-trade-name"
                     value={form.tradeName || ""}
                     onChange={(e) => setForm((prev) => ({ ...prev, tradeName: e.target.value }))}
                     placeholder="Brand/trade name (optional)"
@@ -988,8 +1006,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                   Registered address — printed on every invoice issued under this GSTIN
                 </p>
                 <div className="sm:col-span-2">
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Address line 1</label>
+                  <label htmlFor="gstin-form-address1" className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Address line 1</label>
                   <input
+                    id="gstin-form-address1"
                     value={form.address?.address1 ?? ""}
                     onChange={(e) => patchAddress({ address1: e.target.value })}
                     placeholder="Building, street"
@@ -997,8 +1016,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Address line 2</label>
+                  <label htmlFor="gstin-form-address2" className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Address line 2</label>
                   <input
+                    id="gstin-form-address2"
                     value={form.address?.address2 ?? ""}
                     onChange={(e) => patchAddress({ address2: e.target.value })}
                     placeholder="Area, landmark (optional)"
@@ -1006,8 +1026,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">City</label>
+                  <label htmlFor="gstin-form-city" className="text-[10px] font-medium text-gray-600 dark:text-gray-400">City</label>
                   <input
+                    id="gstin-form-city"
                     value={form.address?.city ?? ""}
                     onChange={(e) => patchAddress({ city: e.target.value })}
                     placeholder="City"
@@ -1015,8 +1036,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">PIN code</label>
+                  <label htmlFor="gstin-form-zip" className="text-[10px] font-medium text-gray-600 dark:text-gray-400">PIN code</label>
                   <input
+                    id="gstin-form-zip"
                     value={form.address?.zip ?? ""}
                     onChange={(e) => patchAddress({ zip: e.target.value })}
                     placeholder="6-digit PIN"
@@ -1228,7 +1250,7 @@ function StateTaxRatesSection() {
           <div className="flex-1">
             <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">State</label>
             <Select value={stateCode} onValueChange={setStateCode}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Select state" /></SelectTrigger>
+              <SelectTrigger aria-label="State" className="mt-1 h-9 text-xs"><SelectValue placeholder="Select state" /></SelectTrigger>
               <SelectContent>
                 {availableStates.map((s) => (
                   <SelectItem key={s.code} value={s.code} className="text-xs">{s.code} - {s.name}</SelectItem>
@@ -1239,7 +1261,7 @@ function StateTaxRatesSection() {
           <div className="w-28">
             <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">GST Rate</label>
             <Select value={gstRate} onValueChange={setGstRate}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
+              <SelectTrigger aria-label="GST rate" className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
               <SelectContent>
                 {GST_RATE_OPTIONS.map((r) => (<SelectItem key={r} value={r} className="text-xs">{r}%</SelectItem>))}
               </SelectContent>
@@ -1320,7 +1342,7 @@ function ProductTypeTaxRatesSection() {
           <div className="flex-1">
             <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Product Type</label>
             <Select value={productType} onValueChange={setProductType}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Select product type" /></SelectTrigger>
+              <SelectTrigger aria-label="Product type" className="mt-1 h-9 text-xs"><SelectValue placeholder="Select product type" /></SelectTrigger>
               <SelectContent>
                 {availableTypes.length > 0 ? (
                   availableTypes.map((t) => (
@@ -1335,7 +1357,7 @@ function ProductTypeTaxRatesSection() {
           <div className="w-28">
             <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">GST Rate</label>
             <Select value={gstRate} onValueChange={setGstRate}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
+              <SelectTrigger aria-label="GST rate" className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
               <SelectContent>
                 {GST_RATE_OPTIONS.map((r) => (<SelectItem key={r} value={r} className="text-xs">{r}%</SelectItem>))}
               </SelectContent>
@@ -1422,7 +1444,7 @@ function CollectionOverridesSection() {
           <div className="flex-1">
             <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Collection</label>
             <Select value={collectionId} onValueChange={setCollectionId}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Select collection" /></SelectTrigger>
+              <SelectTrigger aria-label="Collection" className="mt-1 h-9 text-xs"><SelectValue placeholder="Select collection" /></SelectTrigger>
               <SelectContent>
                 {availableCollections.map((c: ShopifyCollection) => (
                   <SelectItem key={c.id} value={c.id} className="text-xs">{c.title}</SelectItem>
@@ -1433,7 +1455,7 @@ function CollectionOverridesSection() {
           <div className="w-28">
             <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">GST Rate</label>
             <Select value={gstRate} onValueChange={setGstRate}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
+              <SelectTrigger aria-label="GST rate" className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
               <SelectContent>
                 {GST_RATE_OPTIONS.map((r) => (<SelectItem key={r} value={r} className="text-xs">{r}%</SelectItem>))}
               </SelectContent>
@@ -1525,9 +1547,9 @@ function AppearanceTab() {
       </Section>
 
       <Section title="Layout" description="How the navigation is displayed.">
-        <Field label="Navigation Style" hint="Choose how the main navigation appears.">
+        <Field label="Navigation Style" hint="Choose how the main navigation appears." htmlFor="navigation-style">
           <Select defaultValue="top">
-            <SelectTrigger className="h-9 w-full rounded-lg border border-input bg-transparent dark:bg-gray-900 dark:text-gray-100 px-3 text-sm focus:ring-2 focus:ring-[#CEF17B]/50">
+            <SelectTrigger id="navigation-style" aria-labelledby="navigation-style-label" className="h-9 w-full rounded-lg border border-input bg-transparent dark:bg-gray-900 dark:text-gray-100 px-3 text-sm focus:ring-2 focus:ring-[#CEF17B]/50">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1735,8 +1757,9 @@ export default function SettingsPage() {
                 ) : (
                   <>
                     <div className="space-y-4 divide-y divide-border">
-                      <Field label="Organization Name" hint="The name shown across your CRM.">
+                      <Field label="Organization Name" hint="The name shown across your CRM." htmlFor="org-name">
                         <input
+                          id="org-name"
                           value={displayName}
                           onChange={(e) => setOrgName(e.target.value)}
                           disabled={!canManageTeam}
@@ -1744,9 +1767,9 @@ export default function SettingsPage() {
                         />
                       </Field>
                       <div className="pt-4">
-                        <Field label="Industry" hint="Your primary business vertical.">
+                        <Field label="Industry" hint="Your primary business vertical." htmlFor="org-industry">
                           <Select value={displayIndustry || undefined} onValueChange={setOrgIndustry} disabled={!canManageTeam}>
-                            <SelectTrigger className="w-full h-9 border-input bg-transparent">
+                            <SelectTrigger id="org-industry" aria-labelledby="org-industry-label" className="w-full h-9 border-input bg-transparent">
                               <SelectValue placeholder="Select industry" />
                             </SelectTrigger>
                             <SelectContent>
@@ -1758,8 +1781,9 @@ export default function SettingsPage() {
                         </Field>
                       </div>
                       <div className="pt-4">
-                        <Field label="Website" hint="Your company's public website.">
+                        <Field label="Website" hint="Your company's public website." htmlFor="org-website">
                           <input
+                            id="org-website"
                             value={displayWebsite}
                             onChange={(e) => setOrgWebsite(e.target.value)}
                             placeholder="https://yourstore.com"
@@ -1825,9 +1849,9 @@ export default function SettingsPage() {
 
               <Section title="Localization" description="Timezone, currency, and regional settings.">
                 <div className="space-y-4 divide-y divide-border">
-                  <Field label="Timezone">
+                  <Field label="Timezone" htmlFor="org-timezone">
                     <Select value={displayTimezone} onValueChange={setOrgTimezone} disabled={!canManageTeam}>
-                      <SelectTrigger className="w-full h-9 border-input bg-transparent">
+                      <SelectTrigger id="org-timezone" aria-labelledby="org-timezone-label" className="w-full h-9 border-input bg-transparent">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1838,9 +1862,9 @@ export default function SettingsPage() {
                     </Select>
                   </Field>
                   <div className="pt-4">
-                    <Field label="Currency">
+                    <Field label="Currency" htmlFor="org-currency">
                       <Select value={displayCurrency} onValueChange={setOrgCurrency} disabled={!canManageTeam}>
-                        <SelectTrigger className="w-full h-9 border-input bg-transparent">
+                        <SelectTrigger id="org-currency" aria-labelledby="org-currency-label" className="w-full h-9 border-input bg-transparent">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1900,37 +1924,46 @@ export default function SettingsPage() {
             <>
               <Section title="Change Password" description="Update your account password regularly.">
                 <form onSubmit={passwordForm.handleSubmit((formData) => changePassword.mutate(formData))} className="space-y-3">
-                  <Field label="Current Password">
+                  <Field label="Current Password" htmlFor="currentPassword">
                     <input
+                      id="currentPassword"
                       type="password"
                       placeholder="••••••••"
+                      aria-invalid={!!passwordForm.formState.errors.currentPassword}
+                      aria-describedby={passwordForm.formState.errors.currentPassword ? "currentPassword-error" : undefined}
                       {...passwordForm.register("currentPassword")}
                       className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
                     />
                     {passwordForm.formState.errors.currentPassword && (
-                      <p className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.currentPassword.message}</p>
+                      <p id="currentPassword-error" className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.currentPassword.message}</p>
                     )}
                   </Field>
-                  <Field label="New Password" hint="Minimum 8 characters.">
+                  <Field label="New Password" hint="Minimum 8 characters." htmlFor="newPassword">
                     <input
+                      id="newPassword"
                       type="password"
                       placeholder="••••••••"
+                      aria-invalid={!!passwordForm.formState.errors.newPassword}
+                      aria-describedby={passwordForm.formState.errors.newPassword ? "newPassword-error" : undefined}
                       {...passwordForm.register("newPassword")}
                       className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
                     />
                     {passwordForm.formState.errors.newPassword && (
-                      <p className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.newPassword.message}</p>
+                      <p id="newPassword-error" className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.newPassword.message}</p>
                     )}
                   </Field>
-                  <Field label="Confirm New Password">
+                  <Field label="Confirm New Password" htmlFor="confirmPassword">
                     <input
+                      id="confirmPassword"
                       type="password"
                       placeholder="••••••••"
+                      aria-invalid={!!passwordForm.formState.errors.confirmPassword}
+                      aria-describedby={passwordForm.formState.errors.confirmPassword ? "confirmPassword-error" : undefined}
                       {...passwordForm.register("confirmPassword")}
                       className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
                     />
                     {passwordForm.formState.errors.confirmPassword && (
-                      <p className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.confirmPassword.message}</p>
+                      <p id="confirmPassword-error" className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.confirmPassword.message}</p>
                     )}
                   </Field>
                   <div className="flex justify-end pt-2">
@@ -2113,7 +2146,10 @@ export default function SettingsPage() {
                                 );
                               }}
                             >
-                              <SelectTrigger className="h-7 w-[100px] shrink-0 border-input bg-white dark:bg-gray-900 text-xs">
+                              <SelectTrigger
+                                aria-label={`Role for ${member.user.firstName} ${member.user.lastName}`}
+                                className="h-7 w-[100px] shrink-0 border-input bg-white dark:bg-gray-900 text-xs"
+                              >
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
@@ -2131,7 +2167,8 @@ export default function SettingsPage() {
                                   removeMember.mutate(member.id);
                                 }
                               }}
-                              className="shrink-0 text-gray-300 hover:text-red-500 transition-colors"
+                              aria-label={`Remove ${member.user.firstName} ${member.user.lastName}`}
+                              className="-m-1.5 shrink-0 rounded-md p-1.5 text-muted-foreground hover:text-red-500 transition-colors"
                             >
                               <Trash2 className="size-3.5" />
                             </button>

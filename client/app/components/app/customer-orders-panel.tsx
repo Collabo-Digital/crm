@@ -170,7 +170,7 @@ export function CustomerOrdersPanel({
         />
 
         <Select value={channelId} onValueChange={reset(setChannelId)}>
-          <SelectTrigger className="h-8 w-32 rounded-lg bg-card text-caption">
+          <SelectTrigger aria-label="Channel" className="h-8 w-32 rounded-lg bg-card text-caption">
             <SelectValue placeholder="Channels" />
           </SelectTrigger>
           <SelectContent>

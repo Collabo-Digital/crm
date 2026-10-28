@@ -155,7 +155,7 @@ export function GstReturnSettings() {
                 mutation.mutate({ defaultUnitOfMeasure: next })
               }
             >
-              <SelectTrigger className="h-9 w-56 text-caption">
+              <SelectTrigger aria-label="Default unit of quantity" className="h-9 w-56 text-caption">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

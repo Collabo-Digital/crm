@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { Link } from "react-router";
 import { PaymentsCard } from "~/components/app/settings/payments-card";
@@ -105,15 +105,16 @@ function VendorMetafieldRow({
 
   useEffect(() => setNamespace(settings.vendorMetafieldNamespace ?? "custom"), [settings.vendorMetafieldNamespace]);
   useEffect(() => setKey(settings.vendorMetafieldKey ?? "vendor_shop_domain"), [settings.vendorMetafieldKey]);
+  const id = useId();
 
   return (
     <div className="space-y-3 px-5 py-4">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+          <p id={`${id}-label`} className="text-sm font-medium text-gray-900 dark:text-gray-100">
             Identify vendor by product metafield
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
+          <p id={`${id}-help`} className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
             When ON, product sync reads the metafield below into each product's vendor key, which is
             used to scope vendor accounts (their products + order lines). The built-in Shopify "Vendor"
             field is the fallback for untagged products. Re-sync products after enabling. Default OFF.
@@ -123,6 +124,8 @@ function VendorMetafieldRow({
           checked={settings.vendorMetafieldEnabled}
           disabled={!canManage || isFieldSaving(mutation, "vendorMetafieldEnabled")}
           onChange={(checked) => mutation.mutate({ vendorMetafieldEnabled: checked })}
+          labelledBy={`${id}-label`}
+          describedBy={`${id}-help`}
         />
       </div>
       {settings.vendorMetafieldEnabled && (
@@ -136,6 +139,7 @@ function VendorMetafieldRow({
               mutation.mutate({ vendorMetafieldNamespace: namespace })
             }
             placeholder="namespace (e.g. custom)"
+            aria-label="Metafield namespace"
             className="h-8 flex-1 rounded-lg border border-input bg-white px-3 text-xs dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-[#cdff8c]"
           />
           <span className="text-xs text-muted-foreground">.</span>
@@ -148,6 +152,7 @@ function VendorMetafieldRow({
               mutation.mutate({ vendorMetafieldKey: key })
             }
             placeholder="key (e.g. vendor_shop_domain)"
+            aria-label="Metafield key"
             className="h-8 flex-1 rounded-lg border border-input bg-white px-3 text-xs dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-[#cdff8c]"
           />
         </div>
@@ -203,9 +208,9 @@ function LowStockThresholdRow() {
   return (
     <div className="flex items-start justify-between gap-4 px-5 py-4">
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+        <label htmlFor="low-stock-threshold" className="text-sm font-medium text-gray-900 dark:text-gray-100">
           Low-stock alert threshold
-        </p>
+        </label>
         <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
           Variants whose stock is at or below this number are flagged as "low
           stock" on the dashboard, in the Low-stock panel, and in the products
@@ -220,6 +225,7 @@ function LowStockThresholdRow() {
           <Check className="size-3.5 text-green-600" />
         ) : null}
         <input
+          id="low-stock-threshold"
           type="number"
           min={1}
           value={draft}
@@ -469,14 +475,15 @@ function SettingsToggleRow({
   disabled?: boolean;
   onChange: (next: boolean) => void;
 }) {
+  const id = useId();
   return (
     <div className="flex items-start justify-between gap-4 px-5 py-4">
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+        <p id={`${id}-label`} className="text-sm font-medium text-gray-900 dark:text-gray-100">
           {label}
         </p>
         {help && (
-          <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
+          <p id={`${id}-help`} className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
             {help}
           </p>
         )}
@@ -485,25 +492,34 @@ function SettingsToggleRow({
         checked={checked}
         disabled={disabled}
         onChange={onChange}
+        labelledBy={`${id}-label`}
+        describedBy={help ? `${id}-help` : undefined}
       />
     </div>
   );
 }
 
+/** `labelledBy` and `describedBy` are the ids of the row's title and help text. */
 function ToggleSwitch({
   checked,
   disabled,
   onChange,
+  labelledBy,
+  describedBy,
 }: {
   checked: boolean;
   disabled?: boolean;
   onChange: (next: boolean) => void;
+  labelledBy: string;
+  describedBy?: string;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#cdff8c] disabled:cursor-not-allowed disabled:opacity-50 ${
