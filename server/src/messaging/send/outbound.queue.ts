@@ -30,6 +30,20 @@ const LOWEST_PRIORITY = 2 ** 21;
 export const broadcastPriority = (batch: number): number =>
     Math.min(LOWEST_PRIORITY, Priority.BULK + Math.max(0, Math.floor(batch)));
 
+/// Automation and API sends a workspace queues in a minute at NORMAL priority.
+export const NORMAL_SENDS_PER_STEP = 100;
+
+/**
+ * An automation or API send's place in the shared queue, from how many such
+ * sends its workspace has queued this minute: each further
+ * NORMAL_SENDS_PER_STEP go one level lower, so one workspace's flood waits
+ * behind other workspaces' sends rather than in front of them, and once it is
+ * broadcast-sized it takes turns with broadcast batches. Every workspace's
+ * first sends of each minute keep NORMAL priority, so none is shut out.
+ */
+export const normalPriority = (queuedThisMinute: number): number =>
+    Math.min(LOWEST_PRIORITY, Priority.NORMAL + Math.floor(Math.max(0, queuedThisMinute - 1) / NORMAL_SENDS_PER_STEP));
+
 /**
  * How long a message may wait to go out (rate limits, lost jobs) before it is
  * failed rather than sent late: a reply someone is waiting on is stale
