@@ -188,7 +188,7 @@ export default function SignupPage() {
       </p>
 
       <p className="mt-3 text-center text-[14px] text-gray-500 ">
-        By creating an account, you agree to  <Link to="https://grow100x.app/terms-and-conditions.html" className="text-[#084734] hover:text-[#3d6000] transition-colors">Terms of service</Link> and <Link to="https://grow100x.app/privacy-policy.html" className="text-[#084734] hover:text-[#3d6000] transition-colors">Privacy policy</Link>
+        By creating an account, you agree to  <Link to="https://grow100x.app/terms-and-conditions.html" className="text-[#084734] underline underline-offset-2 hover:text-[#3d6000] transition-colors">Terms of service</Link> and <Link to="https://grow100x.app/privacy-policy.html" className="text-[#084734] underline underline-offset-2 hover:text-[#3d6000] transition-colors">Privacy policy</Link>
       </p>
     </div>
   );

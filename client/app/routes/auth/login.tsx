@@ -156,7 +156,7 @@ export default function LoginPage() {
         </Link>
       </p>
       <p className="mt-6 text-center text-[14px] text-gray-500 ">
-        By logging , you agree to  <Link to="https://grow100x.app/terms-and-conditions.html" className="text-[#084734] hover:text-[#3d6000] transition-colors">Terms of service</Link> and <Link to="https://grow100x.app/privacy-policy.html" className="text-[#084734] hover:text-[#3d6000] transition-colors">Privacy policy</Link>
+        By logging , you agree to  <Link to="https://grow100x.app/terms-and-conditions.html" className="text-[#084734] underline underline-offset-2 hover:text-[#3d6000] transition-colors">Terms of service</Link> and <Link to="https://grow100x.app/privacy-policy.html" className="text-[#084734] underline underline-offset-2 hover:text-[#3d6000] transition-colors">Privacy policy</Link>
       </p>
     </div>
   );
