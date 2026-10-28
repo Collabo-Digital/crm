@@ -73,6 +73,21 @@ const ALLOWED_IMAGE_MIME = new Set([
 ]);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_IMAGES_PER_PRODUCT = 10;
+const UPLOADS_PATH = '/uploads/products/';
+
+/**
+ * The storage key of an image this organization uploaded, from its URL
+ * (…/uploads/products/<orgId>/<file>), or null. A src can also come from a
+ * CSV import and name any path, another store's image included: removing
+ * such an image must not delete that file.
+ */
+function ownUploadKey(src: string, orgId: string): string | null {
+  const at = src.indexOf(UPLOADS_PATH);
+  if (at < 0) return null;
+  const [folder, file, ...rest] = src.slice(at + UPLOADS_PATH.length).split('/');
+  if (folder !== orgId || rest.length > 0 || !file || file === '.' || file === '..' || /[\\%?#\0]/.test(file)) return null;
+  return `${orgId}/${file}`;
+}
 
 type ShopifySyncStatus = 'PENDING' | 'SYNCED' | 'FAILED' | 'OUT_OF_SYNC';
 
@@ -2054,14 +2069,8 @@ export class ProductService {
 
     // Best-effort delete from storage; DB row removal is the source of truth.
     try {
-      // Recover storageKey from the URL: /uploads/products/<orgId>/<filename>
-      const idx = image.src.indexOf('/uploads/products/');
-      if (idx >= 0) {
-        const storageKey = image.src.substring(
-          idx + '/uploads/products/'.length,
-        );
-        await this.imageStorage.delete(storageKey);
-      }
+      const storageKey = ownUploadKey(image.src, orgId);
+      if (storageKey) await this.imageStorage.delete(storageKey);
     } catch (err) {
       this.logger.warn(
         `Failed to delete image file for ${imageId}: ${err}`,
