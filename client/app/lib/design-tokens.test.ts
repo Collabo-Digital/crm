@@ -255,7 +255,7 @@ const SMALL_TEXT_ALLOWANCE: Record<string, number> = {
   "routes/app/products/$id.tsx": 18,
   "routes/app/products/inventory.tsx": 5,
   "routes/app/products/inventory/warehouses.tsx": 6,
-  "routes/app/settings.tsx": 34,
+  "routes/app/settings.tsx": 30,
   "routes/auth/signup.tsx": 1,
   "routes/onboarding/invite-team.tsx": 1,
 };

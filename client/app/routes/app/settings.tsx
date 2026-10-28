@@ -2038,34 +2038,37 @@ export default function SettingsPage() {
 
                       return (
                         <div key={member.id} className="space-y-2">
-                        <div className="flex items-center gap-3 rounded-lg bg-[#f1f7fa] dark:bg-gray-800/60 px-4 py-3">
+                        {/* A phone stacks the member: who on the first line, their
+                            access, role and remove on the second. */}
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-[#f1f7fa] dark:bg-gray-800/60 px-4 py-3 md:flex-nowrap">
                           <div className={cn("flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold", AVATAR_COLORS[index % AVATAR_COLORS.length])}>
                             {initials}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="text-xs font-medium text-gray-900 dark:text-gray-100">
+                            <p className="truncate text-xs font-medium text-gray-900 dark:text-gray-100">
                               {member.user.firstName} {member.user.lastName}
-                              {isCurrentUser && <span className="ml-1.5 text-[10px] text-gray-400">(you)</span>}
+                              {isCurrentUser && <span className="ml-1.5 text-caption text-muted-foreground">(you)</span>}
                             </p>
-                            <p className="text-caption text-muted-foreground">{member.user.email}</p>
+                            <p className="truncate text-caption text-muted-foreground">{member.user.email}</p>
                           </div>
 
+                          <div className="flex shrink-0 items-center gap-3 max-md:w-full max-md:gap-2">
                           {hasSectionAccess && canManageAccess && (
                             <button
                               type="button"
                               onClick={() => setAccessMemberId(accessMemberId === member.id ? null : member.id)}
-                              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[10px] font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+                              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-caption font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 transition-colors max-md:h-11 max-md:px-3"
                             >
                               <Lock className="size-3" /> {sectionAccessLabel(member.permissions)}
                             </button>
                           )}
 
                           {isOwner ? (
-                            <span className="shrink-0 rounded-full bg-[#CEF17B]/30 px-2 py-0.5 text-[10px] font-semibold text-[#084734]">
+                            <span className="shrink-0 rounded-full bg-[#CEF17B]/30 px-2 py-0.5 text-caption font-semibold text-[#084734]">
                               Owner
                             </span>
                           ) : !canManageTeam ? (
-                            <span className="shrink-0 rounded-full bg-white dark:bg-gray-900 px-2 py-0.5 text-[10px] font-medium text-gray-600 dark:text-gray-300 ring-1 ring-border">
+                            <span className="shrink-0 rounded-full bg-white dark:bg-gray-900 px-2 py-0.5 text-caption font-medium text-gray-600 dark:text-gray-300 ring-1 ring-border">
                               {roleLabel(member.role)}
                             </span>
                           ) : (
@@ -2095,7 +2098,7 @@ export default function SettingsPage() {
                                 );
                               }}
                             >
-                              <SelectTrigger className="h-7 w-[100px] shrink-0 border-input bg-white dark:bg-gray-900 text-xs">
+                              <SelectTrigger aria-label={`Role for ${member.user.firstName}`} className="h-7 w-[100px] shrink-0 border-input bg-white dark:bg-gray-900 text-xs max-md:min-w-24 max-md:flex-1">
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
@@ -2108,16 +2111,19 @@ export default function SettingsPage() {
 
                           {canManageTeam && !isOwner && !isCurrentUser && (
                             <button
+                              type="button"
                               onClick={() => {
                                 if (window.confirm(`Remove ${member.user.firstName} from this workspace?`)) {
                                   removeMember.mutate(member.id);
                                 }
                               }}
-                              className="shrink-0 text-gray-300 hover:text-red-500 transition-colors"
+                              aria-label={`Remove ${member.user.firstName} ${member.user.lastName}`}
+                              className="inline-flex shrink-0 items-center justify-center text-gray-300 hover:text-red-500 transition-colors max-md:size-11 max-md:rounded-lg max-md:text-danger-text"
                             >
-                              <Trash2 className="size-3.5" />
+                              <Trash2 className="size-3.5 max-md:size-4" />
                             </button>
                           )}
+                          </div>
                         </div>
                         {hasSectionAccess && accessMemberId === member.id && currentOrgId && (
                           <MemberAccessEditor
