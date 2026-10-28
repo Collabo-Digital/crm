@@ -97,6 +97,11 @@ export interface DataTableProps<Row> {
   emptyState: EmptyStateSpec;
   /** Right of Sort / Columns — an export button, a secondary action. */
   toolbarEnd?: ReactNode;
+  /**
+   * Replaces the date chip's wording while the page is not applying the
+   * range, e.g. a search that looks through every date.
+   */
+  dateLabel?: string;
   className?: string;
 }
 
@@ -137,6 +142,7 @@ export function DataTable<Row>({
   actionsWidth = 56,
   emptyState,
   toolbarEnd,
+  dateLabel: dateLabelOverride,
   className,
 }: DataTableProps<Row>) {
   const { config } = state;
@@ -366,7 +372,7 @@ export function DataTable<Row>({
               presets={dateConfig.presets}
               preset={state.date.preset}
               custom={state.date.custom}
-              label={dateLabel}
+              label={dateLabelOverride ?? dateLabel}
               today={dateConfig.today ?? localToday()}
               onPresetChange={state.setDatePreset}
               onCustomApply={state.setDateCustom}

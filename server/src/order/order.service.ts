@@ -43,6 +43,7 @@ import { TaxResolverService } from '../gst/tax-resolver.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShopifyPushEnqueuer } from '../channel/shopify-push.enqueuer';
 import { CommerceEventsService } from '../commerce/commerce-events.service';
+import { isCashOnDelivery } from '../commerce/order-vars';
 import {
   ShopifyPushService,
   isStalePendingSync,
@@ -178,6 +179,16 @@ const SHIPPED_LINE_WHERE = {
  */
 const MAX_SLIP_ORDERS = 100;
 
+/** Not paid yet: the payment is still due, whether online or in cash on delivery. */
+const UNPAID_FINANCIAL_STATUSES: OrderFinancialStatus[] = [
+  OrderFinancialStatus.PENDING,
+  OrderFinancialStatus.AUTHORIZED,
+  OrderFinancialStatus.PARTIALLY_PAID,
+];
+
+/** One buyer's orders, with room to spare; a phone search is never a bulk export. */
+const PHONE_SEARCH_LIMIT = 500;
+
 /**
  * What a point-of-sale bill adds to a counter sale. Every field is optional,
  * and without them `createOfflineOrder` makes exactly the order it always has.
@@ -287,10 +298,18 @@ export class OrderService {
       where.lineItems = { some: { vendor: vendorScope } };
     }
 
-    // Search by order number, customer name, or email
+    // Conditions that must all hold, kept apart from the search OR below.
+    const and: Prisma.OrderWhereInput[] = [];
+
+    if (query.payment) {
+      and.push(await this.paymentWhere(orgId, query.payment));
+    }
+
+    // Search by order number, customer name, email or phone
     if (query.search) {
       const searchTerm = query.search.trim();
       const orderNum = parseInt(searchTerm, 10);
+      const phoneMatches = await this.orderIdsByPhone(orgId, searchTerm);
 
       where.OR = [
         // Search by order number (if numeric)
@@ -307,6 +326,7 @@ export class OrderService {
             ],
           },
         },
+        ...(phoneMatches.length ? [{ id: { in: phoneMatches } }] : []),
       ];
     }
 
@@ -324,13 +344,14 @@ export class OrderService {
     // search `where.OR` above.
     if (query.dateFrom || query.dateTo) {
       const timeZone = await this.reportingTimeZone(orgId);
-      where.AND = [
+      and.push(
         placedBetween(
           query.dateFrom ? zonedDayStart(query.dateFrom, timeZone) : undefined,
           query.dateTo ? zonedDayEndExclusive(query.dateTo, timeZone) : undefined,
         ),
-      ];
+      );
     }
+    if (and.length) where.AND = and;
 
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -424,6 +445,9 @@ export class OrderService {
         sourceName: order.sourceName,
         sourceLabel: order.sourceLabel,
         itemCount: order._count.lineItems,
+        // The Payment column tells cash on delivery from prepaid, by the same
+        // rule as Packing and the automations.
+        cashOnDelivery: isCashOnDelivery(order.paymentGateways),
         // The push record only, not the whole metadata blob: the table's
         // Shopify column needs it to tell a pushed Collabo order from one
         // never pushed.
@@ -431,6 +455,75 @@ export class OrderService {
       })),
       meta,
     };
+  }
+
+  /**
+   * The list's payment filter. COD is read off the payment gateway names, so
+   * the names this organisation's orders actually carry are fetched once and
+   * matched with `isCashOnDelivery`: the filter then agrees exactly with the
+   * COD tag on Packing, which a fixed list of names could not promise.
+   */
+  private async paymentWhere(
+    orgId: string,
+    payment: NonNullable<QueryOrdersDto['payment']>,
+  ): Promise<Prisma.OrderWhereInput> {
+    if (payment === 'paid') return { financialStatus: OrderFinancialStatus.PAID };
+    if (payment === 'refunded') {
+      return {
+        financialStatus: {
+          in: [OrderFinancialStatus.REFUNDED, OrderFinancialStatus.PARTIALLY_REFUNDED],
+        },
+      };
+    }
+
+    const rows = await this.prisma.$queryRaw<Array<{ name: string }>>`
+      SELECT DISTINCT g AS "name"
+      FROM "orders" o CROSS JOIN LATERAL unnest(o."payment_gateways") AS g
+      WHERE o."organization_id" = ${orgId} AND o."deleted_at" IS NULL`;
+    const cod = rows.map((r) => r.name).filter((name) => isCashOnDelivery([name]));
+    const unpaid = { financialStatus: { in: UNPAID_FINANCIAL_STATUSES } };
+
+    if (payment === 'cod') {
+      // No COD gateway on any order: nothing can match.
+      return cod.length
+        ? { ...unpaid, paymentGateways: { hasSome: cod } }
+        : { id: { in: [] } };
+    }
+    return cod.length ? { ...unpaid, NOT: { paymentGateways: { hasSome: cod } } } : unpaid;
+  }
+
+  /**
+   * Orders whose buyer has this phone number: the customer's own number, or
+   * the shipping phone of a guest order. Both sides are compared as digits
+   * only, so "98765 43210", "+91 98765-43210" and "9876543210" all find the
+   * same buyer, and the last ten digits match a number saved with or without
+   * its country code (the Packing search's rule). Only a term of six or more
+   * digits and no letters counts as a phone, so an order number like 4706
+   * does not also pull in every phone containing it.
+   */
+  private async orderIdsByPhone(orgId: string, term: string): Promise<string[]> {
+    const digits = term.replace(/\D/g, '');
+    if (digits.length < 6 || /\p{L}/u.test(term)) return [];
+    const like = `%${digits.length > 10 ? digits.slice(-10) : digits}%`;
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT o."id"
+      FROM "orders" o
+      WHERE o."organization_id" = ${orgId}
+        AND o."deleted_at" IS NULL
+        AND (
+          o."customer_id" IN (
+            SELECT c."id" FROM "customers" c
+            WHERE c."organization_id" = ${orgId}
+              AND c."deleted_at" IS NULL
+              AND regexp_replace(coalesce(c."phone", ''), '\\D', '', 'g') LIKE ${like}
+          )
+          OR (
+            o."customer_id" IS NULL
+            AND regexp_replace(coalesce(o."shipping_address"->>'phone', ''), '\\D', '', 'g') LIKE ${like}
+          )
+        )
+      LIMIT ${PHONE_SEARCH_LIMIT}`;
+    return rows.map((r) => r.id);
   }
 
   async findOne(id: string, orgId: string) {

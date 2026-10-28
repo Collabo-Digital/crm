@@ -1,4 +1,4 @@
-import type { FinancialStatus, FulfillmentStatus } from "~/types/api";
+import type { FinancialStatus, FulfillmentStatus, OrderPaymentFilter } from "~/types/api";
 import { STATUS_TONE_CLASSES, toneClasses, type StatusTone } from "./status-tone.ts";
 
 /**
@@ -62,6 +62,52 @@ export const FULFILLMENT_LABELS_FULL: Record<FulfillmentStatus, string> = {
   ...FULFILLMENT_LABELS,
   PARTIAL: "Partly fulfilled",
 };
+
+/* ── Payment, as the orders list shows and filters it ────────────────────── */
+
+export const PAYMENT_FILTER_OPTIONS: ReadonlyArray<{ value: OrderPaymentFilter; label: string }> = [
+  { value: "paid", label: "Paid" },
+  { value: "pending", label: "Pending" },
+  { value: "cod", label: "COD" },
+  { value: "refunded", label: "Refunded" },
+];
+
+export const FULFILLMENT_FILTER_OPTIONS: ReadonlyArray<{ value: FulfillmentStatus; label: string }> = [
+  { value: "UNFULFILLED", label: "Unfulfilled" },
+  { value: "PARTIAL", label: "Partly fulfilled" },
+  { value: "FULFILLED", label: "Fulfilled" },
+  { value: "RESTOCKED", label: "Restocked" },
+];
+
+/** Money still due. Mirrors the server's unpaid set behind the COD and Pending filters. */
+const UNPAID: ReadonlyArray<FinancialStatus> = ["PENDING", "AUTHORIZED", "PARTIALLY_PAID"];
+
+export interface PaymentBadge {
+  label: string;
+  tone: StatusTone;
+}
+
+/**
+ * The orders list's Payment column, with the Packing screen's words: an unpaid
+ * cash-on-delivery order is "COD", plus "Not confirmed" until the buyer has
+ * confirmed it (the `cod-confirmed` tag the COD automation adds). Any other
+ * order shows its payment status.
+ */
+export function orderPaymentBadges(order: {
+  /** Absent on a vendor's rows, which show no payment at all. */
+  financialStatus?: FinancialStatus;
+  cashOnDelivery?: boolean;
+  tags?: string[] | null;
+}): PaymentBadge[] {
+  if (!order.financialStatus) return [];
+  if (order.cashOnDelivery && UNPAID.includes(order.financialStatus)) {
+    const confirmed = (order.tags ?? []).some((t) => t.trim().toLowerCase() === "cod-confirmed");
+    return confirmed
+      ? [{ label: "COD", tone: "neutral" }]
+      : [{ label: "COD", tone: "neutral" }, { label: "Not confirmed", tone: "attention" }];
+  }
+  return [{ label: FINANCIAL_LABELS_FULL[order.financialStatus], tone: FINANCIAL_TONES[order.financialStatus] }];
+}
 
 /**
  * Per-line fulfilment state. The API returns a lowercase free-form string:
