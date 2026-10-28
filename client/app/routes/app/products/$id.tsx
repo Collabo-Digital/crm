@@ -42,7 +42,7 @@ import { useInventoryStatus } from "~/hooks/use-inventory-queries";
 import { STOCK_TERMS } from "~/lib/inventory-vocabulary";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { toneClasses } from "~/lib/status-tone";
-import { calcMargin, cn, formatCurrency } from "~/lib/utils";
+import { calcMargin, cn, formatCurrency, NO_COST_MARGIN } from "~/lib/utils";
 import { formatDate, formatDateTime } from "~/lib/format-date";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import {
@@ -1387,7 +1387,9 @@ export default function ProductDetailPage() {
                           <span className="text-[12px] font-medium text-muted-foreground">
                             {pricingMargin
                               ? `${pricingMargin.marginPct.toFixed(0)}%`
-                              : "—"}
+                              : dv?.cost?.trim()
+                                ? "—"
+                                : NO_COST_MARGIN}
                           </span>
                         </div>
                         <div className="flex flex-col flex-1 gap-1 bg-[#f5f5f5] p-2 rounded-lg dark:bg-gray-800/60">
