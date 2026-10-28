@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { ChevronDown, ChevronRight, X, Loader2, Check, Sparkles } from "lucide-react";
 import { toast } from "sonner";
@@ -8,6 +8,7 @@ import { formatMargin } from "~/lib/utils";
 import { normalizeProductOptions } from "~/lib/product-options";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { RichTextEditor } from "~/components/ui/rich-text-editor";
+import { ModalFrame, ModalTitle } from "~/components/app/order-dialog-primitives";
 import {
   Select,
   SelectContent,
@@ -703,23 +704,21 @@ export function ProductFormDialog({
   }
 
   const wideMode = form.hasOptions; // expand dialog when the variant table is shown
+  const descriptionId = useId();
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
+    <ModalFrame
+      onClose={onClose}
+      describedBy={descriptionId}
+      className={`w-full ${wideMode ? "max-w-4xl" : "max-w-2xl"} max-h-[90vh] overflow-y-auto rounded-xl bg-white dark:bg-gray-900 shadow-xl outline-none`}
     >
-      <div
-        className={`w-full ${wideMode ? "max-w-4xl" : "max-w-2xl"} max-h-[90vh] overflow-y-auto rounded-xl bg-white dark:bg-gray-900 shadow-xl`}
-        onClick={(e) => e.stopPropagation()}
-      >
         {/* Header */}
         <div className="flex items-center justify-between border-b px-6 py-4">
           <div>
-            <h2 className="text-sm font-bold text-gray-900 dark:text-gray-100">
+            <ModalTitle className="text-sm font-bold text-gray-900 dark:text-gray-100">
               {isEdit ? "Edit product" : "Create product"}
-            </h2>
-            <p className="text-[10px] text-muted-foreground">
+            </ModalTitle>
+            <p id={descriptionId} className="text-[10px] text-muted-foreground">
               {isEdit
                 ? "Update name, price, tax, or stock for this CRM-managed product."
                 : "Add a product to your CRM. It can be used in offline orders right away, and syncs to Shopify when you connect a store."}
@@ -728,6 +727,7 @@ export function ProductFormDialog({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close"
             className="rounded-md p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800"
           >
             <X className="size-4" />
@@ -1085,8 +1085,7 @@ export function ProductFormDialog({
             Cancel
           </button>
         </div>
-      </div>
-    </div>
+    </ModalFrame>
   );
 }
 

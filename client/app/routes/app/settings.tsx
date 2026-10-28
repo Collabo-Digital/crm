@@ -17,6 +17,7 @@ import {
 } from "~/components/ui/select";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
+import { ModalFrame, ModalTitle } from "~/components/app/order-dialog-primitives";
 import { cn } from "~/lib/utils";
 import { useAuthStore } from "~/stores/auth.store";
 import { useThemeStore } from "~/stores/theme.store";
@@ -592,10 +593,13 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
       </Section>
 
       {confirmRecompute && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setConfirmRecompute(false)}>
-          <div className="w-full max-w-sm rounded-xl bg-white dark:bg-gray-900 p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Recompute customer tiers?</p>
-            <p className="mt-1 text-xs text-muted-foreground">
+        <ModalFrame
+          onClose={() => setConfirmRecompute(false)}
+          describedBy="recompute-tiers-help"
+          className="w-full max-w-sm rounded-xl bg-white dark:bg-gray-900 p-5 shadow-xl outline-none"
+        >
+            <ModalTitle className="text-sm font-semibold text-gray-900 dark:text-gray-100">Recompute customer tiers?</ModalTitle>
+            <p id="recompute-tiers-help" className="mt-1 text-xs text-muted-foreground">
               Every customer will be re-evaluated against the current thresholds. Manual VIP overrides will be replaced.
             </p>
             <div className="mt-4 flex items-center justify-end gap-2">
@@ -614,8 +618,7 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
                 <Check className="size-3.5" /> Recompute
               </button>
             </div>
-          </div>
-        </div>
+        </ModalFrame>
       )}
     </>
   );
@@ -1088,21 +1091,18 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
       {/* Remove-registration confirmation. Same shape as the recompute-tiers
           confirm above, so the page has one way of asking. */}
       {confirmDelete && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setConfirmDeleteId(null)}
+        <ModalFrame
+          onClose={() => setConfirmDeleteId(null)}
+          describedBy="remove-gstin-help"
+          className="w-full max-w-sm rounded-xl bg-white dark:bg-gray-900 p-5 shadow-xl outline-none"
         >
-          <div
-            className="w-full max-w-sm rounded-xl bg-white dark:bg-gray-900 p-5 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+            <ModalTitle className="text-sm font-semibold text-gray-900 dark:text-gray-100">
               Remove this GSTIN registration?
-            </p>
+            </ModalTitle>
             <p className="mt-1 font-mono text-xs text-gray-700 dark:text-gray-300">
               {confirmDelete.gstin}
             </p>
-            <p className="mt-2 text-xs text-muted-foreground">
+            <p id="remove-gstin-help" className="mt-2 text-xs text-muted-foreground">
               New invoices can no longer be issued under it. Invoices already issued keep it,
               and you can add the same number back later to restore this registration.
             </p>
@@ -1138,8 +1138,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                 Remove
               </button>
             </div>
-          </div>
-        </div>
+        </ModalFrame>
       )}
     </>
   );

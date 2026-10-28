@@ -7,6 +7,7 @@ import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { formatMargin } from "~/lib/utils";
 import { CODE_TERMS } from "~/lib/inventory-vocabulary";
+import { ModalFrame, ModalTitle } from "~/components/app/order-dialog-primitives";
 import { stockLinesFor } from "./stock-locations";
 
 /**
@@ -358,26 +359,25 @@ function VariantDetailPanel({
   const variantTitle = titleLabels.length > 0 ? titleLabels.join(" / ") : "Default Title";
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-stretch justify-end bg-black/30"
-      onClick={onClose}
+    <ModalFrame
+      onClose={onClose}
+      overlayClassName="fixed inset-0 z-[60] flex items-stretch justify-end bg-black/30"
+      className="flex h-full w-full max-w-md flex-col bg-white dark:bg-gray-900 shadow-2xl outline-none"
     >
-      <aside
-        onClick={(e) => e.stopPropagation()}
-        className="flex h-full w-full max-w-md flex-col bg-white dark:bg-gray-900 shadow-2xl"
-      >
         <header className="flex items-center justify-between border-b px-5 py-3">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Variant details
             </p>
-            <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
+            <ModalTitle className="text-sm font-bold text-gray-900 dark:text-gray-100">
+              <span className="sr-only">Variant details: </span>
               {variantTitle}
-            </h3>
+            </ModalTitle>
           </div>
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close"
             className="rounded-md p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800"
           >
             <X className="size-4" />
@@ -659,8 +659,7 @@ function VariantDetailPanel({
             Changes save when you click "Save changes" / "Create product".
           </p>
         </footer>
-      </aside>
-    </div>
+    </ModalFrame>
   );
 }
 
