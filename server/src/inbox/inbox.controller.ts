@@ -9,6 +9,7 @@ import {
     Query,
     Sse,
     UploadedFile,
+    UseGuards,
     UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -20,6 +21,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { RequireSection } from '../auth/decorators/require-section.decorator';
 import type { SessionPayload } from '../auth/interfaces/jwt-payload.interface';
 import { InboxEventsService } from '../messaging/inbox-events.service';
+import { UPLOAD_THROTTLE, UploadQuotaGuard } from '../messaging/media/upload-quota';
 import { InboxService } from './inbox.service';
 import type { UploadedFile as InboxUpload } from './inbox.service';
 import { InboxTeamService } from './inbox-team.service';
@@ -138,8 +140,11 @@ export class InboxController {
         return this.inbox.addNote(user.orgId!, await this.teams.viewer(user), id, dto);
     }
 
+    /** Limited per member a minute, and per workspace a day (UploadQuotaService). */
     @Post('uploads')
     @Roles(UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.AGENT)
+    @Throttle(UPLOAD_THROTTLE)
+    @UseGuards(UploadQuotaGuard)
     @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 100 * 1024 * 1024 } }))
     upload(@CurrentUser() user: SessionPayload, @UploadedFile() file: InboxUpload, @Body('voice') voice?: string) {
         return this.inbox.upload(user.orgId!, file, { voice: voice === 'true' });

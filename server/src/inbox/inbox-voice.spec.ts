@@ -36,6 +36,7 @@ function build(voiceNotes: Partial<VoiceNoteConverter> = {}) {
     const sender = { send: jest.fn(async () => ({ ok: true, messageId: 'm1' })) };
     const prisma = { conversation: { findFirst: jest.fn(async () => ({ id: 'c1', channelId: 'ch1' })) } };
     const config = { get: () => 'secret' };
+    const uploadQuota = { reserve: jest.fn(async () => undefined) };
     const service = new InboxService(
         prisma as never,
         sender as never,
@@ -50,8 +51,9 @@ function build(voiceNotes: Partial<VoiceNoteConverter> = {}) {
         {} as never,
         {} as never,
         config as never,
+        uploadQuota as never,
     );
-    return { service, storage, sender };
+    return { service, storage, sender, uploadQuota };
 }
 
 const file = (mimetype: string, buffer = Buffer.from('recording')) => ({ originalname: 'blob', mimetype, size: buffer.length, buffer });

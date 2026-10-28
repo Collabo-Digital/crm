@@ -1,5 +1,6 @@
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator';
 import { RequireSection } from '../../auth/decorators/require-section.decorator';
@@ -7,6 +8,7 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import type { SessionPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { LockTimeoutError } from '../../automation/engine/redis-lock';
 import { MessagingMediaStorage } from '../../messaging/media/messaging-media.storage';
+import { UPLOAD_THROTTLE, UploadQuotaGuard, UploadQuotaService } from '../../messaging/media/upload-quota';
 import { CAMPAIGN_EDITORS, CAMPAIGN_READERS } from '../campaign-roles';
 import { QueryTemplatesDto, SaveTemplateDto, WriteTemplateDto } from '../dto/campaign.dto';
 import { parseDraft } from './template-draft.schema';
@@ -31,6 +33,7 @@ export class TemplatesController {
         private readonly writer: TemplateWriterService,
         private readonly storage: MessagingMediaStorage,
         private readonly pack: TemplatePackService,
+        private readonly uploadQuota: UploadQuotaService,
     ) { }
 
     @Get('templates')
@@ -120,10 +123,12 @@ export class TemplatesController {
         return this.templates.remove(user.orgId!, id);
     }
 
-    /** A header sample for a template, or the header file of a broadcast. */
+    /** A header sample for a template, or the header file of a broadcast. Limited like the inbox's uploads. */
     @Post('uploads')
     @Roles(...CAMPAIGN_EDITORS)
     @RequirePermissions('campaigns.manage')
+    @Throttle(UPLOAD_THROTTLE)
+    @UseGuards(UploadQuotaGuard)
     @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 100 * 1024 * 1024 } }))
     async upload(@CurrentUser() user: SessionPayload, @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined) {
         if (!file) throw new BadRequestException('Choose a file.');
@@ -131,6 +136,7 @@ export class TemplatesController {
         const rule = HEADER_FILES[mime];
         if (!rule) throw new BadRequestException('Use a JPEG or PNG image, an MP4 video or a PDF.');
         if (file.size > rule.max) throw new BadRequestException(`That file is too large; the limit is ${rule.max / 1024 / 1024} MB.`);
+        await this.uploadQuota.reserve(user.orgId!, file.size);
         const saved = await this.storage.save(user.orgId!, file.buffer, mime);
         return { storageKey: saved.storageKey, mime, size: saved.size, filename: file.originalname, kind: rule.kind };
     }

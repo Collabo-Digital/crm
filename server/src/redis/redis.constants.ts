@@ -26,6 +26,8 @@ export const REDIS_KEYS = {
     OAUTH_GOOGLE: 'oauth:google:',
     /// A Google access token minted from the organization's refresh token, kept until just before it expires.
     GOOGLE_ACCESS_TOKEN: 'google:access:',
+    /// Bytes a workspace's members uploaded on one UTC day (see UploadQuotaService).
+    UPLOAD_BYTES: 'upload_bytes:',
 };
 
 export const REDIS_TTL = {
