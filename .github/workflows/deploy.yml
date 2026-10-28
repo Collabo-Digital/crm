@@ -7,30 +7,78 @@ on:
     workflow_dispatch:
         inputs:
             ref:
-                description: Commit SHA to deploy (blank = tip of production). Use an older SHA to roll back.
+                description: Commit SHA on the production branch to deploy (blank = its tip). Use an older production SHA to roll back.
                 required: false
 
 concurrency:
     group: deploy-production
     cancel-in-progress: false
 
+# No token permissions unless a job asks for them.
+permissions: {}
+
 env:
     IMAGE: ghcr.io/collabo-digital/crm-api
 
+# Actions are pinned to full commit SHAs; the comment names the tag each one was.
 jobs:
-    # The image is built only from a commit whose unit tests pass.
-    test:
+    # Settles the one commit this run tests, builds and deploys. Only the
+    # production branch's own workflow may deploy, and only a commit already on
+    # production (a rollback names an older one); anything else stops here.
+    resolve:
         if: github.repository == 'Collabo-Digital/crm'
         runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        outputs:
+            sha: ${{ steps.check.outputs.sha }}
+        steps:
+            - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+              with:
+                ref: production
+                fetch-depth: 0
+                persist-credentials: false
+
+            - id: check
+              env:
+                RUN_REF: ${{ github.ref }}
+                WANTED: ${{ inputs.ref || github.sha }}
+              run: |
+                if [ "$RUN_REF" != refs/heads/production ]; then
+                  echo "::error::Deploys run only from the production branch, not $RUN_REF."
+                  exit 1
+                fi
+                wanted=$(printf '%s' "$WANTED" | tr '[:upper:]' '[:lower:]')
+                if ! [[ "$wanted" =~ ^[0-9a-f]{7,40}$ ]]; then
+                  echo "::error::ref must be a commit SHA."
+                  exit 1
+                fi
+                if ! sha=$(git rev-parse --verify --quiet "$wanted^{commit}"); then
+                  echo "::error::$wanted is not a commit of this repository."
+                  exit 1
+                fi
+                if ! git merge-base --is-ancestor "$sha" origin/production; then
+                  echo "::error::$sha is not on the production branch. Only commits on production deploy."
+                  exit 1
+                fi
+                echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+    # The image is built only from a commit whose unit tests pass.
+    test:
+        needs: resolve
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
         defaults:
             run:
                 working-directory: server
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
               with:
-                ref: ${{ inputs.ref || github.sha }}
+                ref: ${{ needs.resolve.outputs.sha }}
+                persist-credentials: false
 
-            - uses: actions/setup-node@v4
+            - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
               with:
                 node-version: 24
                 cache: npm
@@ -45,43 +93,42 @@ jobs:
             - run: npx jest
 
     build:
-        needs: test
+        needs: [resolve, test]
         runs-on: ubuntu-latest
         permissions:
             contents: read
             packages: write
-        outputs:
-            sha: ${{ steps.meta.outputs.sha }}
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
               with:
-                ref: ${{ inputs.ref || github.sha }}
+                ref: ${{ needs.resolve.outputs.sha }}
+                persist-credentials: false
 
-            - id: meta
-              run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-            - uses: docker/setup-buildx-action@v3
-
-            - uses: docker/login-action@v3
+            - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
               with:
                 registry: ghcr.io
                 username: ${{ github.actor }}
                 password: ${{ secrets.GITHUB_TOKEN }}
 
-            - uses: docker/build-push-action@v6
+            - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
               with:
                 context: server
                 push: true
                 tags: |
-                    ${{ env.IMAGE }}:${{ steps.meta.outputs.sha }}
+                    ${{ env.IMAGE }}:${{ needs.resolve.outputs.sha }}
                     ${{ env.IMAGE }}:production
-                labels: org.opencontainers.image.revision=${{ steps.meta.outputs.sha }}
+                labels: org.opencontainers.image.revision=${{ needs.resolve.outputs.sha }}
                 cache-from: type=gha
                 cache-to: type=gha,mode=max
 
     deploy:
-        needs: build
+        needs: [resolve, build]
         runs-on: ubuntu-latest
+        # Required reviewers, the production-only branch rule and the DROPLET_*
+        # secrets live on this GitHub Environment: see docs/deploy-hardening.md.
+        environment: production
         permissions:
             contents: read
             packages: read
@@ -90,9 +137,10 @@ jobs:
             # Host alias defined in ~/.ssh/config by the Configure SSH step.
             SSH: ssh droplet
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
               with:
-                ref: ${{ needs.build.outputs.sha }}
+                ref: ${{ needs.resolve.outputs.sha }}
+                persist-credentials: false
 
             - name: Configure SSH
               env:
@@ -116,10 +164,10 @@ jobs:
                 echo "Deploy key: $(ssh-keygen -y -f ~/.ssh/id_deploy)"
 
             - name: Log the droplet in to GHCR (token expires when this job ends)
-              env: 
+              env:
                 TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
               run: printf '%s' "$TOKEN" | $SSH "docker login ghcr.io -u ${{ github.actor }} --password-stdin"
-            
+
             - name: Deploy
-              run: $SSH "bash -s -- ${{ needs.build.outputs.sha }}" < server/deploy/deploy.sh
+              run: $SSH "bash -s -- ${{ needs.resolve.outputs.sha }}" < server/deploy/deploy.sh
