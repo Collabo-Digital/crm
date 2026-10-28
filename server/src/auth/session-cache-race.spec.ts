@@ -74,7 +74,7 @@ describe('session cache — a write whose read was overtaken by a role change or
     });
 
     const strategy = new JwtStrategy({ get: () => 'secret' } as never, redis, prisma as never);
-    const members = new MembersService(prisma as never, redis, { publish: jest.fn() } as never);
+    const members = new MembersService(prisma as never, redis, { publish: jest.fn() } as never, {} as never);
     const auth = new AuthService(
       prisma as never,
       { sign: () => 'access' } as never,

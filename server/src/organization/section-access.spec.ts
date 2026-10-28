@@ -62,7 +62,7 @@ describe('section access — members', () => {
       },
     };
     const redis = { deleteSession: jest.fn().mockResolvedValue(undefined) };
-    return { service: new MembersService(prisma as never, redis as never, {} as never), prisma, redis };
+    return { service: new MembersService(prisma as never, redis as never, {} as never, {} as never), prisma, redis };
   }
 
   it('replaces the grants and drops the cached session', async () => {

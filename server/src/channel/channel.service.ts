@@ -450,6 +450,25 @@ export class ChannelService {
     for (const channel of channels) await this.release(channel);
   }
 
+  /**
+   * Disconnect what an influencer connected in these workspaces when they
+   * leave them. Their Instagram is their own account, not the workspace's:
+   * the workspace keeps its conversations but stops receiving and sending on
+   * it, and no longer holds their token.
+   */
+  async disconnectOwnedBy(orgIds: string[], userId: string): Promise<void> {
+    if (orgIds.length === 0) return;
+    const channels = await this.prisma.channel.findMany({
+      where: {
+        organizationId: { in: orgIds },
+        ownerUserId: userId,
+        platform: { not: ChannelPlatform.MANUAL },
+        status: { not: ChannelStatus.DISCONNECTED },
+      },
+    });
+    for (const channel of channels) await this.release(channel);
+  }
+
   /** Revoke what we can remotely, then clear the grant and the account claim. */
   private async release(channel: Channel): Promise<void> {
     const { id: channelId, organizationId: orgId } = channel;

@@ -24,7 +24,8 @@ describe('UserService — account lookup and deletion', () => {
       $transaction: jest.fn(),
     };
     prisma.$transaction.mockImplementation((fn: (tx: typeof prisma) => unknown) => fn(prisma));
-    return { service: new UserService(prisma as never), prisma };
+    const channels = { disconnectOwnedBy: jest.fn().mockResolvedValue(undefined) };
+    return { service: new UserService(prisma as never, channels as never), prisma, channels };
   }
 
   describe('findIdByEmail', () => {
@@ -105,6 +106,30 @@ describe('UserService — account lookup and deletion', () => {
       const data = prisma.user.update.mock.calls[0][0].data;
       expect(data.deletedAt).toBeInstanceOf(Date);
       expect(data.email).toBe('deleted+u1@deleted.invalid');
+    });
+
+    it("disconnects the Instagram an influencer connected in the workspaces they leave, before closing the account", async () => {
+      const { service, prisma, channels } = build();
+      prisma.organizationMember.findMany.mockImplementation(({ where }: { where: { role?: UserRole } }) =>
+        Promise.resolve(where.role === UserRole.INFLUENCER ? [{ organizationId: 'org-brand' }] : [{ organizationId: 'org-a' }, { organizationId: 'org-brand' }]),
+      );
+
+      await service.softDelete('u1');
+
+      expect(prisma.organizationMember.findMany).toHaveBeenCalledWith({
+        where: { userId: 'u1', isActive: true, role: UserRole.INFLUENCER },
+        select: { organizationId: true },
+      });
+      expect(channels.disconnectOwnedBy).toHaveBeenCalledWith(['org-brand'], 'u1');
+      expect(channels.disconnectOwnedBy.mock.invocationCallOrder[0]).toBeLessThan(prisma.organizationMember.updateMany.mock.invocationCallOrder[0]);
+    });
+
+    it('leaves the account open when those channels could not be disconnected', async () => {
+      const { service, prisma, channels } = build();
+      channels.disconnectOwnedBy.mockRejectedValue(new Error('database busy'));
+
+      await expect(service.softDelete('u1')).rejects.toThrow('database busy');
+      expect(prisma.user.update).not.toHaveBeenCalled();
     });
   });
 });
