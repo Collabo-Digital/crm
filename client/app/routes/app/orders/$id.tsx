@@ -375,9 +375,14 @@ function OwnerOrderDetail({ id }: { id: string }) {
             <StatusRow label="Shipping">
               <StatusPill className={shippingState.className}>{shippingState.label}</StatusPill>
             </StatusRow>
+            {/* Only a till bill is an in-store sale: that is what Store
+                reports and the dashboard's in-store split count. Any other
+                order made in Collabo is a manual order. */}
             {source === "offline" && (
               <StatusRow label="Source">
-                <StatusPill className="bg-info-subtle text-info">In-Store</StatusPill>
+                <StatusPill className={order.posSale ? STATUS_TONE_CLASSES.info : STATUS_TONE_CLASSES.neutral}>
+                  {order.posSale ? "Point of sale" : "Manual order"}
+                </StatusPill>
               </StatusRow>
             )}
           </div>
