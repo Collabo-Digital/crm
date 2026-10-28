@@ -47,7 +47,7 @@ import { cn } from "~/lib/utils";
 import { MobileNavigation } from "~/components/app/mobile-navigation";
 import { HelpDialog } from "~/components/app/help-dialog";
 import { BrandLogo } from "~/components/app/brand-logo";
-import { APP_BAR_ACTIONS_ID } from "~/components/app/app-bar-actions";
+import { APP_BAR_ACTIONS_ID, SECTION_BAR_ACTIONS_ID } from "~/components/app/app-bar-actions";
 import { Tip } from "~/components/ui/tooltip";
 import { useAuthStore, normalizeOrganizations } from "~/stores/auth.store";
 import { signOut } from "~/lib/sign-out";
@@ -426,7 +426,8 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
       {/* ── Section sub-nav — only for a section that has children ─── */}
       {sectionChildren && (
         <LayoutGroup id="section-nav">
-          <div ref={sectionNavRef} className="mobile-section-nav mx-auto max-w-screen-xl overflow-x-auto px-1 max-md:border-b max-md:border-border/70 md:mt-3 md:px-6 md:pb-3">
+          <div className="mx-auto flex max-w-screen-xl items-center md:mt-3 md:gap-3 md:px-6 md:pb-3">
+          <div ref={sectionNavRef} className="mobile-section-nav min-w-0 flex-1 overflow-x-auto px-1 max-md:border-b max-md:border-border/70 md:px-0">
             <nav
               aria-label={`${activeTop?.label} section`}
               className="inline-flex min-w-max items-center gap-0.5 md:rounded-full md:bg-white md:px-1.5 md:py-1 md:shadow-sm md:ring-1 md:ring-black/[0.06] md:dark:bg-gray-900 md:dark:ring-gray-700"
@@ -436,10 +437,10 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                 // A new group starts: a divider, and its name when it holds more than one page.
                 const startsGroup = group !== undefined && sectionChildren[index - 1]?.group !== group;
                 const groupHead = startsGroup && (
-                  <span className="flex items-center gap-1.5 pl-1.5 pr-0.5" aria-hidden>
+                  <span className="flex items-center gap-2 pl-1.5 pr-1" aria-hidden>
                     <span className="h-5 w-px bg-border" />
                     {sectionChildren.filter((child) => child.group === group).length > 1 && (
-                      <span className="text-caption font-medium text-muted-foreground max-md:hidden">{group}</span>
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground max-md:hidden">{group}</span>
                     )}
                   </span>
                 );
@@ -489,6 +490,9 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                 );
               })}
             </nav>
+          </div>
+          {/* A page's own buttons beside its section tabs, on desktop (SectionBarActions). */}
+          <div id={SECTION_BAR_ACTIONS_ID} className="hidden shrink-0 items-center gap-2 md:flex" />
           </div>
         </LayoutGroup>
       )}

@@ -6,7 +6,7 @@ import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import { AvailabilityMenu } from "~/components/app/inbox/availability-menu";
-import { AppBarActions } from "~/components/app/app-bar-actions";
+import { AppBarActions, SectionBarActions } from "~/components/app/app-bar-actions";
 import { CatalogPanel, type CatalogDrop } from "~/components/app/inbox/catalog-panel";
 import { ChatDropZone } from "~/components/app/inbox/chat-drop-zone";
 import { ContactPanel } from "~/components/app/inbox/contact-panel";
@@ -23,7 +23,6 @@ import { TemplatePickerDialog } from "~/components/app/inbox/template-picker-dia
 import { ThreadHeader } from "~/components/app/inbox/thread-header";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { Button } from "~/components/ui/button";
-import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderTitle } from "~/components/ui/page-header";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "~/components/ui/sheet";
 import { useChannels } from "~/hooks/use-channel-queries";
 import { usePageActive } from "~/hooks/use-page-active";
@@ -339,34 +338,32 @@ export default function InboxPage() {
           <MessageSquarePlus />
         </Button>
       )}
-      <PageHeader className="shrink-0 items-center max-md:hidden">
-        <PageHeaderContent>
-          <PageHeaderTitle>Inbox</PageHeaderTitle>
-        </PageHeaderContent>
-        <PageHeaderActions>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={alerts.toggle}
-            aria-label={alerts.on ? "Turn off new-message alerts" : "Turn on new-message alerts"}
-            title={alerts.on ? "New-message alerts are on" : "New-message alerts are off"}
-          >
-            {alerts.on ? <Bell /> : <BellOff />}
+      {/* Desktop: beside the Conversations / Contacts / Groups tabs, so the
+          inbox spends no row on a title the top bar already shows. */}
+      <h1 className="sr-only">Inbox</h1>
+      <SectionBarActions>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={alerts.toggle}
+          aria-label={alerts.on ? "Turn off new-message alerts" : "Turn on new-message alerts"}
+          title={alerts.on ? "New-message alerts are on" : "New-message alerts are off"}
+        >
+          {alerts.on ? <Bell /> : <BellOff />}
+        </Button>
+        {me?.access.canReply && (
+          <Button size="sm" variant="accent" onClick={() => setNewChatOpen(true)}>
+            <MessageSquarePlus />
+            New chat
           </Button>
-          {me?.access.canReply && (
-            <Button size="sm" variant="accent" onClick={() => setNewChatOpen(true)}>
-              <MessageSquarePlus />
-              New chat
-            </Button>
-          )}
-          <AvailabilityMenu
-            status={me?.status}
-            connected={connected}
-            disabled={setAvailability.isPending || !me?.access.canReply}
-            onChange={(status) => setAvailability.mutate(status)}
-          />
-        </PageHeaderActions>
-      </PageHeader>
+        )}
+        <AvailabilityMenu
+          status={me?.status}
+          connected={connected}
+          disabled={setAvailability.isPending || !me?.access.canReply}
+          onChange={(status) => setAvailability.mutate(status)}
+        />
+      </SectionBarActions>
 
       {/*
         Grid rather than flex, with minmax(0,1fr) on the thread: a bare 1fr

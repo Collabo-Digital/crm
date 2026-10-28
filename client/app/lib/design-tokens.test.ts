@@ -211,7 +211,6 @@ const SMALL_TEXT_ALLOWANCE: Record<string, number> = {
   "components/app/auth/illustrations/unified-commerce.tsx": 4,
   "components/app/channel-sync-options.tsx": 7,
   "components/app/gstr1-panels.tsx": 2,
-  "components/app/inbox/conversation-list-row.tsx": 1,
   "components/app/inbox/message-bubble.tsx": 3,
   "components/app/inbox/voice-note-player.tsx": 1,
   "components/app/inventory/location-kind-badge.tsx": 1,

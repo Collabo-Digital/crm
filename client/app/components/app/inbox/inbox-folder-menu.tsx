@@ -1,4 +1,4 @@
-import { Bookmark, Check, ChevronDown, Inbox, Trash2, User, Users, UserX } from "lucide-react";
+import { Bookmark, Check, ChevronDown, FolderOpen, Inbox, Trash2, User, Users, UserX } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
 import {
@@ -12,7 +12,7 @@ import {
 import { cn } from "~/lib/utils";
 import type { InboxCounts, InboxListStatus, InboxListView, InboxSavedView, InboxTeamRef } from "~/types/api";
 
-const VIEWS: Array<{ view: InboxListView; label: string; icon: typeof Inbox; count: keyof InboxCounts }> = [
+export const VIEWS: Array<{ view: InboxListView; label: string; icon: typeof Inbox; count: keyof InboxCounts }> = [
   { view: "all", label: "All conversations", icon: Inbox, count: "all" },
   { view: "mine", label: "Assigned to me", icon: User, count: "mine" },
   { view: "unassigned", label: "Unassigned", icon: UserX, count: "unassigned" },
@@ -37,9 +37,9 @@ export function folderLabel(state: {
 
 /**
  * Which conversations the list holds: a built-in view, a team's queue, or a
- * saved view — plus open, snoozed or closed. One menu, because these are the
- * same kind of decision ("whose work am I looking at") and a rail of links
- * would spend permanent width on something set once per session.
+ * saved view — plus open, snoozed or closed. The three built-in views are also
+ * tabs above the list (see ConversationList); this menu, behind a folder
+ * button, keeps the rest, which are set once per session.
  *
  * Counts come from /inbox/counts, so they describe the whole inbox and do not
  * collapse to the visible row count while a filter is active.
@@ -59,7 +59,10 @@ export function InboxFolderMenu({
   onSavedView,
   onSaveCurrent,
   onDeleteView,
+  compact = false,
 }: {
+  /** An icon button rather than the folder's name: the tabs already say it. */
+  compact?: boolean;
   counts?: InboxCounts;
   view: InboxListView;
   status: InboxListStatus;
@@ -87,11 +90,18 @@ export function InboxFolderMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="-ml-1 min-w-0 gap-1.5 px-1.5">
-          <span className="truncate text-caption font-semibold text-foreground">{label}</span>
-          {!!activeCount && <span className="text-caption tabular-nums text-muted-foreground">{activeCount}</span>}
-          <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
-        </Button>
+        {compact ? (
+          <Button variant="ghost" size="xs" className="text-muted-foreground" aria-label="Status, teams and saved views" title="Status, teams and saved views">
+            <FolderOpen />
+            <ChevronDown className="size-3 md:hidden" />
+          </Button>
+        ) : (
+          <Button variant="ghost" size="sm" className="-ml-1 min-w-0 gap-1.5 px-1.5">
+            <span className="truncate text-caption font-semibold text-foreground">{label}</span>
+            {!!activeCount && <span className="text-caption tabular-nums text-muted-foreground">{activeCount}</span>}
+            <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+          </Button>
+        )}
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="start" className="w-64">

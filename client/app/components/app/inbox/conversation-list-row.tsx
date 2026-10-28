@@ -2,6 +2,7 @@ import { memo } from "react";
 import { MessageCircle } from "lucide-react";
 
 import { Checkbox } from "~/components/ui/checkbox";
+import { StatusBadge } from "~/components/ui/status-badge";
 import { formatRowTime } from "~/lib/inbox-format";
 import { cn } from "~/lib/utils";
 import type { InboxConversation } from "~/types/api";
@@ -24,6 +25,7 @@ export const ConversationListRow = memo(function ConversationListRow({
   isSelected,
   isChecked,
   selecting,
+  showOwner,
   now,
   onSelect,
   onCheck,
@@ -33,6 +35,8 @@ export const ConversationListRow = memo(function ConversationListRow({
   isChecked: boolean;
   /** Bulk-select mode: the checkbox shows on every row. */
   selecting: boolean;
+  /** Who has it. Off where the folder already says (Mine, Unassigned). */
+  showOwner: boolean;
   now: number;
   onSelect: (id: string) => void;
   onCheck: (id: string, checked: boolean) => void;
@@ -40,6 +44,9 @@ export const ConversationListRow = memo(function ConversationListRow({
   const { contact, unreadCount, assignee, team, platform } = conversation;
   const unread = unreadCount > 0;
   const awaiting = !!conversation.awaitingReplySince && conversation.status === "OPEN";
+  const owner = [assignee?.name ?? (team ? null : "Unassigned"), team?.name].filter(Boolean).join(" · ");
+  // A third line only when there is something to say on it.
+  const hasMeta = contact.blocked || contact.optedOut || contact.tags.length > 0 || (awaiting && !unread);
 
   return (
     <div
@@ -47,7 +54,7 @@ export const ConversationListRow = memo(function ConversationListRow({
         // Flat fill for the selected row rather than an accent rule down the
         // side: at list density a coloured bar reads as a second, competing
         // divider between every pair of rows.
-        "group relative flex w-full items-start gap-3.5 px-4 py-5 text-left transition-colors active:bg-muted/70 md:gap-3 md:px-3 md:py-3.5",
+        "group relative flex w-full items-start gap-3.5 px-4 py-3 text-left transition-colors active:bg-muted/70 md:gap-3 md:px-3 md:py-2.5",
         isSelected ? "bg-muted" : "hover:bg-muted/50",
         isChecked && "bg-brand/10",
       )}
@@ -73,44 +80,43 @@ export const ConversationListRow = memo(function ConversationListRow({
         aria-current={isSelected ? "true" : undefined}
         className="min-w-0 flex-1 text-left outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-ring/50"
       >
-        <div className="flex items-baseline justify-between gap-2">
-          <span className={cn("truncate text-[15px] font-medium text-foreground md:text-caption md:font-normal", unread && "font-semibold md:font-semibold")}>
+        <div className="flex items-baseline gap-2">
+          <span className={cn("min-w-0 flex-1 truncate text-[15px] font-medium text-foreground md:text-caption md:font-normal", unread && "font-semibold md:font-semibold")}>
             {contact.name}
           </span>
+          {showOwner && owner && <span className="max-w-[45%] truncate text-micro text-muted-foreground">{owner}</span>}
           <span className="shrink-0 text-micro text-muted-foreground">
             {formatRowTime(conversation.lastMessageAt, now)}
           </span>
         </div>
 
-        <p className={cn("mt-1 flex items-center gap-1 truncate text-sm md:mt-0.5 md:text-caption", unread ? "text-foreground" : "text-muted-foreground")}>
-          {conversation.lastMessagePreview?.startsWith("Comment") && <MessageCircle className="size-3 shrink-0" />}
-          <span className="truncate">{conversation.lastMessagePreview ?? "No messages yet"}</span>
-        </p>
-
-        <div className="mt-1.5 flex flex-wrap items-center gap-1">
-          {contact.blocked && <span className="rounded-full bg-danger-subtle px-2 py-0.5 text-micro font-medium text-danger">Blocked</span>}
-          {contact.optedOut && !contact.blocked && (
-            <span className="rounded-full bg-warning-subtle px-2 py-0.5 text-micro font-medium text-warning">Opted out</span>
+        <div className="mt-1 flex items-center gap-2 md:mt-0.5">
+          <p className={cn("flex min-w-0 flex-1 items-center gap-1 truncate text-sm md:text-caption", unread ? "text-foreground" : "text-muted-foreground")}>
+            {conversation.lastMessagePreview?.startsWith("Comment") && <MessageCircle className="size-3 shrink-0" />}
+            <span className="truncate">{conversation.lastMessagePreview ?? "No messages yet"}</span>
+          </p>
+          {unread && (
+            <span
+              className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-unread px-1 text-micro font-semibold text-unread-foreground md:h-4 md:min-w-4"
+              aria-label={`${unreadCount} unread`}
+            >
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </span>
           )}
-          {contact.tags.slice(0, 2).map((tag) => (
-            <TagChip key={tag} tag={tag} />
-          ))}
-          {contact.tags.length > 2 && <span className="text-micro text-muted-foreground">+{contact.tags.length - 2}</span>}
-          <span className="truncate text-micro text-muted-foreground">
-            {[assignee?.name ?? (team ? null : "Unassigned"), team?.name].filter(Boolean).join(" · ")}
-          </span>
-          {awaiting && !unread && <span className="text-micro text-warning-strong">Waiting for reply</span>}
         </div>
-      </button>
 
-      {unread && (
-        <span
-          className="mt-0.5 flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand px-1 text-[11px] font-semibold text-brand-foreground md:h-4 md:min-w-4 md:text-micro"
-          aria-label={`${unreadCount} unread`}
-        >
-          {unreadCount > 99 ? "99+" : unreadCount}
-        </span>
-      )}
+        {hasMeta && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {contact.blocked && <StatusBadge tone="critical">Blocked</StatusBadge>}
+            {contact.optedOut && !contact.blocked && <StatusBadge tone="attention">Opted out</StatusBadge>}
+            {contact.tags.slice(0, 2).map((tag) => (
+              <TagChip key={tag} tag={tag} />
+            ))}
+            {contact.tags.length > 2 && <span className="text-micro text-muted-foreground">+{contact.tags.length - 2}</span>}
+            {awaiting && !unread && <span className="text-micro text-warning-strong-text">Waiting for reply</span>}
+          </div>
+        )}
+      </button>
     </div>
   );
 });
