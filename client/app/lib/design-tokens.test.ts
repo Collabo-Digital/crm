@@ -241,7 +241,6 @@ const SMALL_TEXT_ALLOWANCE: Record<string, number> = {
   "components/app/settings/billing-tab.tsx": 1,
   "components/app/settings/developers-tab.tsx": 1,
   "components/app/settings/payments-card.tsx": 2,
-  "components/app/settings/section-access-picker.tsx": 1,
   "components/app/settings/upgrade-organization-dialog.tsx": 6,
   "components/app/shopify-connect-dialog.tsx": 3,
   "components/app/shopify-locations-dialog.tsx": 2,

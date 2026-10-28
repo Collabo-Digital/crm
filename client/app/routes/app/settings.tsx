@@ -60,6 +60,7 @@ import { UpgradeOrganizationDialog } from "~/components/app/settings/upgrade-org
 import {
   CapabilityPicker,
   DEFAULT_CAPABILITIES,
+  JobPresetPicker,
   MANAGED_CAPABILITY_KEYS,
   SectionAccessPicker,
   accessGrants,
@@ -266,20 +267,21 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
   }
 
   return (
-    <div className="space-y-2 rounded-lg border border-dashed border-brand bg-brand/5 p-3">
+    <div className="space-y-3 rounded-lg border border-dashed border-brand bg-brand/5 p-3">
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative basis-full sm:basis-auto sm:flex-1">
-          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-gray-400 dark:text-gray-400" />
-          <input
+          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+          <Input
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="teammate@company.com"
-            className="w-full rounded-lg border border-gray-200 bg-white dark:bg-gray-900 dark:border-gray-700 py-2 pl-9 pr-3 text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-400 shadow-sm outline-none focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40"
+            aria-label="Teammate's email"
+            className="bg-card pl-9"
           />
         </div>
         <Select value={role} onValueChange={(selectedRole) => setRole(selectedRole as UserRole)}>
-          <SelectTrigger className="w-[110px] h-9 shrink-0 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs shadow-sm">
+          <SelectTrigger aria-label="Role" className="w-[110px] h-9 shrink-0 bg-card text-xs shadow-sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -288,20 +290,27 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
             ))}
           </SelectContent>
         </Select>
-        <button
-          type="button"
-          onClick={handleSendInvite}
-          disabled={sendInvite.isPending || !canSend}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-medium text-brand-foreground hover:bg-brand-hover transition-colors disabled:opacity-50"
-        >
-          {sendInvite.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Send"}
-        </button>
-        <button type="button" onClick={onDone} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
-          <X className="size-4" />
-        </button>
+        <Button type="button" size="lg" onClick={handleSendInvite} disabled={sendInvite.isPending || !canSend}>
+          {sendInvite.isPending && <Loader2 className="animate-spin" />}
+          Send invite
+        </Button>
+        <Button type="button" variant="ghost" size="icon-lg" onClick={onDone} aria-label="Close the invite form">
+          <X />
+        </Button>
       </div>
 
       {needsVendor && <VendorPicker value={vendorScope} onChange={setVendorScope} />}
+
+      {role === "AGENT" && (
+        <JobPresetPicker
+          sections={sections}
+          capabilities={capabilities}
+          onPick={(preset) => {
+            setSections([...preset.sections]);
+            setCapabilities([...preset.capabilities]);
+          }}
+        />
+      )}
 
       {needsSections && (
         <div className="space-y-1.5 pt-1">
@@ -352,6 +361,17 @@ function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: 
 
   return (
     <div className="space-y-3 rounded-lg border border-dashed border-brand bg-brand/5 p-3">
+      {member.role === "AGENT" && (
+        <JobPresetPicker
+          sections={sections}
+          capabilities={capabilities}
+          disabled={updatePermissions.isPending}
+          onPick={(preset) => {
+            setSections([...preset.sections]);
+            setCapabilities([...preset.capabilities]);
+          }}
+        />
+      )}
       <p className="text-caption font-medium text-muted-foreground">
         Sections {member.user.firstName} can open — the rest show as locked
         {configured.length === 0 && " (currently full access)"}
@@ -365,17 +385,13 @@ function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: 
         disabled={updatePermissions.isPending}
       />
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={updatePermissions.isPending || sections.length === 0}
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-medium text-brand-foreground hover:bg-brand-hover transition-colors disabled:opacity-50"
-        >
-          {updatePermissions.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Save access"}
-        </button>
-        <button type="button" onClick={onDone} className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+        <Button type="button" onClick={handleSave} disabled={updatePermissions.isPending || sections.length === 0}>
+          {updatePermissions.isPending && <Loader2 className="animate-spin" />}
+          Save access
+        </Button>
+        <Button type="button" variant="ghost" onClick={onDone}>
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -1909,12 +1925,9 @@ export default function SettingsPage() {
                     {membersLoading ? "Loading…" : `${staffMembers.length} member${staffMembers.length !== 1 ? "s" : ""}`}
                   </p>
                   {canManageTeam && (
-                    <button
-                      onClick={() => setShowInvite(true)}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-3 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors"
-                    >
-                      <Plus className="size-3.5" /> Invite Member
-                    </button>
+                    <Button type="button" onClick={() => setShowInvite(true)}>
+                      <Plus /> Invite member
+                    </Button>
                   )}
                 </div>
 
@@ -1943,7 +1956,7 @@ export default function SettingsPage() {
 
                       return (
                         <div key={member.id} className="space-y-2">
-                        <div className="flex items-center gap-3 rounded-lg bg-[#f1f7fa] dark:bg-gray-800/60 px-4 py-3">
+                        <div className="flex items-center gap-3 rounded-lg bg-muted/60 px-4 py-3">
                           <div className={cn("flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold", AVATAR_COLORS[index % AVATAR_COLORS.length])}>
                             {initials}
                           </div>
@@ -2018,7 +2031,8 @@ export default function SettingsPage() {
                                   removeMember.mutate(member.id);
                                 }
                               }}
-                              className="shrink-0 text-gray-300 hover:text-red-500 transition-colors"
+                              aria-label={`Remove ${member.user.firstName}`}
+                              className="shrink-0 text-muted-foreground hover:text-danger-text transition-colors"
                             >
                               <Trash2 className="size-3.5" />
                             </button>
@@ -2047,7 +2061,7 @@ export default function SettingsPage() {
                 <Section title="Pending Invitations" description="Invitations that haven't been accepted yet.">
                   <div className="space-y-2">
                     {staffInvites.map((invite) => (
-                      <div key={invite.id} className="flex items-center justify-between gap-3 rounded-lg bg-[#f1f7fa] dark:bg-gray-800/60 px-4 py-3">
+                      <div key={invite.id} className="flex items-center justify-between gap-3 rounded-lg bg-muted/60 px-4 py-3">
                         <div className="flex items-center gap-3">
                           <div className="flex size-8 items-center justify-center rounded-full bg-orange-100 text-xs font-bold text-orange-700">
                             <Mail className="size-3.5" />

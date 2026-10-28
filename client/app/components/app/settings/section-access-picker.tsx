@@ -1,3 +1,4 @@
+import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import type { PermissionKey } from "~/lib/permissions";
 import { AVAILABLE_SECTIONS, sectionKey, type SectionId } from "~/lib/sections";
@@ -25,7 +26,7 @@ export function SectionAccessPicker({
         return (
           <label
             key={section.id}
-            className="flex cursor-pointer items-center gap-2 text-xs text-gray-700 dark:text-gray-300"
+            className="flex cursor-pointer items-center gap-2 text-xs text-foreground"
           >
             <Checkbox
               checked={checked}
@@ -122,14 +123,14 @@ export function CapabilityPicker({
     <div className="space-y-2">
       {groups.map((group) => (
         <div key={group.id ?? "warehouse"} className="space-y-1.5">
-          <p className="text-[10px] font-medium text-muted-foreground">{group.heading}</p>
+          <p className="text-caption font-medium text-muted-foreground">{group.heading}</p>
           <div className="grid grid-cols-1 gap-y-2 sm:grid-cols-2 sm:gap-x-4">
             {offered
               .filter((c) => c.section === group.id)
               .map((capability) => (
                 <label
                   key={capability.key}
-                  className="flex cursor-pointer items-center gap-2 text-xs text-gray-700 dark:text-gray-300"
+                  className="flex cursor-pointer items-center gap-2 text-xs text-foreground"
                 >
                   <Checkbox
                     checked={value.includes(capability.key)}
@@ -148,6 +149,80 @@ export function CapabilityPicker({
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * One-click starting points for the jobs owners hire for most, so adding a
+ * packer is not eight unticks and a tick. Each fills the sections and
+ * abilities, which stay editable. A member always keeps one section (none
+ * means full access), so a packer also opens Products, to look items up —
+ * the same set as the server's `packer` preset.
+ */
+export const JOB_PRESETS: ReadonlyArray<{
+  id: string;
+  label: string;
+  description: string;
+  sections: SectionId[];
+  capabilities: PermissionKey[];
+}> = [
+  {
+    id: "packer",
+    label: "Packer",
+    description: "Packs orders with the Packing list and scanner, and can look products up. No orders, customers or sales figures.",
+    sections: ["products"],
+    capabilities: ["inventory.pack"],
+  },
+  {
+    id: "support",
+    label: "Support agent",
+    description: "Answers chats in the Inbox, including new ones nobody has picked up yet. Nothing else.",
+    sections: ["chat"],
+    capabilities: ["chat.view_unassigned"],
+  },
+];
+
+const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x) => b.includes(x));
+
+/** The preset these sections and abilities match exactly, if any. */
+export function matchingPreset(sections: readonly SectionId[], capabilities: readonly string[]) {
+  return JOB_PRESETS.find((p) => sameSet(p.sections, sections) && sameSet(p.capabilities, capabilities));
+}
+
+/** The job buttons above the section grid, for Agents. */
+export function JobPresetPicker({
+  sections,
+  capabilities,
+  onPick,
+  disabled,
+}: {
+  sections: SectionId[];
+  capabilities: string[];
+  onPick: (preset: (typeof JOB_PRESETS)[number]) => void;
+  disabled?: boolean;
+}) {
+  const active = matchingPreset(sections, capabilities);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-caption font-medium text-muted-foreground">Start from a job:</span>
+        {JOB_PRESETS.map((preset) => (
+          <Button
+            key={preset.id}
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-pressed={active?.id === preset.id}
+            className="aria-pressed:border-brand-strong aria-pressed:bg-brand/30"
+            disabled={disabled}
+            onClick={() => onPick(preset)}
+          >
+            {preset.label}
+          </Button>
+        ))}
+      </div>
+      {active && <p className="text-caption text-muted-foreground">{active.description}</p>}
     </div>
   );
 }
