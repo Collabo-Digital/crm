@@ -195,7 +195,7 @@ export default function InviteTeamPage() {
                   value={row.email}
                   onChange={(event) => handleEmailChange(row.id, event.target.value)}
                   disabled={row.status === "sent" || row.status === "sending"}
-                  className="w-full rounded-lg border border-gray-200 bg-white py-2.5 pl-9 pr-3.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 disabled:bg-gray-50 disabled:opacity-60"
+                  className="w-full rounded-lg border border-gray-200 bg-white py-2.5 pl-9 pr-3.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition disabled:bg-gray-50 disabled:opacity-60 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
                 {row.status === "sent" && (
                   <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-[#084734]" />
@@ -208,7 +208,7 @@ export default function InviteTeamPage() {
                 onValueChange={(selectedRole) => handleRoleChange(row.id, selectedRole as UserRole)}
                 disabled={row.status === "sent" || row.status === "sending"}
               >
-                <SelectTrigger className="w-[130px] shrink-0 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 dark:text-gray-100 shadow-sm focus:ring-[#CEF17B]/40">
+                <SelectTrigger className="w-[130px] shrink-0 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 dark:text-gray-100 shadow-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

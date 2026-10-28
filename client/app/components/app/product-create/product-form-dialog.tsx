@@ -834,7 +834,7 @@ export function ProductFormDialog({
                     value={form.gstRate}
                     onChange={(e) => patch({ gstRate: e.target.value })}
                     disabled={isVendor}
-                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
+                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   >
                     <option value="">Not set</option>
                     {GST_RATE_OPTIONS.map((rate) => (
@@ -855,7 +855,7 @@ export function ProductFormDialog({
                     value={form.unitOfMeasure}
                     onChange={(e) => patch({ unitOfMeasure: e.target.value })}
                     disabled={isVendor}
-                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
+                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   >
                     <option value="">Default (NOS)</option>
                     {COMMON_UQC.map((u) => (
@@ -873,7 +873,7 @@ export function ProductFormDialog({
                     value={form.supplyType}
                     onChange={(e) => patch({ supplyType: e.target.value as GstSupplyType })}
                     disabled={isVendor}
-                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
+                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   >
                     {GST_SUPPLY_TYPES.map((t) => (
                       <option key={t.value} value={t.value}>
@@ -1430,7 +1430,7 @@ function SingleVariantFields({
                     onChange={(e) =>
                       patch({ weightUnit: e.target.value as WeightUnit })
                     }
-                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   >
                     <option value="g">g</option>
                     <option value="kg">kg</option>
@@ -1586,7 +1586,7 @@ function Field({
         placeholder={placeholder}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
-        className={`mt-1 h-9 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 ${
+        className={`mt-1 h-9 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring ${
           error ? "border-red-400" : "border-input"
         } ${mono ? "font-mono" : ""} ${
           disabled ? "cursor-not-allowed opacity-60" : ""

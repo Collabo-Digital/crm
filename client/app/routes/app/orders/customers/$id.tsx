@@ -644,7 +644,7 @@ function TagsSection({ customer }: { customer: CustomerDetail }) {
               }
             }}
             placeholder="Tag name"
-            className="h-7 w-24 rounded-full border border-border bg-background px-2.5 text-caption outline-none focus:ring-1 focus:ring-brand"
+            className="h-7 w-24 rounded-full border border-border bg-background px-2.5 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         ) : (
           <button

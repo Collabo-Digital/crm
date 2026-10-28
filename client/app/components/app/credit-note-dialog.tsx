@@ -129,7 +129,7 @@ export function CreditNoteDialog({
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="Goods returned"
-              className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+              className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
           </div>
 
@@ -180,7 +180,7 @@ export function CreditNoteDialog({
                 onChange={(e) => setAmount(e.target.value)}
                 aria-invalid={amountInvalid}
                 aria-describedby={amountInvalid ? "cn-amount-error" : undefined}
-                className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+                className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
               />
               {amountInvalid && (
                 <p id="cn-amount-error" className="mt-1 text-micro text-destructive">
@@ -209,7 +209,7 @@ export function CreditNoteDialog({
                 aria-invalid={taxInvalid}
                 aria-describedby="cn-tax-help"
                 placeholder="Work it out from the invoice"
-                className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus:outline-none focus:ring-2 focus:ring-brand/40"
+                className="mt-1 h-9 w-full rounded-lg border border-input bg-transparent px-3 text-caption focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
               />
               {taxInvalid ? (
                 <p id="cn-tax-help" className="mt-1 text-micro text-destructive">

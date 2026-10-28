@@ -309,7 +309,7 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="teammate@company.com"
-            className="w-full rounded-lg border border-gray-200 bg-white dark:bg-gray-900 dark:border-gray-700 py-2 pl-9 pr-3 text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-400 shadow-sm outline-none focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40"
+            className="w-full rounded-lg border border-gray-200 bg-white dark:bg-gray-900 dark:border-gray-700 py-2 pl-9 pr-3 text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-400 shadow-sm outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </div>
         <Select value={role} onValueChange={(selectedRole) => setRole(selectedRole as UserRole)}>
@@ -616,7 +616,7 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
                   aria-invalid={!!errors[name]}
                   aria-describedby={errors[name] ? `${name}-error` : undefined}
                   {...register(name, { valueAsNumber: true })}
-                  className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs text-gray-900 dark:text-gray-100 shadow-sm focus:border-[#CEF17B] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/40"
+                  className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs text-gray-900 dark:text-gray-100 shadow-sm focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
                 {errors[name] && (
                   <p id={`${name}-error`} className="mt-1 text-[10px] text-red-500">{errors[name]?.message as string}</p>
@@ -1012,7 +1012,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                     onChange={(e) => setForm((prev) => ({ ...prev, gstin: e.target.value.toUpperCase() }))}
                     placeholder="e.g. 27AABCU9603R1ZM"
                     maxLength={15}
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs font-mono outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs font-mono outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                 </div>
                 <div>
@@ -1037,7 +1037,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                     value={form.legalName}
                     onChange={(e) => setForm((prev) => ({ ...prev, legalName: e.target.value }))}
                     placeholder="Registered legal name"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                 </div>
                 <div>
@@ -1047,7 +1047,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                     value={form.tradeName || ""}
                     onChange={(e) => setForm((prev) => ({ ...prev, tradeName: e.target.value }))}
                     placeholder="Brand/trade name (optional)"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                 </div>
               </div>
@@ -1068,7 +1068,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                     value={form.address?.address1 ?? ""}
                     onChange={(e) => patchAddress({ address1: e.target.value })}
                     placeholder="Building, street"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                 </div>
                 <div className="sm:col-span-2">
@@ -1078,7 +1078,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                     value={form.address?.address2 ?? ""}
                     onChange={(e) => patchAddress({ address2: e.target.value })}
                     placeholder="Area, landmark (optional)"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                 </div>
                 <div>
@@ -1088,7 +1088,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                     value={form.address?.city ?? ""}
                     onChange={(e) => patchAddress({ city: e.target.value })}
                     placeholder="City"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                 </div>
                 <div>
@@ -1098,7 +1098,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                     value={form.address?.zip ?? ""}
                     onChange={(e) => patchAddress({ zip: e.target.value })}
                     placeholder="6-digit PIN"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                 </div>
               </div>
@@ -1605,7 +1605,7 @@ function AppearanceTab() {
       <Section title="Layout" description="How the navigation is displayed.">
         <Field label="Navigation Style" hint="Choose how the main navigation appears." htmlFor="navigation-style">
           <Select defaultValue="top">
-            <SelectTrigger id="navigation-style" aria-labelledby="navigation-style-label" className="h-9 w-full rounded-lg border border-input bg-transparent dark:bg-gray-900 dark:text-gray-100 px-3 text-sm focus:ring-2 focus:ring-[#CEF17B]/50">
+            <SelectTrigger id="navigation-style" aria-labelledby="navigation-style-label" className="h-9 w-full rounded-lg border border-input bg-transparent dark:bg-gray-900 dark:text-gray-100 px-3 text-sm">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1830,7 +1830,7 @@ export default function SettingsPage() {
                           value={displayName}
                           onChange={(e) => setOrgName(e.target.value)}
                           disabled={!canManageTeam}
-                          className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                         />
                       </Field>
                       <div className="pt-4">
@@ -1855,7 +1855,7 @@ export default function SettingsPage() {
                             onChange={(e) => setOrgWebsite(e.target.value)}
                             placeholder="https://yourstore.com"
                             disabled={!canManageTeam}
-                            className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                           />
                         </Field>
                       </div>
@@ -1997,7 +1997,7 @@ export default function SettingsPage() {
                       aria-invalid={!!passwordForm.formState.errors.currentPassword}
                       aria-describedby={passwordForm.formState.errors.currentPassword ? "currentPassword-error" : undefined}
                       {...passwordForm.register("currentPassword")}
-                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                     {passwordForm.formState.errors.currentPassword && (
                       <p id="currentPassword-error" className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.currentPassword.message}</p>
@@ -2011,7 +2011,7 @@ export default function SettingsPage() {
                       aria-invalid={!!passwordForm.formState.errors.newPassword}
                       aria-describedby={passwordForm.formState.errors.newPassword ? "newPassword-error" : undefined}
                       {...passwordForm.register("newPassword")}
-                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                     {passwordForm.formState.errors.newPassword && (
                       <p id="newPassword-error" className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.newPassword.message}</p>
@@ -2025,7 +2025,7 @@ export default function SettingsPage() {
                       aria-invalid={!!passwordForm.formState.errors.confirmPassword}
                       aria-describedby={passwordForm.formState.errors.confirmPassword ? "confirmPassword-error" : undefined}
                       {...passwordForm.register("confirmPassword")}
-                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                     {passwordForm.formState.errors.confirmPassword && (
                       <p id="confirmPassword-error" className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.confirmPassword.message}</p>

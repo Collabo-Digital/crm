@@ -1613,7 +1613,7 @@ export default function ProductDetailPage() {
                             value={dv?.weightUnit ?? "kg"}
                             onChange={(e) => setDv({ weightUnit: e.target.value })}
                             disabled={!defaultVariant}
-                            className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                            className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                           >
                             <option value="g">g</option>
                             <option value="kg">kg</option>
@@ -1889,7 +1889,7 @@ export default function ProductDetailPage() {
                   value={gstRate}
                   onChange={(e) => setGstRate(e.target.value)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Not set</option>
                   {GST_RATE_OPTIONS.map((rate) => (
@@ -1911,7 +1911,7 @@ export default function ProductDetailPage() {
                   value={unitOfMeasure}
                   onChange={(e) => setUnitOfMeasure(e.target.value)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Default (NOS)</option>
                   {COMMON_UQC.map((u) => (
@@ -1933,7 +1933,7 @@ export default function ProductDetailPage() {
                   value={supplyType}
                   onChange={(e) => setSupplyType(e.target.value as GstSupplyType)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   {GST_SUPPLY_TYPES.map((t) => (
                     <option key={t.value} value={t.value}>

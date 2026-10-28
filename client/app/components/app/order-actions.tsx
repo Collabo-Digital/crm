@@ -402,7 +402,7 @@ function EditOrderDialog({
             value={tagsText}
             onChange={(e) => setTagsText(e.target.value)}
             placeholder="e.g. vip, retry, wholesale"
-            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </div>
 
@@ -423,7 +423,7 @@ function EditOrderDialog({
             onChange={(e) => setNote(e.target.value)}
             rows={3}
             placeholder="Add a note to this order"
-            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           <p className="mt-1 text-[10px] text-gray-500 dark:text-gray-400">
             {order.channel?.platform === "SHOPIFY"
@@ -541,7 +541,7 @@ export function CancelOrderDialog({
             onChange={(e) => setStaffNote(e.target.value)}
             rows={2}
             placeholder="Why this order is being cancelled"
-            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </div>
 
@@ -623,7 +623,7 @@ export function CapturePaymentDialog({
             min="0"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs tabular-nums outline-none focus:ring-1 focus:ring-[#cdff8c]"
+            className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs tabular-nums outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           <p className="mt-1 text-[10px] text-muted-foreground">
             Order total, less refunds:{" "}

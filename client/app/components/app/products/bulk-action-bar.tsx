@@ -284,7 +284,7 @@ export function BulkActionBar({
                 value={tagsInput}
                 onChange={(e) => setTagsInput(e.target.value)}
                 placeholder="summer, sale"
-                className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
               />
             </div>
             <footer className="flex items-center gap-2 border-t px-5 py-3">

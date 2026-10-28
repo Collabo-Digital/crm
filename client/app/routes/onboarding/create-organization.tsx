@@ -251,7 +251,7 @@ export default function CreateOrganizationPage() {
                   aria-invalid={!!errors.name}
                   aria-describedby={errors.name ? "name-error" : undefined}
                   {...register("name")}
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 aria-[invalid=true]:border-red-400"
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition aria-[invalid=true]:border-red-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
                 {errors.name && (
                   <p id="name-error" className="text-xs text-red-700">{errors.name.message}</p>
@@ -268,7 +268,7 @@ export default function CreateOrganizationPage() {
                   placeholder="https://example.com/logo.png"
                   {...register("logo")}
                   onBlur={handleLogoUrlBlur}
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2 text-xs text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40"
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2 text-xs text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
                 {errors.logo && (
                   <p id="logo-error" className="text-xs text-red-700">{errors.logo.message}</p>
@@ -284,7 +284,7 @@ export default function CreateOrganizationPage() {
                 Industry
               </label>
               <Select onValueChange={(selectedIndustry) => setValue("industry", selectedIndustry)}>
-                <SelectTrigger className="w-full border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 dark:text-gray-100 shadow-sm focus:ring-[#CEF17B]/40">
+                <SelectTrigger className="w-full border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 dark:text-gray-100 shadow-sm">
                   <SelectValue placeholder="Select your industry" />
                 </SelectTrigger>
                 <SelectContent>
@@ -307,7 +307,7 @@ export default function CreateOrganizationPage() {
                   aria-describedby={errors.website ? "website-error" : undefined}
                   placeholder="https://yourstore.com"
                   {...register("website")}
-                  className="w-full rounded-lg border border-gray-200 bg-white py-2.5 pl-9 pr-3.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40"
+                  className="w-full rounded-lg border border-gray-200 bg-white py-2.5 pl-9 pr-3.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
               </div>
               {errors.website && (
@@ -321,7 +321,7 @@ export default function CreateOrganizationPage() {
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-gray-700">Timezone</label>
               <Select defaultValue="UTC" onValueChange={(selectedTimezone) => setValue("timezone", selectedTimezone)}>
-                <SelectTrigger className="w-full border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 dark:text-gray-100 shadow-sm focus:ring-[#CEF17B]/40">
+                <SelectTrigger className="w-full border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 dark:text-gray-100 shadow-sm">
                   <SelectValue placeholder="Select timezone" />
                 </SelectTrigger>
                 <SelectContent>

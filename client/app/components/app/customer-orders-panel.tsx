@@ -154,7 +154,7 @@ export function CustomerOrdersPanel({
             placeholder="Search orders"
             value={search}
             onChange={(e) => reset(setSearch)(e.target.value)}
-            className="h-8 w-full rounded-lg border border-input bg-card pl-8 pr-3 text-caption placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand/50"
+            className="h-8 w-full rounded-lg border border-input bg-card pl-8 pr-3 text-caption placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </div>
 

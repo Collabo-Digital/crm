@@ -141,7 +141,7 @@ function VendorMetafieldRow({
             }
             placeholder="namespace (e.g. custom)"
             aria-label="Metafield namespace"
-            className="h-8 flex-1 rounded-lg border border-input bg-white px-3 text-xs dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-[#cdff8c]"
+            className="h-8 flex-1 rounded-lg border border-input bg-white px-3 text-xs dark:bg-gray-800 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           <span className="text-xs text-muted-foreground">.</span>
           <input
@@ -154,7 +154,7 @@ function VendorMetafieldRow({
             }
             placeholder="key (e.g. vendor_shop_domain)"
             aria-label="Metafield key"
-            className="h-8 flex-1 rounded-lg border border-input bg-white px-3 text-xs dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-[#cdff8c]"
+            className="h-8 flex-1 rounded-lg border border-input bg-white px-3 text-xs dark:bg-gray-800 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </div>
       )}
@@ -241,7 +241,7 @@ function LowStockThresholdRow() {
             }
           }}
           disabled={mutation.isPending || !org?.id}
-          className="h-8 w-20 rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-right text-xs tabular-nums focus:outline-none focus:ring-2 focus:ring-[#cdff8c] disabled:opacity-50"
+          className="h-8 w-20 rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-right text-xs tabular-nums disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
       </div>
     </div>
@@ -433,7 +433,7 @@ function SkuPrefixRow({
             }
           }}
           placeholder="e.g. SJ"
-          className="h-8 w-28 rounded-lg border border-input bg-white px-3 font-mono text-xs uppercase focus:outline-none focus:ring-2 focus:ring-[#cdff8c] dark:bg-gray-800"
+          className="h-8 w-28 rounded-lg border border-input bg-white px-3 font-mono text-xs uppercase dark:bg-gray-800 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
         <span className="font-mono text-xs text-muted-foreground">
           {(candidate || "———") + "-SAR-001"}

@@ -97,7 +97,7 @@ export function InvoiceSeriesSetting() {
                   e.currentTarget.blur();
                 }
               }}
-              className="h-9 w-24 rounded-lg border border-input bg-transparent px-3 font-mono text-caption uppercase focus:outline-none focus:ring-2 focus:ring-brand/40"
+              className="h-9 w-24 rounded-lg border border-input bg-transparent px-3 font-mono text-caption uppercase focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <span className="font-mono text-caption text-muted-foreground">{preview}</span>
             {mutation.isPending && (
