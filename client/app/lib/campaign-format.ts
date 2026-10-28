@@ -13,6 +13,7 @@ import type {
   TemplateRender,
   VariableSourceKind,
 } from "~/types/api";
+import { STATUS_TONE_CLASSES, toneClasses } from "./status-tone.ts";
 
 export const TEMPLATE_STATUS_LABEL: Record<string, string> = {
   APPROVED: "Approved",
@@ -34,20 +35,20 @@ export function templateStatusClass(status: string): string {
   switch (status) {
     case "APPROVED":
     case "REINSTATED":
-      return "bg-success-subtle text-success";
+      return STATUS_TONE_CLASSES.success;
     case "PENDING":
     case "IN_APPEAL":
-      return "bg-info-subtle text-info";
+      return STATUS_TONE_CLASSES.info;
     case "PAUSED":
     case "FLAGGED":
     case "LIMIT_EXCEEDED":
-      return "bg-warning-subtle text-warning";
+      return STATUS_TONE_CLASSES.attention;
     case "REJECTED":
     case "DISABLED":
     case "LOCKED":
-      return "bg-danger-subtle text-danger";
+      return STATUS_TONE_CLASSES.critical;
     default:
-      return "bg-muted text-muted-foreground";
+      return STATUS_TONE_CLASSES.neutral;
   }
 }
 
@@ -94,14 +95,14 @@ export const BROADCAST_STATUS_LABEL: Record<BroadcastStatus, string> = {
   FAILED: "Failed",
 };
 
-export const BROADCAST_STATUS_CLASS: Record<BroadcastStatus, string> = {
-  DRAFT: "bg-muted text-muted-foreground",
-  SCHEDULED: "bg-info-subtle text-info",
-  SENDING: "bg-brand/30 text-brand-strong",
-  COMPLETED: "bg-success-subtle text-success",
-  CANCELLED: "bg-muted text-muted-foreground",
-  FAILED: "bg-danger-subtle text-danger",
-};
+export const BROADCAST_STATUS_CLASS = toneClasses<BroadcastStatus>({
+  DRAFT: "neutral",
+  SCHEDULED: "info",
+  SENDING: "info",
+  COMPLETED: "success",
+  CANCELLED: "neutral",
+  FAILED: "critical",
+});
 
 export const RECIPIENT_STATUS_LABEL: Record<BroadcastRecipientStatus, string> = {
   PENDING: "Waiting",
@@ -113,15 +114,15 @@ export const RECIPIENT_STATUS_LABEL: Record<BroadcastRecipientStatus, string> = 
   FAILED: "Failed",
 };
 
-export const RECIPIENT_STATUS_CLASS: Record<BroadcastRecipientStatus, string> = {
-  PENDING: "bg-muted text-muted-foreground",
-  SKIPPED: "bg-muted text-muted-foreground",
-  QUEUED: "bg-info-subtle text-info",
-  SENT: "bg-info-subtle text-info",
-  DELIVERED: "bg-brand/30 text-brand-strong",
-  READ: "bg-success-subtle text-success",
-  FAILED: "bg-danger-subtle text-danger",
-};
+export const RECIPIENT_STATUS_CLASS = toneClasses<BroadcastRecipientStatus>({
+  PENDING: "neutral",
+  SKIPPED: "neutral",
+  QUEUED: "info",
+  SENT: "info",
+  DELIVERED: "success",
+  READ: "success",
+  FAILED: "critical",
+});
 
 export const RFM_LABEL: Record<RfmGroup, { label: string; hint: string }> = {
   champions: { label: "Champions", hint: "Bought recently and often" },

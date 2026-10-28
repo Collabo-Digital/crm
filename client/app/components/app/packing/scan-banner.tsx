@@ -9,10 +9,11 @@ export interface ShownFeedback {
   at: number;
 }
 
-// Solid fills so a packer can read it from arm's length. Text flips to ink in
-// dark mode, where the status colours turn light.
+// Solid fills so a packer can read it from arm's length. Ink on green and amber
+// (white on green is only 3.2:1); white on red, flipping to ink in dark mode
+// where the red turns light.
 const TONE: Record<FeedbackTone, string> = {
-  success: "bg-success text-ink-foreground dark:text-ink",
+  success: "bg-success text-ink",
   warning: "bg-warning text-ink",
   danger: "bg-danger text-ink-foreground dark:text-ink",
 };

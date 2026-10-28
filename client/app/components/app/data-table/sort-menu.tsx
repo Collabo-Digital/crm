@@ -40,7 +40,7 @@ export function SortMenu<Row>({ state }: { state: DataTableState<Row> }) {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="inline-flex h-11 max-w-full items-center gap-1.5 whitespace-nowrap rounded-xl bg-card px-3 text-label text-muted-foreground ring-1 ring-border transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 md:h-8 md:rounded-lg md:px-2.5"
+          className="inline-flex h-11 max-w-full items-center gap-1.5 whitespace-nowrap rounded-xl bg-card px-3 text-label text-muted-foreground ring-1 ring-border transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:h-8 md:rounded-lg md:px-2.5"
         >
           <ArrowUpDown className="size-3.5" />
           <span className="hidden md:inline">Sort:</span>

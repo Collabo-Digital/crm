@@ -7,15 +7,16 @@ import { Input } from "~/components/ui/input";
 import { useSendMessageMutation } from "~/hooks/use-inbox-mutations";
 import { useConversationPayments, useCreatePaymentLinkMutation, usePaymentAccount, usePaymentLinkActionMutation, useRequestWhatsAppPayMutation } from "~/hooks/use-payments";
 import { formatDateTime } from "~/lib/inbox-format";
+import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import { cn, formatCurrency } from "~/lib/utils";
 import type { PaymentLink, PaymentLinkStatus } from "~/types/api";
 
 const STATUS: Record<PaymentLinkStatus, { label: string; className: string }> = {
-  CREATED: { label: "Waiting", className: "bg-warning-subtle text-warning-strong" },
-  PARTIALLY_PAID: { label: "Part paid", className: "bg-warning-subtle text-warning-strong" },
-  PAID: { label: "Paid", className: "bg-success-subtle text-success" },
-  EXPIRED: { label: "Expired", className: "bg-muted text-muted-foreground" },
-  CANCELLED: { label: "Cancelled", className: "bg-muted text-muted-foreground" },
+  CREATED: { label: "Waiting", className: STATUS_TONE_CLASSES.attention },
+  PARTIALLY_PAID: { label: "Part paid", className: STATUS_TONE_CLASSES.attention },
+  PAID: { label: "Paid", className: STATUS_TONE_CLASSES.success },
+  EXPIRED: { label: "Expired", className: STATUS_TONE_CLASSES.neutral },
+  CANCELLED: { label: "Cancelled", className: STATUS_TONE_CLASSES.neutral },
 };
 
 export const paymentLinkMessage = (link: Pick<PaymentLink, "description" | "amount" | "currency" | "shortUrl">) =>

@@ -39,6 +39,7 @@ import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { VIP_CLASSES, VIP_LABELS } from "~/lib/customer-status";
 import { formatDateTime } from "~/lib/inbox-format";
 import { mapsEmbedUrl, mapsUrl, readAddress } from "~/lib/address";
+import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import { cn, formatCurrency } from "~/lib/utils";
 import type { CustomerDetail } from "~/types/api";
 
@@ -143,9 +144,7 @@ export default function CustomerDetailPage() {
                   <span
                     className={cn(
                       "inline-flex items-center rounded-full px-2 py-0.5 text-micro font-medium",
-                      isActive
-                        ? "bg-brand/30 text-brand-strong"
-                        : "bg-muted text-muted-foreground",
+                      isActive ? STATUS_TONE_CLASSES.success : STATUS_TONE_CLASSES.neutral,
                     )}
                   >
                     {isActive ? "Active" : "Disabled"}
