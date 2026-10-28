@@ -1,11 +1,13 @@
 import { useEffect, type ReactNode } from "react";
 import { useParams } from "react-router";
 import { isAxiosError } from "axios";
-import { Check, Loader2, PackageX } from "lucide-react";
+import { Check, ExternalLink, Loader2, PackageX } from "lucide-react";
 
 import { PublicLinkMessage } from "~/components/app/public-link-message";
+import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
 import { usePublicOrderLink } from "~/hooks/use-public-links";
+import { trackingStep } from "~/lib/tracking-link";
 import { cn } from "~/lib/utils";
 import type { PublicOrderLink, PublicOrderStatus } from "~/types/api";
 
@@ -28,19 +30,18 @@ const HEADLINE: Record<PublicOrderStatus, { title: string; body: string }> = {
   cancelled: { title: "Order cancelled", body: "This order was cancelled." },
 };
 
-/** Only a web address is followed; anything else shows the status page instead. */
-const webUrl = (url: string | null) => (url && /^https?:\/\//i.test(url) ? url : null);
-
 /**
  * Where a customer's order is, from the "Track order" button in a WhatsApp
  * message. Public, outside the app and its sign-in: the token in the link is
- * the only key. With the courier's tracking page it goes straight there;
- * otherwise it shows the order's status. No name, phone or address.
+ * the only key. A known courier's tracking page opens straight away; any
+ * other tracking address is named under the order's status, for the
+ * customer to continue to. No name, phone or address.
  */
 export default function PublicOrderPage() {
   const { token } = useParams<{ token: string }>();
   const { data, error, isLoading, refetch, isFetching } = usePublicOrderLink(token);
-  const courier = webUrl(data?.order.trackingUrl ?? null);
+  const step = data ? trackingStep(data.order) : null;
+  const courier = step?.kind === "open" ? step.url : null;
 
   useEffect(() => {
     if (courier) window.location.replace(courier);
@@ -76,14 +77,14 @@ export default function PublicOrderPage() {
             </a>
           </div>
         ) : (
-          <OrderStatus link={data} />
+          <OrderStatus link={data} next={step?.kind === "confirm" ? step : null} />
         )}
       </main>
     </div>
   );
 }
 
-function OrderStatus({ link }: { link: PublicOrderLink }) {
+function OrderStatus({ link, next }: { link: PublicOrderLink; next: { url: string; host: string } | null }) {
   const { order } = link;
   const headline = HEADLINE[order.status] ?? HEADLINE.confirmed;
   const current = STEPS.findIndex((s) => s.status === order.status);
@@ -118,6 +119,20 @@ function OrderStatus({ link }: { link: PublicOrderLink }) {
             {order.carrier && <Detail label="Courier" value={order.carrier} />}
             {order.trackingNumber && <Detail label="Tracking number" value={<span className="font-mono">{order.trackingNumber}</span>} />}
           </dl>
+        )}
+
+        {next && (
+          <div className="space-y-3 border-t pt-4">
+            <p className="text-body">
+              Tracking for this order is on <span className="break-all font-medium">{next.host}</span>.
+            </p>
+            <Button asChild className="h-11 w-full">
+              <a href={next.url} rel="noopener noreferrer">
+                <span className="truncate">Continue to {next.host}</span>
+                <ExternalLink />
+              </a>
+            </Button>
+          </div>
         )}
       </article>
       <p className="text-center text-caption text-muted-foreground">Questions about your order? Reply to {link.storeName} on WhatsApp.</p>

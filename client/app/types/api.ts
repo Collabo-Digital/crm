@@ -5722,6 +5722,8 @@ export interface PublicOrderLink {
     carrier: string | null;
     trackingNumber: string | null;
     trackingUrl: string | null;
+    /** The tracking address is a known courier's https page, which opens at once. */
+    knownCourier?: boolean;
   };
 }
 
