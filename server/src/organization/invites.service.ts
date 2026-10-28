@@ -274,6 +274,9 @@ export class InvitesService {
                 // forcing the admin to delete and retype it.
                 status: InviteStatus.PENDING,
                 revokedAt: null,
+                // It now stands on this admin's authority: acceptance checks
+                // that the sender may still invite.
+                invitedBy: userId,
             },
         });
 

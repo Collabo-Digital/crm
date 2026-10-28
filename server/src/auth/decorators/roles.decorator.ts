@@ -63,3 +63,9 @@ export const CHANNEL_MANAGERS: UserRole[] = [
   UserRole.ADMIN,
   UserRole.INFLUENCER,
 ];
+
+/**
+ * Who may invite anyone, influencers included. An invitation holds only while
+ * its sender still is one: acceptance checks them again.
+ */
+export const INVITE_MANAGERS: UserRole[] = [UserRole.OWNER, UserRole.ADMIN];

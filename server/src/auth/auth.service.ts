@@ -26,6 +26,7 @@ import { AcceptInviteDto } from './dto/accept-invite.dto';
 import { EmailService } from '../email/email.service';
 import { ACTIVE_MEMBERSHIP } from './active-membership';
 import { buildSessionPayload } from './session-payload.util';
+import { INVITE_MANAGERS } from './decorators/roles.decorator';
 
 /** What is stored in Redis alongside a refresh token. */
 interface RefreshTokenData {
@@ -449,6 +450,7 @@ export class AuthService {
       );
     }
     if (invite.expiresAt < new Date()) throw new BadRequestException('This invitation has expired.');
+    await this.assertInviterMayStillInvite(invite);
 
     const userExists = !!(await this.userService.findByEmail(invite.email));
     return {
@@ -491,6 +493,7 @@ export class AuthService {
       );
     }
     if (invite.expiresAt < new Date()) throw new BadRequestException('This invitation has expired.');
+    await this.assertInviterMayStillInvite(invite);
 
     let user = await this.userService.findByEmail(invite.email);
 
@@ -592,6 +595,23 @@ export class AuthService {
         permissions: grants,
       },
     };
+  }
+
+  /**
+   * An invitation grants its sender's authority, so it holds only while they
+   * still have it. Otherwise an admin who was removed or demoted could join
+   * again, with the role they chose, through an invitation sent beforehand
+   * to a second address of their own. A current admin who re-sends it takes
+   * it over (InvitesService.resend).
+   */
+  private async assertInviterMayStillInvite(invite: { organizationId: string; invitedBy: string }): Promise<void> {
+    const inviter = await this.prisma.organizationMember.findUnique({
+      where: { organizationId_userId: { organizationId: invite.organizationId, userId: invite.invitedBy } },
+      select: { role: true, isActive: true, user: { select: { deletedAt: true } } },
+    });
+    if (!inviter?.isActive || inviter.user.deletedAt || !INVITE_MANAGERS.includes(inviter.role)) {
+      throw new BadRequestException('This invitation is no longer valid. Ask the workspace to send you a new one.');
+    }
   }
 
   /**
