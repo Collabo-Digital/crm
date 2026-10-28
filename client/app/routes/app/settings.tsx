@@ -10,12 +10,14 @@ import {
   Building2, Lock, Bell, Palette, Users, Shield, Smartphone,
   Check, ChevronRight, AlertTriangle, Loader2, Plus, X, Mail, Trash2,
   Sun, Moon, Monitor, Receipt, Star, MapPin, Package, ShoppingBag, Layers, MessageSquare,
-  Pencil, Store, ArrowLeft, ReceiptText,
+  Pencil, Store, ArrowLeft, ReceiptText, LogOut,
 } from "lucide-react";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "~/components/ui/select";
 import { Button } from "~/components/ui/button";
+import { Input } from "~/components/ui/input";
+import { Label } from "~/components/ui/label";
 import { Switch } from "~/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { ModalFrame, ModalTitle } from "~/components/app/order-dialog-primitives";
@@ -34,6 +36,7 @@ import {
 } from "~/hooks/use-org-mutations";
 import { userService } from "~/services/user.service";
 import { apiClient } from "~/lib/api-client";
+import { handleMutationError } from "~/lib/handle-mutation-error";
 import { useGstins, useIndianStates, useStateTaxRates, useProductTypeTaxRates, useCollections, useCollectionOverrides } from "~/hooks/use-gst-queries";
 import {
   useCreateGstinMutation, useUpdateGstinMutation, useDeleteGstinMutation,
@@ -103,6 +106,9 @@ const TABS = [
   { id: "billing", label: "Billing & Plan", icon: BillingIcon },
   // { id: "appearance",    label: "Appearance",       icon: Palette },
 ];
+
+/** Tabs showing the store, tax and invoice set-up (GET /organization/settings and /gst). */
+const SETUP_TABS = ["store-profile", "products", "orders", "tax-gst", "invoices"];
 
 const INDUSTRIES = [
   "Retail", "E-commerce", "Fashion", "Electronics", "Food & Beverage",
@@ -434,6 +440,71 @@ function VendorRoleDialog({ orgId, member, onClose }: { orgId: string; member: O
             onClick={() => updateRole.mutate({ memberId: member.id, data: { role: "VENDOR", vendorScope } }, { onSuccess: onClose })}
           >
             {updateRole.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Change role"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Deleting a workspace cannot be undone, and stops its plan, channels,
+ * automations and broadcasts. The owner types its name and their password,
+ * which the server checks again.
+ */
+function DeleteWorkspaceDialog({ orgId, name, onClose }: { orgId: string; name: string; onClose: () => void }) {
+  const [typedName, setTypedName] = useState("");
+  const [password, setPassword] = useState("");
+  const deleteOrg = useDeleteOrganizationMutation();
+  const ready = typedName.trim() === name.trim() && password.length > 0;
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!ready || deleteOrg.isPending) return;
+    deleteOrg.mutate({ orgId, password, confirmName: typedName }, { onSuccess: onClose });
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !deleteOrg.isPending && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete {name}?</DialogTitle>
+          <DialogDescription>
+            This permanently deletes the workspace and all its data. Its plan is cancelled, its channels are disconnected,
+            and its automations and broadcasts stop. This cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <form id="delete-workspace" onSubmit={submit} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="delete-workspace-name" className="block leading-normal">
+              Type <span className="font-semibold">{name}</span> to confirm
+            </Label>
+            <Input
+              id="delete-workspace-name"
+              value={typedName}
+              onChange={(event) => setTypedName(event.target.value)}
+              autoComplete="off"
+              autoFocus
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="delete-workspace-password">Your password</Label>
+            <Input
+              id="delete-workspace-password"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+            />
+          </div>
+        </form>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={deleteOrg.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" form="delete-workspace" variant="destructive" disabled={!ready || deleteOrg.isPending}>
+            {deleteOrg.isPending && <Loader2 className="animate-spin" />}
+            Delete workspace
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1558,7 +1629,7 @@ function AppearanceTab() {
 export default function SettingsPage() {
   const navigate = useNavigate();
   const { tab } = useParams();
-  const activeTab = TABS.some((t) => t.id === tab) ? tab! : "general";
+  const requestedTab = TABS.some((t) => t.id === tab) ? tab! : "general";
   // Settings tabs an influencer may open. Anything else is an organization
   // setting they have no business in, and the layout would bounce them off it
   // anyway — listing it would just be a dead link. Channels is why they are
@@ -1595,10 +1666,19 @@ export default function SettingsPage() {
   // affordances that would only be refused.
   const canManageTeam = memberRole === "OWNER" || memberRole === "ADMIN";
   // Inbox settings are for members who can open the Inbox; billing and
-  // developers for owners and admins.
+  // developers for owners and admins. The store, tax and invoice set-up is
+  // read by Orders, Products and Invoices, and the server refuses it to
+  // members without one of them.
+  const canSeeSetup = canAccess("/orders") || canAccess("/products") || canAccess("/orders/invoices");
   const visibleTabs = isInfluencer
     ? TABS.filter((t) => INFLUENCER_TABS.includes(t.id))
-    : TABS.filter((t) => (t.id !== "inbox" || canAccess("/inbox")) && ((t.id !== "billing" && t.id !== "developers") || canManageTeam));
+    : TABS.filter(
+        (t) =>
+          (t.id !== "inbox" || canAccess("/inbox")) &&
+          (!SETUP_TABS.includes(t.id) || canSeeSetup) &&
+          ((t.id !== "billing" && t.id !== "developers") || canManageTeam),
+      );
+  const activeTab = !isInfluencer && SETUP_TABS.includes(requestedTab) && !canSeeSetup ? "general" : requestedTab;
   // Staff only. Influencers hold a membership like anyone else, but they are an
   // outside party managed in their own section, with their own lifecycle.
   const staffMembers = (members ?? []).filter((m) => m.role !== "INFLUENCER");
@@ -1608,7 +1688,8 @@ export default function SettingsPage() {
 
   // ── Mutations for organization, member, and invite operations ──
   const updateOrg = useUpdateOrganizationMutation(currentOrgId ?? "");
-  const deleteOrg = useDeleteOrganizationMutation();
+  // The delete-workspace dialog, open while the owner confirms.
+  const [deletingWorkspace, setDeletingWorkspace] = useState(false);
   const updateRole = useUpdateMemberRoleMutation(currentOrgId ?? "");
   const removeMember = useRemoveMemberMutation(currentOrgId ?? "");
   const revokeInvite = useRevokeInviteMutation(currentOrgId ?? "");
@@ -1644,12 +1725,6 @@ export default function SettingsPage() {
     });
   }
 
-  function handleDeleteOrg() {
-    if (!currentOrgId) return;
-    if (!window.confirm("Are you sure? This will permanently delete this workspace and all its data.")) return;
-    deleteOrg.mutate(currentOrgId);
-  }
-
   // Password form
   const passwordForm = useForm<PasswordForm>({
     resolver: zodResolver(passwordSchema),
@@ -1670,6 +1745,13 @@ export default function SettingsPage() {
         toast.error("Something went wrong.");
       }
     },
+  });
+
+  // A lost or shared phone: end every session but this one.
+  const signOutOthers = useMutation({
+    mutationFn: () => userService.signOutOtherDevices(),
+    onSuccess: () => toast.success("Signed out of every other device. This one stays signed in."),
+    onError: (error) => handleMutationError(error, "Could not sign out the other devices."),
   });
 
   // Delete account
@@ -1889,16 +1971,14 @@ export default function SettingsPage() {
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         Permanently delete this workspace and all its data. This action cannot be undone.
                       </p>
-                      <button
-                        onClick={handleDeleteOrg}
-                        disabled={deleteOrg.isPending}
-                        className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 px-4 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                      >
-                        {deleteOrg.isPending && <Loader2 className="size-3.5 animate-spin" />}
+                      <Button variant="destructive" className="mt-3" onClick={() => setDeletingWorkspace(true)}>
                         Delete Workspace
-                      </button>
+                      </Button>
                     </div>
                   </div>
+                  {deletingWorkspace && currentOrgId && org && (
+                    <DeleteWorkspaceDialog orgId={currentOrgId} name={org.name} onClose={() => setDeletingWorkspace(false)} />
+                  )}
                 </div>
               )}
             </>
@@ -1962,6 +2042,18 @@ export default function SettingsPage() {
                     </button>
                   </div>
                 </form>
+              </Section>
+
+              <Section title="Signed-in devices" description="Lost a phone, or signed in on a shared computer? End those sessions.">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+                    Every other phone, tablet and computer signed in to your account is signed out at once. This one stays signed in.
+                  </p>
+                  <Button variant="outline" onClick={() => signOutOthers.mutate()} disabled={signOutOthers.isPending}>
+                    {signOutOthers.isPending ? <Loader2 className="animate-spin" /> : <LogOut />}
+                    Sign out of other devices
+                  </Button>
+                </div>
               </Section>
 
               {/* <Section title="Two-Factor Authentication" description="Add an extra layer of security.">
@@ -2083,7 +2175,7 @@ export default function SettingsPage() {
                               {member.user.firstName} {member.user.lastName}
                               {isCurrentUser && <span className="ml-1.5 text-[10px] text-gray-400">(you)</span>}
                             </p>
-                            <p className="text-caption text-muted-foreground">{member.user.email}</p>
+                            {member.user.email && <p className="text-caption text-muted-foreground">{member.user.email}</p>}
                           </div>
 
                           {hasSectionAccess && canManageAccess && (

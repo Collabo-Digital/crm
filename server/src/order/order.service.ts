@@ -75,6 +75,7 @@ import { extractOrderShopifySync } from './order-shopify-sync.util';
 import { countryCodeOf, phoneLookupVariants } from '../common/phone.util';
 import { defaultCountryFor, toShopifyAddress } from '../channel/shopify-address.util';
 import { normalizeTrackingUrl } from './tracking-url.util';
+import { neutraliseCsvRow } from '../common/utils/csv-formula.util';
 import {
   FulfillmentCancelResponse,
   FulfillmentCancelVariables,
@@ -1095,7 +1096,8 @@ export class OrderService {
       'total', 'currency', 'financialStatus', 'fulfillmentStatus',
     ];
     const parser = new Parser({ fields });
-    return parser.parse(data);
+    // Buyer names and emails are typed by shoppers; keep them from running as formulas.
+    return parser.parse(data.map(neutraliseCsvRow));
   }
 
   private calcChange(current: number, previous: number): { percentage: number; direction: 'up' | 'down' | 'same' } {

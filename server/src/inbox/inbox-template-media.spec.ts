@@ -36,7 +36,7 @@ function build(rows: Array<Record<string, unknown>>) {
     };
     const storage = { open: jest.fn(async () => ({ stream: Readable.from(['%PDF-1.3']), size: 8 })) };
     const none = {} as never;
-    const service = new InboxService(prisma as never, none, storage as never, none, none, none, none, none, none, none, none, none, { get: () => SECRET } as never);
+    const service = new InboxService(prisma as never, none, storage as never, none, none, none, none, none, none, none, none, none, { get: () => SECRET } as never, none);
     return { service, storage };
 }
 

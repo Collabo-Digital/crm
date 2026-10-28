@@ -178,6 +178,17 @@ export function canListOrders(
   );
 }
 
+/**
+ * May this member search the store's customers? The same sections
+ * `GET /customers` asks for: Customers, or Orders for the order form's
+ * customer picker. The inbox's "Find customer" asks this too, so a member
+ * given only the Chat section cannot read the customer list through it.
+ */
+export function canBrowseCustomers(role: UserRole, grants: readonly string[]): boolean {
+  const sections = resolveSections(role, grants);
+  return sections === 'all' || sections.has('section.customers') || sections.has('section.orders');
+}
+
 /** Roles whose section access is chosen per member (the invite checkboxes). */
 export const SECTION_SCOPED_ROLES: UserRole[] = [UserRole.AGENT, UserRole.VIEWER];
 
