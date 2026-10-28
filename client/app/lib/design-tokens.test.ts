@@ -218,7 +218,6 @@ const SMALL_TEXT_ALLOWANCE: Record<string, number> = {
   "components/app/inward-supplies-panel.tsx": 6,
   "components/app/low-stock-products-panel.tsx": 2,
   "components/app/order-actions.tsx": 8,
-  "components/app/order-dialog-primitives.tsx": 2,
   "components/app/order-fulfillments.tsx": 9,
   "components/app/order-slip.tsx": 12,
   "components/app/phone-input.tsx": 4,
