@@ -310,10 +310,10 @@ function OwnerOrderDetail({ id }: { id: string }) {
               {adjacent.position} of {adjacent.total}
             </span>
           )}
-          <Button asChild={!!prevId} variant="outline" size="sm" disabled={!prevId} aria-label="Previous order" className="shrink-0 px-3">
+          <Button asChild={!!prevId} variant="outline" size="sm" disabled={!prevId} aria-label="Previous order" className="shrink-0 px-3 max-md:min-w-11 pointer-coarse:min-w-11">
             {prevId ? <Link to={`/orders/${prevId}`}><ChevronLeft className="sm:hidden" /><span className="hidden sm:inline">Previous</span></Link> : <><ChevronLeft className="sm:hidden" /><span className="hidden sm:inline">Previous</span></>}
           </Button>
-          <Button asChild={!!nextId} variant="outline" size="sm" disabled={!nextId} aria-label="Next order" className="shrink-0 px-3">
+          <Button asChild={!!nextId} variant="outline" size="sm" disabled={!nextId} aria-label="Next order" className="shrink-0 px-3 max-md:min-w-11 pointer-coarse:min-w-11">
             {nextId ? <Link to={`/orders/${nextId}`}><ChevronRight className="sm:hidden" /><span className="hidden sm:inline">Next order</span></Link> : <><ChevronRight className="sm:hidden" /><span className="hidden sm:inline">Next order</span></>}
           </Button>
           <OrderSyncButton order={order} />
@@ -941,14 +941,14 @@ function OrderTags({ order, canEdit }: { order: OrderDetail; canEdit: boolean })
             }
           }}
           placeholder="Tag name"
-          className="h-6 w-24 rounded-full border border-border bg-background px-2 text-micro outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
+          className="h-6 w-24 rounded-full border border-border bg-background px-2 text-micro outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring max-md:w-32"
         />
       ) : (
         <button
           type="button"
           onClick={() => setAdding(true)}
           disabled={mutation.isPending}
-          className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-micro font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+          className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-micro font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:min-h-11 max-md:px-3 pointer-coarse:min-h-11"
         >
           <Plus className="size-2.5" />
           Add

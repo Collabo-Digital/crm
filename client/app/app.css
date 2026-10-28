@@ -612,6 +612,10 @@ html.dark { color-scheme: dark; }
   [data-slot="dialog-content"] input, [data-slot="sheet-content"] input,
   [data-slot="dialog-content"] textarea, [data-slot="sheet-content"] textarea { font-size: 16px; }
   .settings-page button:not([role="switch"]):not([role="checkbox"]) { min-height: 44px; }
+  /* The rich-text toolbar (Quill's snow theme) draws 28x24 buttons. */
+  html .ql-snow.ql-toolbar button { width: 44px; height: 44px; }
+  html .ql-snow.ql-toolbar .ql-picker { height: 44px; }
+  html .ql-snow.ql-toolbar .ql-picker-label { display: flex; align-items: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {

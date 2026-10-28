@@ -244,7 +244,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
       <div className="mx-auto flex h-14 max-w-screen-xl items-center justify-between gap-2 px-4 md:h-[72px] md:px-6">
 
         {/* ── Logo ──────────────────────────────────────────────────── */}
-        <Link to={landingPath} className={cn("shrink-0 items-center", mobileTitle ? "hidden md:flex" : "flex")}>
+        <Link to={landingPath} className={cn("shrink-0 items-center pointer-coarse:min-h-11", mobileTitle ? "hidden md:flex" : "flex")}>
           <BrandLogo className="h-6 md:h-7" />
         </Link>
         {parent && backTo ? (
@@ -274,7 +274,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                       role="link"
                       aria-disabled="true"
                       tabIndex={0}
-                      className="flex shrink-0 cursor-not-allowed items-center gap-1 rounded-full p-2.5 text-sm font-medium text-background/40 select-none focus-visible:outline-brand dark:text-gray-600"
+                      className="flex shrink-0 cursor-not-allowed items-center gap-1 rounded-full p-2.5 text-sm font-medium text-background/40 select-none focus-visible:outline-brand dark:text-gray-600 pointer-coarse:min-h-11"
                     >
                       <Lock className="size-3" />
                       {label}
@@ -288,7 +288,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                   to={target}
                   aria-current={isActive ? "page" : undefined}
                   className={cn(
-                    "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none p-2.5 focus-visible:outline-brand",
+                    "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none p-2.5 focus-visible:outline-brand pointer-coarse:min-h-11",
                     isActive
                       ? "font-semibold text-brand-foreground"
                       : "font-medium text-background hover:text-background/70 dark:text-gray-400 dark:hover:text-gray-200"
@@ -336,7 +336,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
         <div className="flex shrink-0 items-center gap-1 md:gap-3">
           <div id={APP_BAR_ACTIONS_ID} className="flex items-center gap-0.5 md:hidden" />
 
-          <button aria-label="Settings" onClick={() => navigate("/settings")} className="hidden md:flex size-9 items-center justify-center rounded-full bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
+          <button aria-label="Settings" onClick={() => navigate("/settings")} className="hidden md:flex size-9 pointer-coarse:size-11 items-center justify-center rounded-full bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
             <Settings className="size-4" />
           </button>
           {/* 
@@ -463,7 +463,7 @@ export function Navbar({ immersive = false }: { immersive?: boolean }) {
                     to={href}
                     aria-current={isActive ? "page" : undefined}
                     className={cn(
-                      "relative flex min-h-11 items-center gap-1.5 px-3 py-2.5 text-sm select-none md:min-h-0 md:rounded-full md:p-2.5 md:text-xs",
+                      "relative flex min-h-11 items-center gap-1.5 px-3 py-2.5 text-sm select-none md:min-h-0 md:rounded-full md:p-2.5 md:text-xs pointer-coarse:min-h-11",
                       isActive
                         ? "font-semibold text-foreground md:text-brand-foreground"
                         : "font-medium text-muted-foreground hover:text-foreground"

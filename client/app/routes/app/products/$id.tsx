@@ -1181,7 +1181,7 @@ export default function ProductDetailPage() {
               aria-controls="product-tabpanel"
               onClick={() => setActiveTab(id)}
               className={cn(
-                "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none",
+                "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none max-md:min-h-11 pointer-coarse:min-h-11",
                 isActive
                   ? "font-semibold text-gray-900 dark:text-gray-900"
                   : "font-medium text-background hover:text-background/70 dark:text-gray-400 dark:hover:text-gray-200",

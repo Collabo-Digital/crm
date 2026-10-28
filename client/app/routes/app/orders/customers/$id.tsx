@@ -662,7 +662,7 @@ function TagsSection({ customer }: { customer: CustomerDetail }) {
             type="button"
             onClick={() => setAdding(true)}
             disabled={mutation.isPending}
-            className="inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-caption font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+            className="inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-caption font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:min-h-11 max-md:px-3 pointer-coarse:min-h-11"
           >
             <Plus className="size-3" />
             Add

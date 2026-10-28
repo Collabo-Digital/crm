@@ -295,7 +295,7 @@ export function DataTable<Row>({
             <kbd
               aria-hidden
               title="Press / to search"
-              className="pointer-events-none absolute right-2 top-[7px] hidden h-[18px] min-w-[18px] items-center justify-center rounded-[4px] font-mono text-caption text-muted-foreground ring-1 ring-border md:flex"
+              className="pointer-events-none absolute right-2 top-1/2 hidden h-[18px] min-w-[18px] -translate-y-1/2 items-center justify-center rounded-[4px] font-mono text-caption text-muted-foreground ring-1 ring-border md:flex"
             >
               /
             </kbd>
