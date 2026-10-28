@@ -4,6 +4,7 @@ import { Dialog as DialogPrimitive } from "radix-ui"
 import { cn } from "~/lib/utils"
 import { Button } from "~/components/ui/button"
 import { XIcon } from "lucide-react"
+import { useCloseOnBack, useKeyboardInset, useSheetDrag } from "~/hooks/use-bottom-sheet"
 
 function Dialog({
   ...props
@@ -45,6 +46,26 @@ function DialogOverlay({
   )
 }
 
+/**
+ * What a dialog needs as a phone bottom sheet (app.css): a handle that drags
+ * it down to close, back closing it, and staying above the iOS keyboard.
+ * Mounted inside the content, so it only runs while the dialog is open.
+ */
+function SheetChrome() {
+  const handleRef = React.useRef<HTMLDivElement>(null)
+  const closeRef = React.useRef<HTMLButtonElement>(null)
+  const close = React.useCallback(() => closeRef.current?.click(), [])
+  useCloseOnBack(close)
+  useKeyboardInset(() => handleRef.current?.parentElement)
+  const drag = useSheetDrag(handleRef, close)
+  return (
+    <>
+      <div ref={handleRef} data-slot="dialog-handle" aria-hidden className="md:hidden" {...drag} />
+      <DialogPrimitive.Close ref={closeRef} hidden tabIndex={-1} />
+    </>
+  )
+}
+
 function DialogContent({
   className,
   children,
@@ -64,6 +85,7 @@ function DialogContent({
         )}
         {...props}
       >
+        <SheetChrome />
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close data-slot="dialog-close" asChild>

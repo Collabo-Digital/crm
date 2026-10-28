@@ -172,6 +172,34 @@ export function useInvoiceColumns(currency: string): ColumnDef<Invoice>[] {
   );
 }
 
+/** An invoice as a three-line phone card: number and total, buyer and date, then status and tax. */
+export function InvoiceMobileSummary({ invoice, currency }: { invoice: Invoice; currency: string }) {
+  const displayStatus = resolveDisplayStatus(invoice);
+  const rate = effectiveGstRate(invoice);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between gap-3 text-sm">
+        <p className="min-w-0 truncate font-mono font-semibold text-foreground">{invoice.invoiceNumber}</p>
+        <MoneyCell amount={invoice.grandTotal} currency={invoice.currency || currency} strong />
+      </div>
+      <div className="flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
+        <span className="min-w-0 truncate">{invoice.buyerName}</span>
+        <span aria-hidden>·</span>
+        <span className="shrink-0"><DateCell value={invoice.invoiceDate} /></span>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5 text-caption text-muted-foreground">
+        <StatusPill className={INVOICE_STATUS_CLASSES[displayStatus]}>
+          {INVOICE_STATUS_LABELS[displayStatus]}
+        </StatusPill>
+        <span>
+          {invoice.buyerGstin ? "B2B" : "B2C"} · {GST_TYPE_LABELS[invoice.gstType]}
+          {rate !== null && ` · ${rate}%`}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /**
  * One menu per row: view and navigate, then documents, then the destructive
  * one. Owns its own download flag so a second click while the PDF engine is

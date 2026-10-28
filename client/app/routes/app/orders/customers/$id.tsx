@@ -113,8 +113,6 @@ export default function CustomerDetailPage() {
     customer.email ||
     "—";
   const isActive = customer.state !== "DISABLED";
-  // No numeric customer number exists — ids are cuids. Shopify's own id is the
-  // closest thing to the mockup's "#56578"; the cuid tail is the fallback.
 
   // A linked WhatsApp chat opens as it is (latest first), even when the
   // customer record has no phone; otherwise the inbox starts one on the
@@ -196,7 +194,7 @@ export default function CustomerDetailPage() {
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <DropdownMenu>
                 {/* 38px is the measured height of a `size="action"` pill, so the
                     circle sits flush beside Send Message. The stock icon size
@@ -232,6 +230,12 @@ export default function CustomerDetailPage() {
                 {startChat.isPending && <Loader2 className="size-3.5 animate-spin" />}
                 Send Message
               </Button>
+              {/* Touch screens never show the hover reason, so it is written out. */}
+              {messageBlocked && (
+                <p className="hidden basis-full text-right text-caption text-muted-foreground max-md:block pointer-coarse:block">
+                  {messageBlocked}
+                </p>
+              )}
 
               {/* <NotYet title="Stepping between customers isn't available yet">
                 <Button
@@ -685,7 +689,7 @@ function TagsSection({ customer }: { customer: CustomerDetail }) {
             type="button"
             onClick={() => setAdding(true)}
             disabled={mutation.isPending}
-            className="inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-caption font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+            className="inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-caption font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:min-h-11 max-md:px-3 pointer-coarse:min-h-11"
           >
             <Plus className="size-3" />
             Add

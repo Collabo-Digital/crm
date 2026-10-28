@@ -304,24 +304,24 @@ function OwnerOrderDetail({ id }: { id: string }) {
       <title>{pageTitle(`Order ${order.name}`)}</title>
       {/* Breadcrumb + prev/next rail */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <nav aria-label="Breadcrumb" className="flex w-full items-center gap-1.5 text-caption sm:w-auto">
+        {/* On a phone the app bar's back arrow does this job. */}
+        <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption max-md:hidden">
           <Link to={ordersPath} className="text-muted-foreground hover:text-foreground">
             Orders
           </Link>
           <ChevronRight className="size-3 text-muted-foreground" />
           <span className="font-medium text-foreground">{order.name}</span>
-          {adjacent && adjacent.total > 0 && <span className="ml-auto text-muted-foreground sm:hidden">{adjacent.position} of {adjacent.total}</span>}
         </nav>
-        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+        <div className="flex w-full flex-wrap items-center gap-2 md:w-auto">
           {adjacent && adjacent.total > 0 && (
-            <span className="hidden text-caption text-muted-foreground sm:inline">
+            <span className="text-caption text-muted-foreground max-md:mr-auto">
               {adjacent.position} of {adjacent.total}
             </span>
           )}
-          <Button asChild={!!prevId} variant="outline" size="sm" disabled={!prevId} aria-label="Previous order" className="shrink-0 px-3">
+          <Button asChild={!!prevId} variant="outline" size="sm" disabled={!prevId} aria-label="Previous order" className="shrink-0 px-3 max-md:min-w-11 pointer-coarse:min-w-11">
             {prevId ? <Link to={`/orders/${prevId}`}><ChevronLeft className="sm:hidden" /><span className="hidden sm:inline">Previous</span></Link> : <><ChevronLeft className="sm:hidden" /><span className="hidden sm:inline">Previous</span></>}
           </Button>
-          <Button asChild={!!nextId} variant="outline" size="sm" disabled={!nextId} aria-label="Next order" className="shrink-0 px-3">
+          <Button asChild={!!nextId} variant="outline" size="sm" disabled={!nextId} aria-label="Next order" className="shrink-0 px-3 max-md:min-w-11 pointer-coarse:min-w-11">
             {nextId ? <Link to={`/orders/${nextId}`}><ChevronRight className="sm:hidden" /><span className="hidden sm:inline">Next order</span></Link> : <><ChevronRight className="sm:hidden" /><span className="hidden sm:inline">Next order</span></>}
           </Button>
           <OrderSyncButton order={order} />
@@ -329,12 +329,14 @@ function OwnerOrderDetail({ id }: { id: string }) {
         </div>
       </div>
 
+      {/* One column below 1024px, ordered for working the order: the summary,
+          the actions, what was bought, the customer, then the history. */}
       <div className="flex min-w-0 flex-col gap-4 lg:flex-row">
         {/* ── Left rail: order meta ─────────────────────────────────────── */}
         {/* Sticky like the right rail. It runs taller than short screens, so
             cap it to the viewport and let it scroll itself — otherwise its
             bottom (metadata) would be unreachable while pinned. */}
-        <aside className="flex min-w-0 flex-1 flex-col gap-4.5 rounded-xl bg-card p-4 lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+        <aside className="flex min-w-0 flex-1 flex-col gap-4.5 rounded-xl bg-card p-4 max-lg:order-1 lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
           {/* Header */}
           <div className="flex flex-col gap-2">
             <h1 className="text-subhead text-foreground">{order.name}</h1>
@@ -412,150 +414,154 @@ function OwnerOrderDetail({ id }: { id: string }) {
         </aside>
 
         {/* ── Center: line items, fulfilment, activity ───────────────────── */}
-        <div className="min-w-0 flex-3 space-y-5">
-          <OrderItemsFulfillment
-            orderId={order.id}
-            items={order.lineItems}
-            currency={currency}
-            variant="detail"
-            title="Line items"
-            allowInProgress
-            canActOnItems={canActOnItems}
-            canCreateFulfillment={canFulfill}
-            groupCaptions={lineGroupCaptions}
-            onFulfil={openFulfil}
-            headerAction={
-              /* The one Fulfil items button, and the page's main action while
-                 anything is left to ship. It and every group or row "Fulfil…"
-                 entry open the same dialog, where tracking and the customer
-                 email are chosen before anything is marked shipped.
+        <div className="min-w-0 flex-3 space-y-5 max-lg:contents">
+          <div className="min-w-0 max-lg:order-3">
+            <OrderItemsFulfillment
+              orderId={order.id}
+              items={order.lineItems}
+              currency={currency}
+              variant="detail"
+              title="Line items"
+              allowInProgress
+              canActOnItems={canActOnItems}
+              canCreateFulfillment={canFulfill}
+              groupCaptions={lineGroupCaptions}
+              onFulfil={openFulfil}
+              headerAction={
+                /* The one Fulfil items button, and the page's main action while
+                   anything is left to ship. It and every group or row "Fulfil…"
+                   entry open the same dialog, where tracking and the customer
+                   email are chosen before anything is marked shipped.
 
-                 A standalone Restock button used to sit beside it, permanently
-                 disabled — there is no restock endpoint. Restocking is real,
-                 but it is a checkbox on Cancel order, which is where it
-                 belongs; a dead control is worse than no control. */
-              canFulfill ? (
-                <Button size="sm" onClick={() => openFulfil()}>
-                  Fulfil items
-                </Button>
-              ) : null
-            }
-            footer={
-              <div className="flex justify-end rounded-b-xl border-t bg-[#f5f5f5] px-5 py-3 dark:bg-muted/40">
-                {/* Order of rows matters here. Shopify's `subtotalPrice` is
-                    already NET of discounts, so printing it as "Subtotal" and
-                    then a separate "-Discounts" row read as if the discount came
-                    off twice and never reconciled to the Total. Worse, the line
-                    rows above show gross (price x qty), so on a discounted order
-                    the visible rows didn't add up to the Subtotal either — e.g.
-                    #1002: rows 785.95, subtotal 628.76, discount -157.19,
-                    total 628.76.
+                   A standalone Restock button used to sit beside it, permanently
+                   disabled — there is no restock endpoint. Restocking is real,
+                   but it is a checkbox on Cancel order, which is where it
+                   belongs; a dead control is worse than no control. */
+                canFulfill ? (
+                  <Button size="sm" onClick={() => openFulfil()}>
+                    Fulfil items
+                  </Button>
+                ) : null
+              }
+              footer={
+                <div className="flex justify-end rounded-b-xl border-t bg-[#f5f5f5] px-5 py-3 dark:bg-muted/40">
+                  {/* Order of rows matters here. Shopify's `subtotalPrice` is
+                      already NET of discounts, so printing it as "Subtotal" and
+                      then a separate "-Discounts" row read as if the discount came
+                      off twice and never reconciled to the Total. Worse, the line
+                      rows above show gross (price x qty), so on a discounted order
+                      the visible rows didn't add up to the Subtotal either — e.g.
+                      #1002: rows 785.95, subtotal 628.76, discount -157.19,
+                      total 628.76.
 
-                    Gross is derived from the order's own numbers rather than by
-                    summing the rows, so it stays exact when a line carries its
-                    own `totalDiscount`. */}
-                <dl className="flex w-full max-w-56 flex-col gap-1.5 text-caption">
-                  <TotalRow
-                    label="Subtotal"
-                    value={formatCurrency(subtotal + discounts, currency)}
-                  />
-                  {discounts > 0 && (
+                      Gross is derived from the order's own numbers rather than by
+                      summing the rows, so it stays exact when a line carries its
+                      own `totalDiscount`. */}
+                  <dl className="flex w-full max-w-56 flex-col gap-1.5 text-caption">
                     <TotalRow
-                      label="Discounts"
-                      value={`-${formatCurrency(discounts, currency)}`}
-                      negative
+                      label="Subtotal"
+                      value={formatCurrency(subtotal + discounts, currency)}
                     />
-                  )}
-                  <TotalRow
-                    label={gstRate !== null ? `GST ${gstRate}%` : "GST"}
-                    value={formatCurrency(tax, currency)}
-                  />
-                  {shipping > 0 && (
-                    <TotalRow label="Shipping" value={formatCurrency(shipping, currency)} />
-                  )}
-                  <TotalRow label="Total" value={formatCurrency(total, currency)} bold />
-                </dl>
-              </div>
-            }
-          />
+                    {discounts > 0 && (
+                      <TotalRow
+                        label="Discounts"
+                        value={`-${formatCurrency(discounts, currency)}`}
+                        negative
+                      />
+                    )}
+                    <TotalRow
+                      label={gstRate !== null ? `GST ${gstRate}%` : "GST"}
+                      value={formatCurrency(tax, currency)}
+                    />
+                    {shipping > 0 && (
+                      <TotalRow label="Shipping" value={formatCurrency(shipping, currency)} />
+                    )}
+                    <TotalRow label="Total" value={formatCurrency(total, currency)} bold />
+                  </dl>
+                </div>
+              }
+            />
+          </div>
 
-          {/* Fulfilment summary — carrier, progress, what is still outstanding. */}
-          <section className="rounded-xl bg-card shadow-sm ring-1 ring-border">
-            <h2 className="border-b px-5 py-3 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
-              Fulfilment · {fulfilledCount} shipped, {outstanding.length} outstanding
-            </h2>
-            <div className="grid grid-cols-1 divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
-              <div className="px-5 py-4">
-                <p className="text-caption font-medium text-foreground">{carrier ?? DASH}</p>
-                <p className="mt-0.5 font-mono text-micro text-muted-foreground">
-                  {awb ? `AWB ${awb}` : DASH}
-                </p>
-                <ShipmentStepper fulfillment={primaryFulfilment} />
-              </div>
-              <div className="space-y-2 px-5 py-4">
-                {outstanding.length > 0 ? (
-                  <ul className="space-y-1.5">
-                    {outstanding.map((li) => (
-                      <li key={li.id} className="flex items-start gap-2 text-caption">
-                        <span
-                          className={cn(
-                            "mt-1.5 size-1.5 shrink-0 rounded-full",
-                            li.fulfillmentStatus === "on_hold" ? "bg-muted-foreground" : "bg-warning",
-                          )}
-                        />
-                        <span className="min-w-0 text-foreground">
-                          <span className="truncate">{li.title}</span>
-                          <span className="text-muted-foreground">
-                            {" "}
-                            — {li.fulfillmentStatus === "on_hold" ? "on hold" : "ready to ship"}
-                          </span>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-caption text-muted-foreground">
-                    Every item on this order has been fulfilled.
-                  </p>
-                )}
-              </div>
-            </div>
-          </section>
-
-          {/* Existing shipments, with edit-tracking / cancel. Self-nulls when empty. */}
-          <OrderFulfillmentsSection order={order} canAct={canActOnItems} />
-
-          {/* Activity — `orgMembers` is already fetched above for the Owner row. */}
-          <OrderActivity order={order} currency={currency} members={orgMembers} />
-
-          {/* Refunds */}
-          {order.refunds.length > 0 && (
+          <div className="min-w-0 space-y-5 max-lg:order-5">
+            {/* Fulfilment summary — carrier, progress, what is still outstanding. */}
             <section className="rounded-xl bg-card shadow-sm ring-1 ring-border">
               <h2 className="border-b px-5 py-3 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
-                Refunds ({order.refunds.length})
+                Fulfilment · {fulfilledCount} shipped, {outstanding.length} outstanding
               </h2>
-              <ul className="divide-y">
-                {order.refunds.map((r) => (
-                  <li key={r.id} className="flex items-center justify-between px-5 py-3">
-                    <div>
-                      <p className="text-caption font-medium tabular-nums text-danger">
-                        -{formatCurrency(Number(r.amount), currency)}
-                      </p>
-                      {r.reason && <p className="text-micro text-muted-foreground">{r.reason}</p>}
-                    </div>
-                    <p className="text-micro text-muted-foreground">{formatDate(r.createdAt)}</p>
-                  </li>
-                ))}
-              </ul>
+              <div className="grid grid-cols-1 divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
+                <div className="px-5 py-4">
+                  <p className="text-caption font-medium text-foreground">{carrier ?? DASH}</p>
+                  <p className="mt-0.5 font-mono text-micro text-muted-foreground">
+                    {awb ? `AWB ${awb}` : DASH}
+                  </p>
+                  <ShipmentStepper fulfillment={primaryFulfilment} />
+                </div>
+                <div className="space-y-2 px-5 py-4">
+                  {outstanding.length > 0 ? (
+                    <ul className="space-y-1.5">
+                      {outstanding.map((li) => (
+                        <li key={li.id} className="flex items-start gap-2 text-caption">
+                          <span
+                            className={cn(
+                              "mt-1.5 size-1.5 shrink-0 rounded-full",
+                              li.fulfillmentStatus === "on_hold" ? "bg-muted-foreground" : "bg-warning",
+                            )}
+                          />
+                          <span className="min-w-0 text-foreground">
+                            <span className="truncate">{li.title}</span>
+                            <span className="text-muted-foreground">
+                              {" "}
+                              — {li.fulfillmentStatus === "on_hold" ? "on hold" : "ready to ship"}
+                            </span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-caption text-muted-foreground">
+                      Every item on this order has been fulfilled.
+                    </p>
+                  )}
+                </div>
+              </div>
             </section>
-          )}
+
+            {/* Existing shipments, with edit-tracking / cancel. Self-nulls when empty. */}
+            <OrderFulfillmentsSection order={order} canAct={canActOnItems} />
+
+            {/* Activity — `orgMembers` is already fetched above for the Owner row. */}
+            <OrderActivity order={order} currency={currency} members={orgMembers} />
+
+            {/* Refunds */}
+            {order.refunds.length > 0 && (
+              <section className="rounded-xl bg-card shadow-sm ring-1 ring-border">
+                <h2 className="border-b px-5 py-3 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
+                  Refunds ({order.refunds.length})
+                </h2>
+                <ul className="divide-y">
+                  {order.refunds.map((r) => (
+                    <li key={r.id} className="flex items-center justify-between px-5 py-3">
+                      <div>
+                        <p className="text-caption font-medium tabular-nums text-danger">
+                          -{formatCurrency(Number(r.amount), currency)}
+                        </p>
+                        {r.reason && <p className="text-micro text-muted-foreground">{r.reason}</p>}
+                      </div>
+                      <p className="text-micro text-muted-foreground">{formatDate(r.createdAt)}</p>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+          </div>
         </div>
 
         {/* ── Right rail: money, actions, customer, note ─────────────────── */}
-        <aside className="flex flex-1 flex-col gap-1.5 rounded-xl bg-card p-4 lg:sticky lg:top-6 lg:self-start">
+        <aside className="flex flex-1 flex-col gap-1.5 rounded-xl bg-card p-4 max-lg:contents lg:sticky lg:top-6 lg:self-start">
           {/* The order total lives in the left rail now — this rail opens with
               the actions rather than repeating the same figure. */}
-          <div className="space-y-2">
+          <div className="space-y-2 max-lg:order-2 max-lg:rounded-xl max-lg:bg-card max-lg:p-4">
             {/* No Fulfil items button here on purpose — fulfilment belongs to the
                 Line Items card, which groups by state and can act per line. This
                 rail carried a third copy of the same setDialog("fulfill") call. */}
@@ -582,16 +588,24 @@ function OwnerOrderDetail({ id }: { id: string }) {
               /* POST /invoices is ORG_MANAGERS-only, so this carried no gate
                  and handed a VIEWER or AGENT a guaranteed 403. */
               canManage && (
-                <Button
-                  variant={canFulfill || canCapture || !gstEnabled ? "outline" : "default"}
-                  className="w-full"
-                  disabled={!gstEnabled}
-                  title={gstEnabled ? undefined : "GST is not enabled for this organization"}
-                  onClick={() => setShowInvoiceDialog(true)}
-                >
-                  <Receipt className="size-3.5" />
-                  Generate GST invoice
-                </Button>
+                <>
+                  <Button
+                    variant={canFulfill || canCapture || !gstEnabled ? "outline" : "default"}
+                    className="w-full"
+                    disabled={!gstEnabled}
+                    title={gstEnabled ? undefined : "GST is not enabled for this organization"}
+                    onClick={() => setShowInvoiceDialog(true)}
+                  >
+                    <Receipt className="size-3.5" />
+                    Generate GST invoice
+                  </Button>
+                  {/* Touch screens never show the hover reason, so it is written out. */}
+                  {!gstEnabled && (
+                    <p className="hidden text-caption text-muted-foreground max-md:block pointer-coarse:block">
+                      GST is not enabled for this organization. Turn it on in Settings → Tax &amp; GST.
+                    </p>
+                  )}
+                </>
               )
             )}
             {/* Why automatic invoicing did not produce one. The server has
@@ -599,7 +613,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
                 on the invoices tab meant the one place you would look — the
                 order itself — said nothing. */}
             {!invoice && order.invoiceError && (
-              <p className="flex items-start gap-1.5 rounded-lg bg-warning-subtle px-3 py-2 text-[10px] leading-relaxed text-warning">
+              <p className="flex items-start gap-1.5 rounded-lg bg-warning-subtle px-3 py-2 text-caption text-warning-text">
                 <AlertTriangle className="mt-px size-3 shrink-0" />
                 <span>{order.invoiceError}</span>
               </p>
@@ -622,16 +636,18 @@ function OwnerOrderDetail({ id }: { id: string }) {
             )}
           </div>
 
-          <CustomerRail
-            order={order}
-            customer={customer}
-            customerError={customerError}
-            onRetryCustomer={refetchCustomer}
-            currency={currency}
-            phone={phone}
-          />
+          <div className="flex min-w-0 flex-col gap-1.5 max-lg:order-4 max-lg:rounded-xl max-lg:bg-card max-lg:p-4">
+            <CustomerRail
+              order={order}
+              customer={customer}
+              customerError={customerError}
+              onRetryCustomer={refetchCustomer}
+              currency={currency}
+              phone={phone}
+            />
 
-          <InternalNote key={order.id} order={order} canEdit={canEdit} />
+            <InternalNote key={order.id} order={order} canEdit={canEdit} />
+          </div>
         </aside>
       </div>
 
@@ -929,14 +945,14 @@ function OrderTags({ order, canEdit }: { order: OrderDetail; canEdit: boolean })
             }
           }}
           placeholder="Tag name"
-          className="h-6 w-24 rounded-full border border-border bg-background px-2 text-micro outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
+          className="h-6 w-24 rounded-full border border-border bg-background px-2 text-micro outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring max-md:w-32"
         />
       ) : (
         <button
           type="button"
           onClick={() => setAdding(true)}
           disabled={mutation.isPending}
-          className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-micro font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+          className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-micro font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:min-h-11 max-md:px-3 pointer-coarse:min-h-11"
         >
           <Plus className="size-2.5" />
           Add
@@ -1153,13 +1169,13 @@ function CustomerRail({
         {order.customer?.email && (
           <a
             href={`mailto:${order.customer.email}`}
-            className="truncate text-caption text-info hover:underline"
+            className="truncate text-caption text-info hover:underline max-md:py-3.5"
           >
             {order.customer.email}
           </a>
         )}
         {phone && (
-          <a href={`tel:${phone}`} className="truncate text-caption text-info hover:underline">
+          <a href={`tel:${phone}`} className="truncate text-caption text-info hover:underline max-md:py-3.5">
             {phone}
           </a>
         )}
@@ -1190,7 +1206,7 @@ function CustomerRail({
       {order.customer && (
         <Link
           to={`/orders/customers/${order.customer.id}`}
-          className=" pt-3 text-center text-caption font-medium text-foreground hover:underline"
+          className="pt-3 text-center text-caption font-medium text-foreground hover:underline max-md:py-3.5"
         >
           View customer →
         </Link>

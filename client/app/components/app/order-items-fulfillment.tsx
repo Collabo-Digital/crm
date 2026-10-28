@@ -1113,7 +1113,9 @@ export function OrderItemsFulfillment({
                           li.fulfillmentStatus !== "delivered";
                         return (
                           <li key={li.id} className="px-3.5 py-3">
-                            <div className="flex items-center gap-3">
+                            {/* On a phone the name gets the full width and wraps;
+                                quantity and price move to their own line. */}
+                            <div className="flex items-start gap-3 md:items-center">
                               {selectMode && (
                                 <input
                                   type="checkbox"
@@ -1137,8 +1139,8 @@ export function OrderItemsFulfillment({
                               )}
 
                               <div className="min-w-0 flex-1">
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <p className="truncate text-body font-medium text-brand-strong">
+                                <div className="flex min-w-0 items-center gap-2 max-md:flex-wrap">
+                                  <p className="text-body font-medium text-brand-strong max-md:line-clamp-2 md:truncate">
                                     {li.title}
                                   </p>
                                   {/* Only for a status with no group of its own —
@@ -1163,15 +1165,23 @@ export function OrderItemsFulfillment({
                                     {remainingOf(li)} still to send
                                   </p>
                                 )}
+                                <p className="mt-1 flex items-baseline justify-between gap-3 tabular-nums md:hidden">
+                                  <span className="text-caption text-muted-foreground">
+                                    {li.quantity} × {formatCurrency(Number(li.price), currency)}
+                                  </span>
+                                  <span className="text-body font-semibold text-foreground">
+                                    {formatCurrency(Number(li.price) * li.quantity, currency)}
+                                  </span>
+                                </p>
                               </div>
 
-                              <span className="shrink-0 whitespace-nowrap text-caption tabular-nums text-muted-foreground">
+                              <span className="shrink-0 whitespace-nowrap text-caption tabular-nums text-muted-foreground max-md:hidden">
                                 {li.quantity} × {formatCurrency(Number(li.price), currency)}
                               </span>
-                              <span className="shrink-0 whitespace-nowrap text-body font-semibold tabular-nums text-foreground">
+                              <span className="shrink-0 whitespace-nowrap text-body font-semibold tabular-nums text-foreground max-md:hidden">
                                 {formatCurrency(Number(li.price) * li.quantity, currency)}
                               </span>
-                              <div className="flex w-6 shrink-0 justify-end">{rowMenu(li)}</div>
+                              <div className="flex w-6 shrink-0 justify-end max-md:-my-2.5 max-md:-mr-2 max-md:w-11">{rowMenu(li)}</div>
                             </div>
 
                             {trackingLine === li.id && (

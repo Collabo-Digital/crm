@@ -57,7 +57,7 @@ function InsertPoint({ slot, depth, props }: { slot: Slot; depth: number; props:
             type="button"
             disabled={props.full}
             title={props.full ? "An automation can have at most 40 steps" : "Add a step here"}
-            className="flex size-6 items-center justify-center rounded-full border bg-background text-muted-foreground outline-none transition-colors hover:border-brand hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-40"
+            className="flex size-6 items-center justify-center rounded-full border bg-background text-muted-foreground outline-none transition-colors hover:border-brand hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-40 max-md:size-11 pointer-coarse:size-11"
             aria-label="Add a step here"
           >
             <Plus className="size-3.5" />

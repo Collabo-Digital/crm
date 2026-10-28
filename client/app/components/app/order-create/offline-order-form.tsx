@@ -6,7 +6,9 @@ import { useCreateDraftOrderMutation } from "~/hooks/use-draft-order-mutations";
 import { CustomerPickerOrCreate } from "./customer-picker-or-create";
 import { ProductPicker, type CartLineSeed } from "./product-picker";
 import { OrderCart, type CartLine } from "./order-cart";
-import { BillSummary } from "./bill-summary";
+import { BillSummary, billTotals } from "./bill-summary";
+import { Button } from "~/components/ui/button";
+import { formatCurrency } from "~/lib/utils";
 import { AddressFields, cleanAddress } from "./address-fields";
 import { isPhoneValidOrEmpty } from "~/components/app/phone-input";
 import { useSelectedLocation } from "~/hooks/use-selected-location";
@@ -255,7 +257,12 @@ export function OfflineOrderForm({
     });
   }
 
+  const itemCount = lines.reduce((sum, l) => sum + l.quantity, 0);
+  const { grandTotal } = billTotals(lines, settings?.pricesIncludeTax.effective ?? false);
+  const submitting = createOrder.isPending || createDraft.isPending;
+
   return (
+    <>
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
       <div className="min-w-0 space-y-6 lg:col-span-2">
         <Section
@@ -293,7 +300,7 @@ export function OfflineOrderForm({
           subtitle="Leave blank when nothing is delivered. For a delivered order the state here sets the GST place of supply — a different state from yours means IGST instead of CGST + SGST."
         >
           {autofilled && shipTo === autofilled ? (
-            <p className="mb-2 rounded-md bg-muted px-2 py-1.5 text-[10px] text-muted-foreground">
+            <p className="mb-2 rounded-md bg-muted px-2 py-1.5 text-caption text-muted-foreground">
               Filled from {customerName || "this customer"}'s saved address — edit it if this
               order goes somewhere else.
             </p>
@@ -301,14 +308,14 @@ export function OfflineOrderForm({
             <button
               type="button"
               onClick={applySavedAddress}
-              className="mb-2 text-[10px] font-medium text-info hover:underline"
+              className="mb-2 text-caption font-medium text-info hover:underline"
             >
               Use {customerName || "this customer"}'s saved address
             </button>
           ) : null}
           <AddressFields value={shipTo} onChange={setShipTo} />
 
-          <label className="mt-3 flex items-center gap-2 text-[11px] text-gray-700 dark:text-gray-300">
+          <label className="mt-3 flex items-center gap-2 text-caption text-gray-700 dark:text-gray-300 max-md:min-h-11 max-md:text-label pointer-coarse:min-h-11">
             <input
               type="checkbox"
               checked={billSame}
@@ -320,7 +327,7 @@ export function OfflineOrderForm({
 
           {!billSame && (
             <div className="mt-3 border-t border-border pt-3">
-              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <p className="mb-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
                 Billing address
               </p>
               <AddressFields value={billTo} onChange={setBillTo} />
@@ -353,6 +360,32 @@ export function OfflineOrderForm({
         </div>
       </div>
     </div>
+
+    {/* Below 1024px the bill summary comes after the whole form, so the
+        running total and the main button ride along at the bottom. */}
+    <div className="mobile-action-dock sticky bottom-0 z-30 -mx-4 flex items-center gap-3 border-t bg-card/95 px-4 py-2.5 backdrop-blur lg:hidden">
+      <p className="min-w-0 flex-1 leading-tight">
+        <span className="line-clamp-2 text-caption text-muted-foreground">
+          {!canSubmit && disabledReason
+            ? disabledReason
+            : `${itemCount} item${itemCount === 1 ? "" : "s"} · estimated total`}
+        </span>
+        <span className="block truncate text-section font-semibold tabular-nums">
+          {formatCurrency(grandTotal, currency)}
+        </span>
+      </p>
+      <Button
+        variant="brand"
+        className="h-11 shrink-0 rounded-xl px-4"
+        disabled={!canSubmit || submitting}
+        onClick={draftOnly ? handleSaveDraft : handleSubmit}
+      >
+        {draftOnly
+          ? createDraft.isPending ? "Saving…" : "Save draft"
+          : createOrder.isPending ? "Creating…" : "Create order"}
+      </Button>
+    </div>
+    </>
   );
 }
 
@@ -371,7 +404,7 @@ function Section({
         <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
           {title}
         </h2>
-        <p className="text-[11px] text-muted-foreground">{subtitle}</p>
+        <p className="text-caption text-muted-foreground">{subtitle}</p>
       </div>
       {children}
     </section>

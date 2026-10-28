@@ -89,10 +89,11 @@ export default function DraftDetailPage() {
       {/* Breadcrumb + actions */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption">
-          <Link to={draftsPath} className="text-muted-foreground hover:text-foreground">
+          {/* On a phone the app bar's back arrow replaces the link. */}
+          <Link to={draftsPath} className="text-muted-foreground hover:text-foreground max-md:hidden">
             Drafts
           </Link>
-          <ChevronRight className="size-3 text-muted-foreground" />
+          <ChevronRight className="size-3 text-muted-foreground max-md:hidden" />
           <span className="font-medium text-foreground">{draftName}</span>
         </nav>
         {!isCompleted && (

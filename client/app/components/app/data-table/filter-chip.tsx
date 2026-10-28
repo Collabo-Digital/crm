@@ -83,7 +83,7 @@ export function FilterChip<Row>({
             type="button"
             aria-haspopup="listbox"
             aria-expanded={open}
-            className="flex h-10 items-center gap-1 whitespace-nowrap rounded-full pl-3 pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:h-7"
+            className="flex h-11 items-center gap-1 whitespace-nowrap rounded-full pl-3 pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:h-7 pointer-coarse:h-11"
           >
             <span className="font-medium">{def.label}:</span>
             <span className="max-w-50 truncate">{valueLabel}</span>
@@ -191,7 +191,7 @@ export function AddFilterMenu({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-full border border-dashed border-muted-foreground/50 bg-card px-2.5 text-label font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="inline-flex h-11 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-dashed border-muted-foreground/50 bg-card px-3 text-label font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:h-7 md:px-2.5 pointer-coarse:h-11"
         >
           <Plus className="size-3" strokeWidth={2.5} />
           Filter
