@@ -50,7 +50,12 @@ describe('ChannelController.triggerSync', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
       queue as never,
+      {} as never,
+      {} as never,
     );
     // Silence the expected warn/error lines.
     jest.spyOn(controller['logger'], 'warn').mockImplementation(() => undefined);
@@ -78,6 +83,8 @@ describe('ChannelController.triggerSync', () => {
       queue.add.mock.invocationCallOrder[0],
     );
     expect(result).toMatchObject({ jobId: 'job-1', channelId: 'ch-1' });
+    // A Sync press is the one run allowed to push the CRM backlog.
+    expect(queue.add.mock.calls[0][1]).toMatchObject({ pushAfter: true });
   });
 
   it('refuses a second trigger while a job for the channel is still queued', async () => {

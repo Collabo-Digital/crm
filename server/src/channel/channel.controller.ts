@@ -1,7 +1,8 @@
-import { BadRequestException, ConflictException, ServiceUnavailableException, Controller, Post, Get, Patch, Delete, Body, Param, Query, Res, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, ServiceUnavailableException, Controller, Post, Get, Patch, Delete, Body, Param, Query, Res, Logger, HttpCode } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { requireMessagingChannel } from './messaging-channels';
 import type { Response, Request } from 'express';
-import { ChannelPlatform, ChannelStatus, SyncStatus } from '@prisma/client';
+import { ChannelPlatform, ChannelStatus, SyncStatus, UserRole } from '@prisma/client';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue, type JobType } from 'bullmq';
 import { SYNC_QUEUE, SyncJobData } from './sync.queue';
@@ -10,19 +11,32 @@ import { SYNC_RESUME_MAX_AGE_MS } from './shopify-sync.service';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
-import { Roles, ORG_MANAGERS } from '../auth/decorators/roles.decorator';
+import { Roles, ORG_MANAGERS, ORG_OPERATORS, CHANNEL_MANAGERS } from '../auth/decorators/roles.decorator';
+import { AllowInfluencer } from '../auth/decorators/allow-influencer.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChannelService } from './channel.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { ConnectShopifyDto } from './dto/connect-shopify.dto';
+import { ConnectInstagramDto } from './dto/connect-instagram.dto';
+import { CompleteInstagramDto } from './dto/complete-instagram.dto';
+import { WhatsAppInstallDto } from './dto/whatsapp-install.dto';
 import { ManualConnectShopifyDto } from './dto/manual-connect-shopify.dto';
 import { UpdateChannelDto } from './dto/update-channel.dto';
 import { TriggerSyncDto } from './dto/trigger-sync.dto';
 import { UpdateSyncSettingsDto } from './dto/update-sync-settings.dto';
 import { InstagramOAuthService } from './instagram-oauth.service';
 import { WhatsAppOAuthService } from './whatsapp-oauth.service';
+import { WhatsAppAccountService } from './whatsapp-account.service';
+import { MetaPagesOAuthService } from './meta-pages-oauth.service';
+import { MetaPagesCallbackDto } from './dto/meta-pages-callback.dto';
 import { WhatsAppCallbackDto } from './dto/whatsapp-callback.dto';
+import { classifyMetaCallbackError } from './channel-connection.util';
 import { ShopifyPixelService } from './shopify-pixel.service';
+import { RateLimitStateService } from '../rate-limit/rate-limit-state.service';
+import { Priority } from '../rate-limit/rate-limit.types';
+import { ShopifyLocationDecisionService } from './shopify-location-decision.service';
+import { ApplyShopifyLocationDecisionsDto } from './dto/shopify-location-decisions.dto';
+import { TEMPLATE_PACK_QUEUE, TemplatePackJobData, queuePackEnsureIfPresent } from '../campaigns/templates/pack/template-pack.queue';
 
 /** Queue states in which a sync job is still going to run, or is running. */
 const PENDING_JOB_STATES: JobType[] = ['active', 'waiting', 'delayed', 'prioritized', 'paused'];
@@ -38,12 +52,19 @@ export class ChannelController {
     private readonly shopifyPixel: ShopifyPixelService,
     private readonly instagramOAuth: InstagramOAuthService,
     private readonly whatsappOAuth: WhatsAppOAuthService,
+    private readonly whatsappAccount: WhatsAppAccountService,
+    private readonly metaPages: MetaPagesOAuthService,
     private readonly config: ConfigService,
+    private readonly rateLimitState: RateLimitStateService,
     @InjectQueue(SYNC_QUEUE) private readonly syncQueue: Queue,
+    private readonly locationDecisions: ShopifyLocationDecisionService,
+    @InjectQueue(TEMPLATE_PACK_QUEUE) private readonly packQueue: Queue<TemplatePackJobData>,
   ) { }
 
-  // POST /channels/shopify/install — start public-app OAuth (shop domain only)
+  // POST /channels/shopify/install — start public-app OAuth (shop domain only).
+  // Connecting a store is for owners and admins, as the settings page offers it.
   @Post('shopify/install')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   async installShopify(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ConnectShopifyDto,
@@ -103,23 +124,13 @@ export class ChannelController {
       // redirect. The channel row is already committed by handleCallback.
       await this.enqueueChannelSetup(result.channelId, result.organizationId);
 
-      // Auto-trigger initial sync after successful connection
-      try {
-        await this.syncQueue.add('sync', {
-          channelId: result.channelId,
-          organizationId: result.organizationId,
-          entityTypes: ['locations', 'products', 'orders', 'customers', 'inventory'],
-        } satisfies SyncJobData, {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5000 },
-          removeOnComplete: { count: 100 },
-          removeOnFail: { count: 50 },
-        });
-      } catch {
-        // Non-fatal: sync can be triggered manually later
-      }
+      // Auto-trigger initial sync after successful connection. Bulk
+      // priority: it is a backfill nobody is waiting on click-by-click.
+      const locations = await this.queueInitialSync(result.channelId, result.organizationId);
 
-      return res.redirect(result.redirectUrl);
+      return res.redirect(
+        locations.pending ? `${result.redirectUrl}&locations=pending` : result.redirectUrl,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
       // Match precisely — a bare 'state' also matches identifiers inside
@@ -137,27 +148,15 @@ export class ChannelController {
 
   // POST /channels/shopify/manual-connect — connect using manually created custom app credentials
   @Post('shopify/manual-connect')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   async manualConnectShopify(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ManualConnectShopifyDto,
   ) {
     const result = await this.shopifyOAuth.manualConnect(user.orgId!, dto.shopDomain, dto.apiKey, dto.apiSecret, dto.accessToken);
 
-    // Auto-trigger initial sync after successful connection
-    try {
-      await this.syncQueue.add('sync', {
-        channelId: result.channelId,
-        organizationId: user.orgId!,
-        entityTypes: ['locations', 'products', 'orders', 'customers', 'inventory'],
-      } satisfies SyncJobData, {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
-        removeOnComplete: { count: 100 },
-        removeOnFail: { count: 50 },
-      });
-    } catch {
-      // Non-fatal: sync can be triggered manually later
-    }
+    // Auto-trigger initial sync after successful connection (bulk priority).
+    await this.queueInitialSync(result.channelId, user.orgId!);
 
     // Queued, not awaited: the client aborts this request at 30s, and ~20
     // sequential webhook mutations routinely take longer. That timeout was
@@ -169,51 +168,203 @@ export class ChannelController {
     return result;
   }
 
-  // POST /channels/instagram/install — start Meta OAuth flow
+  // POST /channels/instagram/install — start Meta OAuth flow.
+  //
+  // OWNER/ADMIN across every connect route: linking a channel hands a third
+  // party ongoing access to the org's data and, for WhatsApp, the ability to
+  // message its customers. Matches the role check ChannelService.disconnect
+  // has always applied — connecting was simply never gated.
   @Post('instagram/install')
-  async installInstagram(@CurrentUser() user: JwtPayload) {
-    const authUrl = await this.instagramOAuth.getInstallUrl(user.orgId!, user.sub);
+  @Roles(...CHANNEL_MANAGERS)
+  @AllowInfluencer()
+  async installInstagram(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ConnectInstagramDto,
+  ) {
+    requireMessagingChannel(ChannelPlatform.INSTAGRAM);
+    const authUrl = await this.instagramOAuth.getInstallUrl(
+      user.orgId!,
+      user.sub,
+      dto.reconnectChannelId,
+    );
     return { authUrl };
   }
 
-  // GET /channels/instagram/callback — Meta redirects here after OAuth
+  // GET /channels/instagram/callback — Meta redirects here after OAuth.
+  //
+  // The merchant's browser is sitting on this URL, so EVERY outcome has to end
+  // in a redirect back to the frontend carrying a reason slug — never a JSON
+  // error page, which is what an uncaught throw here used to render. Same
+  // contract as shopifyCallback above.
   @Public()
   @Get('instagram/callback')
   async instagramCallback(
-    @Query() query: { code: string; state: string },
+    @Query()
+    query: {
+      code?: string;
+      state?: string;
+      error?: string;
+      error_reason?: string;
+      error_description?: string;
+    },
     @Res() res: Response,
   ) {
-    const { redirectUrl } = await this.instagramOAuth.handleCallback(query);
-    return res.redirect(redirectUrl);
+    const frontendUrl = this.config.get<string>('frontendUrl');
+    try {
+      const { redirectUrl } = await this.instagramOAuth.handleCallback(query);
+      return res.redirect(redirectUrl);
+    } catch (error) {
+      const reason = classifyMetaCallbackError(query, error);
+      this.logger.warn(
+        `Instagram OAuth callback failed (${reason}): ${error instanceof Error ? error.message : ''}`,
+      );
+      return res.redirect(
+        `${frontendUrl}/settings/channels?error=instagram_connect_failed&reason=${reason}`,
+      );
+    }
+  }
+
+  // GET /channels/instagram/pending/:id — the accounts one login granted, for
+  // the picker. Tokens are stripped server-side; this returns display fields
+  // only.
+  @Get('instagram/pending/:id')
+  @Roles(...CHANNEL_MANAGERS)
+  @AllowInfluencer()
+  async instagramPending(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.instagramOAuth.listPending(id, user.orgId!);
+  }
+
+  // POST /channels/instagram/complete — connect the account the merchant picked.
+  @Post('instagram/complete')
+  @Roles(...CHANNEL_MANAGERS)
+  @AllowInfluencer()
+  async completeInstagram(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CompleteInstagramDto,
+  ) {
+    return this.instagramOAuth.completePending(
+      dto.pendingId,
+      dto.igUserId,
+      user.orgId!,
+      user.sub,
+    );
   }
 
   // POST /channels/whatsapp/install — returns configId + state for the Meta JS SDK
   // (Embedded Signup runs in a popup launched by the frontend, not a browser redirect)
   @Post('whatsapp/install')
-  async installWhatsApp(@CurrentUser() user: JwtPayload) {
-    return this.whatsappOAuth.getSignupConfig(user.orgId!, user.sub);
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  async installWhatsApp(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: WhatsAppInstallDto,
+  ) {
+    return this.whatsappOAuth.getSignupConfig(
+      user.orgId!,
+      user.sub,
+      dto.reconnectChannelId,
+    );
   }
 
   // POST /channels/whatsapp/callback — frontend forwards the code returned by FB.login
   @Post('whatsapp/callback')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   async whatsappCallback(@CurrentUser() user: JwtPayload, @Body() dto: WhatsAppCallbackDto) {
-    return this.whatsappOAuth.handleSignupCallback(dto.code, dto.state, user.orgId!, user.sub);
+    return this.whatsappOAuth.handleSignupCallback(dto.code, dto.state, user.orgId!, user.sub, {
+      phoneNumberId: dto.phoneNumberId,
+      wabaId: dto.wabaId,
+      isOnBizApp: dto.isOnBizApp,
+      businessId: dto.businessId,
+    });
   }
 
-  // GET /channels — list org's channels
+  // POST /channels/messenger/install — config id + CSRF state for the Facebook
+  // Login for Business popup that shares Pages and their Instagram accounts.
+  @Post('messenger/install')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  async installMessenger(@CurrentUser() user: JwtPayload) {
+    requireMessagingChannel(ChannelPlatform.FACEBOOK);
+    return this.metaPages.getConnectConfig(user.orgId!, user.sub);
+  }
+
+  // POST /channels/messenger/callback — the popup's code; connects every Page
+  // granted, plus the Instagram account linked to each.
+  @Post('messenger/callback')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  async messengerCallback(@CurrentUser() user: JwtPayload, @Body() dto: MetaPagesCallbackDto) {
+    requireMessagingChannel(ChannelPlatform.FACEBOOK);
+    return this.metaPages.handleCallback(dto.code, dto.state, user.orgId!, user.sub);
+  }
+
+  // POST /channels/:id/whatsapp/retry-setup — re-run webhook subscription and
+  // number registration after a partial setup failure.
+  @Post(':id/whatsapp/retry-setup')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  async whatsappRetrySetup(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.whatsappOAuth.retrySetup(id, user.orgId!);
+  }
+
+  // POST /channels/:id/whatsapp/refresh-health — re-read quality rating,
+  // messaging limit and display-name status from Meta.
+  @Post(':id/whatsapp/refresh-health')
+  @Roles(UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER)
+  async whatsappRefreshHealth(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    await this.channelService.findOne(id, user.orgId!, { userId: user.sub, role: user.role });
+    return this.whatsappAccount.refreshHealth(id);
+  }
+
+  // GET /channels — list org's channels.
+  //
+  // Open to influencers: this is how they reach their own Instagram connection.
+  // The list is scoped by role inside the service, so an influencer receives
+  // only the channels they personally connected.
   @Get()
+  @AllowInfluencer()
   findAll(@CurrentUser() user: JwtPayload) {
-    return this.channelService.findAllForOrg(user.orgId!);
+    return this.channelService.findAllForOrg(user.orgId!, {
+      userId: user.sub,
+      role: user.role,
+    });
   }
 
   // GET /channels/:id — get channel details + sync logs
   @Get(':id')
+  @AllowInfluencer()
   findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.channelService.findOne(id, user.orgId!);
+    return this.channelService.findOne(id, user.orgId!, {
+      userId: user.sub,
+      role: user.role,
+    });
+  }
+
+  // GET /channels/:id/rate-limit — live outbound rate-limit state for the
+  // wallets this channel spends from (bucket balance, in-flight counts,
+  // breaker, today's counters). Diagnostic; nothing in the UI depends on it.
+  @Get(':id/rate-limit')
+  @AllowInfluencer()
+  async rateLimit(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    // Same visibility rule as findOne: a channel the viewer may not see 404s.
+    await this.channelService.findOne(id, user.orgId!, {
+      userId: user.sub,
+      role: user.role,
+    });
+    const channel = await this.prisma.channel.findUniqueOrThrow({
+      where: { id },
+      select: {
+        id: true,
+        platform: true,
+        externalStoreUrl: true,
+        credentials: true,
+        rateLimitedUntil: true,
+        rateLimitReason: true,
+      },
+    });
+    return this.rateLimitState.describe(channel);
   }
 
   // PATCH /channels/:id — update name or toggle
   @Patch(':id')
+  @Roles(...CHANNEL_MANAGERS)
+  @AllowInfluencer()
   update(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -224,6 +375,8 @@ export class ChannelController {
 
   // DELETE /channels/:id — disconnect
   @Delete(':id')
+  @Roles(...CHANNEL_MANAGERS)
+  @AllowInfluencer()
   disconnect(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.channelService.disconnect(id, user.orgId!, user.sub);
   }
@@ -253,7 +406,10 @@ export class ChannelController {
   //     the UI button is disabled for ever. Take the claim over and queue.
   //
   // `isSyncLive` is what separates them.
+  //
+  // Operators only: this sync can push CRM items into the live store.
   @Post(':id/sync')
+  @Roles(...ORG_OPERATORS)
   async triggerSync(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -316,16 +472,23 @@ export class ChannelController {
 
     let job: Awaited<ReturnType<Queue['add']>>;
     try {
-      // Add job to BullMQ queue — returns immediately
+      // Add job to BullMQ queue — returns immediately. A person pressed the
+      // button, so this run is INTERACTIVE: it is picked before any queued
+      // backfill and may spend deeper into the shop's rate-limit bucket.
       job = await this.syncQueue.add('sync', {
         channelId: id,
         organizationId: orgId,
         entityTypes: dto.entityTypes,
+        priority: Priority.INTERACTIVE,
+        // The only sync that may push: a person asked for it, and the push
+        // toggles they switched on decide what goes.
+        pushAfter: true,
       } satisfies SyncJobData, {
         attempts: 3,                          // Retry up to 3 times
         backoff: { type: 'exponential', delay: 5000 },  // 5s, 10s, 20s
         removeOnComplete: { count: 100 },     // Keep last 100 completed jobs
         removeOnFail: { count: 50 },          // Keep last 50 failed jobs
+        priority: Priority.INTERACTIVE,
       });
     } catch (error) {
       // Nothing will ever run, so nothing would ever release the claim.
@@ -357,6 +520,71 @@ export class ChannelController {
   }
 
   /**
+   * The first sync of a just-connected store.
+   *
+   * With stock locations on, the store's locations are recorded first, each
+   * waiting for the merchant to decide what it shares stock with — so the
+   * sync leaves out `locations` (already read) and `inventory` (nothing to
+   * pull into until something is linked; a reconnect with links keeps it).
+   * A workspace still on a single quantity syncs everything as before.
+   *
+   * Never throws: sync can be triggered manually later.
+   */
+  private async queueInitialSync(
+    channelId: string,
+    organizationId: string,
+  ): Promise<{ pending: boolean }> {
+    const locations = await this.locationDecisions.onConnect(channelId, organizationId);
+    const entityTypes = locations.warehousing
+      ? [
+          ...(locations.recorded ? [] : ['locations']),
+          'products',
+          'orders',
+          'customers',
+          ...(locations.linked ? ['inventory'] : []),
+        ]
+      : ['locations', 'products', 'orders', 'customers', 'inventory'];
+    try {
+      await this.syncQueue.add('sync', {
+        channelId,
+        organizationId,
+        entityTypes,
+        priority: Priority.BULK,
+      } satisfies SyncJobData, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: { count: 100 },
+        removeOnFail: { count: 50 },
+        priority: Priority.BULK,
+      });
+    } catch {
+      // Non-fatal: sync can be triggered manually later
+    }
+    return { pending: locations.pending };
+  }
+
+  // GET /channels/:id/shopify/locations — the store's Shopify locations, what
+  // each shares stock with, and the locations it could share with.
+  @Get(':id/shopify/locations')
+  @Roles(...ORG_MANAGERS)
+  shopifyLocations(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.locationDecisions.view(id, user.orgId!);
+  }
+
+  // POST /channels/:id/shopify/locations — apply the merchant's decisions.
+  // Managers: this decides what stock crosses into the live store.
+  @Post(':id/shopify/locations')
+  @HttpCode(200)
+  @Roles(...ORG_MANAGERS)
+  decideShopifyLocations(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ApplyShopifyLocationDecisionsDto,
+  ) {
+    return this.locationDecisions.apply(id, user.orgId!, dto);
+  }
+
+  /**
    * Is a sync for this channel queued or running right now?
    *
    * The queue is the first authority: a job that is waiting, active, or
@@ -384,7 +612,8 @@ export class ChannelController {
   }
 
   /**
-   * Queue post-connect store setup (webhooks + web pixel).
+   * Queue post-connect store setup (webhooks + web pixel), and the store's
+   * cart reminders on the recommended WhatsApp templates.
    *
    * Never throws: a channel with no webhooks still syncs on demand, so a
    * Redis hiccup must not turn a successful connect into a failed one.
@@ -411,6 +640,10 @@ export class ChannelController {
         error instanceof Error ? error.stack : error,
       );
     }
+    // Only where the organization already has the pack. Not awaited.
+    void queuePackEnsureIfPresent(this.prisma, this.packQueue, organizationId, 'shopify').catch((error) =>
+      this.logger.error(`Could not queue the store's WhatsApp templates for ${organizationId}: ${error instanceof Error ? error.message : error}`),
+    );
   }
 
   // GET /channels/:id/sync-settings — per-entity toggles, per-entity sync
@@ -443,6 +676,7 @@ export class ChannelController {
   }
 
   @Post(':id/activate-pixel')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   async activatePixel(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     const channel = await this.prisma.channel.findFirst({
       where: { id, organizationId: user.orgId!, platform: ChannelPlatform.SHOPIFY },
@@ -459,6 +693,7 @@ export class ChannelController {
   // the new topics. Idempotent on Shopify's side: already-registered
   // topics return a "topic already registered" error which we swallow.
   @Post(':id/register-webhooks')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   async reRegisterWebhooks(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,

@@ -10,22 +10,22 @@ import { BrandLogo } from "~/components/app/brand-logo";
 export default function AuthLayout() {
   return (
     <GuestGuard>
-      <div className="flex min-h-svh bg-[#f1f7fa] p-6">
+      <div className="auth-shell flex min-h-svh bg-surface-sunken p-5 lg:p-6">
 
         {/* ── Left brand panel ─────────────────────────────────── */}
-        <div className="hidden lg:flex lg:w-[50%] flex-col justify-between rounded-4xl bg-[linear-gradient(215deg,_#000000_46%,_#94E802_100%)] p-12 relative overflow-hidden">
+        <div className="hidden lg:flex lg:w-[50%] flex-col justify-between rounded-4xl bg-[linear-gradient(215deg,_var(--ink)_46%,_var(--brand)_100%)] p-12 relative overflow-hidden">
           <BrandCarousel className="h-full w-full" />
 
         </div>
 
         {/* ── Right form panel ─────────────────────────────────── */}
-        <div className="flex flex-1 flex-col items-center justify-center px-6 py-6">
+        <div className="flex flex-1 flex-col items-center justify-center px-0 py-8 sm:px-6 sm:py-6">
           <div className="w-full max-w-[400px]">
             <BrandLogo variant="color" className="mb-8 h-8" />
             <Outlet />
           </div>
 
-          <p className="mt-8 text-center text-xs text-gray-400">
+          <p className="mt-8 text-center text-xs text-muted-foreground">
             &copy; {new Date().getFullYear()} Collabo Digital Network
           </p>
         </div>

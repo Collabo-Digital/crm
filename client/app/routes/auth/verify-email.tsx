@@ -12,6 +12,8 @@ import {
   useVerifyEmailMutation,
   useResendVerificationMutation,
 } from "~/hooks/use-auth-mutations";
+import { withNext } from "~/lib/return-path";
+import { Button } from "~/components/ui/button";
 
 export function meta() {
   return [
@@ -33,11 +35,13 @@ export default function VerifyEmailPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const userId = searchParams.get("userId");
+  // Where sign-in was headed before signup; opened once verified.
+  const next = searchParams.get("next");
 
   const [code, setCode] = useState("");
   const [cooldown, setCooldown] = useState(0);
 
-  const verify = useVerifyEmailMutation();
+  const verify = useVerifyEmailMutation(next);
   const resend = useResendVerificationMutation();
 
   // Cooldown timer
@@ -82,11 +86,11 @@ export default function VerifyEmailPage() {
     <div>
       {/* Icon + heading */}
       <div className="mb-7 text-center">
-        <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
-          <Mail className="size-6 text-[#084734]" />
+        <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-brand/30">
+          <Mail className="size-6 text-brand-strong" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">Check your inbox</h2>
-        <p className="mt-2 text-sm text-gray-500">
+        <h1 className="text-2xl font-bold text-foreground">Check your inbox</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
           We sent a 6-digit verification code to your email address. Enter it
           below to confirm your account.
         </p>
@@ -106,7 +110,7 @@ export default function VerifyEmailPage() {
                 <InputOTPSlot
                   key={slotIndex}
                   index={slotIndex}
-                  className="!size-11 !rounded-lg !border !border-gray-200 bg-white text-base font-bold shadow-sm transition-all data-[active=true]:!border-[#CEF17B] data-[active=true]:!ring-2 data-[active=true]:!ring-[#CEF17B]/40"
+                  className="!size-11 !rounded-lg !border !border-input bg-card text-base font-bold shadow-sm transition-all data-[active=true]:!border-ring data-[active=true]:!ring-2 data-[active=true]:!ring-ring/30"
                 />
               ))}
             </InputOTPGroup>
@@ -115,17 +119,13 @@ export default function VerifyEmailPage() {
 
         {/* Server error */}
         {serverError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-            <p className="text-center text-sm text-red-600">{serverError}</p>
+          <div role="alert" className="rounded-lg bg-danger-subtle px-4 py-3">
+            <p className="text-center text-sm text-danger-text">{serverError}</p>
           </div>
         )}
 
         {/* Submit */}
-        <button
-          type="submit"
-          disabled={verify.isPending || code.length !== OTP_LENGTH}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#CEF17B] px-4 py-2.5 text-sm font-semibold text-gray-900 shadow-sm transition hover:bg-[#BADE6F] disabled:cursor-not-allowed disabled:opacity-60"
-        >
+        <Button type="submit" size="lg" disabled={verify.isPending || code.length !== OTP_LENGTH} className="h-11 w-full font-semibold">
           {verify.isPending ? (
             <>
               <Loader2 className="size-4 animate-spin" />
@@ -134,17 +134,17 @@ export default function VerifyEmailPage() {
           ) : (
             "Verify email"
           )}
-        </button>
+        </Button>
       </form>
 
       {/* Resend */}
       <div className="mt-5 text-center">
-        <p className="text-sm text-gray-500">Didn&apos;t receive the code?</p>
+        <p className="text-sm text-muted-foreground">Didn&apos;t receive the code?</p>
         <button
           type="button"
           onClick={handleResend}
           disabled={cooldown > 0 || resend.isPending}
-          className="mt-1 text-sm font-semibold text-[#084734] hover:text-[#3d6000] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-1 text-sm font-semibold text-brand-strong hover:text-brand-strong-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           {resend.isPending
             ? "Sending…"
@@ -157,8 +157,8 @@ export default function VerifyEmailPage() {
       {/* Back link */}
       <div className="mt-6 flex justify-center">
         <Link
-          to="/auth/signup"
-          className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+          to={withNext("/auth/signup", next)}
+          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="size-3.5" /> Back to sign up
         </Link>

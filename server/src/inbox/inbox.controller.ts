@@ -1,0 +1,176 @@
+import {
+    Body,
+    Controller,
+    Get,
+    MessageEvent,
+    Param,
+    Patch,
+    Post,
+    Query,
+    Sse,
+    UploadedFile,
+    UseGuards,
+    UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
+import { UserRole } from '@prisma/client';
+import { Observable, interval, map, merge, takeUntil, tap } from 'rxjs';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { RequireSection } from '../auth/decorators/require-section.decorator';
+import type { SessionPayload } from '../auth/interfaces/jwt-payload.interface';
+import { InboxEventsService } from '../messaging/inbox-events.service';
+import { UPLOAD_THROTTLE, UploadQuotaGuard } from '../messaging/media/upload-quota';
+import { InboxService } from './inbox.service';
+import type { UploadedFile as InboxUpload } from './inbox.service';
+import { InboxTeamService } from './inbox-team.service';
+import { QueryConversationsDto } from './dto/query-conversations.dto';
+import { QueryMessagesDto } from './dto/query-messages.dto';
+import { ResendMessageDto, SendMessageDto } from './dto/send-message.dto';
+import { UpdateConversationDto } from './dto/update-conversation.dto';
+import { CreateNoteDto } from './dto/create-note.dto';
+import { CreatePaymentLinkDto } from '../payments/dto/payments.dto';
+import { BulkConversationsDto } from './dto/bulk-conversations.dto';
+
+export const INBOX_ROLES = [UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.AGENT, UserRole.VIEWER];
+/// Proxies (Caddy, Cloudflare) close idle streams; a comment line every 25s keeps it open.
+const HEARTBEAT_MS = 25_000;
+/// The live inbox refetches these as events stream in, and a member's tabs share one budget.
+const LIVE_READ_LIMIT = { default: { ttl: 60_000, limit: 300 } };
+/// Streams a member may open a minute: tabs reconnect with backoff, so this is only reached on purpose.
+const STREAM_OPENS = { default: { ttl: 60_000, limit: 30 } };
+
+/**
+ * The shared inbox: WhatsApp, Messenger and Instagram conversations in one
+ * list. Vendors and influencers are refused by their guards; which
+ * conversations a member sees is decided in InboxService by assignment, team
+ * and the chat.* grants.
+ */
+@Controller('inbox')
+@RequireSection('chat')
+@Roles(...INBOX_ROLES)
+export class InboxController {
+    constructor(
+        private readonly inbox: InboxService,
+        private readonly teams: InboxTeamService,
+        private readonly events: InboxEventsService,
+    ) { }
+
+    @Get('conversations')
+    @Throttle(LIVE_READ_LIMIT)
+    async list(@CurrentUser() user: SessionPayload, @Query() q: QueryConversationsDto) {
+        return this.inbox.listConversations(user.orgId!, await this.teams.viewer(user), q);
+    }
+
+    @Post('conversations/bulk')
+    async bulk(@CurrentUser() user: SessionPayload, @Body() dto: BulkConversationsDto) {
+        return this.inbox.bulk(user.orgId!, await this.teams.viewer(user), dto);
+    }
+
+    @Get('counts')
+    @Throttle(LIVE_READ_LIMIT)
+    async counts(@CurrentUser() user: SessionPayload) {
+        return this.inbox.counts(user.orgId!, await this.teams.viewer(user));
+    }
+
+    @Get('conversations/:id')
+    @Throttle(LIVE_READ_LIMIT)
+    async get(@CurrentUser() user: SessionPayload, @Param('id') id: string) {
+        return this.inbox.getConversation(user.orgId!, await this.teams.viewer(user), id);
+    }
+
+    @Get('conversations/:id/messages')
+    @Throttle(LIVE_READ_LIMIT)
+    async messages(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Query() q: QueryMessagesDto) {
+        return this.inbox.listMessages(user.orgId!, await this.teams.viewer(user), id, q);
+    }
+
+    @Post('conversations/:id/messages')
+    async send(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Body() dto: SendMessageDto) {
+        return this.inbox.send(user.orgId!, await this.teams.viewer(user), id, dto);
+    }
+
+    /** A failed message, sent again as it was. */
+    @Post('conversations/:id/messages/:messageId/resend')
+    async resend(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Param('messageId') messageId: string, @Body() dto: ResendMessageDto) {
+        return this.inbox.resend(user.orgId!, await this.teams.viewer(user), id, messageId, dto.clientId);
+    }
+
+    /** The product tray: the store's products, and whether this chat can get catalog messages. */
+    @Get('conversations/:id/products')
+    async products(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Query('search') search?: string, @Query('collectionId') collectionId?: string) {
+        return this.inbox.products(user.orgId!, await this.teams.viewer(user), id, search?.slice(0, 100), collectionId?.slice(0, 40) || undefined);
+    }
+
+    /** Payment links sent in this chat, and the customer's unpaid orders. */
+    @Get('conversations/:id/payment-links')
+    async paymentLinks(@CurrentUser() user: SessionPayload, @Param('id') id: string) {
+        return this.inbox.paymentLinksFor(user.orgId!, await this.teams.viewer(user), id);
+    }
+
+    /** A payment link from the organization's own Razorpay account, for the teammate to send. */
+    @Post('conversations/:id/payment-links')
+    async createPaymentLink(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Body() dto: CreatePaymentLinkDto) {
+        return this.inbox.createPaymentLink(user.orgId!, await this.teams.viewer(user), id, dto);
+    }
+
+    /** A WhatsApp Pay "Review and Pay" bill, sent in this chat. */
+    @Post('conversations/:id/whatsapp-pay')
+    async requestWhatsAppPay(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Body() dto: CreatePaymentLinkDto) {
+        return this.inbox.requestWhatsAppPay(user.orgId!, await this.teams.viewer(user), id, { orderId: dto.orderId, draftOrderId: dto.draftOrderId });
+    }
+
+    /** Turn a cart the customer sent into a draft order with a checkout link. */
+    @Post('conversations/:id/messages/:messageId/draft-order')
+    async draftFromCart(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Param('messageId') messageId: string) {
+        return this.inbox.draftFromCart(user.orgId!, await this.teams.viewer(user), id, messageId);
+    }
+
+    @Post('conversations/:id/read')
+    async read(@CurrentUser() user: SessionPayload, @Param('id') id: string) {
+        return this.inbox.markRead(user.orgId!, await this.teams.viewer(user), id);
+    }
+
+    @Patch('conversations/:id')
+    async update(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Body() dto: UpdateConversationDto) {
+        return this.inbox.update(user.orgId!, await this.teams.viewer(user), id, dto);
+    }
+
+    @Post('conversations/:id/notes')
+    async addNote(@CurrentUser() user: SessionPayload, @Param('id') id: string, @Body() dto: CreateNoteDto) {
+        return this.inbox.addNote(user.orgId!, await this.teams.viewer(user), id, dto);
+    }
+
+    /** Limited per member a minute, and per workspace a day (UploadQuotaService). */
+    @Post('uploads')
+    @Roles(UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.AGENT)
+    @Throttle(UPLOAD_THROTTLE)
+    @UseGuards(UploadQuotaGuard)
+    @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 100 * 1024 * 1024 } }))
+    upload(@CurrentUser() user: SessionPayload, @UploadedFile() file: InboxUpload, @Body('voice') voice?: string) {
+        return this.inbox.upload(user.orgId!, file, { voice: voice === 'true' });
+    }
+
+    /**
+     * Live inbox changes for this organization. The client reads it with a
+     * streamed fetch (the access token is a Bearer header, which EventSource
+     * cannot send) and refetches what each event names. While it is open the
+     * member counts as present for routing and the team list. A member may
+     * hold MAX_STREAMS_PER_USER open at once (InboxEventsService).
+     */
+    @Sse('stream')
+    @Throttle(STREAM_OPENS)
+    stream(@CurrentUser() user: SessionPayload): Observable<MessageEvent> {
+        const orgId = user.orgId!;
+        const present = () => void this.teams.touchPresence(orgId, user.sub).catch(() => undefined);
+        present();
+        return merge(
+            this.events.stream(orgId, user.sub).pipe(map((event) => ({ type: event.type, data: event }) as MessageEvent)),
+            interval(HEARTBEAT_MS).pipe(
+                tap(present),
+                map(() => ({ type: 'ping', data: {} }) as MessageEvent),
+            ),
+        ).pipe(takeUntil(this.events.closing$));
+    }
+}

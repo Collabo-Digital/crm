@@ -134,13 +134,12 @@ const GROUP_META: Record<
     label: "Unfulfilled",
     legend: "unfulfilled",
     icon: CircleAlert,
-    bar: "bg-warning-strong",
-    header: "bg-warning-strong-subtle",
-    accent: "text-warning-strong",
-    chip: "bg-warning-strong/15 text-warning-strong",
+    bar: "bg-warning",
+    header: "bg-warning-subtle",
+    accent: "text-warning-text",
+    chip: "bg-card text-warning-text",
   },
-  // Grey, matching LINE_STATUS_CLASSES.on_hold in lib/order-status.ts — the
-  // amber slot belongs to `partial`, which is progress rather than a stop.
+  // Grey, matching LINE_STATUS_CLASSES.on_hold in lib/order-status.ts.
   on_hold: {
     label: "On hold",
     legend: "on hold",
@@ -148,7 +147,7 @@ const GROUP_META: Record<
     bar: "bg-muted-foreground",
     header: "bg-muted",
     accent: "text-muted-foreground",
-    chip: "bg-muted-foreground/15 text-muted-foreground",
+    chip: "bg-card text-muted-foreground",
   },
   in_progress: {
     label: "In progress",
@@ -156,29 +155,30 @@ const GROUP_META: Record<
     icon: Clock,
     bar: "bg-info",
     header: "bg-info-subtle",
-    accent: "text-info",
-    chip: "bg-info/15 text-info",
+    accent: "text-info-text",
+    chip: "bg-card text-info-text",
   },
   // Some units shipped, some still owed. A real, reachable state now that the
   // server tracks `fulfilledQuantity` — it used to be lumped in with
-  // unfulfilled, so a half-shipped line looked untouched.
+  // unfulfilled, so a half-shipped line looked untouched. Same tone as
+  // unfulfilled (units are still owed); a lighter bar keeps the two apart.
   partial: {
     label: "Partly shipped",
     legend: "partly shipped",
     icon: PackageOpen,
-    bar: "bg-warning",
+    bar: "bg-warning/50",
     header: "bg-warning-subtle",
-    accent: "text-warning",
-    chip: "bg-warning/15 text-warning",
+    accent: "text-warning-text",
+    chip: "bg-card text-warning-text",
   },
   fulfilled: {
     label: "Fulfilled",
     legend: "fulfilled",
     icon: CheckCircle2,
-    bar: "bg-brand",
-    header: "bg-brand/15",
-    accent: "text-brand-strong",
-    chip: "bg-brand/30 text-brand-strong",
+    bar: "bg-success/60",
+    header: "bg-success-subtle",
+    accent: "text-success-text",
+    chip: "bg-card text-success-text",
   },
   delivered: {
     label: "Delivered",
@@ -186,8 +186,8 @@ const GROUP_META: Record<
     icon: CheckCircle2,
     bar: "bg-success",
     header: "bg-success-subtle",
-    accent: "text-success",
-    chip: "bg-success/15 text-success",
+    accent: "text-success-text",
+    chip: "bg-card text-success-text",
   },
 };
 
@@ -260,6 +260,7 @@ export function OrderItemsFulfillment({
   groupCaptions,
   canActOnItems,
   canCreateFulfillment,
+  onFulfil,
 }: {
   orderId: string;
   items: FulfillmentItem[];
@@ -301,6 +302,14 @@ export function OrderItemsFulfillment({
    * group with no entry falls back to its own tracking summary.
    */
   groupCaptions?: Partial<Record<LineGroupKey, string | null>>;
+  /**
+   * `"detail"` only. Opens the page's fulfil dialog for these lines, where
+   * tracking and the customer email are chosen. The group and row "Fulfil…"
+   * entries used to mark lines shipped on the spot, with no tracking and
+   * Shopify's shipping email sent, while a button of the same name opened
+   * the dialog. Without it the lines are fulfilled directly (vendor view).
+   */
+  onFulfil?: (lineIds: string[]) => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [trackingNumber, setTrackingNumber] = useState("");
@@ -374,6 +383,12 @@ export function OrderItemsFulfillment({
         },
       },
     );
+  }
+
+  function startFulfil(ids: string[]) {
+    if (ids.length === 0) return;
+    if (onFulfil) onFulfil(ids);
+    else fulfillLines(ids);
   }
 
   function holdLines(ids: string[]) {
@@ -561,13 +576,13 @@ export function OrderItemsFulfillment({
           value={tNumber}
           onChange={(e) => setTNumber(e.target.value)}
           placeholder="Tracking number"
-          className="min-w-[10rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+          className="min-w-[10rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
         <CarrierInput
           value={tCompany}
           onChange={setTCompany}
           listId="carriers-line"
-          className="min-w-[8rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+          className="min-w-[8rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
         {/* Tracking URL must be present here too: the endpoint is a FULL
             REPLACE (order.service.ts writes `trackingUrl: dto.tracking.url ??
@@ -577,7 +592,7 @@ export function OrderItemsFulfillment({
           value={tUrl}
           onChange={(e) => setTUrl(e.target.value)}
           placeholder="Tracking URL"
-          className="min-w-[10rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+          className="min-w-[10rem] flex-1 rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
         <Button
           variant="brand"
@@ -612,31 +627,34 @@ export function OrderItemsFulfillment({
           isDetail ? "border-y" : "border-b",
         )}
       >
+        {/* With the dialog, tracking is entered there. */}
+        {!onFulfil && (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <input
             value={trackingNumber}
             onChange={(e) => setTrackingNumber(e.target.value)}
             placeholder="Tracking number (optional)"
-            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           <CarrierInput
             value={trackingCompany}
             onChange={setTrackingCompany}
             listId="carriers-bulk"
-            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
           <input
             value={trackingUrl}
             onChange={(e) => setTrackingUrl(e.target.value)}
             placeholder="Tracking URL (optional)"
-            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+            className="rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </div>
+        )}
         <input
           value={holdReason}
           onChange={(e) => setHoldReason(e.target.value)}
           placeholder="Reason for hold (optional)"
-          className="w-full rounded-lg border bg-background px-3 py-2 text-caption outline-none focus:ring-1 focus:ring-brand"
+          className="w-full rounded-lg border bg-background px-3 py-2 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
         <div className="flex flex-wrap items-center gap-2">
           {isDetail && (
@@ -652,8 +670,8 @@ export function OrderItemsFulfillment({
           )}
           {canCreateFulfillment && (
             <Button
-              variant="accent"
-              onClick={() => fulfillLines(selectedIds)}
+              variant={onFulfil ? "outline" : "accent"}
+              onClick={() => startFulfil(selectedIds)}
               disabled={busy || selectedIds.length === 0}
               className="text-caption font-semibold text-brand-strong"
             >
@@ -662,7 +680,7 @@ export function OrderItemsFulfillment({
               ) : (
                 <CheckCircle2 className="size-3.5" />
               )}
-              Mark fulfilled
+              {onFulfil ? "Fulfil selected…" : "Mark fulfilled"}
             </Button>
           )}
           {allowInProgress && (
@@ -670,7 +688,7 @@ export function OrderItemsFulfillment({
               variant="ghost"
               onClick={() => inProgressLines(selectedIds)}
               disabled={busy || selectedIds.length === 0}
-              className="bg-info-subtle text-caption text-info hover:bg-info-subtle hover:text-info hover:opacity-80 dark:hover:bg-info-subtle"
+              className="bg-info-subtle text-caption text-info-text hover:bg-info-subtle hover:text-info-text hover:opacity-80 dark:hover:bg-info-subtle"
             >
               {setStatus.isPending && setStatus.variables?.status === "in_progress" ? (
                 <Loader2 className="size-3.5 animate-spin" />
@@ -684,7 +702,7 @@ export function OrderItemsFulfillment({
             variant="ghost"
             onClick={() => holdLines(selectedIds)}
             disabled={busy || selectedIds.length === 0}
-            className="bg-warning-subtle text-caption text-warning hover:bg-warning-subtle hover:text-warning hover:opacity-80 dark:hover:bg-warning-subtle"
+            className="bg-warning-subtle text-caption text-warning-text hover:bg-warning-subtle hover:text-warning-text hover:opacity-80 dark:hover:bg-warning-subtle"
           >
             {setStatus.isPending && setStatus.variables?.status === "on_hold" ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -748,7 +766,9 @@ export function OrderItemsFulfillment({
         case "unfulfilled":
         case "in_progress":
         case "partial":
-          if (!canCreateFulfillment) return null;
+          // The card's own Fulfil items button already covers every line
+          // still to ship; the group menu offers just these.
+          if (!canCreateFulfillment || onFulfil) return null;
           return (
             <Button variant="accent" size="xs" onClick={() => fulfillLines(ids)} disabled={busy}>
               {createFulfillment.isPending ? <Loader2 className="animate-spin" /> : null}
@@ -772,7 +792,7 @@ export function OrderItemsFulfillment({
           if (deliverable.length === 0) return null;
           return (
             <Button
-              variant="brand"
+              variant="outline"
               size="xs"
               onClick={() => deliverLines(deliverable)}
               disabled={busy}
@@ -819,9 +839,9 @@ export function OrderItemsFulfillment({
             ) : (
               <>
                 {canCreateFulfillment && (
-                  <DropdownMenuItem onSelect={() => fulfillLines(ids)} disabled={busy}>
+                  <DropdownMenuItem onSelect={() => startFulfil(ids)} disabled={busy}>
                     <CheckCircle2 />
-                    Fulfil these items
+                    {onFulfil ? "Fulfil these items…" : "Fulfil these items"}
                   </DropdownMenuItem>
                 )}
                 {key === "on_hold" ? (
@@ -928,9 +948,9 @@ export function OrderItemsFulfillment({
           {trigger}
           <DropdownMenuContent align="end" className="w-48">
             {showFulfil && (
-              <DropdownMenuItem onSelect={() => fulfillLines([li.id])} disabled={busy}>
+              <DropdownMenuItem onSelect={() => startFulfil([li.id])} disabled={busy}>
                 <CheckCircle2 />
-                Fulfil this item
+                {onFulfil ? "Fulfil this item…" : "Fulfil this item"}
               </DropdownMenuItem>
             )}
             {showDeliver && (
@@ -1093,7 +1113,9 @@ export function OrderItemsFulfillment({
                           li.fulfillmentStatus !== "delivered";
                         return (
                           <li key={li.id} className="px-3.5 py-3">
-                            <div className="flex items-center gap-3">
+                            {/* On a phone the name gets the full width and wraps;
+                                quantity and price move to their own line. */}
+                            <div className="flex items-start gap-3 md:items-center">
                               {selectMode && (
                                 <input
                                   type="checkbox"
@@ -1117,8 +1139,8 @@ export function OrderItemsFulfillment({
                               )}
 
                               <div className="min-w-0 flex-1">
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <p className="truncate text-body font-medium text-brand-strong">
+                                <div className="flex min-w-0 items-center gap-2 max-md:flex-wrap">
+                                  <p className="text-body font-medium text-brand-strong max-md:line-clamp-2 md:truncate">
                                     {li.title}
                                   </p>
                                   {/* Only for a status with no group of its own —
@@ -1138,20 +1160,28 @@ export function OrderItemsFulfillment({
                                 {/* Only when the two disagree — on a whole line
                                     the quantity column already says it. */}
                                 {remainingOf(li) > 0 && (li.fulfilledQuantity ?? 0) > 0 && (
-                                  <p className="truncate text-micro font-medium text-warning">
+                                  <p className="truncate text-micro font-medium text-warning-text">
                                     {li.fulfilledQuantity} of {li.quantity} shipped ·{" "}
                                     {remainingOf(li)} still to send
                                   </p>
                                 )}
+                                <p className="mt-1 flex items-baseline justify-between gap-3 tabular-nums md:hidden">
+                                  <span className="text-caption text-muted-foreground">
+                                    {li.quantity} × {formatCurrency(Number(li.price), currency)}
+                                  </span>
+                                  <span className="text-body font-semibold text-foreground">
+                                    {formatCurrency(Number(li.price) * li.quantity, currency)}
+                                  </span>
+                                </p>
                               </div>
 
-                              <span className="shrink-0 whitespace-nowrap text-caption tabular-nums text-muted-foreground">
+                              <span className="shrink-0 whitespace-nowrap text-caption tabular-nums text-muted-foreground max-md:hidden">
                                 {li.quantity} × {formatCurrency(Number(li.price), currency)}
                               </span>
-                              <span className="shrink-0 whitespace-nowrap text-body font-semibold tabular-nums text-foreground">
+                              <span className="shrink-0 whitespace-nowrap text-body font-semibold tabular-nums text-foreground max-md:hidden">
                                 {formatCurrency(Number(li.price) * li.quantity, currency)}
                               </span>
-                              <div className="flex w-6 shrink-0 justify-end">{rowMenu(li)}</div>
+                              <div className="flex w-6 shrink-0 justify-end max-md:-my-2.5 max-md:-mr-2 max-md:w-11">{rowMenu(li)}</div>
                             </div>
 
                             {trackingLine === li.id && (

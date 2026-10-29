@@ -56,7 +56,8 @@ describe('AuthService — impersonation survives refresh and workspace switch', 
       clearRefreshRotation: jest.fn().mockResolvedValue(undefined),
       setRefreshToken: jest.fn().mockResolvedValue(undefined),
       trackUserToken: jest.fn().mockResolvedValue(undefined),
-      setSession: jest.fn().mockResolvedValue(undefined),
+      sessionRevision: jest.fn().mockResolvedValue('rev-1'),
+      setSession: jest.fn().mockResolvedValue(true),
       setAuthSession: jest.fn().mockResolvedValue(undefined),
       touchAuthSession: jest.fn().mockResolvedValue(true),
       isAuthSessionActive: jest.fn().mockResolvedValue(opts.adminSessionLive ?? true),
@@ -109,7 +110,7 @@ describe('AuthService — impersonation survives refresh and workspace switch', 
       expect.any(String),
       expect.objectContaining({ impersonatedBy: ADMIN, impersonatorSid: 'admin-sid', sid: 's1' }),
     );
-    expect(redis.setSession).toHaveBeenCalledWith('u1', expect.objectContaining({ impersonatedBy: ADMIN }));
+    expect(redis.setSession).toHaveBeenCalledWith('u1', expect.objectContaining({ impersonatedBy: ADMIN }), 'rev-1');
   });
 
   it('ends the session at refresh once the admin is off the super-admin allowlist', async () => {
@@ -141,6 +142,38 @@ describe('AuthService — impersonation survives refresh and workspace switch', 
     expect(redis.deleteAuthSession).toHaveBeenCalledWith('admin-sid', ADMIN);
   });
 
+  describe('stopping', () => {
+    const stop = { sid: 's1', targetUserId: 'u1', impersonatorSid: 'admin-sid' };
+
+    it("hands back admin tokens, checking the admin's session before retiring it", async () => {
+      const { service, redis, jwt } = build();
+      const live = new Set(['s1', 'admin-sid']);
+      redis.isAuthSessionActive.mockImplementation((sid: string) => Promise.resolve(live.has(sid)));
+      redis.deleteAuthSession.mockImplementation((sid: string) => Promise.resolve(void live.delete(sid)));
+
+      await expect(service.stopImpersonation(ADMIN, stop)).resolves.toMatchObject({ user: { id: ADMIN, isSuperAdmin: true } });
+      expect(jwt.sign).toHaveBeenCalledWith(expect.objectContaining({ sub: ADMIN, isSuperAdmin: true }));
+    });
+
+    // Otherwise a support session that outlived a forced logout of the admin
+    // could be traded for a brand-new admin session.
+    it.each([
+      ["the admin's own session was logged out or revoked", { adminSessionLive: false }, stop],
+      ['the admin is off the super-admin allowlist', { allowlist: [] }, stop],
+      ['the support session has no recorded origin', {}, { sid: 's1', targetUserId: 'u1' }],
+    ])('issues no admin tokens when %s, but still ends the support session', async (_case, opts, args) => {
+      const { service, redis, jwt, prisma } = build(opts);
+
+      await expect(service.stopImpersonation(ADMIN, args)).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(jwt.sign).not.toHaveBeenCalled();
+      expect(redis.setAuthSession).not.toHaveBeenCalled();
+      expect(redis.deleteAuthSession).toHaveBeenCalledWith('s1', 'u1');
+      expect(prisma.impersonationLog.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { superAdminId: ADMIN, endedAt: null } }),
+      );
+    });
+  });
+
   it('ends the session at refresh once the admin account is deleted', async () => {
     const { service, redis } = build({ stored: impersonating, adminDeleted: true });
 
@@ -169,6 +202,6 @@ describe('AuthService — impersonation survives refresh and workspace switch', 
       expect.any(String),
       expect.objectContaining({ impersonatedBy: ADMIN, impersonatorSid: 'admin-sid' }),
     );
-    expect(redis.setSession).toHaveBeenCalledWith('u1', expect.objectContaining({ impersonatedBy: ADMIN }));
+    expect(redis.setSession).toHaveBeenCalledWith('u1', expect.objectContaining({ impersonatedBy: ADMIN }), 'rev-1');
   });
 });

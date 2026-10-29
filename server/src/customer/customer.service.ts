@@ -1,10 +1,16 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { QueryCustomersDto } from './dto/query-customers.dto';
-import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { CustomerAddressDto, UpdateCustomerDto } from './dto/update-customer.dto';
+import { countryCodeOf, normalizePhone } from '../common/phone.util';
 import { pickPrefillAddress } from './prefill-address.util';
+import { contactName } from '../messaging/contact-name';
+import {
+  resolveReportingTimeZone,
+  zonedMonthStartMonthsAgo,
+} from '../common/utils/zoned-date.util';
 
 @Injectable()
 export class CustomerService {
@@ -104,7 +110,35 @@ export class CustomerService {
       }
     }
 
-    return { ...customer, prefillAddress };
+    return { ...customer, prefillAddress, chats: await this.chats(id, orgId) };
+  }
+
+  /**
+   * Every WhatsApp number and Instagram or Messenger profile linked to this
+   * customer, latest message first. Each is its own chat: the reply window
+   * and opt-in belong to the number, so they are not merged.
+   */
+  private async chats(customerId: string, orgId: string) {
+    const contacts = await this.prisma.channelContact.findMany({
+      where: { customerId, organizationId: orgId },
+      include: {
+        channel: { select: { name: true } },
+        conversations: { select: { id: true, lastMessageAt: true }, take: 1 },
+      },
+      take: 50,
+    });
+    return contacts
+      .map((c) => ({
+        contactId: c.id,
+        platform: c.platform,
+        channel: c.channel,
+        name: contactName(c),
+        phone: c.phone,
+        username: c.username,
+        conversationId: c.conversations[0]?.id ?? null,
+        lastMessageAt: c.conversations[0]?.lastMessageAt ?? null,
+      }))
+      .sort((a, b) => (b.lastMessageAt?.getTime() ?? 0) - (a.lastMessageAt?.getTime() ?? 0));
   }
 
   async update(id: string, orgId: string, userId: string, dto: UpdateCustomerDto) {
@@ -123,7 +157,11 @@ export class CustomerService {
       });
     }
 
-    const updated = await this.prisma.customer.update({ where: { id }, data: dto });
+    const { phone, defaultAddress, ...rest } = dto;
+    const updated = await this.prisma.customer.update({
+      where: { id },
+      data: { ...rest, ...contactPatch(customer.defaultAddress, { phone, defaultAddress }) },
+    });
 
     // Defensive: if a future change to UpdateCustomerDto exposes ordersCount
     // or totalSpent, the tier needs to stay in sync. Cheap to call and a no-op
@@ -162,10 +200,28 @@ export class CustomerService {
       ...(channelId && { channelId }),
     };
 
+    // Months in the org's reporting timezone, not the server's (UTC in
+    // production), so an IST sign-up at 02:00 on the 1st counts in its own month.
+    const org = await this.prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { timezone: true },
+    });
+    const timeZone = resolveReportingTimeZone(org ?? {});
     const now = new Date();
-    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const previousMonthEnd = new Date(currentMonthStart.getTime() - 1);
+    const currentMonthStart = zonedMonthStartMonthsAgo(now, 0, timeZone);
+    const previousMonthStart = zonedMonthStartMonthsAgo(now, 1, timeZone);
+    // A customer first seen in [from, to). `externalCreatedAt` is null for
+    // customers created in the CRM (offline orders, drafts), so those count by
+    // `createdAt` — the same rule as the dashboard's new-customer figure.
+    const firstSeenBetween = (from: Date, to?: Date): Prisma.CustomerWhereInput => {
+      const range = { gte: from, ...(to ? { lt: to } : {}) };
+      return {
+        OR: [
+          { externalCreatedAt: range },
+          { externalCreatedAt: null, createdAt: range },
+        ],
+      };
+    };
 
     const [
       totalCustomers,
@@ -181,12 +237,12 @@ export class CustomerService {
 
       // New customers this month
       this.prisma.customer.count({
-        where: { ...baseWhere, externalCreatedAt: { gte: currentMonthStart } },
+        where: { ...baseWhere, ...firstSeenBetween(currentMonthStart) },
       }),
 
       // New customers last month
       this.prisma.customer.count({
-        where: { ...baseWhere, externalCreatedAt: { gte: previousMonthStart, lte: previousMonthEnd } },
+        where: { ...baseWhere, ...firstSeenBetween(previousMonthStart, currentMonthStart) },
       }),
 
       // Active customers — have placed at least 1 order
@@ -265,4 +321,48 @@ export class CustomerService {
     const pct = Math.round(((current - previous) / previous) * 100);
     return { percentage: Math.abs(pct), direction: pct > 0 ? 'up' : pct < 0 ? 'down' : 'same' };
   }
+}
+
+/**
+ * The phone and address of an edit, checked and normalised. The phone is
+ * saved as E.164, read with the address's country (else India, as the order
+ * form reads it), so the inbox can start a WhatsApp chat on it and the
+ * Shopify push accepts it. An Indian PIN code must be 6 digits.
+ */
+export function contactPatch(
+  savedAddress: unknown,
+  edit: { phone?: string | null; defaultAddress?: CustomerAddressDto },
+): Prisma.CustomerUpdateInput {
+  const patch: Prisma.CustomerUpdateInput = {};
+  let address: Record<string, string> | undefined;
+
+  if (edit.defaultAddress) {
+    address = Object.fromEntries(
+      Object.entries(edit.defaultAddress)
+        .filter(([, v]) => typeof v === 'string' && v.trim() !== '')
+        .map(([k, v]) => [k, (v as string).trim()]),
+    );
+    const indian = address.country_code === 'IN' || /^india$/i.test(address.country ?? '');
+    if (indian && !/^\d{6}$/.test(address.zip ?? '')) {
+      throw new BadRequestException('An Indian PIN code is 6 digits, like 400001.');
+    }
+    if (address.phone) {
+      const e164 = normalizePhone(address.phone, countryCodeOf(address) ?? 'IN');
+      if (!e164) throw new BadRequestException('Enter a valid phone number for the address, like +91 98765 43210.');
+      address.phone = e164;
+    }
+    patch.defaultAddress = address;
+  }
+
+  if (edit.phone !== undefined) {
+    const raw = edit.phone?.trim();
+    if (!raw) {
+      patch.phone = null;
+    } else {
+      const e164 = normalizePhone(raw, countryCodeOf(address ?? savedAddress) ?? 'IN');
+      if (!e164) throw new BadRequestException('Enter a valid phone number, like +91 98765 43210.');
+      patch.phone = e164;
+    }
+  }
+  return patch;
 }

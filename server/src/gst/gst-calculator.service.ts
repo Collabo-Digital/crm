@@ -104,6 +104,59 @@ export class GstCalculatorService {
   }
 
   /**
+   * GST for a line whose price already INCLUDES the tax: a Shopify store with
+   * "taxes included", or a catalogue priced at MRP.
+   *
+   * The line's amount (unit price × quantity − discount) is what the customer
+   * pays, so the taxable value is backed out of it (amount × 100 / (100 +
+   * rate)) and the tax is what is left. Taking the remainder keeps taxable +
+   * tax equal to the amount charged; CGST takes half and SGST the rest, so the
+   * two can differ by a paisa.
+   */
+  calculateInclusiveLineItem(
+    input: GstCalculationInput,
+    isIntraState: boolean,
+  ): GstCalculationResult {
+    const amount = Math.max(
+      0,
+      this.round(input.unitPrice * input.quantity - input.discount),
+    );
+    const gstRate = input.gstRate;
+    const taxableValue = this.round((amount * 100) / (100 + gstRate));
+    const totalTax = this.round(amount - taxableValue);
+
+    let cgstRate = 0;
+    let cgstAmount = 0;
+    let sgstRate = 0;
+    let sgstAmount = 0;
+    let igstRate = 0;
+    let igstAmount = 0;
+
+    if (isIntraState) {
+      cgstRate = this.round(gstRate / 2);
+      sgstRate = this.round(gstRate / 2);
+      cgstAmount = this.round(totalTax / 2);
+      sgstAmount = this.round(totalTax - cgstAmount);
+    } else {
+      igstRate = gstRate;
+      igstAmount = totalTax;
+    }
+
+    return {
+      taxableValue,
+      gstRate,
+      cgstRate,
+      cgstAmount,
+      sgstRate,
+      sgstAmount,
+      igstRate,
+      igstAmount,
+      totalTax,
+      totalAmount: amount,
+    };
+  }
+
+  /**
    * Calculate invoice totals from an array of line item results.
    *
    * `totalDiscount` is INFORMATIONAL only and must be the sum of the discounts

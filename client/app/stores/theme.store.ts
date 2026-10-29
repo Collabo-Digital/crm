@@ -55,3 +55,10 @@ export const useThemeStore = create<ThemeState & ThemeActions>()(
     }
   )
 );
+
+// "System" follows the device while the app is open, not only when it loads.
+if (typeof window !== "undefined") {
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (useThemeStore.getState().theme === "system") applyTheme("system");
+  });
+}

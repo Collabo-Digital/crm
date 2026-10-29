@@ -5,6 +5,8 @@ import { useOrder } from "~/hooks/use-order-queries";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useSlipStore } from "~/hooks/use-slip-store";
 import { PackageSlipSheet } from "~/components/app/package-slip-sheet";
+import { BarcodeSvg } from "~/components/app/labels/label-artwork";
+import { planBarcode } from "~/lib/barcode";
 import { SLIP_DEFAULT_LAYOUT, SLIP_DEFAULT_PAPER_ID } from "~/lib/slip-stock";
 import type { OrderSlipData, VendorShipTo } from "~/types/api";
 
@@ -248,25 +250,26 @@ function PickSlipView() {
               value={opts.companyName}
               onChange={(e) => set({ companyName: e.target.value })}
               placeholder="Company name"
-              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c] dark:bg-gray-800"
+              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none dark:bg-gray-800 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <input
               value={opts.fromAddress}
               onChange={(e) => set({ fromAddress: e.target.value })}
               placeholder="From / return address (optional)"
-              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c] dark:bg-gray-800"
+              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none dark:bg-gray-800 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <input
               value={opts.note}
               onChange={(e) => set({ note: e.target.value })}
               placeholder="Note shown on the slip (optional)"
-              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c] dark:bg-gray-800"
+              className="rounded-lg border bg-white px-3 py-2 text-xs outline-none dark:bg-gray-800 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
           </div>
         </div>
       </div>
 
       <PickSlipBody
+        orderId={id!}
         order={order}
         opts={opts}
         orgLogo={org?.logo}
@@ -282,6 +285,7 @@ function PickSlipView() {
 
 /** The clean slip layout used by the pick variant. */
 function PickSlipBody({
+  orderId,
   order,
   opts,
   orgLogo,
@@ -291,6 +295,8 @@ function PickSlipBody({
   ship,
   totalUnits,
 }: {
+  /** Encoded in the barcode that the packing queue scans to open the order. */
+  orderId: string;
   order: SlipOrder;
   opts: SlipOptions;
   orgLogo?: string | null;
@@ -300,6 +306,8 @@ function PickSlipBody({
   ship: SlipAddress | null;
   totalUnits: number;
 }) {
+  // Six dots at 600 dpi (0.254 mm): an office printer's A4.
+  const barcode = planBarcode({ value: orderId, availableMm: 90, dpi: 600, preferDots: 6, maxBarHeightMm: 10 });
   return (
     <div className="slip-paper mx-auto my-6 max-w-3xl bg-white p-10 text-[12px] text-gray-900 shadow-sm">
       {/* Header */}
@@ -328,6 +336,12 @@ function PickSlipBody({
           {dateStr && <p className="text-[11px] text-gray-500">{dateStr}</p>}
         </div>
       </div>
+      {barcode.quality !== "unfit" && (
+        <div className="mt-4 flex flex-col items-center gap-1">
+          <BarcodeSvg plan={barcode} maxHeightMm={barcode.barHeightMm} />
+          <p className="text-[10px] text-gray-500">Scan on the Packing screen to open this order</p>
+        </div>
+      )}
 
       {/* Ship to */}
       {opts.shipTo && (

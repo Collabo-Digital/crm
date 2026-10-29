@@ -28,7 +28,8 @@ export default function NewDraftPage() {
   const draftsPath = useListReturnPath("drafts", "/orders/drafts");
   return (
     <div className="space-y-6">
-      <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption">
+      {/* On a phone the app bar's back arrow does this job. */}
+      <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption max-md:hidden">
         <Link to={draftsPath} className="text-muted-foreground hover:text-foreground">
           Drafts
         </Link>
@@ -36,7 +37,7 @@ export default function NewDraftPage() {
         <span className="font-medium text-foreground">New draft</span>
       </nav>
 
-      <PageHeader>
+      <PageHeader data-mobile-title>
         <PageHeaderContent>
           <PageHeaderTitle>New draft</PageHeaderTitle>
           <PageHeaderDescription>

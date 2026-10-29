@@ -6,25 +6,27 @@ import {
   BadRequestException,
   Logger,
   HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { InviteStatus, Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { UserService } from '../user/user.service';
 import { JwtPayload, TokenPair } from './interfaces/jwt-payload.interface';
+import { defaultGrantsForRole, extractGrants } from './permissions';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { AcceptInviteDto } from './dto/accept-invite.dto';
 import { EmailService } from '../email/email.service';
-import { extractGrants } from './permissions';
 import { ACTIVE_MEMBERSHIP } from './active-membership';
 import { buildSessionPayload } from './session-payload.util';
+import { INVITE_MANAGERS } from './decorators/roles.decorator';
 
 /** What is stored in Redis alongside a refresh token. */
 interface RefreshTokenData {
@@ -43,6 +45,32 @@ type ImpersonationOrigin = Pick<RefreshTokenData, 'impersonatedBy' | 'impersonat
 // How long a duplicate refresh waits for the rotation it lost to: 30 x 100ms.
 const ROTATION_WAIT_ATTEMPTS = 30;
 const ROTATION_WAIT_INTERVAL_MS = 100;
+
+// Accepting any code would make the flag meaningless, so until a real second
+// factor check exists an account with it turned on cannot sign in at all.
+const TWO_FACTOR_UNAVAILABLE =
+  'Two-factor sign-in is not available yet, so this account cannot sign in. Please contact support.';
+
+// Reset and refresh tokens are stored as SHA-256 hashes, so a read of the
+// table yields nothing that works as a token. The prefix tells a hash apart
+// from a raw token stored before hashing began.
+const HASHED_TOKEN_PREFIX = 'sha256:';
+
+function hashToken(token: string): string {
+  return HASHED_TOKEN_PREFIX + createHash('sha256').update(token).digest('hex');
+}
+
+/**
+ * Stored values a presented token may match: its hash, and the raw token for
+ * rows written before hashing began. Those rows run out on their own (reset
+ * links within the hour, refresh rows with their token) and must keep working
+ * until then.
+ */
+function storedTokenValues(token: string): string[] {
+  const hashed = hashToken(token);
+  // A hash copied out of the table must not pass as a raw token.
+  return token.startsWith(HASHED_TOKEN_PREFIX) ? [hashed] : [hashed, token];
+}
 
 @Injectable()
 export class AuthService {
@@ -83,6 +111,16 @@ export class AuthService {
   }
 
   async verifyEmail(userId: string, code: string) {
+    // Counted per account before the code is checked: the per-IP throttle
+    // alone let guesses spread over many addresses walk the six digits.
+    if (await this.redis.countVerifyAttempt(userId)) {
+      // Spent, so even a Redis restart cannot give it more tries.
+      await this.prisma.user.updateMany({
+        where: { id: userId, emailVerified: false },
+        data: { emailVerifyCode: null, emailVerifyExpires: null },
+      });
+      throw new HttpException('Too many incorrect codes. Request a new code and try again.', HttpStatus.TOO_MANY_REQUESTS);
+    }
     const user = await this.userService.verifyEmail(userId, code);
 
     // Pull a typed row so the super-admin flag has the right type without any casts.
@@ -134,8 +172,13 @@ export class AuthService {
   }
 
   async resendVerification(userId: string) {
-    const user = await this.userService.regenerateVerifyCode(userId);
+    // Over the limit, the code already sent stays valid; nothing new is sent.
+    const user = (await this.redis.allowEmailSend('verify', userId))
+      ? await this.userService.regenerateVerifyCode(userId)
+      : null;
     if (user) {
+      // A new code gets its own tries.
+      await this.redis.resetVerifyAttempts(user.id);
       await this.emailService.sendVerificationCode(user.email, user.emailVerifyCode as string);
     }
     return {
@@ -145,18 +188,22 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, userAgent?: string, ipAddress?: string) {
-    // Rate limit check — block after 5 failed attempts per email
-    const attempts = await this.redis.getLoginAttempts(dto.email);
-    if (this.redis.isLoginBlocked(attempts)) {
+    const clientIp = ipAddress ?? 'unknown';
+    if (await this.redis.countLoginAttempt(dto.email, clientIp)) {
       throw new UnauthorizedException('Too many failed login attempts. Please try again in 15 minutes.');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-      include: {
-        memberships: { where: ACTIVE_MEMBERSHIP, orderBy: { createdAt: 'asc' }, include: { organization: true } },
-      },
-    });
+    const userId = await this.userService.findIdByEmail(dto.email);
+    // Read before the memberships, as for every session write (RedisService.setSession).
+    const revision = userId ? await this.redis.sessionRevision(userId) : '';
+    const user = userId
+      ? await this.prisma.user.findUnique({
+          where: { id: userId },
+          include: {
+            memberships: { where: ACTIVE_MEMBERSHIP, orderBy: { createdAt: 'asc' }, include: { organization: true } },
+          },
+        })
+      : null;
 
     if (!user || user.deletedAt) {
       throw new UnauthorizedException('Invalid email or password');
@@ -164,15 +211,17 @@ export class AuthService {
 
     const isValid = await bcrypt.compare(dto.password, user.password);
     if (!isValid) {
-      await this.redis.incrementLoginAttempts(dto.email);
       throw new UnauthorizedException('Invalid email or password');
     }
 
     // CHANGED: include userId in error so frontend can redirect to OTP page
     if (!user.emailVerified) {
-      // Resend OTP automatically 
-      const updatedUser = await this.userService.regenerateVerifyCode(user.id);
+      // Resend OTP automatically, within the same per-recipient limit as the resend button
+      const updatedUser = (await this.redis.allowEmailSend('verify', user.id))
+        ? await this.userService.regenerateVerifyCode(user.id)
+        : null;
       if (updatedUser) {
+        await this.redis.resetVerifyAttempts(user.id);
         await this.emailService.sendVerificationCode(user.email, updatedUser.emailVerifyCode!);
       }
 
@@ -187,15 +236,10 @@ export class AuthService {
       );
     }
 
-    if (user.twoFactorEnabled) {
-      if (!dto.totpCode) {
-        throw new ForbiddenException('Two-factor authentication code required');
-      }
-      // TODO: Validate TOTP
-    }
+    if (user.twoFactorEnabled) throw new ForbiddenException(TWO_FACTOR_UNAVAILABLE);
 
     // Reset rate limit on successful login
-    await this.redis.resetLoginAttempts(dto.email);
+    await this.redis.resetLoginAttempts(dto.email, clientIp);
 
     // Sync the Collabo-team super-admin flag against the env allowlist before issuing a token.
     await this.syncSuperAdminFlag(user);
@@ -217,6 +261,7 @@ export class AuthService {
     await this.redis.setSession(
       user.id,
       buildSessionPayload(user, membership, user.memberships, { isSuperAdmin: user.isSuperAdmin }),
+      revision,
     );
 
     return {
@@ -246,6 +291,7 @@ export class AuthService {
 
   async switchOrg(userId: string, orgId: string, sid?: string, impersonation?: ImpersonationOrigin) {
     const impersonatedBy = impersonation?.impersonatedBy;
+    const revision = await this.redis.sessionRevision(userId);
     // Verify user is an active member of this org
     const membership = await this.prisma.organizationMember.findUnique({
       where: { organizationId_userId: { organizationId: orgId, userId } },
@@ -290,6 +336,7 @@ export class AuthService {
         isSuperAdmin: impersonatedBy ? false : user.isSuperAdmin,
         impersonatedBy,
       }),
+      revision,
     );
 
     return {
@@ -323,7 +370,7 @@ export class AuthService {
     // Only revoke a refresh token that belongs to the caller.
     const tokenData = await this.redis.getRefreshToken<{ userId: string }>(refreshToken);
     if (tokenData?.userId === userId) {
-      await this.revokeRefreshToken(refreshToken);
+      await this.revokeRefreshToken(refreshToken, userId);
     }
     // Kill the access token too, not just the refresh token.
     if (sid) await this.redis.deleteAuthSession(sid, userId);
@@ -332,20 +379,26 @@ export class AuthService {
   }
 
   async forgotPassword(email: string) {
+    const message = 'If an account exists with this email, a reset link has been sent to your email.';
+    // Limited per address before the lookup, so the answer and its timing say
+    // nothing about whether an account exists.
+    if (!(await this.redis.allowEmailSend('password-reset', email))) return { message };
+
     const user = await this.userService.findByEmail(email);
     if (user && !user.deletedAt) {
       const token = randomBytes(32).toString('hex');
       await this.prisma.passwordResetToken.create({
-        data: { userId: user.id, token, expiresAt: new Date(Date.now() + 3600000) },
+        data: { userId: user.id, token: hashToken(token), expiresAt: new Date(Date.now() + 3600000) },
       });
-      await this.emailService.sendPasswordResetLink(email, token);
+      // The account's own address: the lookup ignores case, the mailbox is the account's.
+      await this.emailService.sendPasswordResetLink(user.email, token);
     }
-    return { message: 'If an account exists with this email, a reset link has been sent to your email.' };
+    return { message };
   }
 
   async resetPassword(dto: ResetPasswordDto) {
     const resetToken = await this.prisma.passwordResetToken.findFirst({
-      where: { token: dto.token, usedAt: null, expiresAt: { gt: new Date() } },
+      where: { token: { in: storedTokenValues(dto.token) }, usedAt: null, expiresAt: { gt: new Date() } },
     });
     if (!resetToken) throw new NotFoundException('Invalid or expired reset token');
 
@@ -393,56 +446,137 @@ export class AuthService {
       where: { token, organization: { deletedAt: null } },
       include: { organization: { select: { id: true, name: true, slug: true, logo: true } } },
     });
-    if (!invite) throw new NotFoundException('Invite not found');
-    if (invite.status !== InviteStatus.PENDING) throw new BadRequestException(`Invite has been ${invite.status.toLowerCase()}`);
-    if (invite.expiresAt < new Date()) throw new BadRequestException('Invite has expired');
+    if (!invite) throw new NotFoundException('Invitation not found');
+    if (invite.status !== InviteStatus.PENDING) {
+      throw new BadRequestException(
+        invite.status === InviteStatus.ACCEPTED
+          ? 'This invitation has already been used.'
+          : `This invitation has been ${invite.status.toLowerCase()}.`,
+      );
+    }
+    if (invite.expiresAt < new Date()) throw new BadRequestException('This invitation has expired.');
+    await this.assertInviterMayStillInvite(invite);
 
     const userExists = !!(await this.userService.findByEmail(invite.email));
-    return { email: invite.email, role: invite.role, vendorScope: invite.vendorScope, organization: invite.organization, userExists };
+    return {
+      email: invite.email,
+      name: invite.name,
+      role: invite.role,
+      vendorScope: invite.vendorScope,
+      organization: invite.organization,
+      userExists,
+      expiresAt: invite.expiresAt,
+    };
   }
 
-  async acceptInvite(dto: AcceptInviteDto) {
+  /**
+   * Claim an invitation.
+   *
+   * `callerUserId` is the authenticated user, when there is one — this endpoint
+   * is `@Public()` because a brand-new person must be able to reach it, so the
+   * caller is resolved from the header rather than by a guard.
+   *
+   * It is also what closes a real hole: previously, ANY holder of the token
+   * could accept an invitation addressed to an existing account, which silently
+   * joined that person's account to an organization they had never heard of. A
+   * forwarded invitation email was enough. Now an invitation to an address that
+   * already has an account can only be claimed while signed in as that account.
+   */
+  async acceptInvite(dto: AcceptInviteDto, callerUserId?: string) {
     // Accepting an invite into a deleted workspace would create a membership
     // (and for a new invitee, an account) that can never be used.
     const invite = await this.prisma.teamInvite.findUnique({
       where: { token: dto.token, organization: { deletedAt: null } },
       include: { organization: true },
     });
-    if (!invite) throw new NotFoundException('Invite not found');
-    if (invite.status !== InviteStatus.PENDING) throw new BadRequestException(`Invite has been ${invite.status.toLowerCase()}`);
-    if (invite.expiresAt < new Date()) throw new BadRequestException('Invite has expired');
+    if (!invite) throw new NotFoundException('Invitation not found');
+    if (invite.status !== InviteStatus.PENDING) {
+      throw new BadRequestException(
+        invite.status === InviteStatus.ACCEPTED
+          ? 'This invitation has already been used.'
+          : `This invitation has been ${invite.status.toLowerCase()}.`,
+      );
+    }
+    if (invite.expiresAt < new Date()) throw new BadRequestException('This invitation has expired.');
+    await this.assertInviterMayStillInvite(invite);
 
     let user = await this.userService.findByEmail(invite.email);
-    if (user) {
-      // Existing account: the invite token alone must not log anyone in —
-      // the inviter chooses the email, so it would hand them that account.
+
+    // Whoever is signed in must be the person the invitation names. Being
+    // signed in as someone else is the confusing case, so it is named plainly
+    // rather than silently creating a second account or joining the wrong one.
+    if (callerUserId) {
+      const caller = await this.prisma.user.findUnique({
+        where: { id: callerUserId },
+        select: { id: true, email: true },
+      });
+      if (caller && caller.email.toLowerCase() !== invite.email.toLowerCase()) {
+        throw new ForbiddenException(
+          `This invitation was sent to ${invite.email}. You are signed in as ${caller.email}. Sign out and open the invitation link again.`,
+        );
+      }
+    } else if (user) {
+      // Existing account, nobody signed in: the invite token alone must not
+      // log anyone in — the inviter chooses the email, so it would hand them
+      // that account. The account's password proves ownership.
       if (user.deletedAt) throw new ForbiddenException('Account has been deactivated');
       if (!dto.password || !(await bcrypt.compare(dto.password, user.password))) {
         throw new UnauthorizedException('Enter your account password to accept this invite');
       }
-    } else {
+      // This signs the account in, so it is held to the same rule as login.
+      if (user.twoFactorEnabled) throw new ForbiddenException(TWO_FACTOR_UNAVAILABLE);
+    }
+
+    if (!user) {
       if (!dto.password || !dto.firstName || !dto.lastName) {
         throw new BadRequestException('firstName, lastName, and password are required for new users');
       }
       user = await this.userService.create({
         email: invite.email, password: dto.password, firstName: dto.firstName, lastName: dto.lastName,
       });
+      // Holding the emailed token IS proof of address ownership, so there is
+      // nothing left for a verification code to establish.
       await this.prisma.user.update({
         where: { id: user.id },
         data: { emailVerified: true, emailVerifiedAt: new Date(), emailVerifyCode: null, emailVerifyExpires: null },
       });
     }
 
-    await this.prisma.organizationMember.create({
-      data: {
-        organizationId: invite.organizationId, userId: user.id, role: invite.role, vendorScope: invite.vendorScope,
-        // Section access chosen on the invite form travels with it.
-        ...(invite.permissions ? { permissions: invite.permissions as Prisma.InputJsonValue } : {}),
+    // Upsert, not create: removal from an organization is a soft `isActive:
+    // false`, so a returning member already has a row and `create` threw P2002
+    // — which made re-inviting anyone who had ever been removed impossible.
+    // The role's default grants are seeded alongside the section access chosen
+    // on the invite form, and re-joining re-seeds both.
+    const grants = [...new Set([...defaultGrantsForRole(invite.role), ...extractGrants(invite.permissions)])];
+    await this.prisma.organizationMember.upsert({
+      where: {
+        organizationId_userId: { organizationId: invite.organizationId, userId: user.id },
+      },
+      create: {
+        organizationId: invite.organizationId,
+        userId: user.id,
+        role: invite.role,
+        vendorScope: invite.vendorScope,
+        permissions: { grants },
+      },
+      update: {
+        role: invite.role,
+        vendorScope: invite.vendorScope,
+        isActive: true,
+        permissions: { grants },
       },
     });
+
     await this.prisma.teamInvite.update({
       where: { id: invite.id },
-      data: { status: InviteStatus.ACCEPTED, acceptedAt: new Date() },
+      // acceptedUserId is what ties the invitation to the account that claimed
+      // it — the influencer list joins on it, and the invited address alone
+      // could not answer "who actually joined".
+      data: {
+        status: InviteStatus.ACCEPTED,
+        acceptedAt: new Date(),
+        acceptedUserId: user.id,
+      },
     });
 
     // Invalidate session cache — stale orgId/memberships need to refresh
@@ -454,14 +588,53 @@ export class AuthService {
     return {
       ...tokens,
       user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName },
+      // The role travels with the response so the client can put the correct
+      // one in its store; it used to assume AGENT and get every later role
+      // check wrong until the next full reload.
+      role: invite.role,
       organization: {
         id: invite.organization.id, name: invite.organization.name, slug: invite.organization.slug,
         type: invite.organization.type,
         role: invite.role,
         vendorScope: invite.vendorScope ?? undefined,
-        permissions: extractGrants(invite.permissions),
+        permissions: grants,
       },
     };
+  }
+
+  /**
+   * An invitation grants its sender's authority, so it holds only while they
+   * still have it. Otherwise an admin who was removed or demoted could join
+   * again, with the role they chose, through an invitation sent beforehand
+   * to a second address of their own. A current admin who re-sends it takes
+   * it over (InvitesService.resend).
+   */
+  private async assertInviterMayStillInvite(invite: { organizationId: string; invitedBy: string }): Promise<void> {
+    const inviter = await this.prisma.organizationMember.findUnique({
+      where: { organizationId_userId: { organizationId: invite.organizationId, userId: invite.invitedBy } },
+      select: { role: true, isActive: true, user: { select: { deletedAt: true } } },
+    });
+    if (!inviter?.isActive || inviter.user.deletedAt || !INVITE_MANAGERS.includes(inviter.role)) {
+      throw new BadRequestException('This invitation is no longer valid. Ask the workspace to send you a new one.');
+    }
+  }
+
+  /**
+   * The user id inside a Bearer token, or undefined.
+   *
+   * Used only by the public invite-accept route, which must behave differently
+   * for a signed-in caller but cannot use a guard to find one. An invalid or
+   * expired token is treated as "not signed in" rather than an error: the
+   * request is still a legitimate attempt to accept an invitation.
+   */
+  verifyAccessTokenSubject(authorization?: string): string | undefined {
+    const raw = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : null;
+    if (!raw) return undefined;
+    try {
+      return this.jwt.verify<JwtPayload>(raw).sub;
+    } catch {
+      return undefined;
+    }
   }
 
   // ─── TOKEN MANAGEMENT ───
@@ -501,7 +674,9 @@ export class AuthService {
 
     // Audit trail: DB (fire-and-forget, don't block)
     const expiresAt = this.calculateExpiry(this.refreshExpires);
-    this.prisma.refreshToken.create({ data: { userId, token, userAgent, ipAddress, expiresAt } }).catch(() => { });
+    this.prisma.refreshToken
+      .create({ data: { userId, token: hashToken(token), userAgent, ipAddress, expiresAt } })
+      .catch(() => { });
 
     return token;
   }
@@ -563,6 +738,7 @@ export class AuthService {
     userAgent?: string,
     ipAddress?: string,
   ): Promise<TokenPair> {
+    const revision = await this.redis.sessionRevision(tokenData.userId);
     const user = await this.prisma.user.findUnique({
       where: { id: tokenData.userId },
       include: { memberships: { where: ACTIVE_MEMBERSHIP, orderBy: { createdAt: 'asc' } } },
@@ -570,7 +746,9 @@ export class AuthService {
     if (!user || user.deletedAt) throw new UnauthorizedException('Account has been deactivated');
 
     // Audit trail (fire-and-forget)
-    this.prisma.refreshToken.updateMany({ where: { token: oldToken, revokedAt: null }, data: { revokedAt: new Date() } }).catch(() => { });
+    this.prisma.refreshToken
+      .updateMany({ where: { token: { in: storedTokenValues(oldToken) }, revokedAt: null }, data: { revokedAt: new Date() } })
+      .catch(() => { });
 
     // Keep the org the session was in. Taking memberships[0] here silently
     // moved a multi-org user back to their first org every time the access
@@ -642,20 +820,24 @@ export class AuthService {
     await this.redis.setSession(
       user.id,
       buildSessionPayload(user, membership, user.memberships, { isSuperAdmin, impersonatedBy }),
+      revision,
     );
 
     return { accessToken, refreshToken };
   }
 
-  async revokeRefreshToken(token: string): Promise<void> {
-    await this.redis.deleteRefreshToken(token);
+  async revokeRefreshToken(token: string, userId?: string): Promise<void> {
+    await this.redis.deleteRefreshToken(token, userId);
     // Audit trail (fire-and-forget)
-    this.prisma.refreshToken.updateMany({ where: { token, revokedAt: null }, data: { revokedAt: new Date() } }).catch(() => { });
+    this.prisma.refreshToken
+      .updateMany({ where: { token: { in: storedTokenValues(token) }, revokedAt: null }, data: { revokedAt: new Date() } })
+      .catch(() => { });
   }
 
-  async revokeAllUserTokens(userId: string): Promise<void> {
-    await this.redis.deleteAllUserTokens(userId);
-    await this.redis.deleteAllAuthSessions(userId);
+  /** End every session of a user; `keepSid` keeps that one (the caller's own) signed in. */
+  async revokeAllUserTokens(userId: string, keepSid?: string): Promise<void> {
+    await this.redis.deleteAllUserTokens(userId, keepSid);
+    await this.redis.deleteAllAuthSessions(userId, keepSid);
     await this.redis.deleteSession(userId);
     // Audit trail (fire-and-forget)
     this.prisma.refreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } }).catch(() => { });
@@ -717,6 +899,7 @@ export class AuthService {
       throw new BadRequestException('Cannot impersonate yourself');
     }
 
+    const revision = await this.redis.sessionRevision(targetUserId);
     const target = await this.prisma.user.findUnique({
       where: { id: targetUserId },
       include: { memberships: { where: ACTIVE_MEMBERSHIP, include: { organization: true } } },
@@ -748,6 +931,7 @@ export class AuthService {
         isSuperAdmin: false,
         impersonatedBy: superAdminId,
       }),
+      revision,
     );
 
     // Write audit row (best-effort — don't block token issue on audit failures).
@@ -806,6 +990,7 @@ export class AuthService {
     impersonatedByUserId: string,
     impersonation?: { sid?: string; targetUserId: string; impersonatorSid?: string },
   ) {
+    const revision = await this.redis.sessionRevision(impersonatedByUserId);
     const superAdmin = await this.prisma.user.findUnique({
       where: { id: impersonatedByUserId },
       include: { memberships: { where: ACTIVE_MEMBERSHIP, include: { organization: true } } },
@@ -813,6 +998,14 @@ export class AuthService {
     if (!superAdmin?.isSuperAdmin) {
       throw new ForbiddenException('Impersonation can only be stopped by a super admin');
     }
+    // A fresh admin session is issued only while the admin session this was
+    // started from is still live. Otherwise a support session that outlived a
+    // forced logout of the admin could be traded for a new admin login. One
+    // with no recorded origin cannot show that, so it is refused too. Checked
+    // before that session is retired below.
+    const impersonatorSid = impersonation?.impersonatorSid;
+    const adminStillAuthorized =
+      !!impersonatorSid && (await this.isImpersonationStillAuthorized(superAdmin.id, impersonatorSid));
 
     // End the impersonation session itself, so its tokens stop working now
     // rather than lingering after the super admin has "exited".
@@ -822,8 +1015,8 @@ export class AuthService {
     // The admin gets a fresh session below. Retire the one this was started
     // from: nothing uses it any more, and any other support session started
     // from it ends with it.
-    if (impersonation?.impersonatorSid) {
-      await this.redis.deleteAuthSession(impersonation.impersonatorSid, superAdmin.id);
+    if (impersonatorSid) {
+      await this.redis.deleteAuthSession(impersonatorSid, superAdmin.id);
     }
 
     // Close any open log rows for this super admin (there should be exactly one).
@@ -831,6 +1024,8 @@ export class AuthService {
       where: { superAdminId: superAdmin.id, endedAt: null },
       data: { endedAt: new Date() },
     });
+
+    if (!adminStillAuthorized) throw new UnauthorizedException('Impersonation session has ended');
 
     const membership = superAdmin.memberships[0];
     const payload: JwtPayload = {
@@ -846,6 +1041,7 @@ export class AuthService {
     await this.redis.setSession(
       superAdmin.id,
       buildSessionPayload(superAdmin, membership, superAdmin.memberships, { isSuperAdmin: true }),
+      revision,
     );
 
     return {

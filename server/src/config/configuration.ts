@@ -23,6 +23,53 @@ export default () => ({
         fromName: process.env.FROM_NAME || 'YourCRM',
         replyTo: process.env.REPLY_TO_EMAIL || undefined,
     },
+    // Facebook Login for Business configuration with ads_read, for ad results.
+    ads: {
+        configId: process.env.META_ADS_CONFIG_ID,
+    },
+    // Collabo's own Anthropic key, for the AI template writer. Without it the
+    // writer reports itself unavailable.
+    ai: {
+        anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+        anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL,
+        // Daily draft caps beside each organization's own; unset, the writer's defaults.
+        draftsPerUserPerDay: process.env.AI_DRAFTS_PER_USER_PER_DAY ? Number.parseInt(process.env.AI_DRAFTS_PER_USER_PER_DAY, 10) : undefined,
+        draftsPerDayTotal: process.env.AI_DRAFTS_PER_DAY_TOTAL ? Number.parseInt(process.env.AI_DRAFTS_PER_DAY_TOTAL, 10) : undefined,
+    },
+    // Collabo's subscription billing, with Collabo's own Razorpay keys
+    // (RAZORPAY_KEY_*). The API base is for local tests of usage billing.
+    billing: {
+        razorpayApiBase: process.env.RAZORPAY_API_BASE || 'https://api.razorpay.com',
+        // The Razorpay plan for each plan and currency: test and live mode have their own.
+        plans: {
+            BASIC: { INR: process.env.RAZORPAY_PLAN_BASIC_INR, USD: process.env.RAZORPAY_PLAN_BASIC_USD },
+            GROWTH: { INR: process.env.RAZORPAY_PLAN_GROWTH_INR, USD: process.env.RAZORPAY_PLAN_GROWTH_USD },
+        },
+        // Where "Talk to us" on the Enterprise plan writes to.
+        salesEmail: process.env.BILLING_SALES_EMAIL,
+        usagePollSeconds: Number.parseInt(process.env.BILLING_USAGE_POLL_SECONDS || '3600', 10),
+    },
+    // Merchants' own gateway accounts, for payment links sent in chat. Not
+    // Collabo's subscription billing (RAZORPAY_KEY_* / BillingService).
+    payments: {
+        razorpayApiBase: process.env.RAZORPAY_MERCHANT_API_BASE || 'https://api.razorpay.com',
+    },
+    // Merchants' own review apps, where reviews collected on WhatsApp are published.
+    reviews: {
+        judgemeApiBase: process.env.JUDGEME_API_BASE || 'https://api.judge.me/api/v1',
+    },
+    // Collabo's own Google OAuth client, for Google Sheets in automations. Without
+    // it the Google Sheets page says it is not set up. The URLs are for local tests.
+    google: {
+        clientId: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        authUrl: process.env.GOOGLE_OAUTH_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth',
+        tokenUrl: process.env.GOOGLE_OAUTH_TOKEN_URL || 'https://oauth2.googleapis.com/token',
+        revokeUrl: process.env.GOOGLE_OAUTH_REVOKE_URL || 'https://oauth2.googleapis.com/revoke',
+        sheetsApiBase: process.env.GOOGLE_SHEETS_API_BASE || 'https://sheets.googleapis.com/v4',
+        // How often sheets watched by "A row is added to a sheet" are read.
+        pollSeconds: Number.parseInt(process.env.GOOGLE_SHEETS_POLL_SECONDS || '120', 10),
+    },
     shopify: {
         clientId: process.env.SHOPIFY_CLIENT_ID,
         clientSecret: process.env.SHOPIFY_CLIENT_SECRET,
@@ -37,6 +84,8 @@ export default () => ({
             process.env.SHOPIFY_INITIAL_ORDER_WINDOW_DAYS || '60',
             10,
         ),
+        // How often orders whose webhook never arrived are fetched and recovered.
+        reconcileMinutes: Number.parseFloat(process.env.SHOPIFY_RECONCILE_MINUTES || '30'),
         // MUST mirror [access_scopes] in the public app's shopify.app.toml —
         // with include_config_on_deploy, Shopify grants what the TOML declares,
         // regardless of the scope param in the authorize URL.
@@ -52,15 +101,128 @@ export default () => ({
             'read_products,write_products,read_orders,read_all_orders,write_orders,read_customers,write_customers,read_inventory,write_inventory,read_locations,read_reports,read_draft_orders,write_draft_orders,read_merchant_managed_fulfillment_orders,write_merchant_managed_fulfillment_orders,read_assigned_fulfillment_orders,write_assigned_fulfillment_orders,read_third_party_fulfillment_orders,write_third_party_fulfillment_orders,write_fulfillments,write_pixels,read_customer_events',
     },
     instagram: {
+        // The Meta app itself. Only still read to verify webhook signatures
+        // and to unsubscribe rows connected with the old Facebook Login flow.
         appId: process.env.META_APP_ID,
         appSecret: process.env.META_APP_SECRET,
+        // Instagram Login ("API setup with Instagram login"). Meta shows these
+        // as the "Instagram app ID / secret" — a different pair from META_APP_*
+        // even though they live on the same app.
+        loginAppId: process.env.INSTAGRAM_APP_ID,
+        loginAppSecret: process.env.INSTAGRAM_APP_SECRET,
         webhookVerifyToken: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN,
+        // The same version the shared Graph client uses, so the two can no
+        // longer drift apart.
+        graphVersion:
+            process.env.META_GRAPH_VERSION ?? process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
     },
     whatsapp: {
         appId: process.env.META_APP_ID,
         appSecret: process.env.META_APP_SECRET,
         configId: process.env.WHATSAPP_CONFIG_ID,
         graphVersion: process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
+        webhookVerifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+    },
+    // Facebook Pages (Messenger) and the Instagram accounts linked to them,
+    // connected through Facebook Login for Business with its own configuration.
+    messenger: {
+        configId: process.env.MESSENGER_CONFIG_ID,
+        webhookVerifyToken: process.env.MESSENGER_WEBHOOK_VERIFY_TOKEN,
+    },
+    // One Meta app serves WhatsApp, Instagram and (later) Marketing. The
+    // outbound rate limiter keys the app-level wallet on this id, and the
+    // shared Graph client reads one version for every surface.
+    meta: {
+        appId: process.env.META_APP_ID,
+        // Signs every webhook delivery (X-Hub-Signature-256) for all three surfaces.
+        appSecret: process.env.META_APP_SECRET,
+        // Only ever changed to point local and CI runs at a stand-in Graph API.
+        graphBaseUrl: process.env.META_GRAPH_BASE_URL || 'https://graph.facebook.com',
+        graphVersion:
+            process.env.META_GRAPH_VERSION ?? process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
+    },
+    // Outbound API rate limiter (server -> Shopify / Meta). See
+    // src/rate-limit/README-in-code: rate-limiter.service.ts.
+    //
+    //   off      no Redis calls, today's behaviour (kill switch)
+    //   observe  decide + log, never wait — compare against real THROTTLEDs
+    //   enforce  reserve before every request, park jobs on long waits
+    rateLimit: {
+        mode: (process.env.RATE_LIMIT_MODE ?? 'observe') as 'enforce' | 'observe' | 'off',
+        // Cap on one limiter Redis call before that request proceeds unmetered.
+        // Measured against the dev Upstash: median ~50ms, p90 ~65ms, but a tail
+        // to ~600ms. At 250ms a few percent of calls timed out; three in a row
+        // are still needed before the limiter concludes Redis is down.
+        redisTimeoutMs: Number.parseInt(process.env.RATE_LIMIT_REDIS_TIMEOUT_MS ?? '500', 10),
+        // How long reserve() may hold the caller in-process per priority
+        // (1 interactive, 5 normal, 10 bulk), and above what single wait a
+        // job is parked instead of slept. Interactive never parks on length.
+        wait: {
+            maxWaitMs: { 1: 10_000, 5: 5_000, 10: 2_000 },
+            parkThresholdMs: { 1: Number.POSITIVE_INFINITY, 5: 5_000, 10: 2_000 },
+        },
+        shopify: {
+            defaultCostHint: Number.parseInt(process.env.RATE_LIMIT_SHOPIFY_DEFAULT_COST ?? '50', 10),
+            // Standard plan. A shop's real numbers overwrite these on the first
+            // reply, so they only matter for the very first request.
+            maximumAvailable: 1000,
+            restoreRate: 50,
+            // Fraction of the bucket each priority must leave untouched. Bulk
+            // stops at 30% so a user's click always finds room.
+            watermarks: {
+                1: 0.05,
+                5: 0.15,
+                10: Number.parseFloat(process.env.RATE_LIMIT_SHOPIFY_BULK_WATERMARK ?? '0.30'),
+            },
+            // Concurrent requests per shop per priority. Bulk is capped low so
+            // one big merchant cannot occupy every worker slot.
+            inflightCap: { 1: 8, 5: 4, 10: 2 },
+            leaseTtlMs: 45_000,
+            keyTtlS: 7 * 24 * 3600,
+            breakerMinMs: 5_000,
+            breakerMaxMs: 120_000,
+        },
+        meta: {
+            // Percent windows; aim to stay under ~75% at bulk priority.
+            watermarks: { 1: 0.05, 5: 0.15, 10: 0.25 },
+            inflightCap: { 1: 8, 5: 4, 10: 2 },
+            // Percent of the window one call costs, before any is learned.
+            defaultPpc: 0.5,
+            // WhatsApp Cloud API per-phone-number throughput.
+            phoneMps: Number.parseInt(process.env.RATE_LIMIT_META_PHONE_MPS ?? '80', 10),
+            windowSeconds: 3600,
+            leaseTtlMs: 45_000,
+            keyTtlS: 7 * 24 * 3600,
+            breakerMinMs: 30_000,
+            breakerMaxMs: 900_000,
+        },
+    },
+    templatePack: {
+        // Create Collabo's recommended WhatsApp templates at start-up on every
+        // connected WhatsApp account that does not have them yet (see
+        // TemplatePackBackfill). On unless set to "false"; a test harness whose
+        // workspaces must keep exactly the templates it made turns it off.
+        autoEnable: process.env.TEMPLATE_PACK_AUTO_ENABLE !== 'false',
+    },
+    inventory: {
+        // Switch every workspace still on a single stock quantity to stock
+        // locations at start-up (see LocationsSwitchOver). On unless set to
+        // "false"; a test harness that needs a legacy workspace turns it off.
+        locationsAutoEnable: process.env.LOCATIONS_AUTO_ENABLE !== 'false',
+    },
+    queues: {
+        // Read at decoration time in the processors (process.env directly) —
+        // kept here too so the value is visible alongside its neighbours.
+        shopifyPushConcurrency: Number.parseInt(process.env.SHOPIFY_PUSH_CONCURRENCY ?? '3', 10),
+        whatsappConcurrency: Number.parseInt(process.env.WHATSAPP_MESSAGING_CONCURRENCY ?? '3', 10),
+    },
+    messaging: {
+        // Private chat media. Must be a persistent volume in production.
+        mediaDir: process.env.MESSAGING_MEDIA_DIR || undefined,
+        // Signs short-lived media links; rotating it only expires open links.
+        linkSecret: process.env.MESSAGING_MEDIA_SECRET || process.env.JWT_ACCESS_SECRET,
+        // Converts recorded voice notes; the Docker images install it.
+        ffmpegPath: process.env.FFMPEG_PATH || 'ffmpeg',
     },
     encryptionKey: process.env.ENCRYPTION_KEY || undefined,
     superAdminEmails: (process.env.SUPER_ADMIN_EMAILS || '')

@@ -4,6 +4,8 @@ const FAST_FOR_MS = 30_000;
 const SLOW_MS = 10_000;
 /** A job that has not settled by now is lost. Stop asking rather than poll forever. */
 const GIVE_UP_AFTER_MS = 15 * 60_000;
+/** Past that, for pollers told to wait longer (Meta can take a day to review a template). */
+const LATE_MS = 60_000;
 
 /**
  * Builds a `refetchInterval` that polls only while `isBusy(data)` is true:
@@ -15,10 +17,13 @@ const GIVE_UP_AFTER_MS = 15 * 60_000;
  * mean a query is otherwise read once. Without polling, a "Syncing" badge
  * stays on screen until the page is reloaded.
  *
+ * `giveUpAfterMs` keeps polling past 15 minutes, once a minute, for work that
+ * is slow but not lost.
+ *
  * Create it ONCE at module level, never inside a hook body: the "busy since"
  * clock lives in this closure, and a new one per render would never expire.
  */
-export function pollWhile<TData>(isBusy: (data: TData | undefined) => boolean) {
+export function pollWhile<TData>(isBusy: (data: TData | undefined) => boolean, { giveUpAfterMs = GIVE_UP_AFTER_MS } = {}) {
   const busySince = new WeakMap<object, number>();
 
   return (query: { state: { data: TData | undefined } }): number | false => {
@@ -30,7 +35,7 @@ export function pollWhile<TData>(isBusy: (data: TData | undefined) => boolean) {
     busySince.set(query, since);
 
     const elapsed = Date.now() - since;
-    if (elapsed > GIVE_UP_AFTER_MS) return false;
-    return elapsed < FAST_FOR_MS ? FAST_MS : SLOW_MS;
+    if (elapsed > giveUpAfterMs) return false;
+    return elapsed < FAST_FOR_MS ? FAST_MS : elapsed < GIVE_UP_AFTER_MS ? SLOW_MS : LATE_MS;
   };
 }

@@ -36,8 +36,8 @@ export function SectionCard({
     return (
         <Card className={cn("gap-0 py-0 shadow-sm ring-border", className)}>
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
-                <div className="flex items-center gap-2">
-                    {icon}
+                <div className="flex items-start gap-2">
+                    {icon && <span className="mt-0.5 flex shrink-0">{icon}</span>}
                     <div>
                         <CardTitle className="text-body font-semibold">{title}</CardTitle>
                         {description && (

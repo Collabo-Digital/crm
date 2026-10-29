@@ -1,11 +1,19 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ChannelPlatform, ChannelStatus, OrderFulfillmentStatus, Prisma } from '@prisma/client';
+import {
+  ChannelPlatform,
+  ChannelStatus,
+  OrderFinancialStatus,
+  OrderFulfillmentStatus,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { mergeJsonMetadata } from '../common/utils/jsonb-merge.util';
+import { sanitizeProductHtml } from '../common/utils/sanitize-product-html.util';
 import { countryCodeOf, normalizePhone } from '../common/phone.util';
 import { defaultCountryFor, toShopifyAddress } from './shopify-address.util';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { ShopifyGraphqlClient, ShopifyGraphqlError, ShopifyAuthContext } from './shopify-graphql.client';
+import { Priority } from '../rate-limit/rate-limit.types';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import {
@@ -22,6 +30,8 @@ import {
   ProductSetResponse,
   PRODUCT_UPDATE_MUTATION,
   ProductUpdatePushResponse,
+  PRODUCT_DESCRIPTION_QUERY,
+  ProductDescriptionResponse,
   PRODUCT_VARIANTS_BULK_UPDATE_MUTATION,
   ProductVariantsBulkUpdateResponse,
   PRODUCT_VARIANTS_BULK_CREATE_MUTATION,
@@ -123,6 +133,42 @@ export function isStalePendingSync(
   const at = Date.parse(sync.queuedAt);
   return !Number.isFinite(at) || now - at > STALE_PENDING_SYNC_MS;
 }
+
+/**
+ * Why a CRM order must not be pushed, or null when it may be.
+ *
+ * The push creates a PAID Shopify order with a SALE transaction for the full
+ * total and decrements Shopify stock, and a Shopify order cannot be deleted.
+ * A cancelled, refunded or voided sale would arrive as a live paid order that
+ * fulfilment apps may ship, and its echo would revive it in the CRM.
+ */
+export function unpushableOrderReason(order: {
+  cancelledAt: Date | null;
+  financialStatus: OrderFinancialStatus;
+}): string | null {
+  if (order.cancelledAt) {
+    return 'This order was cancelled, so it is not sent to Shopify.';
+  }
+  if (order.financialStatus === OrderFinancialStatus.REFUNDED) {
+    return 'This order was refunded, so it is not sent to Shopify.';
+  }
+  if (order.financialStatus === OrderFinancialStatus.VOIDED) {
+    return 'This order was voided, so it is not sent to Shopify.';
+  }
+  return null;
+}
+
+/// The discount code a pushed CRM order carries in Shopify for its line
+/// discounts. Shown on the Shopify order; not a code a shopper can use.
+export const CRM_DISCOUNT_CODE = 'CRM-DISCOUNT';
+
+/** Prisma filter for the orders `unpushableOrderReason` lets through. */
+export const PUSHABLE_ORDER_WHERE: Prisma.OrderWhereInput = {
+  cancelledAt: null,
+  financialStatus: {
+    notIn: [OrderFinancialStatus.REFUNDED, OrderFinancialStatus.VOIDED],
+  },
+};
 
 /** inventorySetQuantities rejected a write because the item is not stocked
  *  at that location. Message fallback covers responses without `code`. */
@@ -226,6 +272,46 @@ export function shopifyOrderCustomer(
 }
 
 /**
+ * One SALE per payment taken at the point of sale, as the push sends them.
+ *
+ * Payments are taken against the bill rounded to the rupee while the order's
+ * total stays exact, so the amounts are fitted to the total: a paid bill's
+ * transactions add up to exactly the total, and a part-paid one's stay below
+ * it — otherwise Shopify would mark a bill with a balance still due as paid.
+ */
+export function posSaleTransactions(
+  order: {
+    totalPrice: Prisma.Decimal;
+    financialStatus: OrderFinancialStatus;
+    payments: Array<{ method: string; amount: Prisma.Decimal }>;
+  },
+  storeLocationId: number | null,
+): Array<{ amount: string; gateway: string; locationId: string | null }> {
+  const total = new Prisma.Decimal(order.totalPrice);
+  const paid = order.financialStatus === OrderFinancialStatus.PAID;
+  // A part-paid bill whose payments cover the exact total owes only round-off.
+  const ceiling = paid ? total : Prisma.Decimal.max(total.minus('0.01'), 0);
+  const amounts: Array<{ amount: Prisma.Decimal; method: string }> = [];
+  let sent = new Prisma.Decimal(0);
+  for (const p of order.payments) {
+    const amount = Prisma.Decimal.min(new Prisma.Decimal(p.amount), ceiling.minus(sent));
+    if (amount.lte(0)) break;
+    amounts.push({ amount, method: p.method });
+    sent = sent.plus(amount);
+  }
+  // Paid against a bill rounded down: the last payment carries the paise.
+  if (paid && amounts.length > 0 && sent.lt(total)) {
+    amounts[amounts.length - 1].amount = amounts[amounts.length - 1].amount.plus(total.minus(sent));
+  }
+  const locationId = storeLocationId ? ShopifyGraphqlClient.toGid('Location', storeLocationId) : null;
+  return amounts.map((a) => ({
+    amount: a.amount.toFixed(2),
+    gateway: `manual_${a.method.toLowerCase()}`,
+    locationId,
+  }));
+}
+
+/**
  * Pushes a locally-created (offline / in-store) order to the merchant's
  * connected Shopify store. Inventory is decremented automatically by Shopify
  * via `inventory_behaviour: 'decrement_obeying_policy'` — we do NOT make a
@@ -272,18 +358,17 @@ export class ShopifyPushService {
 
   /** Resolve the org's connected SHOPIFY channel (if any). Null = nothing to push. */
   async findShopifyChannel(orgId: string) {
-    return this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.SHOPIFY,
-        },
-      },
+    return this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
   }
 
   /** Main entry point — invoked by the BullMQ processor. */
-  async pushOrder(orderId: string, orgId: string): Promise<void> {
+  async pushOrder(
+    orderId: string,
+    orgId: string,
+    priority: Priority = Priority.NORMAL,
+  ): Promise<void> {
     const channel = await this.findShopifyChannel(orgId);
     if (!channel || channel.status !== ChannelStatus.CONNECTED) {
       this.logger.warn(
@@ -304,6 +389,8 @@ export class ShopifyPushService {
         customer: true,
         channel: { select: { platform: true } },
         lineItems: { include: { variant: true } },
+        dispatchWarehouse: { select: { shopifyLocationId: true } },
+        payments: { orderBy: { createdAt: 'asc' } },
       },
     });
     if (!order) {
@@ -329,21 +416,37 @@ export class ShopifyPushService {
       );
       return;
     }
+    // Re-checked here, not only at enqueue: the order can be cancelled while
+    // its job waits in the queue.
+    const unpushable = unpushableOrderReason(order);
+    if (unpushable) {
+      this.logger.log(`Order ${orderId} not pushed: ${unpushable}`);
+      await this.recordFailure(orderId, orgId, unpushable, /* incrementAttempt */ false);
+      return;
+    }
 
     const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(
       channel.id,
     );
 
-    // Resolve (or cache) the primary location id. Shopify decrements inventory
+    // The store the goods left from when it is a Shopify location, else the
+    // primary (resolved once and cached). Shopify decrements inventory
     // against the location set on the order's fulfillment.
-    const locationId = await this.resolveLocationId(channel.id, shopDomain, token);
+    const storeLocationId = Number(order.dispatchWarehouse?.shopifyLocationId) || null;
+    const locationId =
+      storeLocationId ?? (await this.resolveLocationId(channel.id, shopDomain, token));
 
     // Build the orderCreate input. Variants with a real Shopify variant_id
     // (externalId on the local ProductVariant) reference that variant by GID.
     // CRM-only items (no Shopify mapping; externalId starts with `manual_`)
     // fall back to a custom line item — `{title, priceSet, quantity}` without
     // a variantId records the item as a one-off on the order.
-    const auth: ShopifyAuthContext = { shopDomain, accessToken: token };
+    const auth: ShopifyAuthContext = {
+      shopDomain,
+      accessToken: token,
+      channelId: channel.id,
+      priority,
+    };
     const currency = order.currency;
     const money = (amount: string) => ({ shopMoney: { amount, currencyCode: currency } });
 
@@ -374,6 +477,18 @@ export class ShopifyPushService {
 
     const grandTotal = order.totalPrice.toString();
 
+    // Line prices go up undiscounted while the GST on `taxLines` and the SALE
+    // transaction are on the discounted value, so without the discount
+    // Shopify's total came out higher than the amount captured: the order
+    // landed PARTIALLY_PAID and its echo inflated the CRM order past its GST
+    // invoice. orderCreate has no per-line discount, so the lines' discounts
+    // go up as one fixed amount off the order (Shopify allocates it across the
+    // lines); the totals then match the CRM to the paisa.
+    const lineDiscountTotal = order.lineItems.reduce(
+      (sum, li) => sum.plus(li.totalDiscount),
+      new Prisma.Decimal(0),
+    );
+
     // A phone Shopify can't parse must not block the sale reaching Shopify —
     // send the order without it. The number itself stays out of the log.
     const phone = shopifyOrderPhone(order);
@@ -391,8 +506,9 @@ export class ShopifyPushService {
 
     const orderInput: Record<string, unknown> = {
       currency,
-      // Line prices are pre-tax; the tax rides on `taxLines` above.
-      taxesIncluded: false,
+      // The tax rides on `taxLines` above; line prices are pre-tax unless the
+      // sale was priced with tax included.
+      taxesIncluded: order.taxesIncluded === true,
       email: order.customer?.email ?? undefined,
       phone: phone.e164 ?? undefined,
       ...(shippingAddress && { shippingAddress }),
@@ -402,24 +518,58 @@ export class ShopifyPushService {
       sourceName: 'collabo-crm',
       sourceIdentifier: String(order.id || ''),
       lineItems,
+      ...(lineDiscountTotal.gt(0)
+        ? {
+          discountCode: {
+            itemFixedDiscountCode: {
+              code: CRM_DISCOUNT_CODE,
+              amountSet: money(lineDiscountTotal.toFixed(2)),
+            },
+          },
+        }
+        : {}),
       ...(customerBlock ? { customer: customerBlock } : {}),
       // A successful SALE transaction covering the total marks the order paid.
-      transactions: [
-        {
-          kind: 'SALE',
-          status: 'SUCCESS',
-          amountSet: money(grandTotal),
-          gateway: this.resolveGateway(order.metadata),
-        },
-      ],
+      // A point-of-sale bill sends what was actually taken instead.
+      transactions:
+        order.posSale || order.payments?.length
+          ? posSaleTransactions(order, storeLocationId).map((t) => ({
+            kind: 'SALE',
+            status: 'SUCCESS',
+            amountSet: money(t.amount),
+            gateway: t.gateway,
+            ...(t.locationId ? { locationId: t.locationId } : {}),
+          }))
+          : [
+            {
+              kind: 'SALE',
+              status: 'SUCCESS',
+              amountSet: money(grandTotal),
+              gateway: this.resolveGateway(order.metadata),
+            },
+          ],
     };
+
+    // A counter sale that was not pushed at sale time already had its stock
+    // sent to Shopify as an absolute figure (createOfflineOrder records that
+    // as `shopifyStockPushed`). Decrementing again would take the units off
+    // twice, and the inventory webhook would copy the drop back into the CRM.
+    //
+    // In a workspace with stock locations every sale carries the flag: its
+    // stock left one location, which had its own figure pushed when it is
+    // linked to Shopify — and when it is not, Shopify's stock must not change
+    // for it at all.
+    const stockAlreadyPushed =
+      !!order.metadata &&
+      typeof order.metadata === 'object' &&
+      (order.metadata as Record<string, unknown>).shopifyStockPushed === true;
 
     const result = await this.graphql.request<OrderCreatePushResponse>(auth, ORDER_CREATE_MUTATION, {
       order: orderInput,
       options: {
         sendReceipt: false,
         sendFulfillmentReceipt: false,
-        inventoryBehaviour: 'DECREMENT_OBEYING_POLICY',
+        inventoryBehaviour: stockAlreadyPushed ? 'BYPASS' : 'DECREMENT_OBEYING_POLICY',
       },
     });
     ShopifyGraphqlClient.throwIfUserErrors(
@@ -752,7 +902,11 @@ export class ShopifyPushService {
    * Not carried over from the REST era: per-variant image linkage — merchants
    * can set variant images in Shopify Admin if needed.
    */
-  async pushProduct(productId: string, orgId: string): Promise<void> {
+  async pushProduct(
+    productId: string,
+    orgId: string,
+    priority: Priority = Priority.NORMAL,
+  ): Promise<void> {
     const shopify = await this.findShopifyChannel(orgId);
     if (!shopify || shopify.status !== ChannelStatus.CONNECTED) {
       this.logger.warn(
@@ -821,6 +975,7 @@ export class ShopifyPushService {
         oversellGlobally,
         trackGlobally,
         pushGeneratedBarcodes,
+        priority,
       );
       // Throws when Shopify refuses one, which fails the push with Shopify's
       // own reason instead of reporting a sync that did not fully happen.
@@ -838,8 +993,20 @@ export class ShopifyPushService {
     // One-shot create via productSet — options, variants, images, per-variant
     // inventory quantities AND inventory-item fields (cost / HS code / country
     // of origin / weight / tracked) all ride in a single synchronous mutation.
-    const auth: ShopifyAuthContext = { shopDomain, accessToken: token };
-    const locationId = await this.resolveLocationId(shopify.id, shopDomain, token);
+    const auth: ShopifyAuthContext = {
+      shopDomain,
+      accessToken: token,
+      channelId: shopify.id,
+      priority,
+    };
+    // Where stock is held per location, the variant's quantity is a total over
+    // locations some of which may not be on Shopify. Seeding it at the primary
+    // would put stock there that is not there, so nothing is seeded; each
+    // linked location's own figure is sent after the create, below.
+    const warehousing = await this.inventoryLedger.isWarehousingEnabled(orgId);
+    const locationId = warehousing
+      ? null
+      : await this.resolveLocationId(shopify.id, shopDomain, token);
     const input = this.buildProductSetInput(
       product,
       oversellGlobally,
@@ -923,14 +1090,11 @@ export class ShopifyPushService {
 
     await this.recordProductSuccess(productId, orgId, remoteProductId);
 
-    // productSet seeded the whole quantity at the primary location, because
-    // that is the only location its per-variant input can name. For an org
-    // running multi-location warehouses that is the wrong distribution — the
-    // stock may live in a different warehouse entirely — so redistribute now
-    // that the rebadge transaction above has persisted each inventoryItemId.
-    // Skipped for non-warehousing orgs, where the seed is already correct and
-    // this would be a redundant mutation.
-    if (await this.inventoryLedger.isWarehousingEnabled(orgId)) {
+    // Now that the rebadge above has persisted each inventoryItemId, send each
+    // linked location its own stock — the same push an Inventory adjustment
+    // makes, so stock at a location not linked to Shopify stays off it.
+    // Legacy orgs were already seeded at the primary by productSet.
+    if (warehousing) {
       await this.pushAvailability(orgId, product.variants.map((v) => v.id));
     }
     // Locations chosen before the product was ever on Shopify. The quantity
@@ -1064,7 +1228,7 @@ export class ShopifyPushService {
 
     return {
       title: product.title,
-      ...(product.bodyHtml ? { descriptionHtml: product.bodyHtml } : {}),
+      ...(product.bodyHtml ? { descriptionHtml: sanitizeProductHtml(product.bodyHtml) } : {}),
       ...(product.vendor ? { vendor: product.vendor } : {}),
       ...(product.productType ? { productType: product.productType } : {}),
       status: product.status,
@@ -1147,13 +1311,15 @@ export class ShopifyPushService {
     oversellGlobally: boolean,
     trackGlobally: boolean,
     pushGeneratedBarcodes: boolean,
+    priority: Priority = Priority.NORMAL,
   ): Promise<void> {
-    const auth: ShopifyAuthContext = { shopDomain, accessToken: token };
+    const auth: ShopifyAuthContext = { shopDomain, accessToken: token, channelId, priority };
     // The stock push below resolves its own target location(s) — per mapped
     // warehouse when the org runs multi-location, primary otherwise.
     const productGid = ShopifyGraphqlClient.toGid('Product', product.externalId);
 
     // Top-level product fields.
+    const description = await this.descriptionUpdate(auth, productGid, product.bodyHtml);
     const updateRes = await this.graphql.request<ProductUpdatePushResponse>(
       auth,
       PRODUCT_UPDATE_MUTATION,
@@ -1161,7 +1327,7 @@ export class ShopifyPushService {
         input: {
           id: productGid,
           title: product.title,
-          descriptionHtml: product.bodyHtml ?? null,
+          ...description,
           vendor: product.vendor ?? null,
           productType: product.productType ?? null,
           status: product.status,
@@ -1508,7 +1674,12 @@ export class ShopifyPushService {
    * return restock). Variants that never existed on Shopify (manual_ external
    * ids without an inventory item) are skipped — nothing to sync.
    */
-  async pushAvailability(orgId: string, variantIds: string[]): Promise<void> {
+  async pushAvailability(
+    orgId: string,
+    variantIds: string[],
+    priority: Priority = Priority.NORMAL,
+    warehouseId?: string,
+  ): Promise<void> {
     if (variantIds.length === 0) return;
     const shopify = await this.findShopifyChannel(orgId);
     if (!shopify || shopify.status !== ChannelStatus.CONNECTED) {
@@ -1518,7 +1689,12 @@ export class ShopifyPushService {
       return;
     }
     const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(shopify.id);
-    const auth: ShopifyAuthContext = { shopDomain, accessToken: token };
+    const auth: ShopifyAuthContext = {
+      shopDomain,
+      accessToken: token,
+      channelId: shopify.id,
+      priority,
+    };
 
     const variants = await this.prisma.productVariant.findMany({
       where: {
@@ -1543,11 +1719,91 @@ export class ShopifyPushService {
       token,
       variants,
       invIdByVariant,
+      warehouseId,
     );
 
     if (quantities.length > 0) {
       await this.setInventoryQuantities(auth, quantities);
     }
+  }
+
+  /**
+   * Send one location's stock to the Shopify location it is linked to, for
+   * every tracked variant on Shopify — "keep Collabo's counts" when a location
+   * that already holds stock is linked. A variant the location holds no row
+   * for is sent as 0: that is Collabo's count there.
+   */
+  async pushWarehouseStock(
+    orgId: string,
+    warehouseId: string,
+    priority: Priority = Priority.NORMAL,
+  ): Promise<void> {
+    const warehouse = await this.prisma.warehouse.findFirst({
+      where: { id: warehouseId, organizationId: orgId },
+      select: { shopifyLocationId: true },
+    });
+    if (!warehouse?.shopifyLocationId) return;
+    // A location holding nothing has no counts worth keeping; sending its
+    // zeros would wipe the Shopify location's stock instead.
+    const holdsStock = await this.prisma.stockLevel.findFirst({
+      where: {
+        warehouseId,
+        OR: [{ available: { not: 0 } }, { reserved: { not: 0 } }, { qc: { not: 0 } }, { damaged: { not: 0 } }],
+      },
+      select: { id: true },
+    });
+    if (!holdsStock) {
+      this.logger.log(`Location ${warehouseId} holds no stock; keeping Shopify's counts instead.`);
+      return;
+    }
+    const shopify = await this.findShopifyChannel(orgId);
+    if (!shopify || shopify.status !== ChannelStatus.CONNECTED) return;
+    const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(shopify.id);
+    const auth: ShopifyAuthContext = { shopDomain, accessToken: token, channelId: shopify.id, priority };
+    const locationId = ShopifyGraphqlClient.toGid('Location', warehouse.shopifyLocationId);
+
+    // Shopify keeps no count for an untracked item, so there is none to set.
+    const trackGlobally = (await this.orgSettings.getProductSettings(orgId)).trackQuantityGlobally === true;
+    // inventorySetQuantities takes at most 250 writes per call.
+    const BATCH = 200;
+    let cursor: string | undefined;
+    let sent = 0;
+    for (;;) {
+      const variants = await this.prisma.productVariant.findMany({
+        where: {
+          organizationId: orgId,
+          inventoryItemId: { not: null },
+          ...(trackGlobally ? {} : { trackQuantity: true }),
+          product: { deletedAt: null },
+        },
+        orderBy: { id: 'asc' },
+        take: BATCH,
+        ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+        select: { id: true, inventoryItemId: true },
+      });
+      if (variants.length === 0) break;
+      const levels = await this.prisma.stockLevel.findMany({
+        where: { warehouseId, locationId: null, variantId: { in: variants.map((v) => v.id) } },
+        select: { variantId: true, available: true },
+      });
+      const available = new Map(levels.map((l) => [l.variantId, l.available]));
+      // Strict: the pull that follows overwrites with Shopify's figures, so a
+      // write that did not land must fail the job before that pull runs.
+      await this.setInventoryQuantities(
+        auth,
+        variants.map((v) => ({
+          inventoryItemId: ShopifyGraphqlClient.toGid('InventoryItem', v.inventoryItemId as string),
+          locationId,
+          quantity: available.get(v.id) ?? 0,
+        })),
+        { strict: true },
+      );
+      sent += variants.length;
+      cursor = variants[variants.length - 1].id;
+    }
+    this.logger.log(
+      `Sent ${sent} stock figure(s) of location ${warehouseId} to Shopify location ${warehouse.shopifyLocationId} (org ${orgId})`,
+    );
   }
 
   /**
@@ -1584,15 +1840,22 @@ export class ShopifyPushService {
    *    `available` to the location it mirrors. Pushing the org-wide total to
    *    the primary (as this did originally) left other locations untouched, so
    *    Shopify's displayed total became our number PLUS whatever they held.
-   *  - **Otherwise** → legacy orgs, and warehousing orgs whose locations sync
-   *    has not run yet. Falls back to the previous behaviour exactly.
+   *  - **Warehousing on, nothing linked** → nothing. A Shopify location's
+   *    stock syncs only once the merchant has decided what it shares stock
+   *    with; until then it is Shopify's alone.
+   *  - **Legacy orgs** → the previous behaviour exactly: the cached quantity
+   *    at the primary location.
+   *
+   * `onlyWarehouseId` narrows the push to one location — a sale or restock
+   * there says nothing new about the others.
    *
    * A variant with no stock row *at a mapped warehouse* emits nothing for that
    * location — symmetric with the pull, which treats an absent inventory level
    * as "not stocked here" rather than as zero. But a variant with no stock row
    * at ALL is not covered by the bucket model (created after the enable seed,
    * or trackQuantity:false so never seeded), and falls back to the primary
-   * location so it keeps syncing rather than silently dropping out.
+   * location — when that location is linked — so it keeps syncing rather than
+   * silently dropping out.
    */
   private async buildAvailabilityQuantities(
     orgId: string,
@@ -1601,6 +1864,7 @@ export class ShopifyPushService {
     token: string,
     variants: Array<{ id: string; inventoryQuantity: number }>,
     invIdByVariant: Map<string, string>,
+    onlyWarehouseId?: string,
   ): Promise<Array<{ inventoryItemId: string; locationId: string; quantity: number }>> {
     // The pre-multi-location behaviour, kept as a named helper because two
     // callers need it: whole-org fallback, and per-variant fallback below.
@@ -1627,18 +1891,18 @@ export class ShopifyPushService {
     };
 
     const warehousing = await this.inventoryLedger.isWarehousingEnabled(orgId);
-    const mapped = warehousing
-      ? await this.prisma.warehouse.findMany({
-          where: {
-            organizationId: orgId,
-            shopifyLocationId: { not: null },
-            isActive: true,
-          },
-          select: { id: true, shopifyLocationId: true },
-        })
-      : [];
+    if (!warehousing) return pushAtPrimary(variants);
+    const mapped = await this.prisma.warehouse.findMany({
+      where: {
+        organizationId: orgId,
+        shopifyLocationId: { not: null },
+        isActive: true,
+        ...(onlyWarehouseId ? { id: onlyWarehouseId } : {}),
+      },
+      select: { id: true, shopifyLocationId: true },
+    });
 
-    if (mapped.length === 0) return pushAtPrimary(variants);
+    if (mapped.length === 0) return [];
 
     const locationByWarehouse = new Map(
       mapped.map((w) => [w.id, w.shopifyLocationId as string]),
@@ -1675,6 +1939,7 @@ export class ShopifyPushService {
     // locations, and wrote its org-wide total onto the primary Shopify
     // location — stock that is not there. Once "Edit locations" could take a
     // variant out of its last Shopify location, every sync of it did that.
+    if (onlyWarehouseId) return perLocation;
     const variantsStockedAnywhere = await this.prisma.stockLevel.findMany({
       where: { variantId: { in: variants.map((v) => v.id) } },
       select: { variantId: true },
@@ -1683,7 +1948,10 @@ export class ShopifyPushService {
     const covered = new Set(variantsStockedAnywhere.map((level) => level.variantId));
     const uncovered = variants.filter((v) => !covered.has(v.id));
     if (uncovered.length > 0) {
-      perLocation.push(...(await pushAtPrimary(uncovered)));
+      const primary = await this.resolveLocationId(channelId, shopDomain, token);
+      if (primary && mapped.some((w) => w.shopifyLocationId === String(primary))) {
+        perLocation.push(...(await pushAtPrimary(uncovered)));
+      }
     }
 
     return perLocation;
@@ -1703,6 +1971,9 @@ export class ShopifyPushService {
   private async setInventoryQuantities(
     auth: ShopifyAuthContext,
     quantities: Array<{ inventoryItemId: string; locationId: string; quantity: number }>,
+    // Throw instead of logging — for a caller whose next step must not run
+    // unless every write landed. A rate limit then reaches the processor too.
+    { strict = false }: { strict?: boolean } = {},
   ): Promise<void> {
     try {
       let errors = await this.sendInventoryQuantities(auth, quantities);
@@ -1743,14 +2014,16 @@ export class ShopifyPushService {
         // here — that is the detail that makes it diagnosable, and it used to
         // be absent entirely.
         const locations = [...new Set(quantities.map((q) => q.locationId))].join(', ');
-        this.logger.error(
+        const message =
           `inventorySetQuantities rejected ${errors.length} of ${quantities.length} quantity write(s) ` +
-          `across location(s) ${locations}: ${errors.map((e) => e.message).join('; ')}`,
-        );
+          `across location(s) ${locations}: ${errors.map((e) => e.message).join('; ')}`;
+        if (strict) throw new Error(message);
+        this.logger.error(message);
       } else {
         this.logger.log(`Inventory set for ${quantities.length} variant/location pair(s)`);
       }
     } catch (err) {
+      if (strict) throw err;
       this.logger.error(
         `Inventory update failed for ${quantities.length} quantity write(s): ${err instanceof Error ? err.message : err}`,
       );
@@ -1928,6 +2201,31 @@ export class ShopifyPushService {
       );
       return null;
     }
+  }
+
+  /**
+   * The `descriptionHtml` part of a productUpdate: the stored description,
+   * sanitised, or nothing when that is only the sanitised form of what
+   * Shopify already holds.
+   *
+   * Descriptions pulled from Shopify are stored sanitised, so a push for an
+   * unrelated edit (a price, say) would otherwise strip whatever markup the
+   * merchant added in Shopify Admin, such as an embedded video.
+   */
+  private async descriptionUpdate(
+    auth: ShopifyAuthContext,
+    productGid: string,
+    bodyHtml: string | null,
+  ): Promise<{ descriptionHtml?: string | null }> {
+    const local = bodyHtml == null ? null : sanitizeProductHtml(bodyHtml);
+    const res = await this.graphql.request<ProductDescriptionResponse>(
+      auth,
+      PRODUCT_DESCRIPTION_QUERY,
+      { id: productGid },
+    );
+    const remote = res.product?.descriptionHtml ?? '';
+    if (sanitizeProductHtml(remote) === (local ?? '')) return {};
+    return { descriptionHtml: local };
   }
 
   /**
@@ -2289,7 +2587,7 @@ export class ShopifyPushService {
    * Already-SYNCED and currently-PENDING products are left alone so we don't
    * race in-flight jobs or re-push unchanged data.
    */
-  async bulkPushManualProducts(orgId: string): Promise<void> {
+  async planBulkProductPush(orgId: string): Promise<string[]> {
     // Pull every product for the org with its channel platform; filter in
     // app code because Prisma JSON-path queries against optional nested
     // fields are awkward, and the row count is bounded by the catalog size.
@@ -2321,49 +2619,28 @@ export class ShopifyPushService {
 
     if (toPush.length === 0) {
       this.logger.log(`Org ${orgId} has no products pending Shopify push.`);
-      return;
+      return [];
     }
 
     this.logger.log(
-      `Bulk-pushing ${toPush.length} pending product(s) for org ${orgId}…`,
+      `Planning bulk push of ${toPush.length} pending product(s) for org ${orgId}.`,
     );
-
-    let succeeded = 0;
-    let failed = 0;
-    for (const p of toPush) {
-      try {
-        await this.pushProduct(p.id, orgId);
-        succeeded++;
-      } catch (err) {
-        failed++;
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.error(`Bulk push: product ${p.id} failed: ${msg}`);
-        await this.recordProductFailure(p.id, orgId, msg).catch(() => undefined);
-      }
-    }
-
-    this.logger.log(
-      `Bulk product push complete for org ${orgId}: ${succeeded} succeeded, ${failed} failed.`,
-    );
+    return toPush.map((p) => p.id);
   }
 
   /**
-   * Push every unsynced offline (MANUAL channel) order to the connected
-   * Shopify store. Mirror of `bulkPushManualProducts`. Triggered by the
-   * channels-page Sync action after the pull step completes.
+   * List every unsynced offline (MANUAL channel) order that should be pushed
+   * to the connected Shopify store. Mirror of `planBulkProductPush`: the
+   * processor fans the ids out as one job each, so a large backlog no longer
+   * holds a worker slot for its whole duration.
    */
-  async bulkPushUnsyncedOrders(orgId: string): Promise<void> {
-    const manual = await this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-        },
-      },
+  async planBulkOrderPush(orgId: string): Promise<string[]> {
+    const manual = await this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.MANUAL },
     });
     if (!manual) {
       this.logger.log(`Org ${orgId} has no MANUAL channel — nothing to bulk-push.`);
-      return;
+      return [];
     }
 
     const orders = await this.prisma.order.findMany({
@@ -2371,6 +2648,7 @@ export class ShopifyPushService {
         organizationId: orgId,
         channelId: manual.id,
         deletedAt: null,
+        ...PUSHABLE_ORDER_WHERE,
       },
       select: { id: true, metadata: true },
     });
@@ -2378,32 +2656,13 @@ export class ShopifyPushService {
     const unsynced = orders.filter((o) => !this.isAlreadySynced(o.metadata));
     if (unsynced.length === 0) {
       this.logger.log(`Org ${orgId} has no unsynced offline orders to push.`);
-      return;
+      return [];
     }
 
     this.logger.log(
-      `Bulk-pushing ${unsynced.length} unsynced offline order(s) for org ${orgId}…`,
+      `Planning bulk push of ${unsynced.length} unsynced offline order(s) for org ${orgId}.`,
     );
-
-    let succeeded = 0;
-    let failed = 0;
-    for (const o of unsynced) {
-      try {
-        await this.pushOrder(o.id, orgId);
-        succeeded++;
-      } catch (err) {
-        failed++;
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.error(`Bulk push: order ${o.id} failed: ${msg}`);
-        await this.recordFailure(o.id, orgId, msg, /* incrementAttempt */ true).catch(
-          () => undefined,
-        );
-      }
-    }
-
-    this.logger.log(
-      `Bulk order push complete for org ${orgId}: ${succeeded} succeeded, ${failed} failed.`,
-    );
+    return unsynced.map((o) => o.id);
   }
 
   /** Returns true when metadata.shopifySync.status is exactly 'SYNCED'. */

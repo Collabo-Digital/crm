@@ -1,8 +1,10 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import type { Response } from 'express';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequireSection } from '../auth/decorators/require-section.decorator';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { DashboardService } from './dashboard.service';
 import { QueryDashboardDto } from './dto/query-dashboard.dto';
 import {
@@ -19,6 +21,14 @@ export class DashboardController {
   @Get()
   getOverview(@CurrentUser() user: JwtPayload, @Query() query: QueryDashboardDto) {
     return this.dashboardService.getOverview(user.orgId!, query);
+  }
+
+  // GET /api/v1/dashboard/setup — the "Get started" checklist, for the people
+  // who set the workspace up.
+  @Get('setup')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  getSetupProgress(@CurrentUser() user: JwtPayload) {
+    return this.dashboardService.getSetupProgress(user.orgId!);
   }
 
   // GET /api/v1/dashboard/monthly-sales — sales & gross profit, bucketed.

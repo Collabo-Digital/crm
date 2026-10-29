@@ -122,7 +122,7 @@ export function ProductPicker({
           placeholder="Search products by name, vendor or SKU…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-900 pl-8 pr-3 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+          className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-900 pl-8 pr-3 text-xs placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
       </div>
 
@@ -172,7 +172,7 @@ export function ProductPicker({
                   <p className="text-xs font-medium text-gray-900 dark:text-gray-100 truncate">
                     {product.title}
                   </p>
-                  <p className="text-[10px] text-muted-foreground truncate">
+                  <p className="text-caption text-muted-foreground truncate">
                     {variant.title}
                     {variant.sku ? ` • SKU ${variant.sku}` : ""}
                   </p>
@@ -182,7 +182,7 @@ export function ProductPicker({
                     {formatCurrency(variant.price, priceCurrency)}
                   </p>
                   <p
-                    className={`text-[10px] tabular-nums ${oos
+                    className={`text-caption tabular-nums ${oos
                       ? canOversell
                         ? "text-amber-600"
                         : "text-red-600"
@@ -207,7 +207,7 @@ export function ProductPicker({
                         ? "Out of stock. Enable 'Continue selling when out of stock' on this variant or globally to allow backorders."
                         : undefined
                   }
-                  className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#CEF17B] px-3 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] disabled:pointer-events-none disabled:opacity-40"
+                  className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#CEF17B] px-3 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] disabled:pointer-events-none disabled:opacity-40 max-md:h-11 pointer-coarse:h-11"
                 >
                   <Plus className="size-3.5" />
                   Add

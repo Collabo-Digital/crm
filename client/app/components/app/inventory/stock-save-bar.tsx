@@ -44,7 +44,7 @@ export function StockSaveBar({
   if (changes.length === 0) return null;
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center px-6 pb-4">
+    <div className="pointer-events-none fixed inset-x-0 bottom-[var(--mobile-nav-height)] md:bottom-0 z-40 flex justify-center px-6 pb-4">
       <div className="pointer-events-auto w-full max-w-4xl">
         {reviewOpen && (
           <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-border bg-card p-3 shadow-lg">

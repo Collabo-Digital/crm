@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { GstSupplyType, GstType, InvoiceStatus } from '@prisma/client';
 import {
+  EXPORT_PLACE_OF_SUPPLY,
   getStateName,
   UNSPECIFIED_PLACE_OF_SUPPLY,
 } from '../gst/constants/indian-states';
@@ -84,6 +85,12 @@ export interface ReturnInvoice {
   creditNoteForId?: string | null;
   /** Number of the invoice being reversed — Table 9B reports it. */
   creditNoteForNumber?: string | null;
+  /**
+   * Value of the invoice being reversed. Decides where an unregistered
+   * buyer's note goes: CDNUR when the original was B2CL, otherwise netted out
+   * of Table 7.
+   */
+  creditNoteForGrandTotal?: unknown;
   creditNoteReason?: string | null;
   invoiceNumber: string;
   invoiceDate: Date | string;
@@ -188,8 +195,14 @@ export interface Gstr1NilRatedRow {
 
 /** One GSTR-1 Table 9B row — a credit or debit note against a prior invoice. */
 export interface Gstr1CreditNoteRow {
-  /** CDNR when the buyer is registered, CDNUR when they are not. */
+  /**
+   * CDNR when the buyer is registered. CDNUR only for an unregistered buyer
+   * whose original invoice was B2CL or an export; a note against an ordinary
+   * B2C sale is netted out of Table 7 and has no row here.
+   */
   section: 'CDNR' | 'CDNUR';
+  /** CDNUR's "UR type": what the original invoice was. Null on CDNR. */
+  urType: 'B2CL' | 'EXPWP' | 'EXPWOP' | null;
   noteNumber: string;
   noteDate: Date | string;
   buyerGstin: string | null;
@@ -258,8 +271,7 @@ export interface Gstr1Return {
      *
      * `totalTaxable` and the tax figures above are NET, because that is what
      * gets filed. These are kept alongside so the deduction is visible rather
-     * than implied, and so table 12 — which reports invoice lines, not notes —
-     * can still be reconciled against something.
+     * than implied.
      */
     grossTaxable: number;
     creditNoteCount: number;
@@ -571,10 +583,38 @@ export class Gstr1Accumulator {
       this.creditNoteIgst = this.creditNoteIgst.plus(igst);
       this.creditNoteTax = this.creditNoteTax.plus(tax);
 
+      // Table 12 is reported net of every note, whichever table the note
+      // itself goes in.
+      this.netHsnLines(invoice, isRegistered ? 'B2B' : 'B2C');
+
+      // For an unregistered buyer, CDNUR takes only notes against B2CL
+      // invoices and exports. A note against an ordinary B2C sale reduces
+      // that sale's Table 7 (B2CS) bucket instead; filed as CDNUR, it left
+      // Table 7 gross and would not upload.
+      const originalValue =
+        invoice.creditNoteForGrandTotal != null
+          ? dec(invoice.creditNoteForGrandTotal)
+          : grandTotal;
+      const urType: Gstr1CreditNoteRow['urType'] = isRegistered
+        ? null
+        : pos === EXPORT_PLACE_OF_SUPPLY
+          ? igst.greaterThan(0)
+            ? 'EXPWP'
+            : 'EXPWOP'
+          : isInterState && originalValue.greaterThan(this.b2cLargeThreshold)
+            ? 'B2CL'
+            : null;
+
+      if (!isRegistered && !urType) {
+        this.netB2cs(invoice, pos, isInterState, { subtotal, cgst, sgst, igst, tax });
+        return;
+      }
+
       this.creditNoteRows.push({
         // CDNR when the buyer is registered, CDNUR when they are not — the two
         // are separate tables on the form.
         section: isRegistered ? 'CDNR' : 'CDNUR',
+        urType,
         noteNumber: invoice.invoiceNumber,
         noteDate: invoice.invoiceDate,
         buyerGstin: invoice.buyerGstin,
@@ -810,6 +850,94 @@ export class Gstr1Accumulator {
   }
 
   /**
+   * Take a credit note against an ordinary B2C sale out of Table 7 and the
+   * per-state roll-up. A note in a later period than its sale can leave a
+   * bucket negative, which is how the net adjustment is reported.
+   */
+  private netB2cs(
+    invoice: ReturnInvoice,
+    pos: string,
+    isInterState: boolean,
+    amounts: Record<'subtotal' | 'cgst' | 'sgst' | 'igst' | 'tax', Prisma.Decimal>,
+  ): void {
+    const state = this.b2c.get(pos) ?? {
+      placeOfSupplyName: invoice.placeOfSupplyName,
+      invoiceCount: 0,
+      totalTaxable: ZERO,
+      totalCgst: ZERO,
+      totalSgst: ZERO,
+      totalIgst: ZERO,
+      totalTax: ZERO,
+    };
+    state.totalTaxable = state.totalTaxable.minus(amounts.subtotal);
+    state.totalCgst = state.totalCgst.minus(amounts.cgst);
+    state.totalSgst = state.totalSgst.minus(amounts.sgst);
+    state.totalIgst = state.totalIgst.minus(amounts.igst);
+    state.totalTax = state.totalTax.minus(amounts.tax);
+    this.b2c.set(pos, state);
+
+    for (const [rate, bucket] of this.rateBuckets(invoice)) {
+      const key = `${pos}|${rate}`;
+      const row = this.b2cs.get(key) ?? {
+        placeOfSupply: pos,
+        placeOfSupplyName: invoice.placeOfSupplyName,
+        gstRate: rate,
+        supplyType: isInterState ? ('INTER' as const) : ('INTRA' as const),
+        taxable: ZERO,
+        cgst: ZERO,
+        sgst: ZERO,
+        igst: ZERO,
+      };
+      row.taxable = row.taxable.minus(bucket.taxable);
+      row.cgst = row.cgst.minus(bucket.cgst);
+      row.sgst = row.sgst.minus(bucket.sgst);
+      row.igst = row.igst.minus(bucket.igst);
+      this.b2cs.set(key, row);
+    }
+  }
+
+  /** Subtract a credit note's lines from their Table 12 rows. */
+  private netHsnLines(invoice: ReturnInvoice, recipientType: 'B2B' | 'B2C'): void {
+    for (const item of invoice.lineItems ?? []) {
+      const rate = dec(item.gstRate).toNumber();
+      const rawHsn = item.hsnCode?.trim();
+      const hsnCode = !rawHsn || rawHsn === '0000' ? null : rawHsn;
+      const uqc = item.unitOfMeasure?.trim() || 'NOS';
+      const hsnKey = `${recipientType}|${hsnCode ?? ''}|${uqc}|${rate}`;
+      const row = this.hsn.get(hsnKey) ?? {
+        recipientType,
+        hsnCode,
+        descriptions: new Map<string, Prisma.Decimal>(),
+        descriptionOverflow: 0,
+        uqc,
+        gstRate: rate,
+        quantity: 0,
+        totalValue: ZERO,
+        taxable: ZERO,
+        cgst: ZERO,
+        sgst: ZERO,
+        igst: ZERO,
+      };
+
+      // Named, but with no weight: a row made only of notes still says what
+      // the goods were, without a reversal outranking a sale.
+      const description = item.description?.trim();
+      if (description && !row.descriptions.has(description) && row.descriptions.size < HSN_DESCRIPTION_CAP) {
+        row.descriptions.set(description, ZERO);
+      }
+
+      const taxable = dec(item.taxableValue);
+      row.quantity -= item.quantity;
+      row.taxable = row.taxable.minus(taxable);
+      row.totalValue = row.totalValue.minus(taxable).minus(dec(item.totalTax));
+      row.cgst = row.cgst.minus(dec(item.cgstAmount));
+      row.sgst = row.sgst.minus(dec(item.sgstAmount));
+      row.igst = row.igst.minus(dec(item.igstAmount));
+      this.hsn.set(hsnKey, row);
+    }
+  }
+
+  /**
    * Line items of one invoice, collapsed to per-rate buckets.
    *
    * B2CL and B2CS are both rate-wise, and an invoice can carry several rates,
@@ -938,8 +1066,7 @@ export class Gstr1Accumulator {
         totalTax: toMoney(this.totalTax.minus(this.creditNoteTax)),
         totalInvoices: this.totalInvoices,
         linesMissingHsn: this.linesMissingHsn,
-        // Kept so the deduction is visible rather than implied, and so table 12
-        // — which reports invoice LINES, not notes — remains reconcilable.
+        // Kept so the deduction is visible rather than implied.
         grossTaxable: toMoney(this.totalTaxable),
         creditNoteCount: this.creditNoteCount,
         creditNoteTaxable: toMoney(this.creditNoteTaxable),

@@ -22,7 +22,6 @@ import { DateRangeFilter } from "~/components/app/date-range-filter";
 import { ChannelBadge } from "~/components/app/channel-badge";
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
-import { NotYet } from "~/components/app/not-yet";
 import { useChannels } from "~/hooks/use-channel-queries";
 import { useDebounced } from "~/hooks/use-debounced";
 import { useOrder, useOrders } from "~/hooks/use-order-queries";
@@ -154,7 +153,7 @@ export function CustomerOrdersPanel({
             placeholder="Search orders"
             value={search}
             onChange={(e) => reset(setSearch)(e.target.value)}
-            className="h-8 w-full rounded-lg border border-input bg-card pl-8 pr-3 text-caption placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand/50"
+            className="h-8 w-full rounded-lg border border-input bg-card pl-8 pr-3 text-caption placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </div>
 
@@ -170,7 +169,7 @@ export function CustomerOrdersPanel({
         />
 
         <Select value={channelId} onValueChange={reset(setChannelId)}>
-          <SelectTrigger className="h-8 w-32 rounded-lg bg-card text-caption">
+          <SelectTrigger aria-label="Channel" className="h-8 w-32 rounded-lg bg-card text-caption">
             <SelectValue placeholder="Channels" />
           </SelectTrigger>
           <SelectContent>
@@ -362,16 +361,6 @@ function OrderCard({ order, currency }: { order: Order; currency: string }) {
         <Button asChild variant="outline" size="sm">
           <Link to={`/orders/${order.id}`}>View order</Link>
         </Button>
-        <NotYet title="Reordering isn't available yet">
-          <Button variant="outline" size="sm" disabled>
-            Reorder items
-          </Button>
-        </NotYet>
-        <NotYet title="Issuing refunds isn't available yet">
-          <Button variant="destructive" size="sm" disabled>
-            Refund
-          </Button>
-        </NotYet>
       </div>
     </div>
   );

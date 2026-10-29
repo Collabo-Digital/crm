@@ -6,14 +6,19 @@ import { authService } from "~/services/auth.service";
 import { useAuthStore } from "~/stores/auth.store";
 import { orgKeys } from "~/hooks/use-org-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
+import { takeAfterOnboarding } from "~/lib/return-path";
+import { SessionChangedError } from "~/lib/session-stamp";
 import type {
   CreateOrganizationRequest,
   CreatePersonalRequest,
   UpdateOrganizationRequest,
+  DeleteOrganizationRequest,
   UpgradeToOrganizationRequest,
   UpdateMemberRoleRequest,
   UpdateMemberPermissionsRequest,
   SendInviteRequest,
+  InviteInfluencerRequest,
+  OrgResponse,
 } from "~/types/api";
 
 // ─── Organization Mutations ─────────────────────────────────────────────────
@@ -38,18 +43,30 @@ export function useCreateOrganizationMutation() {
   });
 }
 
-/** Mutation hook for creating a personal workspace. */
+/** Mutation hook for creating a personal workspace, and moving the session into it. */
 export function useCreatePersonalMutation() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const setTokens = useAuthStore((s) => s.setTokens);
   const setCurrentOrg = useAuthStore((s) => s.setCurrentOrg);
   const setOrganizations = useAuthStore((s) => s.setOrganizations);
   const existingOrgs = useAuthStore((s) => s.organizations);
   const clearPendingPlan = useAuthStore((s) => s.clearPendingPlan);
 
   return useMutation({
-    mutationFn: (data: CreatePersonalRequest) => orgService.createPersonal(data),
-    onSuccess: (org) => {
+    mutationFn: async (data: CreatePersonalRequest) => {
+      const org = await orgService.createPersonal(data);
+      // The token minted at sign-up names no org, and the server would run
+      // this workspace's requests in whichever org it resolves first. The
+      // workspace exists either way (a second try is refused), so a failed
+      // switch is left to AuthGuard, which retries it before showing it.
+      const tokens = await authService.switchOrg({ orgId: org.id }).catch((error: unknown) => {
+        if (error instanceof SessionChangedError) throw error;
+        return null;
+      });
+      return { org, tokens };
+    },
+    onSuccess: ({ org, tokens }) => {
       queryClient.invalidateQueries({ queryKey: orgKeys.list() });
 
       // Add the new personal workspace to auth store so AuthGuard allows dashboard access
@@ -76,9 +93,10 @@ export function useCreatePersonalMutation() {
         },
       };
       setOrganizations([...existingOrgs, newMembership]);
+      if (tokens) setTokens(tokens.accessToken, tokens.refreshToken);
       setCurrentOrg(org.id);
       clearPendingPlan();
-      navigate("/dashboard");
+      navigate(takeAfterOnboarding() ?? "/dashboard");
     },
     onError: (error) => handleMutationError(error, "Failed to create workspace."),
   });
@@ -90,10 +108,13 @@ export function useUpdateOrganizationMutation(orgId: string) {
 
   return useMutation({
     mutationFn: (data: UpdateOrganizationRequest) => orgService.update(orgId, data),
-    onSuccess: () => {
+    onSuccess: (_org, saved) => {
+      // The page shows the saved values at once rather than after the refetch,
+      // so a form's "unsaved changes" clears the moment the save lands.
+      queryClient.setQueryData<OrgResponse>(orgKeys.detail(orgId), (previous) => (previous ? { ...previous, ...saved } : previous));
       queryClient.invalidateQueries({ queryKey: orgKeys.detail(orgId) });
       queryClient.invalidateQueries({ queryKey: orgKeys.list() });
-      toast.success("Organization updated successfully.");
+      toast.success("Settings saved.");
     },
     onError: (error) => handleMutationError(error, "Failed to update organization."),
   });
@@ -158,13 +179,13 @@ export function useCreateOrganizationInSettingsMutation() {
   });
 }
 
-/** Mutation hook for deleting an organization. Navigates to dashboard on success. */
+/** Mutation hook for deleting an organization, confirmed with its name and the owner's password. Navigates to dashboard on success. */
 export function useDeleteOrganizationMutation() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (orgId: string) => orgService.delete(orgId),
+    mutationFn: ({ orgId, ...confirm }: { orgId: string } & DeleteOrganizationRequest) => orgService.delete(orgId, confirm),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: orgKeys.list() });
       toast.success("Organization deleted.");
@@ -247,5 +268,58 @@ export function useRevokeInviteMutation(orgId: string) {
       toast.success("Invitation revoked.");
     },
     onError: (error) => handleMutationError(error, "Failed to revoke invitation."),
+  });
+}
+
+// ─── Influencer Mutations ───────────────────────────────────────────────────
+
+/** Invite someone to join as an influencer. */
+export function useInviteInfluencerMutation(orgId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: InviteInfluencerRequest) => orgService.inviteInfluencer(orgId, data),
+    onSuccess: (invite) => {
+      queryClient.invalidateQueries({ queryKey: orgKeys.influencers(orgId) });
+      queryClient.invalidateQueries({ queryKey: orgKeys.invites(orgId) });
+      toast.success(`Invitation sent successfully to ${invite.email}.`);
+    },
+    onError: (error) => handleMutationError(error, "Failed to send the invitation."),
+  });
+}
+
+/**
+ * Re-issue a pending invitation.
+ *
+ * The server rotates the token, so this both re-sends the email and invalidates
+ * the previous link — worth knowing when a merchant asks why the old one stopped
+ * working.
+ */
+export function useResendInviteMutation(orgId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (inviteId: string) => orgService.resendInvite(orgId, inviteId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: orgKeys.influencers(orgId) });
+      queryClient.invalidateQueries({ queryKey: orgKeys.invites(orgId) });
+      toast.success("Invitation resent successfully.");
+    },
+    onError: (error) => handleMutationError(error, "Failed to resend the invitation."),
+  });
+}
+
+/** Cancel a pending invitation. Its link stops working immediately. */
+export function useCancelInviteMutation(orgId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (inviteId: string) => orgService.revokeInvite(orgId, inviteId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: orgKeys.influencers(orgId) });
+      queryClient.invalidateQueries({ queryKey: orgKeys.invites(orgId) });
+      toast.success("Invitation cancelled successfully.");
+    },
+    onError: (error) => handleMutationError(error, "Failed to cancel the invitation."),
   });
 }

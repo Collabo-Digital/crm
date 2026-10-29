@@ -5,8 +5,16 @@ import {
   rangeToWindow,
   windowStart,
 } from './dto/query-dashboard.dto';
-import { Prisma } from '@prisma/client';
+import {
+  AutomationStatus,
+  ChannelPlatform,
+  ChannelStatus,
+  InviteStatus,
+  Prisma,
+  UserRole,
+} from '@prisma/client';
 import { Parser } from 'json2csv';
+import { neutraliseCsvRow } from '../common/utils/csv-formula.util';
 import {
   SALES_FINANCIAL_STATUSES,
   placedBetween,
@@ -27,6 +35,7 @@ import {
   type SalesProfitRow,
 } from './profit.util';
 import { lowStockVariantRows, toLowStockEntry } from './low-stock.util';
+import { setupProgress, type SetupProgress } from './setup-progress';
 
 /** Most order rows one CSV / JSON download will carry, newest first. */
 export const REPORT_ROW_CAP = 10_000;
@@ -57,9 +66,67 @@ export interface SalesProfitPoint extends ProfitBucket {
   newCustomers: number;
 }
 
+interface InStoreSplitRow {
+  pos_sale: boolean;
+  sales: number;
+  orders: number;
+}
+
+function splitOf(rows: InStoreSplitRow[], posSale: boolean) {
+  const row = rows.find((r) => r.pos_sale === posSale);
+  return { sales: row?.sales ?? 0, orders: row?.orders ?? 0 };
+}
+
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) { }
+
+  /** The owner's "Get started" checklist. Counts only; see setup-progress.ts. */
+  async getSetupProgress(orgId: string): Promise<SetupProgress> {
+    const org = { organizationId: orgId };
+    const connected = { in: [ChannelStatus.CONNECTED, ChannelStatus.SYNCING] };
+    const [
+      organization,
+      settings,
+      whatsappChannels,
+      shopifyChannels,
+      products,
+      gstins,
+      members,
+      pendingInvites,
+      recommendedAutomationsOn,
+    ] = await Promise.all([
+      this.prisma.organization.findUnique({ where: { id: orgId }, select: { gstEnabled: true } }),
+      this.prisma.organizationSettings.findUnique({ where: org, select: { storeProfileSettings: true } }),
+      this.prisma.channel.count({ where: { ...org, platform: ChannelPlatform.WHATSAPP, status: connected } }),
+      this.prisma.channel.count({ where: { ...org, platform: ChannelPlatform.SHOPIFY, status: connected } }),
+      this.prisma.product.count({ where: { ...org, deletedAt: null } }),
+      this.prisma.organizationGstin.findMany({ where: { ...org, isActive: true }, select: { address: true } }),
+      this.prisma.organizationMember.count({ where: { ...org, isActive: true, role: { not: UserRole.INFLUENCER } } }),
+      this.prisma.teamInvite.count({
+        where: { ...org, status: InviteStatus.PENDING, expiresAt: { gt: new Date() }, role: { not: UserRole.INFLUENCER } },
+      }),
+      this.prisma.automation.count({
+        where: {
+          ...org,
+          packKey: { not: null },
+          archivedAt: null,
+          OR: [{ status: AutomationStatus.ACTIVE }, { activateWhenReady: true }],
+        },
+      }),
+    ]);
+    return setupProgress({
+      whatsappChannels,
+      shopifyChannels,
+      products,
+      storeProfileSettings: settings?.storeProfileSettings ?? null,
+      gstEnabled: organization?.gstEnabled ?? false,
+      gstinAddresses: gstins.map((g) => g.address),
+      members,
+      pendingInvites,
+      recommendedAutomationsOn,
+    });
+  }
 
   /**
    * `sharedWindow` lets one caller (the JSON export) compute this and the
@@ -334,7 +401,8 @@ export class DashboardService {
       'total', 'currency', 'financialStatus', 'fulfillmentStatus',
     ];
     const parser = new Parser({ fields });
-    return parser.parse(data);
+    // Buyer names and emails are typed by shoppers; keep them from running as formulas.
+    return parser.parse(data.map(neutraliseCsvRow));
   }
 
   // ─── SALES & GROSS PROFIT (feeds the stat cards AND the bar chart) ───
@@ -357,7 +425,7 @@ export class DashboardService {
     const window = await this.resolveWindow(orgId, query);
     const previous = this.precedingWindow(window);
 
-    const [rows, customerRows, previousRows, currencyRows, unconvertedOrders] = await Promise.all([
+    const [rows, customerRows, previousRows, currencyRows, unconvertedOrders, splitRows] = await Promise.all([
       this.fetchProfitRows(orgId, window, query.channelId),
       this.fetchNewCustomerRows(orgId, window, query.channelId),
       // The trend compares this window against the one immediately before it,
@@ -400,6 +468,7 @@ export class DashboardService {
           ],
         },
       }),
+      this.fetchInStoreSplit(orgId, window, query.channelId),
     ]);
 
     const newCustomersByBucket = new Map(
@@ -456,7 +525,45 @@ export class DashboardService {
               previousTotals.grossProfit ?? 0,
             ),
           },
+      // `totals.grossSales` and `totals.orders`, split by where the sale was
+      // made. In store is a POS bill; online is every other order.
+      inStoreVsOnline: {
+        inStore: splitOf(splitRows, true),
+        online: splitOf(splitRows, false),
+      },
     };
+  }
+
+  /**
+   * The same orders, rates and window as `fetchProfitRows`' `scoped` CTE,
+   * grouped by `pos_sale` — so the two halves add up to the headline. Keep the
+   * WHERE clauses in step with that CTE.
+   */
+  private async fetchInStoreSplit(
+    orgId: string,
+    window: Window,
+    channelId?: string,
+  ): Promise<InStoreSplitRow[]> {
+    const channelFilter = channelId
+      ? Prisma.sql`AND o."channel_id" = ${channelId}`
+      : Prisma.empty;
+
+    return this.prisma.$queryRaw<InStoreSplitRow[]>`
+      SELECT
+        o."pos_sale"                                               AS pos_sale,
+        ROUND(SUM(o."total_price" * o."exchange_rate"), 2)::float8 AS sales,
+        COUNT(*)::int                                              AS orders
+      FROM "orders" o
+      WHERE o."organization_id" = ${orgId}
+        AND o."deleted_at"   IS NULL
+        AND o."cancelled_at" IS NULL
+        AND o."exchange_rate" IS NOT NULL
+        AND UPPER(o."base_currency") = ${window.currency}
+        AND o."financial_status"::text IN (${Prisma.join(SALES_FINANCIAL_STATUSES)})
+        AND COALESCE(o."external_created_at", o."created_at") >= ${window.from}::timestamptz AT TIME ZONE 'UTC'
+        AND COALESCE(o."external_created_at", o."created_at") <  ${window.to}::timestamptz AT TIME ZONE 'UTC'
+        ${channelFilter}
+      GROUP BY o."pos_sale"`;
   }
 
   /**
@@ -811,55 +918,88 @@ export class DashboardService {
     window: Window,
     limit: number,
   ) {
-    // Group line items by externalProductId to get total quantity sold per
-    // product. Scoped through `placedBetween`, so manual/offline orders — whose
-    // `externalCreatedAt` is null — are no longer invisible in this panel.
-    const topItems = await this.prisma.orderLineItem.groupBy({
-      by: ['externalProductId'],
+    // Same sales filter as every other revenue figure: cancelled and unpaid
+    // orders did not sell anything.
+    //
+    // Grouped by variant AND Shopify product id, then folded into products
+    // here. Grouping by `externalProductId` alone dropped every counter sale
+    // and completed draft, whose lines carry no Shopify product id; a line
+    // whose variant has since been deleted still counts through that id.
+    const groups = await this.prisma.orderLineItem.groupBy({
+      by: ['variantId', 'externalProductId'],
       where: {
-        order: {
-          organizationId: orgId,
-          deletedAt: null,
-          ...(query.channelId && { channelId: query.channelId }),
-          ...placedBetween(window.from, window.to),
-        },
-        externalProductId: { not: null },
+        order: salesOrderWhere({
+          orgId,
+          channelId: query.channelId,
+          from: window.from,
+          to: window.to,
+        }),
+        OR: [{ variantId: { not: null } }, { externalProductId: { not: null } }],
       },
       _sum: { quantity: true },
       _count: true,
-      orderBy: { _sum: { quantity: 'desc' } },
-      take: limit,
     });
 
-    // Fetch product details for the top items
-    const productIds = topItems
-      .map((item) => item.externalProductId)
-      .filter(Boolean) as string[];
+    const variantIds = [...new Set(groups.map((g) => g.variantId).filter((id): id is string => !!id))];
+    const variants = variantIds.length
+      ? await this.prisma.productVariant.findMany({
+        where: { id: { in: variantIds }, organizationId: orgId },
+        select: { id: true, productId: true },
+      })
+      : [];
+    const productIdByVariant = new Map(variants.map((v) => [v.id, v.productId]));
+
+    const orphanExternalIds = [
+      ...new Set(
+        groups
+          .filter((g) => !(g.variantId && productIdByVariant.has(g.variantId)) && g.externalProductId)
+          .map((g) => g.externalProductId as string),
+      ),
+    ];
+    const byExternalId = orphanExternalIds.length
+      ? await this.prisma.product.findMany({
+        where: { organizationId: orgId, externalId: { in: orphanExternalIds } },
+        select: { id: true, externalId: true },
+      })
+      : [];
+    const productIdByExternal = new Map(byExternalId.map((p) => [p.externalId, p.id]));
+
+    const totals = new Map<string, { quantity: number; lines: number }>();
+    for (const g of groups) {
+      const productId =
+        (g.variantId ? productIdByVariant.get(g.variantId) : undefined) ??
+        (g.externalProductId ? productIdByExternal.get(g.externalProductId) : undefined);
+      if (!productId) continue;
+      const t = totals.get(productId) ?? { quantity: 0, lines: 0 };
+      t.quantity += g._sum.quantity ?? 0;
+      t.lines += g._count;
+      totals.set(productId, t);
+    }
+
+    const top = [...totals.entries()]
+      .sort(([, a], [, b]) => b.quantity - a.quantity)
+      .slice(0, limit);
 
     const products = await this.prisma.product.findMany({
-      where: {
-        organizationId: orgId,
-        externalId: { in: productIds },
-      },
+      where: { organizationId: orgId, id: { in: top.map(([id]) => id) } },
       include: {
         images: { take: 1, orderBy: { position: 'asc' } },
         variants: { select: { price: true, inventoryQuantity: true } },
       },
     });
+    const productMap = new Map(products.map((p) => [p.id, p]));
 
-    const productMap = new Map(products.map((p) => [p.externalId, p]));
-
-    return topItems.map((item) => {
-      const product = productMap.get(item.externalProductId!);
+    return top.map(([productId, t]) => {
+      const product = productMap.get(productId);
       const totalStock = product?.variants.reduce((sum, v) => sum + v.inventoryQuantity, 0) ?? 0;
       const prices = product?.variants.map((v) => parseFloat(String(v.price))) ?? [];
 
       return {
-        externalProductId: item.externalProductId,
+        externalProductId: product?.externalId ?? productId,
         title: product?.title ?? 'Unknown Product',
         image: product?.images[0]?.src ?? null,
-        totalQuantitySold: item._sum.quantity ?? 0,
-        totalOrders: item._count,
+        totalQuantitySold: t.quantity,
+        totalOrders: t.lines,
         currentStock: totalStock,
         price: prices.length > 0 ? Math.min(...prices).toFixed(2) : '0.00',
       };

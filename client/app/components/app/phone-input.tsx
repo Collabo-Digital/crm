@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Search } from "lucide-react";
 import {
   AsYouType,
@@ -99,6 +99,7 @@ export function PhoneInput({
   const [national, setNational] = useState(initial.national);
   const [touched, setTouched] = useState(false);
   const [open, setOpen] = useState(false);
+  const errorId = useId();
   const [query, setQuery] = useState("");
 
   // Re-sync only when the value changes from OUTSIDE (form reset, prefill);
@@ -173,7 +174,7 @@ export function PhoneInput({
 
   return (
     <div className="block">
-      <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+      <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
         {label}
       </span>
       <div
@@ -181,7 +182,7 @@ export function PhoneInput({
           "mt-1 flex h-8 w-full items-stretch overflow-hidden rounded-lg border bg-white dark:bg-gray-800 focus-within:ring-1",
           invalid
             ? "border-destructive focus-within:ring-destructive/40"
-            : "border-input focus-within:ring-[#CEF17B]/60",
+            : "border-input focus-within:border-ring focus-within:ring-ring",
         )}
       >
         <Popover
@@ -197,7 +198,7 @@ export function PhoneInput({
             title={countryName(country)}
             className="flex shrink-0 items-center gap-1 border-r border-input px-2 text-xs hover:bg-muted/60 focus-visible:outline-none"
           >
-            <span className="rounded bg-muted px-1 text-[9px] font-semibold text-muted-foreground">
+            <span className="rounded bg-muted px-1 text-caption font-semibold text-muted-foreground">
               {country}
             </span>
             <span className="tabular-nums text-foreground">{dial}</span>
@@ -237,7 +238,7 @@ export function PhoneInput({
                         active && "bg-muted",
                       )}
                     >
-                      <span className="w-6 shrink-0 text-[9px] font-semibold text-muted-foreground">
+                      <span className="w-6 shrink-0 text-caption font-semibold text-muted-foreground">
                         {c.code}
                       </span>
                       <span className="min-w-0 flex-1 truncate">{c.name}</span>
@@ -256,6 +257,7 @@ export function PhoneInput({
           autoComplete="tel"
           aria-label={label}
           aria-invalid={invalid || undefined}
+          aria-describedby={invalid ? errorId : undefined}
           value={national}
           onChange={(e) => handleType(e.target.value)}
           onBlur={handleBlur}
@@ -263,7 +265,7 @@ export function PhoneInput({
         />
       </div>
       {invalid && (
-        <p className="mt-1 text-[10px] text-destructive">
+        <p id={errorId} className="mt-1 text-caption text-destructive">
           Enter a valid phone number for {countryName(country)}.
         </p>
       )}

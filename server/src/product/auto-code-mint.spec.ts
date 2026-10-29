@@ -34,14 +34,14 @@ function build() {
   };
 
   const tx = {
-    channel: { upsert: jest.fn().mockResolvedValue({ id: 'ch_manual' }) },
+    channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch_manual' }) },
     product: { create: jest.fn().mockResolvedValue(created) },
   };
 
   const prisma = {
     $transaction: jest.fn((cb: (t: unknown) => unknown) => cb(tx)),
     productVariant: { findFirst: jest.fn().mockResolvedValue(null) },
-    channel: { findUnique: jest.fn().mockResolvedValue(null) },
+    channel: { findFirst: jest.fn().mockResolvedValue(null) },
     product: { findFirst: jest.fn(), update: jest.fn() },
   };
 

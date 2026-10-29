@@ -2,9 +2,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { channelService } from "~/services/channel.service";
 import { channelKeys } from "~/hooks/use-channel-queries";
+import { inventoryKeys } from "~/hooks/use-inventory-queries";
 import { orgKeys } from "~/hooks/use-org-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
-import type { UpdateChannelRequest, TriggerSyncRequest, ShopifyInstallRequest, ManualConnectShopifyRequest, UpdateSyncSettingsRequest } from "~/types/api";
+import type { UpdateChannelRequest, TriggerSyncRequest, ShopifyInstallRequest, ManualConnectShopifyRequest, UpdateSyncSettingsRequest, InstagramInstallRequest, CompleteInstagramRequest, SaveShopifyLocationsRequest } from "~/types/api";
 
 /** Mutation hook for updating a channel's settings. */
 export function useUpdateChannelMutation() {
@@ -96,13 +97,59 @@ export function useManualConnectShopifyMutation() {
   });
 }
 
-/** Mutation hook for starting Instagram OAuth flow. Redirects to Meta on success. */
+/**
+ * Saves the decision on several Shopify locations in one call. The caller
+ * shows the outcome from the response, so there is no toast on success.
+ */
+export function useSaveShopifyLocationsMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: SaveShopifyLocationsRequest }) =>
+      channelService.saveShopifyLocations(id, data),
+    onSuccess: (response, { id }) => {
+      queryClient.setQueryData(channelKeys.shopifyLocations(id), response);
+      // Linking and creating both change the Locations list.
+      queryClient.invalidateQueries({ queryKey: inventoryKeys.all });
+    },
+    onError: (error) => handleMutationError(error, "Could not save the Shopify locations."),
+  });
+}
+
+/**
+ * Start the Instagram (Facebook Login) flow. Redirects to Meta on success.
+ *
+ * Pass `reconnectChannelId` to re-authorize an existing account instead of
+ * adding another — an org may hold many Instagram accounts, so the two are
+ * genuinely different intents.
+ */
 export function useInstallInstagramMutation() {
   return useMutation({
-    mutationFn: () => channelService.installInstagram(),
+    mutationFn: (data: InstagramInstallRequest = {}) => channelService.installInstagram(data),
     onSuccess: (response) => {
       window.location.href = response.authUrl;
     },
     onError: (error) => handleMutationError(error, "Failed to start Instagram connection."),
+  });
+}
+
+/**
+ * Connect the Instagram account the merchant chose, when one Facebook login
+ * granted several.
+ */
+export function useCompleteInstagramInstallMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CompleteInstagramRequest) => channelService.completeInstagramInstall(data),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: channelKeys.all });
+      toast.success(
+        response.account?.handle
+          ? `Instagram ${response.account.handle} connected.`
+          : "Instagram account connected.",
+      );
+    },
+    onError: (error) => handleMutationError(error, "Failed to connect that Instagram account."),
   });
 }

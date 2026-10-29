@@ -35,9 +35,9 @@ export function ScopeSelect<Row>({ state, def }: { state: DataTableState<Row>; d
       }}
     >
       <PopoverTrigger asChild>
-        <Button variant="outline" aria-haspopup="listbox" aria-expanded={open}>
+        <Button variant="outline" aria-haspopup="listbox" aria-expanded={open} className="h-11 max-w-full rounded-xl md:h-8 md:rounded-lg">
           <span className="font-normal text-muted-foreground">{def.label}</span>
-          <span className="max-w-50 truncate">{current?.label ?? "—"}</span>
+          <span className="min-w-0 max-w-50 truncate">{current?.label ?? "—"}</span>
           <ChevronDown className="text-muted-foreground" />
         </Button>
       </PopoverTrigger>

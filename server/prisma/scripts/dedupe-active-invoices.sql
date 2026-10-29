@@ -35,7 +35,7 @@
 -- REVIEW FIRST — this rewrites statutory records
 -- ----------------------------------------------
 -- `prisma db execute` discards result rows, so run this diagnostic in a real
--- SQL client (e.g. the Supabase SQL editor) and read the output before
+-- SQL client (psql against DIRECT_URL, or the DO console) and read the output before
 -- executing the script:
 --
 --   SELECT i.order_id, o.name AS order_name, i.id, i.invoice_number,

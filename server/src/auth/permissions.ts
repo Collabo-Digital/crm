@@ -13,7 +13,7 @@ import { UserRole } from '@prisma/client';
  *
  * Resolution rules (enforced by PermissionsGuard):
  *   - OWNER / ADMIN / MANAGER implicitly hold EVERY key.
- *   - AGENT and VIEWER hold exactly what their `grants` array contains.
+ *   - AGENT, VIEWER and INFLUENCER hold exactly what their `grants` array contains.
  *   - VENDOR holds none — vendor floor access is a V2 question.
  *
  * `section.*` keys are a second family in the same grant list: which app
@@ -47,6 +47,34 @@ export const PERMISSION_KEYS = [
   'inventory.labels',
   'inventory.reports',
   'reports.finance',
+  /**
+   * Campaign access, split read/write from the start.
+   *
+   * Influencers currently get `campaigns.view` and nothing else (see
+   * DEFAULT_ROLE_GRANTS). That split is the point: the requirement to give
+   * influencers the Campaign section is explicitly TEMPORARY and due for review,
+   * so narrowing it later must be a change of DATA — an entry in the map below,
+   * or the grants on one member — and never a change of code. Nothing should
+   * ever test `role === INFLUENCER` to decide campaign access.
+   */
+  'campaigns.view',
+  'campaigns.manage',
+  /**
+   * Inbox (the Chat section). An AGENT / VIEWER without `chat.view_all` sees
+   * the conversations assigned to them or to their teams, plus the unassigned
+   * queue when they hold `chat.view_unassigned`. `chat.assign` lets them hand a
+   * conversation to someone else; taking an unassigned one needs no grant.
+   */
+  'chat.view_all',
+  'chat.view_unassigned',
+  'chat.assign',
+  /**
+   * The two campaign actions with consequences outside the CRM — a broadcast
+   * reaches customers and is billed by Meta, a template goes to Meta's review —
+   * so they are granted apart from `campaigns.manage`.
+   */
+  'broadcasts.send',
+  'templates.manage',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
@@ -150,6 +178,17 @@ export function canListOrders(
   );
 }
 
+/**
+ * May this member search the store's customers? The same sections
+ * `GET /customers` asks for: Customers, or Orders for the order form's
+ * customer picker. The inbox's "Find customer" asks this too, so a member
+ * given only the Chat section cannot read the customer list through it.
+ */
+export function canBrowseCustomers(role: UserRole, grants: readonly string[]): boolean {
+  const sections = resolveSections(role, grants);
+  return sections === 'all' || sections.has('section.customers') || sections.has('section.orders');
+}
+
 /** Roles whose section access is chosen per member (the invite checkboxes). */
 export const SECTION_SCOPED_ROLES: UserRole[] = [UserRole.AGENT, UserRole.VIEWER];
 
@@ -177,4 +216,46 @@ export function resolveSections(
   if (!SECTION_SCOPED_ROLES.includes(role)) return 'all';
   const sections = sectionGrants(grants);
   return sections.length === 0 ? 'all' : new Set(sections);
+}
+
+/**
+ * What a member of a given role starts with, written onto
+ * `OrganizationMember.permissions` when the membership is created.
+ *
+ * Only roles that need a non-empty starting set appear here. Roles in
+ * IMPLICIT_ALL_ROLES are deliberately absent — they hold everything regardless,
+ * and seeding grants for them would imply the list is exhaustive when it is not.
+ *
+ * This map is the single place to change what influencers may do. Revoking
+ * campaign access later is one edit here for future influencers, plus a
+ * permissions update on existing memberships — no guard, route or component
+ * changes anywhere.
+ */
+export const DEFAULT_ROLE_GRANTS: Partial<Record<UserRole, PermissionKey[]>> = {
+  // TEMPORARY, pending the campaign permission review: influencers may see the
+  // Campaign section but not act in it.
+  [UserRole.INFLUENCER]: ['campaigns.view'],
+};
+
+/** The starting grants for a new membership of this role. */
+export function defaultGrantsForRole(role: UserRole): PermissionKey[] {
+  return [...(DEFAULT_ROLE_GRANTS[role] ?? [])];
+}
+
+/**
+ * Does this member hold `key`?
+ *
+ * The same resolution the PermissionsGuard applies, exported so services and
+ * the /me payload answer the question identically rather than each re-deriving
+ * it. VENDOR is excluded wholesale, matching the guard.
+ */
+export function hasPermission(
+  role: UserRole | undefined,
+  grants: readonly string[] | undefined,
+  key: PermissionKey,
+): boolean {
+  if (!role) return false;
+  if (role === UserRole.VENDOR) return false;
+  if (IMPLICIT_ALL_ROLES.includes(role)) return true;
+  return (grants ?? []).includes(key);
 }

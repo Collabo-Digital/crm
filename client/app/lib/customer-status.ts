@@ -10,11 +10,12 @@ import type { VipLevel } from "~/types/api";
  * cannot drift the way the order-status copies did.
  */
 
+/** Tiers, not statuses, so they keep their own colours (on the text shades). */
 export const VIP_CLASSES: Record<VipLevel, string> = {
   NONE: "bg-muted text-muted-foreground",
-  BRONZE: "bg-warning-strong-subtle text-warning-strong",
+  BRONZE: "bg-warning-strong-subtle text-warning-strong-text",
   SILVER: "bg-muted text-foreground",
-  GOLD: "bg-warning-subtle text-warning",
+  GOLD: "bg-warning-subtle text-warning-text",
   PLATINUM: "bg-brand/30 text-brand-strong",
 };
 

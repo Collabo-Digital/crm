@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import { type DateRangePreset, useDateRangeFilter } from "~/hooks/use-date-range-filter";
-import { ArrowRight, Download, Loader2, Upload, Target, Users, ShoppingBag } from "lucide-react";
+import { ArrowRight, Download, Loader2, Upload, Target, Users, ShoppingBag, MessageSquare, Package, Plus, MoreHorizontal } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "~/components/ui/button";
@@ -18,6 +18,7 @@ import { TopProductsPanel } from "~/components/app/top-products-panel";
 import { LowStockProductsPanel } from "~/components/app/low-stock-products-panel";
 import { TableSkeleton } from "~/components/app/table-skeleton";
 import { EmptyState } from "~/components/app/empty-state";
+import { QueryErrorState } from "~/components/app/query-error-state";
 import {
   useDashboard,
   useExportDashboard,
@@ -33,6 +34,11 @@ import { StatCard } from "~/components/app/stat-card";
 import { MoneyTotal } from "~/components/app/money-total";
 import { ProductsPanel } from "~/components/app/products-panel";
 import { SectionCard } from "~/components/app/section-card";
+import { InStoreVsOnlineCard } from "~/components/app/in-store-vs-online-card";
+import { GetStartedCard } from "~/components/app/get-started-card";
+import { useAuthStore } from "~/stores/auth.store";
+import { useSectionAccess } from "~/hooks/use-section-access";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
 
 // Lazy so the page shell renders and both data requests start while the
 // recharts chunk is still downloading. The hooks stay in this route, so the
@@ -67,6 +73,8 @@ const RANGE_OPTIONS: ReadonlyArray<DateRangePreset<DashboardRange>> = [
 ];
 
 export default function DashboardPage() {
+  const user = useAuthStore((state) => state.user);
+  const { canAccess } = useSectionAccess();
   // One window for the whole page. Total Sales used to be an all-time figure
   // sitting beside a chart hard-coded to a rolling 12 months, so the two could
   // never be reconciled and neither said which period it covered.
@@ -82,6 +90,8 @@ export default function DashboardPage() {
   const {
     data: dashboard,
     isLoading,
+    isError: overviewFailed,
+    refetch: refetchOverview,
     isPlaceholderData: overviewStale,
   } = useDashboard(params);
   const { downloadReport, exportJson, exporting } = useExportDashboard();
@@ -99,20 +109,22 @@ export default function DashboardPage() {
   const series = sales?.data;
   const totals = sales?.totals;
   const periodLabel = sales?.period.label ?? "";
+  // Shown only once the store has billed at the point of sale in the period.
+  const split = sales?.inStoreVsOnline;
 
   return (
     <div className="space-y-6">
 
       {/* Page header */}
       <div>
-        <PageHeader>
+        <PageHeader data-mobile-title>
           <PageHeaderContent>
-            <PageHeaderTitle>Overview</PageHeaderTitle>
+            <PageHeaderTitle><span className="md:hidden">Hello{user?.firstName ? `, ${user.firstName}` : ""}.</span><span className="hidden md:inline">Overview</span></PageHeaderTitle>
             <PageHeaderDescription>
-              An overview of recent data of customers info, products details and analysis.
+              Your store, at a glance.
             </PageHeaderDescription>
           </PageHeaderContent>
-          <PageHeaderActions>
+          <PageHeaderActions className="max-md:w-full max-md:justify-between">
             <DateRangeFilter
               presets={RANGE_OPTIONS}
               preset={range.preset}
@@ -123,23 +135,11 @@ export default function DashboardPage() {
               onCustomApply={range.applyCustom}
             />
             {/* One download at a time: both lock while either runs, and the
-                clicked one shows progress until its file arrives or fails. */}
-            <Button
-              size="action"
-              variant="outline"
-              onClick={() => exportJson(params)}
-              disabled={exporting !== null}
-              aria-busy={exporting === "json"}
-            >
-              {exporting === "json" ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Upload className="size-3.5" />
-              )}
-              {exporting === "json" ? "Exporting…" : "Export JSON"}
-            </Button>
+                clicked one shows progress until its file arrives or fails.
+                The JSON file is for developers, so it waits in the menu. */}
             <Button
               variant="brand"
+              className="hidden md:inline-flex"
               size="action"
               onClick={() => downloadReport(params)}
               disabled={exporting !== null}
@@ -150,19 +150,53 @@ export default function DashboardPage() {
               ) : (
                 <Download className="size-3.5" />
               )}
-              {exporting === "report" ? "Preparing…" : "Download Report"}
+              {exporting === "report" ? "Preparing…" : "Download report"}
             </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild><Button variant="outline" size="icon" className="rounded-full md:size-9" aria-label="More dashboard actions"><MoreHorizontal className="size-5" /></Button></DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem className="md:hidden" disabled={exporting !== null} onClick={() => downloadReport(params)}><Download className="size-4" />Download report</DropdownMenuItem>
+                <DropdownMenuItem disabled={exporting !== null} onClick={() => exportJson(params)}><Upload className="size-4" />{exporting === "json" ? "Preparing…" : "Raw data for developers (JSON)"}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </PageHeaderActions>
         </PageHeader>
       </div>
 
+      {/* Owners and admins: the first jobs of a new store, until done or hidden. */}
+      <GetStartedCard />
+
+      <div className={cn("space-y-3 md:hidden", (overviewStale || salesStale) && "opacity-50")}>
+        <section aria-label="Sales summary" className="relative overflow-hidden rounded-[26px] bg-brand-forest p-6 text-white">
+          <div aria-hidden className="pointer-events-none absolute -right-10 -top-14 size-44 rounded-full border-[28px] border-brand/10" />
+          <div className="relative">
+            <div className="flex items-center justify-between gap-3"><p className="text-sm text-white/75">Total sales</p><span className="rounded-full bg-white/10 px-3 py-1.5 text-xs text-white/90">{range.label}</span></div>
+            <div className="my-5 break-words text-[36px] font-semibold leading-tight tracking-[-1.4px] [&_.text-caption]:tracking-normal [&_.text-muted-foreground]:text-white/70 [&_.text-warning]:text-amber-200">
+              {salesLoading ? <Skeleton className="h-11 w-40 bg-white/15" /> : totals ? <MoneyTotal amount={totals.grossSales} currency={totals.currency ?? orgCurrency} breakdown={totals.salesByCurrency} unconverted={totals.unconvertedOrders} /> : "—"}
+            </div>
+            {canAccess("/orders") && <Link to="/orders" className="flex min-h-12 items-center justify-between rounded-2xl bg-brand px-4 text-sm font-semibold text-brand-foreground">View your orders<ArrowRight className="size-4" /></Link>}
+          </div>
+        </section>
+        <div className="grid grid-cols-2 gap-3">
+          <StatCard label="Orders" value={dashboard?.totalOrders.toLocaleString()} icon={<ShoppingBag />} isLoading={isLoading} className="rounded-[22px] shadow-none ring-0" />
+          <StatCard label="New customers" value={dashboard?.totalCustomers.toLocaleString()} icon={<Users />} isLoading={isLoading} className="rounded-[22px] shadow-none ring-0" />
+        </div>
+        <div className="grid grid-cols-3 gap-2 pt-2">
+          {[
+            { href: "/orders/new", label: "New order", icon: Plus },
+            { href: "/inbox", label: "Inbox", icon: MessageSquare },
+            { href: "/products", label: "Products", icon: Package },
+          ].filter((item) => canAccess(item.href)).map(({ href, label, icon: Icon }) => <Link key={href} to={href} className="flex min-h-20 flex-col items-center justify-center gap-2 rounded-2xl bg-card text-xs font-medium transition-colors active:bg-brand/30"><Icon className="size-5 text-brand-strong" strokeWidth={1.7} />{label}</Link>)}
+        </div>
+      </div>
+
       {/* Stat cards row */}
-      <div className="flex gap-3 ">
+      <div className="flex flex-col gap-4 md:flex-row md:gap-3">
         {/* On a range switch the previous window's figures stay up, dimmed,
             until the new ones land — no drop back to skeletons. */}
         <div
           className={cn(
-            "flex flex-col flex-1 overflow-hidden rounded-lg ring-1 ring-border divide-y divide-border transition-opacity",
+            "hidden min-w-0 flex-1 flex-col overflow-hidden rounded-lg ring-1 ring-border divide-y divide-border transition-opacity md:flex",
             (overviewStale || salesStale) && "opacity-50"
           )}
         >
@@ -224,7 +258,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Charts row — 2 equal columns */}
-        <div className="flex flex-col flex-2  overflow-hidden rounded-lg ring-1 ring-border divide-y divide-border">
+        <div className="flex min-w-0 flex-col flex-2 overflow-hidden rounded-lg ring-1 ring-border divide-y divide-border">
           <Suspense fallback={profitChartFallback}>
             <ProfitBarChart currency={orgCurrency} params={params} />
           </Suspense>
@@ -232,17 +266,27 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {split && split.inStore.orders > 0 && (
+        <InStoreVsOnlineCard
+          split={split}
+          currency={totals?.currency ?? orgCurrency}
+          periodLabel={periodLabel}
+          showReportsLink={canAccess("/orders/pos/reports")}
+          className={cn("transition-opacity", salesStale && "opacity-50")}
+        />
+      )}
+
       {/* Bottom row — recent orders table and top products */}
       <div
         className={cn(
-          "flex gap-3 justify-between transition-opacity",
+          "flex flex-col gap-4 justify-between transition-opacity lg:flex-row lg:gap-3",
           overviewStale && "opacity-50"
         )}
       >
         <SectionCard
-          className="flex flex-2 flex-col"
+          className="flex min-w-0 flex-2 flex-col"
           title="Recent Orders"
-          description="Keep track of recent order data and others information."
+          description="Your latest orders and their status."
           action={
             <Link to="/orders" className="flex items-center gap-1 text-caption font-medium text-brand-strong hover:text-brand-strong-hover">
               View All <ArrowRight className="size-3.5" />
@@ -252,6 +296,10 @@ export default function DashboardPage() {
           {isLoading ? (
             <div className="p-4">
               <TableSkeleton rows={5} columns={7} />
+            </div>
+          ) : overviewFailed && !dashboard ? (
+            <div className="flex flex-1 items-center justify-center p-8">
+              <QueryErrorState resource="your recent orders" onRetry={() => refetchOverview()} />
             </div>
           ) : recentOrders.length === 0 ? (
             <div className="flex flex-1 items-center justify-center p-8">
@@ -266,13 +314,14 @@ export default function DashboardPage() {
             </div>
           )}
         </SectionCard>
-        <div className="flex flex-1 flex-col gap-4">
+        <div className="flex min-w-0 flex-1 flex-col gap-4">
           <ProductsPanel
             topProducts={dashboard?.topSellingProducts}
             lowStockProducts={dashboard?.lowStockProducts}
             lowStockVariants={dashboard?.lowStockVariants}
             periodLabel={range.label}
             isLoading={isLoading}
+            onRetry={overviewFailed && !dashboard ? () => void refetchOverview() : undefined}
             currency={orgCurrency}
             className="flex-1"
           />

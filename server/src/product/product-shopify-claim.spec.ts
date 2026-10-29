@@ -32,7 +32,7 @@ describe('ProductService — Shopify push claim', () => {
         findMany: jest.fn().mockResolvedValue(opts.bulkRows ?? []),
       },
       channel: {
-        findUnique: jest.fn().mockResolvedValue({ status: ChannelStatus.CONNECTED }),
+        findFirst: jest.fn().mockResolvedValue({ status: ChannelStatus.CONNECTED }),
       },
       // mergeJsonMetadata runs the claim as a raw UPDATE; the row count is
       // whether the guard let it through.

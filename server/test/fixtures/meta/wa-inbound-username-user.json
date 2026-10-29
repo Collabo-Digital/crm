@@ -1,0 +1,40 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Riya",
+                  "username": "riya.k"
+                },
+                "user_id": "US.99887766554433221100"
+              }
+            ],
+            "messages": [
+              {
+                "from_user_id": "US.99887766554433221100",
+                "id": "wamid.USERNAME0001",
+                "timestamp": "1749416500",
+                "type": "text",
+                "text": {
+                  "body": "Hello from a username account"
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

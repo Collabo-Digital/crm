@@ -7,14 +7,21 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 import { toast } from "sonner";
 import {
-  Building2, Lock, Bell, CreditCard, Palette, Users, Shield, Smartphone,
+  Building2, Lock, Palette, Users, Smartphone,
   Check, ChevronRight, AlertTriangle, Loader2, Plus, X, Mail, Trash2,
-  Sun, Moon, Monitor, Receipt, Star, MapPin, Package, ShoppingBag, Layers,
-  Pencil, Store,
+  Sun, Moon, Monitor, Receipt, Star, MapPin, Package, ShoppingBag, Layers, MessageSquare,
+  Pencil, Store, ReceiptText, LogOut,
 } from "lucide-react";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "~/components/ui/select";
+import { Button } from "~/components/ui/button";
+import { Input } from "~/components/ui/input";
+import { Label } from "~/components/ui/label";
+import { Switch } from "~/components/ui/switch";
+import { SaveBar } from "~/components/app/save-bar";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
+import { ModalFrame, ModalTitle } from "~/components/app/order-dialog-primitives";
 import { cn } from "~/lib/utils";
 import { useAuthStore } from "~/stores/auth.store";
 import { useThemeStore } from "~/stores/theme.store";
@@ -30,6 +37,7 @@ import {
 } from "~/hooks/use-org-mutations";
 import { userService } from "~/services/user.service";
 import { apiClient } from "~/lib/api-client";
+import { handleMutationError } from "~/lib/handle-mutation-error";
 import { useGstins, useIndianStates, useStateTaxRates, useProductTypeTaxRates, useCollections, useCollectionOverrides } from "~/hooks/use-gst-queries";
 import {
   useCreateGstinMutation, useUpdateGstinMutation, useDeleteGstinMutation,
@@ -39,42 +47,77 @@ import {
 } from "~/hooks/use-gst-mutations";
 import { useProductTypes } from "~/hooks/use-product-queries";
 import { useRecomputeLoyaltyMutation } from "~/hooks/use-loyalty-mutations";
-import { getPricingPlan } from "~/data/pricing-plans";
+import { BillingIcon, BillingTab } from "~/components/app/settings/billing-tab";
 import {
   ProductSettingsTab,
   OrderSettingsTab,
 } from "~/components/app/settings/sync-settings-tab";
+import { InfluencersSection } from "~/components/app/influencers/influencers-section";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import { ChannelSettingsTab } from "~/components/app/settings/channel-settings-tab";
+import { InboxSettingsTab } from "~/components/app/settings/inbox-settings-tab";
+import { DevelopersIcon, DevelopersTab } from "~/components/app/settings/developers-tab";
+import { useSectionAccess } from "~/hooks/use-section-access";
 import { StoreProfileTab } from "~/components/app/settings/store-profile-tab";
 import { UpgradeOrganizationDialog } from "~/components/app/settings/upgrade-organization-dialog";
-import { SectionAccessPicker } from "~/components/app/settings/section-access-picker";
+import {
+  CapabilityPicker,
+  DEFAULT_CAPABILITIES,
+  JobPresetPicker,
+  MANAGED_CAPABILITY_KEYS,
+  SectionAccessPicker,
+  accessGrants,
+} from "~/components/app/settings/section-access-picker";
 import { AVAILABLE_SECTIONS, isSectionScopedRole, sectionKey, sectionsInGrants, type SectionId } from "~/lib/sections";
 import { formatCurrency } from "~/lib/utils";
-import type { UserRole, OrgMember, OrganizationGstin, CreateGstinRequest, StateTaxRate, ProductTypeTaxRate, CollectionTaxOverride, ShopifyCollection, LoyaltyMetric, OrgResponse, Warehouse } from "~/types/api";
+import type { UpdateOrganizationRequest, UserRole, OrgMember, OrganizationGstin, CreateGstinRequest, StateTaxRate, ProductTypeTaxRate, CollectionTaxOverride, ShopifyCollection, LoyaltyMetric, OrgResponse, Warehouse } from "~/types/api";
 import { readAddress } from "~/lib/address";
 import { useWarehouses } from "~/hooks/use-inventory-queries";
+import { LocationKindBadge } from "~/components/app/inventory/location-kind-badge";
 import { GstReturnSettings } from "~/components/app/settings/gst-return-settings";
-import { InvoiceSeriesSetting } from "~/components/app/settings/invoice-series-setting";
+import { CatalogPricesSetting } from "~/components/app/settings/catalog-prices-setting";
+import { InvoiceSettingsTab } from "~/components/app/settings/invoice-settings-tab";
+import { TaxSchemeSetting } from "~/components/app/settings/tax-scheme-setting";
+import { platformOffered } from "~/lib/channel-providers";
+import { roleLabel } from "~/lib/labels";
+import { pageTitle } from "~/lib/page-title";
 
-export function meta() {
-  return [{ title: "Settings | Collabo CRM" }];
+export function meta({ params }: { params: { tab?: string } }) {
+  // Each tab gets its own title, so tabs and screen readers can tell them apart.
+  const tab = TABS.find((t) => t.id === params.tab);
+  return [{ title: pageTitle(tab?.label, "Settings") }];
 }
 
 // ── Sidebar tabs ─────────────────────────────────────────────────────────────
 
 const TABS = [
   { id: "general", label: "General", icon: Building2 },
-  { id: "store-profile", label: "Store Profile", icon: Store },
+  { id: "store-profile", label: "Store profile", icon: Store },
   { id: "products", label: "Products", icon: Package },
   { id: "orders", label: "Orders", icon: ShoppingBag },
   { id: "channels", label: "Channels", icon: Layers },
+  { id: "inbox", label: "Inbox", icon: MessageSquare },
   { id: "tax-gst", label: "Tax & GST", icon: Receipt },
-  { id: "loyalty", label: "Loyalty Tiers", icon: Star },
+  { id: "invoices", label: "Invoices & bills", icon: ReceiptText },
+  { id: "loyalty", label: "Loyalty tiers", icon: Star },
   { id: "security", label: "Security", icon: Lock },
-  // { id: "notifications", label: "Notifications", icon: Bell },
-  { id: "members", label: "Team Members", icon: Users },
-  // { id: "billing",       label: "Billing & Plan",  icon: CreditCard },
-  // { id: "appearance",    label: "Appearance",       icon: Palette },
+  { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "members", label: "Team members", icon: Users },
+  { id: "developers", label: "Developers", icon: DevelopersIcon },
+  { id: "billing", label: "Billing & plan", icon: BillingIcon },
+];
+
+// The same groups on desktop and phones, by the job each tab does: who the
+// business is, how it sells and gets paid, how it talks to customers, and the
+// people and the account.
+/** Tabs showing the store, tax and invoice set-up (GET /organization/settings and /gst). */
+const SETUP_TABS = ["store-profile", "products", "orders", "tax-gst", "invoices"];
+
+const TAB_GROUPS = [
+  { label: "Business", ids: ["general", "store-profile", "products", "loyalty"] },
+  { label: "Selling and payments", ids: ["orders", "tax-gst", "invoices"] },
+  { label: "Messaging", ids: ["channels", "inbox"] },
+  { label: "Team and account", ids: ["members", "billing", "developers", "security", "appearance"] },
 ];
 
 const INDUSTRIES = [
@@ -116,8 +159,10 @@ const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
   { value: "VENDOR", label: "Vendor" },
 ];
 
+const OWNER_ADMIN_ONLY = "Only the workspace owner and admins can change these settings.";
+
 const AVATAR_COLORS = [
-  "bg-[#CEF17B] text-gray-900",
+  "bg-brand text-brand-foreground",
   "bg-blue-100 text-blue-700",
   "bg-purple-100 text-purple-700",
   "bg-orange-100 text-orange-700",
@@ -127,33 +172,17 @@ const AVATAR_COLORS = [
 
 // ── Reusable components ──────────────────────────────────────────────────────
 
-/** A small toggle switch used for boolean settings (e.g. notification channels). */
-function Toggle({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onChange}
-      className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200",
-        enabled ? "bg-[#CEF17B]" : "bg-gray-200"
-      )}
-    >
-      <span
-        className={cn(
-          "pointer-events-none inline-block size-4 rounded-full bg-white shadow-sm ring-0 transition-transform duration-200",
-          enabled ? "translate-x-4" : "translate-x-0"
-        )}
-      />
-    </button>
-  );
+/** A switch for one on/off setting. It saves when flipped. */
+function Toggle({ enabled, onChange, label }: { enabled: boolean; onChange: () => void; label: string }) {
+  return <Switch checked={enabled} onCheckedChange={() => onChange()} aria-label={label} />;
 }
 
 /** A card wrapper that groups related settings with a title and optional description. */
 function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl bg-white dark:bg-gray-900 p-6 shadow-sm ring-1 ring-border">
+    <div className="rounded-2xl bg-card p-5 md:p-6 shadow-sm ring-1 ring-border">
       <div className="mb-5 border-b pb-4">
-        <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">{title}</p>
+        <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{title}</h2>
         {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
       </div>
       {children}
@@ -161,39 +190,25 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-/** A labeled form field row with an optional hint, laid out in a responsive grid. */
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+/**
+ * A labeled form field row with an optional hint, laid out in a responsive grid.
+ * `htmlFor` is the control's id; the label's id is `${htmlFor}-label`, which a
+ * Select trigger names itself with (aria-labelledby). A row that holds no
+ * single control leaves it out.
+ */
+function Field({ label, hint, htmlFor, children }: { label: string; hint?: string; htmlFor?: string; children: React.ReactNode }) {
+  const labelClass = "block text-xs font-medium text-gray-700 dark:text-gray-300";
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:items-start">
       <div>
-        <p className="text-xs font-medium text-gray-700 dark:text-gray-300">{label}</p>
-        {hint && <p className="mt-0.5 text-[10px] text-muted-foreground leading-snug">{hint}</p>}
+        {htmlFor ? (
+          <label htmlFor={htmlFor} id={`${htmlFor}-label`} className={labelClass}>{label}</label>
+        ) : (
+          <p className={labelClass}>{label}</p>
+        )}
+        {hint && <p className="mt-0.5 text-caption text-muted-foreground leading-snug">{hint}</p>}
       </div>
       <div className="sm:col-span-2">{children}</div>
-    </div>
-  );
-}
-
-/** A single notification preference row with toggles for email and push channels. */
-function NotifRow({ label, hint, email, push }: { label: string; hint: string; email: boolean; push: boolean }) {
-  const [emailEnabled, setEmailEnabled] = useState(email);
-  const [pushEnabled, setPushEnabled] = useState(push);
-  return (
-    <div className="flex items-center justify-between gap-4 py-3">
-      <div className="min-w-0 flex-1">
-        <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{label}</p>
-        <p className="text-[10px] text-muted-foreground">{hint}</p>
-      </div>
-      <div className="flex items-center gap-6 shrink-0">
-        <div className="flex flex-col items-center gap-1">
-          <span className="text-[10px] text-muted-foreground">Email</span>
-          <Toggle enabled={emailEnabled} onChange={() => setEmailEnabled((prev) => !prev)} />
-        </div>
-        <div className="flex flex-col items-center gap-1">
-          <span className="text-[10px] text-muted-foreground">Push</span>
-          <Toggle enabled={pushEnabled} onChange={() => setPushEnabled((prev) => !prev)} />
-        </div>
-      </div>
     </div>
   );
 }
@@ -212,6 +227,36 @@ type PasswordForm = z.infer<typeof passwordSchema>;
 
 // ── Invite dialog inline ─────────────────────────────────────────────────────
 
+/** Which vendor a Vendor member supplies: they only see that vendor's products and orders. */
+function VendorPicker({ value, onChange }: { value: string; onChange: (vendor: string) => void }) {
+  // Distinct Product.vendor values to scope a vendor to.
+  const { data: vendorOptions = [] } = useQuery({
+    queryKey: ["products", "vendors"],
+    queryFn: () => apiClient.get<string[]>("/products/vendors").then((r) => r.data),
+  });
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <Package className="size-3.5 shrink-0 text-gray-400" />
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger className="flex-1 h-9 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs shadow-sm">
+            <SelectValue placeholder={vendorOptions.length ? "Select the vendor…" : "No vendors found in products"} />
+          </SelectTrigger>
+          <SelectContent>
+            {vendorOptions.map((v) => (
+              <SelectItem key={v} value={v}>{v}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <p className="pl-6 text-caption text-muted-foreground">
+        This vendor will only see products and orders for <strong>{value || "the selected vendor"}</strong>.
+      </p>
+    </div>
+  );
+}
+
 /** Inline form for inviting a new team member by email with a selected role. */
 function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
   const [email, setEmail] = useState("");
@@ -219,17 +264,11 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
   const [vendorScope, setVendorScope] = useState("");
   // Sections an Agent / Viewer starts with — everything, until unticked.
   const [sections, setSections] = useState<SectionId[]>(() => AVAILABLE_SECTIONS.map((s) => s.id));
+  const [capabilities, setCapabilities] = useState<string[]>(DEFAULT_CAPABILITIES);
   const sendInvite = useSendInviteMutation(orgId);
 
   const needsVendor = role === "VENDOR";
   const needsSections = isSectionScopedRole(role);
-
-  // Distinct Product.vendor values to scope a vendor invite to.
-  const { data: vendorOptions = [] } = useQuery({
-    queryKey: ["products", "vendors"],
-    queryFn: () => apiClient.get<string[]>("/products/vendors").then((r) => r.data),
-    enabled: needsVendor,
-  });
 
   const canSend = !!email.trim() && (!needsVendor || !!vendorScope);
 
@@ -240,27 +279,28 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
         email: email.trim(),
         role,
         vendorScope: needsVendor ? vendorScope : undefined,
-        grants: needsSections ? sections.map(sectionKey) : undefined,
+        grants: needsSections ? accessGrants(role, sections, capabilities) : undefined,
       },
       { onSuccess: () => { setEmail(""); setVendorScope(""); onDone(); } },
     );
   }
 
   return (
-    <div className="space-y-2 rounded-lg border border-dashed border-[#CEF17B] bg-[#CEF17B]/5 p-3">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-gray-400 dark:text-gray-400" />
-          <input
+    <div className="space-y-3 rounded-lg border border-dashed border-brand bg-brand/5 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative basis-full sm:basis-auto sm:flex-1">
+          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+          <Input
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="teammate@company.com"
-            className="w-full rounded-lg border border-gray-200 bg-white dark:bg-gray-900 dark:border-gray-700 py-2 pl-9 pr-3 text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-400 shadow-sm outline-none focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40"
+            aria-label="Teammate's email"
+            className="bg-card pl-9"
           />
         </div>
         <Select value={role} onValueChange={(selectedRole) => setRole(selectedRole as UserRole)}>
-          <SelectTrigger className="w-[110px] h-9 shrink-0 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs shadow-sm">
+          <SelectTrigger aria-label="Role" className="w-[110px] h-9 shrink-0 bg-card text-xs shadow-sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -269,46 +309,35 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
             ))}
           </SelectContent>
         </Select>
-        <button
-          type="button"
-          onClick={handleSendInvite}
-          disabled={sendInvite.isPending || !canSend}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-3 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors disabled:opacity-50"
-        >
-          {sendInvite.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Send"}
-        </button>
-        <button type="button" onClick={onDone} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
-          <X className="size-4" />
-        </button>
+        <Button type="button" size="lg" onClick={handleSendInvite} disabled={sendInvite.isPending || !canSend}>
+          {sendInvite.isPending && <Loader2 className="animate-spin" />}
+          Send invite
+        </Button>
+        <Button type="button" variant="ghost" size="icon-lg" onClick={onDone} aria-label="Close the invite form">
+          <X />
+        </Button>
       </div>
 
-      {needsVendor && (
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Package className="size-3.5 shrink-0 text-gray-400" />
-            <Select value={vendorScope} onValueChange={setVendorScope}>
-              <SelectTrigger className="flex-1 h-9 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs shadow-sm">
-                <SelectValue placeholder={vendorOptions.length ? "Select the vendor…" : "No vendors found in products"} />
-              </SelectTrigger>
-              <SelectContent>
-                {vendorOptions.map((v) => (
-                  <SelectItem key={v} value={v}>{v}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <p className="pl-6 text-[10px] text-muted-foreground">
-            This vendor will only see products and orders for <strong>{vendorScope || "the selected vendor"}</strong>.
-          </p>
-        </div>
+      {needsVendor && <VendorPicker value={vendorScope} onChange={setVendorScope} />}
+
+      {role === "AGENT" && (
+        <JobPresetPicker
+          sections={sections}
+          capabilities={capabilities}
+          onPick={(preset) => {
+            setSections([...preset.sections]);
+            setCapabilities([...preset.capabilities]);
+          }}
+        />
       )}
 
       {needsSections && (
         <div className="space-y-1.5 pt-1">
-          <p className="text-[10px] font-medium text-muted-foreground">
+          <p className="text-caption font-medium text-muted-foreground">
             Sections this {role === "VIEWER" ? "viewer" : "agent"} can open — the rest show as locked
           </p>
           <SectionAccessPicker value={sections} onChange={setSections} />
+          <CapabilityPicker role={role} sections={sections} value={capabilities} onChange={setCapabilities} />
         </div>
       )}
     </div>
@@ -336,39 +365,210 @@ function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: 
       ? AVAILABLE_SECTIONS.map((s) => s.id)
       : configured.filter((id) => AVAILABLE_SECTION_KEYS.has(sectionKey(id))),
   );
+  const [capabilities, setCapabilities] = useState<string[]>(() => grants.filter((g) => MANAGED_CAPABILITY_KEYS.has(g)));
   const updatePermissions = useUpdateMemberPermissionsMutation(orgId);
 
   function handleSave() {
-    // The endpoint replaces the whole list: keep every grant this picker does
+    // The endpoint replaces the whole list: keep every grant this editor does
     // not manage (inventory.*, and sections this build does not show).
-    const kept = grants.filter((g) => !AVAILABLE_SECTION_KEYS.has(g));
+    const kept = grants.filter((g) => !AVAILABLE_SECTION_KEYS.has(g) && !MANAGED_CAPABILITY_KEYS.has(g));
     updatePermissions.mutate(
-      { memberId: member.id, data: { grants: [...kept, ...sections.map(sectionKey)] } },
+      { memberId: member.id, data: { grants: [...kept, ...accessGrants(member.role, sections, capabilities)] } },
       { onSuccess: onDone },
     );
   }
 
   return (
-    <div className="space-y-3 rounded-lg border border-dashed border-[#CEF17B] bg-[#CEF17B]/5 p-3">
-      <p className="text-[10px] font-medium text-muted-foreground">
+    <div className="space-y-3 rounded-lg border border-dashed border-brand bg-brand/5 p-3">
+      {member.role === "AGENT" && (
+        <JobPresetPicker
+          sections={sections}
+          capabilities={capabilities}
+          disabled={updatePermissions.isPending}
+          onPick={(preset) => {
+            setSections([...preset.sections]);
+            setCapabilities([...preset.capabilities]);
+          }}
+        />
+      )}
+      <p className="text-caption font-medium text-muted-foreground">
         Sections {member.user.firstName} can open — the rest show as locked
         {configured.length === 0 && " (currently full access)"}
       </p>
       <SectionAccessPicker value={sections} onChange={setSections} disabled={updatePermissions.isPending} />
+      <CapabilityPicker
+        role={member.role}
+        sections={sections}
+        value={capabilities}
+        onChange={setCapabilities}
+        disabled={updatePermissions.isPending}
+      />
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={updatePermissions.isPending || sections.length === 0}
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-3 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors disabled:opacity-50"
-        >
-          {updatePermissions.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Save access"}
-        </button>
-        <button type="button" onClick={onDone} className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+        <Button type="button" onClick={handleSave} disabled={updatePermissions.isPending || sections.length === 0}>
+          {updatePermissions.isPending && <Loader2 className="animate-spin" />}
+          Save access
+        </Button>
+        <Button type="button" variant="ghost" onClick={onDone}>
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
+  );
+}
+
+// ── Vendor role dialog ──────────────────────────────────────────────────────
+
+/** Moving a member to Vendor: the role needs the vendor they supply, so it is asked for first. */
+function VendorRoleDialog({ orgId, member, onClose }: { orgId: string; member: OrgMember; onClose: () => void }) {
+  const [vendorScope, setVendorScope] = useState("");
+  const updateRole = useUpdateMemberRoleMutation(orgId);
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Make {member.user.firstName} a vendor</DialogTitle>
+          <DialogDescription>Choose which vendor {member.user.firstName} supplies.</DialogDescription>
+        </DialogHeader>
+        <VendorPicker value={vendorScope} onChange={setVendorScope} />
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="accent"
+            disabled={!vendorScope || updateRole.isPending}
+            onClick={() => updateRole.mutate({ memberId: member.id, data: { role: "VENDOR", vendorScope } }, { onSuccess: onClose })}
+          >
+            {updateRole.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Change role"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Deleting a workspace cannot be undone, and stops its plan, channels,
+ * automations and broadcasts. The owner types its name and their password,
+ * which the server checks again.
+ */
+function DeleteWorkspaceDialog({ orgId, name, onClose }: { orgId: string; name: string; onClose: () => void }) {
+  const [typedName, setTypedName] = useState("");
+  const [password, setPassword] = useState("");
+  const deleteOrg = useDeleteOrganizationMutation();
+  const ready = typedName.trim() === name.trim() && password.length > 0;
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!ready || deleteOrg.isPending) return;
+    deleteOrg.mutate({ orgId, password, confirmName: typedName }, { onSuccess: onClose });
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !deleteOrg.isPending && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete {name}?</DialogTitle>
+          <DialogDescription>
+            This permanently deletes the workspace and all its data. Its plan is cancelled, its channels are disconnected,
+            and its automations and broadcasts stop. This cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <form id="delete-workspace" onSubmit={submit} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="delete-workspace-name" className="block leading-normal">
+              Type <span className="font-semibold">{name}</span> to confirm
+            </Label>
+            <Input
+              id="delete-workspace-name"
+              value={typedName}
+              onChange={(event) => setTypedName(event.target.value)}
+              autoComplete="off"
+              autoFocus
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="delete-workspace-password">Your password</Label>
+            <Input
+              id="delete-workspace-password"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+            />
+          </div>
+        </form>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={deleteOrg.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" form="delete-workspace" variant="destructive" disabled={!ready || deleteOrg.isPending}>
+            {deleteOrg.isPending && <Loader2 className="animate-spin" />}
+            Delete workspace
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Deleting an account cannot be undone, so it takes the account's password,
+ * which the server checks: a signed-in session alone (a stolen token, an
+ * unlocked phone) is not enough.
+ */
+function DeleteAccountDialog({ onClose }: { onClose: () => void }) {
+  const navigate = useNavigate();
+  const logout = useAuthStore((state) => state.logout);
+  const [password, setPassword] = useState("");
+  const deleteAccount = useMutation({
+    mutationFn: () => userService.deleteAccount(password),
+    onSuccess: () => {
+      toast.success("Account deleted.");
+      logout();
+      navigate("/auth/login");
+    },
+    onError: (error) => handleMutationError(error, "Could not delete your account."),
+  });
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!password || deleteAccount.isPending) return;
+    deleteAccount.mutate();
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !deleteAccount.isPending && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete your account?</DialogTitle>
+          <DialogDescription>
+            You leave every workspace you are a member of, and you are signed out everywhere. This cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <form id="delete-account" onSubmit={submit} className="space-y-1.5">
+          <Label htmlFor="delete-account-password">Your password</Label>
+          <Input
+            id="delete-account-password"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete="current-password"
+            autoFocus
+          />
+        </form>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={deleteAccount.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" form="delete-account" variant="destructive" disabled={!password || deleteAccount.isPending}>
+            {deleteAccount.isPending && <Loader2 className="animate-spin" />}
+            Delete my account
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -396,7 +596,7 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
   const [confirmRecompute, setConfirmRecompute] = useState(false);
 
   const {
-    register, handleSubmit, watch, reset,
+    register, handleSubmit, watch, reset, setValue,
     formState: { errors, isDirty },
   } = useForm<LoyaltyForm>({
     resolver: zodResolver(loyaltySchema),
@@ -410,7 +610,6 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
   });
 
   const metric = watch("loyaltyMetric");
-  const unitLabel = metric === "ORDERS" ? "orders" : `${org.currency} spent`;
   const exampleValue = metric === "ORDERS" ? "5" : formatCurrency(500, org.currency, { minimumFractionDigits: 0 });
 
   function onSubmit(values: LoyaltyForm) {
@@ -426,124 +625,112 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
 
   return (
     <>
-      <Section
-        title="Loyalty Tiers"
-        description="Auto-categorize customers into Bronze / Silver / Gold / Platinum based on how much they've ordered."
-      >
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-          <Field
-            label="Tier metric"
-            hint="Which customer metric decides their tier?"
-          >
-            <Select
-              value={metric}
-              onValueChange={(value) => {
-                // react-hook-form's setValue via register doesn't hook into a ui Select
-                // so write through the form ref.
-                reset({ ...watch(), loyaltyMetric: value as LoyaltyMetric }, { keepDirty: true });
-              }}
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <Section
+          title="Loyalty tiers"
+          description="Sort customers into Bronze, Silver, Gold and Platinum by how much they have bought."
+        >
+          <div className="space-y-5">
+            <Field
+              label="Tier metric"
+              hint="Which customer figure decides their tier?"
+              htmlFor="loyalty-metric"
             >
-              <SelectTrigger className="h-9 w-full border-input bg-white dark:bg-gray-900 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ORDERS">Orders placed</SelectItem>
-                <SelectItem value="TOTAL_SPENT">Total spent</SelectItem>
-              </SelectContent>
-            </Select>
-            {metric === "TOTAL_SPENT" && (
-              <p className="mt-1.5 text-[10px] text-orange-600">
-                Total spent is in each customer's original order currency. For multi-currency orgs, prefer Orders.
-              </p>
-            )}
-          </Field>
-
-          {(["loyaltyBronzeMin", "loyaltySilverMin", "loyaltyGoldMin", "loyaltyPlatinumMin"] as const).map((name) => {
-            const tierLabel = name.replace("loyalty", "").replace("Min", "");
-            return (
-              <Field
-                key={name}
-                label={`${tierLabel} minimum`}
-                hint={`Customers at or above this ${unitLabel} become ${tierLabel}. (e.g. ${exampleValue})`}
+              <Select
+                value={metric}
+                onValueChange={(value) => setValue("loyaltyMetric", value as LoyaltyMetric, { shouldDirty: true })}
               >
-                <input
-                  type="number"
-                  // step={metric === "ORDERS" ? "1" : "0.01"}
-                  min="1"
-                  {...register(name, { valueAsNumber: true })}
-                  className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs text-gray-900 dark:text-gray-100 shadow-sm focus:border-[#CEF17B] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/40"
-                />
-                {errors[name] && (
-                  <p className="mt-1 text-[10px] text-red-500">{errors[name]?.message as string}</p>
-                )}
-              </Field>
-            );
-          })}
+                <SelectTrigger id="loyalty-metric" aria-labelledby="loyalty-metric-label" className="h-9 w-full border-input bg-card text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ORDERS">Orders placed</SelectItem>
+                  <SelectItem value="TOTAL_SPENT">Total spent</SelectItem>
+                </SelectContent>
+              </Select>
+              {metric === "TOTAL_SPENT" && (
+                <p className="mt-1.5 text-caption text-warning-text">
+                  Total spent is counted in each order's own currency. If you sell in more than one currency, use Orders placed.
+                </p>
+              )}
+            </Field>
 
-          <div className="flex items-center justify-between gap-3 border-t pt-4">
-            <p className="text-[10px] text-muted-foreground">
-              Saving changes only stores the new thresholds — click "Recompute tiers" to apply them to existing customers.
+            {(["loyaltyBronzeMin", "loyaltySilverMin", "loyaltyGoldMin", "loyaltyPlatinumMin"] as const).map((name) => {
+              const tierLabel = name.replace("loyalty", "").replace("Min", "");
+              return (
+                <Field
+                  key={name}
+                  label={`${tierLabel} minimum`}
+                  hint={
+                    metric === "ORDERS"
+                      ? `Customers with at least this many orders become ${tierLabel}. For example, ${exampleValue}.`
+                      : `Customers who have spent at least this much become ${tierLabel}. For example, ${exampleValue}.`
+                  }
+                  htmlFor={name}
+                >
+                  <Input
+                    id={name}
+                    type="number"
+                    min="1"
+                    aria-invalid={errors[name] ? true : undefined}
+                    aria-describedby={errors[name] ? `${name}-error` : undefined}
+                    {...register(name, { valueAsNumber: true })}
+                  />
+                  {errors[name] && (
+                    <p id={`${name}-error`} className="mt-1 text-caption text-danger-text">{errors[name]?.message as string}</p>
+                  )}
+                </Field>
+              );
+            })}
+
+            <p className="border-t pt-4 text-caption text-muted-foreground">
+              New orders move their customer to the right tier as they come in. To re-sort the customers you already have, save and then use Recompute tiers below.
             </p>
-            <button
-              type="submit"
-              disabled={!isDirty || updateOrg.isPending}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-3 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {updateOrg.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-              Save thresholds
-            </button>
           </div>
-        </form>
-      </Section>
+        </Section>
+        <SaveBar
+          dirty={isDirty}
+          saving={updateOrg.isPending}
+          invalid={Object.keys(errors).length > 0}
+          onDiscard={() => reset()}
+          what="the loyalty tiers"
+        />
+      </form>
 
       <Section
         title="Recompute all customer tiers"
-        description="Re-evaluates every customer's tier against the current thresholds. Run this after changing thresholds or the metric."
+        description="Re-sorts every customer against the saved thresholds. Run it after changing the thresholds or the metric."
       >
-        <div className="flex items-center justify-between gap-4">
-          <p className="text-[10px] text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <p className="min-w-0 flex-1 text-caption text-muted-foreground">
             {isDirty
-              ? "Save your thresholds first before recomputing."
-              : "New orders sync their customer's tier automatically. Use this for a one-time catch-up across all customers."}
+              ? "Save your thresholds before recomputing."
+              : "A one-time catch-up for all your customers."}
           </p>
-          <button
-            type="button"
-            onClick={() => setConfirmRecompute(true)}
-            disabled={isDirty || recompute.isPending}
-            className="shrink-0 inline-flex h-8 items-center gap-1.5 rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {recompute.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Star className="size-3.5" />}
+          <Button type="button" variant="outline" onClick={() => setConfirmRecompute(true)} disabled={isDirty || recompute.isPending}>
+            {recompute.isPending ? <Loader2 className="animate-spin" /> : <Star />}
             Recompute tiers
-          </button>
+          </Button>
         </div>
       </Section>
 
-      {confirmRecompute && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setConfirmRecompute(false)}>
-          <div className="w-full max-w-sm rounded-xl bg-white dark:bg-gray-900 p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Recompute customer tiers?</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Every customer will be re-evaluated against the current thresholds. Manual VIP overrides will be replaced.
-            </p>
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirmRecompute(false)}
-                className="inline-flex h-8 items-center rounded-lg px-3 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleRecompute}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-3 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors"
-              >
-                <Check className="size-3.5" /> Recompute
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Dialog open={confirmRecompute} onOpenChange={setConfirmRecompute}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Recompute customer tiers?</DialogTitle>
+            <DialogDescription>
+              Every customer is sorted again against the saved thresholds. Tiers you set by hand, such as VIP, are replaced.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmRecompute(false)}>Cancel</Button>
+            <Button onClick={handleRecompute}>
+              <Check />
+              Recompute
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
@@ -551,12 +738,11 @@ function LoyaltyTab({ org }: { org: OrgResponse }) {
 // ── Appearance tab ──────────────────────────────────────────────────────────
 
 const THEME_OPTIONS = [
-  { value: "light" as const, label: "Light", icon: Sun, desc: "Clean light interface with white backgrounds" },
-  { value: "dark" as const, label: "Dark", icon: Moon, desc: "Easy on the eyes with dark backgrounds" },
-  { value: "system" as const, label: "System", icon: Monitor, desc: "Automatically match your OS preference" },
+  { value: "light" as const, label: "Light", icon: Sun, desc: "Light backgrounds, for bright rooms." },
+  { value: "dark" as const, label: "Dark", icon: Moon, desc: "Dark backgrounds, easier on the eyes at night." },
+  { value: "system" as const, label: "System", icon: Monitor, desc: "Follows your device's light or dark setting." },
 ];
 
-/** Appearance settings tab with theme selection, accent color, and layout options. */
 // ── Tax & GST Tab ───────────────────────────────────────────────────────────
 
 // Must stay in step with GST_RATE_SLABS on the server, which now ENFORCES this
@@ -586,19 +772,20 @@ function PlacesOfBusiness({
 
   return (
     <div className="mt-2 space-y-1 border-l-2 border-gray-100 dark:border-gray-800 pl-2">
-      <p className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">
+      <p className="text-caption font-medium text-muted-foreground">
         Places of business
       </p>
-      <p className="text-[10px] text-muted-foreground">
+      <p className="text-caption text-muted-foreground">
         <span className="text-gray-600 dark:text-gray-400">Principal:</span>{" "}
         {principal.hasAddress ? principal.lines.join(", ") : "No registered address"}
       </p>
       {additional.map((w) => (
-        <p key={w.id} className="text-[10px] text-muted-foreground">
+        <p key={w.id} className="text-caption text-muted-foreground">
+          <LocationKindBadge kind={w.kind} className="mr-1 align-middle" />
           <span className="text-gray-600 dark:text-gray-400">{w.name}:</span>{" "}
           {readAddress(w.address).lines.join(", ") || "No address"}
           {!w.apobDeclared && (
-            <span className="ml-1 rounded bg-amber-50 px-1 text-[9px] text-amber-700">
+            <span className="ml-1 rounded bg-warning-subtle px-1 text-caption text-warning-text">
               not declared on portal
             </span>
           )}
@@ -726,19 +913,19 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
   return (
     <>
       {/* GST Toggle */}
-      <Section title="GST Status" description="Enable GST to generate tax-compliant invoices for Indian businesses.">
+      <Section title="GST" description="Enable GST to generate tax-compliant invoices for Indian businesses.">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs font-medium text-gray-700 dark:text-gray-300">Enable GST</p>
-            <p className="text-[10px] text-muted-foreground">When enabled, you can register GSTINs and generate GST invoices.</p>
+            <p className="text-caption text-muted-foreground">When enabled, you can register GSTINs and generate GST invoices.</p>
           </div>
-          <Toggle enabled={gstEnabled} onChange={handleGstToggle} />
+          <Toggle enabled={gstEnabled} onChange={handleGstToggle} label="Enable GST" />
         </div>
       </Section>
 
       {/* GSTIN Registrations */}
       {gstEnabled && (
-        <Section title="GSTIN Registrations" description="Add your GST Identification Numbers for each state where your business is registered.">
+        <Section title="GSTIN registrations" description="Add your GST Identification Numbers for each state where your business is registered.">
           {/* GSTIN List */}
           {gstinsLoading ? (
             <div className="flex items-center justify-center py-8">
@@ -750,7 +937,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
               <p className="mt-2 text-xs text-muted-foreground">No GSTIN registered yet.</p>
               <button
                 onClick={startAdd}
-                className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-[#cdff8c] px-3 py-1.5 text-xs font-medium text-gray-900 hover:bg-[#b8e67d] transition-colors"
+                className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-brand-foreground hover:bg-brand-hover transition-colors"
               >
                 <Plus className="size-3.5" /> Add GSTIN
               </button>
@@ -769,17 +956,17 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                           {g.gstin}
                         </p>
                         {g.isDefault && (
-                          <span className="inline-flex items-center gap-0.5 rounded-full bg-[#cdff8c]/30 px-1.5 py-0.5 text-[9px] font-medium text-[#4d7a00]">
+                          <span className="inline-flex items-center gap-0.5 rounded-full bg-brand/30 px-1.5 py-0.5 text-caption font-medium text-brand-strong">
                             <Star className="size-2.5" /> Default
                           </span>
                         )}
                       </div>
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                      <p className="text-caption text-muted-foreground mt-0.5">
                         {g.legalName} {g.tradeName ? `(${g.tradeName})` : ""}
                       </p>
                       <div className="flex items-center gap-1 mt-0.5">
                         <MapPin className="size-2.5 text-muted-foreground" />
-                        <p className="text-[10px] text-muted-foreground">
+                        <p className="text-caption text-muted-foreground">
                           {g.stateName} ({g.stateCode})
                         </p>
                       </div>
@@ -789,10 +976,10 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                       {!g.isDefault && (
                         <button
                           onClick={() => updateGstin.mutate({ id: g.id, data: { isDefault: true } })}
-                          className="rounded-md px-2 py-1 text-[10px] text-muted-foreground hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-                          title="Set as default"
+                          className="rounded-md px-2 py-1 text-caption text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                          title="Make this the default GSTIN"
                         >
-                          Set Default
+                          Set as default
                         </button>
                       )}
                       <button
@@ -821,7 +1008,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
               {(unlinkedWarehouses > 0 || undeclaredWarehouses > 0) && (
                 <div className="mt-3 space-y-1">
                   {unlinkedWarehouses > 0 && (
-                    <p className="text-[10px] text-muted-foreground">
+                    <p className="text-caption text-muted-foreground">
                       {unlinkedWarehouses} warehouse{unlinkedWarehouses === 1 ? " is" : "s are"} not linked to a GST registration.{" "}
                       <Link to="/products/inventory/warehouses" className="underline hover:text-gray-900 dark:hover:text-gray-100">
                         Link them
@@ -829,7 +1016,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                     </p>
                   )}
                   {undeclaredWarehouses > 0 && (
-                    <p className="text-[10px] text-muted-foreground">
+                    <p className="text-caption text-muted-foreground">
                       {undeclaredWarehouses} place{undeclaredWarehouses === 1 ? "" : "s"} of business not yet marked as declared on the GST portal.
                     </p>
                   )}
@@ -840,7 +1027,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
               {!showAddForm && (
                 <button
                   onClick={startAdd}
-                  className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-xs text-muted-foreground hover:border-[#cdff8c] hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+                  className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-input px-3 py-1.5 text-xs text-muted-foreground hover:border-brand-strong hover:text-foreground transition-colors"
                 >
                   <Plus className="size-3.5" /> Add another GSTIN
                 </button>
@@ -850,26 +1037,27 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
 
           {/* Add GSTIN Form */}
           {showAddForm && (
-            <div className="mt-4 space-y-3 rounded-lg border border-dashed border-[#cdff8c] bg-[#cdff8c]/5 p-4">
+            <div className="mt-4 space-y-3 rounded-lg border border-dashed border-brand bg-brand/5 p-4">
               <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
-                {editingId ? "Edit GSTIN Registration" : "Add GSTIN Registration"}
+                {editingId ? "Edit GSTIN registration" : "Add GSTIN registration"}
               </p>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">GSTIN *</label>
+                  <label htmlFor="gstin-form-gstin" className="text-label text-muted-foreground">GSTIN *</label>
                   <input
+                    id="gstin-form-gstin"
                     value={form.gstin}
                     onChange={(e) => setForm((prev) => ({ ...prev, gstin: e.target.value.toUpperCase() }))}
                     placeholder="e.g. 27AABCU9603R1ZM"
                     maxLength={15}
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs font-mono outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-card px-3 py-2 text-xs font-mono"
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">State *</label>
+                  <label id="gstin-form-state-label" className="text-label text-muted-foreground">State *</label>
                   <Select value={form.stateCode} onValueChange={handleStateChange}>
-                    <SelectTrigger className="mt-1 h-9 text-xs">
+                    <SelectTrigger aria-labelledby="gstin-form-state-label" className="mt-1 h-9 text-xs">
                       <SelectValue placeholder="Select state" />
                     </SelectTrigger>
                     <SelectContent>
@@ -882,21 +1070,23 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                   </Select>
                 </div>
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Legal Name *</label>
+                  <label htmlFor="gstin-form-legal-name" className="text-label text-muted-foreground">Legal name *</label>
                   <input
+                    id="gstin-form-legal-name"
                     value={form.legalName}
                     onChange={(e) => setForm((prev) => ({ ...prev, legalName: e.target.value }))}
                     placeholder="Registered legal name"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-card px-3 py-2 text-xs"
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Trade Name</label>
+                  <label htmlFor="gstin-form-trade-name" className="text-label text-muted-foreground">Trade name</label>
                   <input
+                    id="gstin-form-trade-name"
                     value={form.tradeName || ""}
                     onChange={(e) => setForm((prev) => ({ ...prev, tradeName: e.target.value }))}
                     placeholder="Brand/trade name (optional)"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-card px-3 py-2 text-xs"
                   />
                 </div>
               </div>
@@ -907,48 +1097,52 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                   invoice snapshotted a null sellerAddress and printed without
                   it. Keys match the canonical shape lib/address.ts reads. */}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <p className="sm:col-span-2 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                <p className="sm:col-span-2 text-caption font-semibold text-muted-foreground">
                   Registered address — printed on every invoice issued under this GSTIN
                 </p>
                 <div className="sm:col-span-2">
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Address line 1</label>
+                  <label htmlFor="gstin-form-address1" className="text-label text-muted-foreground">Address line 1</label>
                   <input
+                    id="gstin-form-address1"
                     value={form.address?.address1 ?? ""}
                     onChange={(e) => patchAddress({ address1: e.target.value })}
                     placeholder="Building, street"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-card px-3 py-2 text-xs"
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Address line 2</label>
+                  <label htmlFor="gstin-form-address2" className="text-label text-muted-foreground">Address line 2</label>
                   <input
+                    id="gstin-form-address2"
                     value={form.address?.address2 ?? ""}
                     onChange={(e) => patchAddress({ address2: e.target.value })}
                     placeholder="Area, landmark (optional)"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-card px-3 py-2 text-xs"
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">City</label>
+                  <label htmlFor="gstin-form-city" className="text-label text-muted-foreground">City</label>
                   <input
+                    id="gstin-form-city"
                     value={form.address?.city ?? ""}
                     onChange={(e) => patchAddress({ city: e.target.value })}
                     placeholder="City"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-card px-3 py-2 text-xs"
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">PIN code</label>
+                  <label htmlFor="gstin-form-zip" className="text-label text-muted-foreground">PIN code</label>
                   <input
+                    id="gstin-form-zip"
                     value={form.address?.zip ?? ""}
                     onChange={(e) => patchAddress({ zip: e.target.value })}
                     placeholder="6-digit PIN"
-                    className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-[#cdff8c]"
+                    className="mt-1 w-full rounded-lg border bg-card px-3 py-2 text-xs"
                   />
                 </div>
               </div>
 
-              <label className="flex items-center gap-2 text-[10px] text-gray-600 dark:text-gray-400">
+              <label className="flex items-center gap-2 text-caption text-muted-foreground">
                 <input
                   type="checkbox"
                   checked={form.isDefault || false}
@@ -962,7 +1156,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                 <button
                   onClick={handleAddGstin}
                   disabled={createGstin.isPending || updateGstin.isPending}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#cdff8c] px-4 py-2 text-xs font-medium text-gray-900 hover:bg-[#b8e67d] disabled:opacity-50 transition-colors"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-4 py-2 text-xs font-medium text-brand-foreground hover:bg-brand-hover disabled:opacity-50 transition-colors"
                 >
                   {createGstin.isPending || updateGstin.isPending ? (
                     <Loader2 className="size-3 animate-spin" />
@@ -983,6 +1177,9 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
         </Section>
       )}
 
+      {/* Composition scheme and e-invoicing: which documents get issued at all. */}
+      {gstEnabled && <TaxSchemeSetting />}
+
       {/* State Base Tax Rates */}
       {gstEnabled && (
         <StateTaxRatesSection />
@@ -998,31 +1195,27 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
         <CollectionOverridesSection />
       )}
 
-      {/* GST return settings — B2CL threshold and default UQC. */}
-      {gstEnabled && <GstReturnSettings />}
+      {/* Whether catalogue and typed prices already contain GST. */}
+      {gstEnabled && <CatalogPricesSetting />}
 
-      {/* Invoice series prefix. Statutory output, same as the return settings
-          above, so it lives behind the same manager-gated route. */}
-      {gstEnabled && <InvoiceSeriesSetting />}
+      {/* GST returns and the invoice prefix: one form, one Save. */}
+      {gstEnabled && <GstReturnSettings />}
 
       {/* Remove-registration confirmation. Same shape as the recompute-tiers
           confirm above, so the page has one way of asking. */}
       {confirmDelete && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setConfirmDeleteId(null)}
+        <ModalFrame
+          onClose={() => setConfirmDeleteId(null)}
+          describedBy="remove-gstin-help"
+          className="w-full max-w-sm rounded-xl bg-white dark:bg-gray-900 p-5 shadow-xl outline-none"
         >
-          <div
-            className="w-full max-w-sm rounded-xl bg-white dark:bg-gray-900 p-5 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+            <ModalTitle className="text-sm font-semibold text-gray-900 dark:text-gray-100">
               Remove this GSTIN registration?
-            </p>
+            </ModalTitle>
             <p className="mt-1 font-mono text-xs text-gray-700 dark:text-gray-300">
               {confirmDelete.gstin}
             </p>
-            <p className="mt-2 text-xs text-muted-foreground">
+            <p id="remove-gstin-help" className="mt-2 text-xs text-muted-foreground">
               New invoices can no longer be issued under it. Invoices already issued keep it,
               and you can add the same number back later to restore this registration.
             </p>
@@ -1058,8 +1251,7 @@ function TaxGstTab({ orgId, gstEnabled: initialGstEnabled }: { orgId: string; gs
                 Remove
               </button>
             </div>
-          </div>
-        </div>
+        </ModalFrame>
       )}
     </>
   );
@@ -1089,14 +1281,14 @@ function StateTaxRatesSection() {
   const availableStates = states.filter((s) => !existingCodes.has(s.code));
 
   return (
-    <Section title="State Base Tax Rates" description="Set default GST rates per state. Used when no product-level or collection-level rate is configured.">
+    <Section title="State base tax rates" description="Set default GST rates per state. Used when no product-level or collection-level rate is configured.">
       {isLoading ? (
         <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : taxRates.length === 0 && !showAddForm ? (
         <div className="py-6 text-center">
           <p className="text-xs text-muted-foreground">No state tax rates configured.</p>
-          <button onClick={() => setShowAddForm(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#cdff8c] px-3 py-1.5 text-xs font-medium text-gray-900 hover:bg-[#b8e67d] transition-colors">
-            <Plus className="size-3.5" /> Add State Rate
+          <button onClick={() => setShowAddForm(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-brand-foreground hover:bg-brand-hover transition-colors">
+            <Plus className="size-3.5" /> Add state rate
           </button>
         </div>
       ) : (
@@ -1106,7 +1298,7 @@ function StateTaxRatesSection() {
               <div key={rate.id} className="flex items-center justify-between rounded-lg border p-3">
                 <div>
                   <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{rate.stateName}</p>
-                  <p className="text-[10px] text-muted-foreground">State Code: {rate.stateCode}</p>
+                  <p className="text-caption text-muted-foreground">State code {rate.stateCode}</p>
                 </div>
                 <div className="flex items-center gap-3">
                   {/* Editable in place. The update mutation existed and was
@@ -1137,19 +1329,19 @@ function StateTaxRatesSection() {
           </div>
 
           {!showAddForm && (
-            <button onClick={() => setShowAddForm(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-xs text-muted-foreground hover:border-[#cdff8c] hover:text-gray-900 dark:hover:text-gray-100 transition-colors">
-              <Plus className="size-3.5" /> Add State Rate
+            <button onClick={() => setShowAddForm(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-input px-3 py-1.5 text-xs text-muted-foreground hover:border-brand-strong hover:text-foreground transition-colors">
+              <Plus className="size-3.5" /> Add state rate
             </button>
           )}
         </>
       )}
 
       {showAddForm && (
-        <div className="mt-3 flex items-end gap-3 rounded-lg border border-dashed border-[#cdff8c] bg-[#cdff8c]/5 p-4">
+        <div className="mt-3 flex items-end gap-3 rounded-lg border border-dashed border-brand bg-brand/5 p-4">
           <div className="flex-1">
-            <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">State</label>
+            <label className="text-label text-muted-foreground">State</label>
             <Select value={stateCode} onValueChange={setStateCode}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Select state" /></SelectTrigger>
+              <SelectTrigger aria-label="State" className="mt-1 h-9 text-xs"><SelectValue placeholder="Select state" /></SelectTrigger>
               <SelectContent>
                 {availableStates.map((s) => (
                   <SelectItem key={s.code} value={s.code} className="text-xs">{s.code} - {s.name}</SelectItem>
@@ -1158,15 +1350,15 @@ function StateTaxRatesSection() {
             </Select>
           </div>
           <div className="w-28">
-            <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">GST Rate</label>
+            <label className="text-label text-muted-foreground">GST rate</label>
             <Select value={gstRate} onValueChange={setGstRate}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
+              <SelectTrigger aria-label="GST rate" className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
               <SelectContent>
                 {GST_RATE_OPTIONS.map((r) => (<SelectItem key={r} value={r} className="text-xs">{r}%</SelectItem>))}
               </SelectContent>
             </Select>
           </div>
-          <button onClick={handleAdd} disabled={createRate.isPending} className="inline-flex h-9 items-center gap-1 rounded-lg bg-[#cdff8c] px-3 text-xs font-medium text-gray-900 hover:bg-[#b8e67d] disabled:opacity-50">
+          <button onClick={handleAdd} disabled={createRate.isPending} className="inline-flex h-9 items-center gap-1 rounded-lg bg-brand px-3 text-xs font-medium text-brand-foreground hover:bg-brand-hover disabled:opacity-50">
             {createRate.isPending ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />} Add
           </button>
           <button onClick={() => setShowAddForm(false)} className="h-9 rounded-lg px-3 text-xs text-muted-foreground hover:bg-gray-100 dark:hover:bg-gray-800">Cancel</button>
@@ -1199,14 +1391,14 @@ function ProductTypeTaxRatesSection() {
   const availableTypes = (productTypes as string[]).filter((t) => !existingTypes.has(t));
 
   return (
-    <Section title="Product Type Tax Rates" description="Set default GST rates by product type (e.g., T-Shirts = 12%, Electronics = 18%). Overrides state base rates.">
+    <Section title="Product type tax rates" description="Set default GST rates by product type (e.g., T-Shirts = 12%, Electronics = 18%). Overrides state base rates.">
       {isLoading ? (
         <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : taxRates.length === 0 && !showAddForm ? (
         <div className="py-6 text-center">
           <p className="text-xs text-muted-foreground">No product type tax rates configured.</p>
-          <button onClick={() => setShowAddForm(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#cdff8c] px-3 py-1.5 text-xs font-medium text-gray-900 hover:bg-[#b8e67d] transition-colors">
-            <Plus className="size-3.5" /> Add Product Type Rate
+          <button onClick={() => setShowAddForm(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-brand-foreground hover:bg-brand-hover transition-colors">
+            <Plus className="size-3.5" /> Add product type rate
           </button>
         </div>
       ) : (
@@ -1216,7 +1408,7 @@ function ProductTypeTaxRatesSection() {
               <div key={rate.id} className="flex items-center justify-between rounded-lg border p-3">
                 <div>
                   <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{rate.productType}</p>
-                  <p className="text-[10px] text-muted-foreground">Product type</p>
+                  <p className="text-caption text-muted-foreground">Product type</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="rounded-full bg-blue-50 dark:bg-blue-900/20 px-2 py-0.5 text-xs font-semibold text-blue-700 dark:text-blue-400">{Number(rate.gstRate)}%</span>
@@ -1229,19 +1421,19 @@ function ProductTypeTaxRatesSection() {
           </div>
 
           {!showAddForm && (
-            <button onClick={() => setShowAddForm(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-xs text-muted-foreground hover:border-[#cdff8c] hover:text-gray-900 dark:hover:text-gray-100 transition-colors">
-              <Plus className="size-3.5" /> Add Product Type Rate
+            <button onClick={() => setShowAddForm(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-input px-3 py-1.5 text-xs text-muted-foreground hover:border-brand-strong hover:text-foreground transition-colors">
+              <Plus className="size-3.5" /> Add product type rate
             </button>
           )}
         </>
       )}
 
       {showAddForm && (
-        <div className="mt-3 flex items-end gap-3 rounded-lg border border-dashed border-[#cdff8c] bg-[#cdff8c]/5 p-4">
+        <div className="mt-3 flex items-end gap-3 rounded-lg border border-dashed border-brand bg-brand/5 p-4">
           <div className="flex-1">
-            <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Product Type</label>
+            <label className="text-label text-muted-foreground">Product type</label>
             <Select value={productType} onValueChange={setProductType}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Select product type" /></SelectTrigger>
+              <SelectTrigger aria-label="Product type" className="mt-1 h-9 text-xs"><SelectValue placeholder="Select product type" /></SelectTrigger>
               <SelectContent>
                 {availableTypes.length > 0 ? (
                   availableTypes.map((t) => (
@@ -1254,15 +1446,15 @@ function ProductTypeTaxRatesSection() {
             </Select>
           </div>
           <div className="w-28">
-            <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">GST Rate</label>
+            <label className="text-label text-muted-foreground">GST rate</label>
             <Select value={gstRate} onValueChange={setGstRate}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
+              <SelectTrigger aria-label="GST rate" className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
               <SelectContent>
                 {GST_RATE_OPTIONS.map((r) => (<SelectItem key={r} value={r} className="text-xs">{r}%</SelectItem>))}
               </SelectContent>
             </Select>
           </div>
-          <button onClick={handleAdd} disabled={createRate.isPending} className="inline-flex h-9 items-center gap-1 rounded-lg bg-[#cdff8c] px-3 text-xs font-medium text-gray-900 hover:bg-[#b8e67d] disabled:opacity-50">
+          <button onClick={handleAdd} disabled={createRate.isPending} className="inline-flex h-9 items-center gap-1 rounded-lg bg-brand px-3 text-xs font-medium text-brand-foreground hover:bg-brand-hover disabled:opacity-50">
             {createRate.isPending ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />} Add
           </button>
           <button onClick={() => setShowAddForm(false)} className="h-9 rounded-lg px-3 text-xs text-muted-foreground hover:bg-gray-100 dark:hover:bg-gray-800">Cancel</button>
@@ -1296,19 +1488,19 @@ function CollectionOverridesSection() {
   const isLoading = collectionsLoading || overridesLoading;
 
   return (
-    <Section title="Collection Tax Overrides" description="Override GST rate for all products in a Shopify collection. Overrides state base rates but not individual product rates.">
+    <Section title="Collection tax overrides" description="Override GST rate for all products in a Shopify collection. Overrides state base rates but not individual product rates.">
       {isLoading ? (
         <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : collections.length === 0 ? (
         <div className="py-6 text-center">
           <p className="text-xs text-muted-foreground">No Shopify collections synced yet.</p>
-          <p className="mt-1 text-[10px] text-muted-foreground">Sync your collections from the Channels page first.</p>
+          <p className="mt-1 text-caption text-muted-foreground">Sync your collections from the Channels page first.</p>
         </div>
       ) : overrides.length === 0 && !showAddForm ? (
         <div className="py-6 text-center">
           <p className="text-xs text-muted-foreground">No collection overrides configured.</p>
-          <button onClick={() => setShowAddForm(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#cdff8c] px-3 py-1.5 text-xs font-medium text-gray-900 hover:bg-[#b8e67d] transition-colors">
-            <Plus className="size-3.5" /> Add Override
+          <button onClick={() => setShowAddForm(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-brand-foreground hover:bg-brand-hover transition-colors">
+            <Plus className="size-3.5" /> Add override
           </button>
         </div>
       ) : (
@@ -1318,7 +1510,7 @@ function CollectionOverridesSection() {
               <div key={override.id} className="flex items-center justify-between rounded-lg border p-3">
                 <div>
                   <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{override.collection?.title ?? "Unknown"}</p>
-                  <p className="text-[10px] text-muted-foreground">Collection override</p>
+                  <p className="text-caption text-muted-foreground">Collection override</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="rounded-full bg-purple-50 dark:bg-purple-900/20 px-2 py-0.5 text-xs font-semibold text-purple-700 dark:text-purple-400">{Number(override.gstRate)}%</span>
@@ -1331,19 +1523,19 @@ function CollectionOverridesSection() {
           </div>
 
           {!showAddForm && availableCollections.length > 0 && (
-            <button onClick={() => setShowAddForm(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-xs text-muted-foreground hover:border-[#cdff8c] hover:text-gray-900 dark:hover:text-gray-100 transition-colors">
-              <Plus className="size-3.5" /> Add Override
+            <button onClick={() => setShowAddForm(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-input px-3 py-1.5 text-xs text-muted-foreground hover:border-brand-strong hover:text-foreground transition-colors">
+              <Plus className="size-3.5" /> Add override
             </button>
           )}
         </>
       )}
 
       {showAddForm && (
-        <div className="mt-3 flex items-end gap-3 rounded-lg border border-dashed border-[#cdff8c] bg-[#cdff8c]/5 p-4">
+        <div className="mt-3 flex items-end gap-3 rounded-lg border border-dashed border-brand bg-brand/5 p-4">
           <div className="flex-1">
-            <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">Collection</label>
+            <label className="text-label text-muted-foreground">Collection</label>
             <Select value={collectionId} onValueChange={setCollectionId}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Select collection" /></SelectTrigger>
+              <SelectTrigger aria-label="Collection" className="mt-1 h-9 text-xs"><SelectValue placeholder="Select collection" /></SelectTrigger>
               <SelectContent>
                 {availableCollections.map((c: ShopifyCollection) => (
                   <SelectItem key={c.id} value={c.id} className="text-xs">{c.title}</SelectItem>
@@ -1352,15 +1544,15 @@ function CollectionOverridesSection() {
             </Select>
           </div>
           <div className="w-28">
-            <label className="text-[10px] font-medium text-gray-600 dark:text-gray-400">GST Rate</label>
+            <label className="text-label text-muted-foreground">GST rate</label>
             <Select value={gstRate} onValueChange={setGstRate}>
-              <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
+              <SelectTrigger aria-label="GST rate" className="mt-1 h-9 text-xs"><SelectValue placeholder="Rate" /></SelectTrigger>
               <SelectContent>
                 {GST_RATE_OPTIONS.map((r) => (<SelectItem key={r} value={r} className="text-xs">{r}%</SelectItem>))}
               </SelectContent>
             </Select>
           </div>
-          <button onClick={handleAdd} disabled={createOverride.isPending} className="inline-flex h-9 items-center gap-1 rounded-lg bg-[#cdff8c] px-3 text-xs font-medium text-gray-900 hover:bg-[#b8e67d] disabled:opacity-50">
+          <button onClick={handleAdd} disabled={createOverride.isPending} className="inline-flex h-9 items-center gap-1 rounded-lg bg-brand px-3 text-xs font-medium text-brand-foreground hover:bg-brand-hover disabled:opacity-50">
             {createOverride.isPending ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />} Add
           </button>
           <button onClick={() => setShowAddForm(false)} className="h-9 rounded-lg px-3 text-xs text-muted-foreground hover:bg-gray-100 dark:hover:bg-gray-800">Cancel</button>
@@ -1374,95 +1566,47 @@ function AppearanceTab() {
   const { theme, setTheme } = useThemeStore();
 
   return (
-    <>
-      <Section title="Theme" description="Choose your preferred color mode for the interface.">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {THEME_OPTIONS.map(({ value, label, icon: Icon, desc }) => {
-            const isActive = theme === value;
-            return (
-              <button
-                key={value}
-                onClick={() => setTheme(value)}
-                className={cn(
-                  "group relative flex flex-col items-center gap-3 rounded-xl border-2 p-5 text-center transition-all",
-                  isActive
-                    ? "border-[#CEF17B] bg-[#CEF17B]/10 dark:bg-[#CEF17B]/5"
-                    : "border-transparent bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-800"
-                )}
-              >
-                {/* Preview card */}
-                <div className={cn(
-                  "flex size-16 items-center justify-center rounded-xl shadow-sm ring-1 transition-colors",
-                  value === "light"
-                    ? "bg-white ring-gray-200"
-                    : value === "dark"
-                      ? "bg-gray-900 ring-gray-700"
-                      : "bg-gradient-to-br from-white to-gray-900 ring-gray-300"
-                )}>
-                  <Icon className={cn(
-                    "size-6",
-                    value === "light" ? "text-amber-500" : value === "dark" ? "text-blue-400" : "text-gray-500"
-                  )} />
-                </div>
-
-                <div>
-                  <p className={cn(
-                    "text-sm font-semibold",
-                    isActive ? "text-[#084734] dark:text-[#CEF17B]" : "text-gray-900 dark:text-gray-100"
-                  )}>
-                    {label}
-                  </p>
-                  <p className="mt-0.5 text-[10px] text-muted-foreground leading-snug">{desc}</p>
-                </div>
-
-                {/* Checkmark */}
-                {isActive && (
-                  <div className="absolute top-2.5 right-2.5 flex size-5 items-center justify-center rounded-full bg-[#CEF17B]">
-                    <Check className="size-3 text-gray-900" />
-                  </div>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </Section>
-
-      <Section title="Accent Color" description="Used for buttons, highlights, and active states.">
-        <div className="flex items-center gap-3">
-          {["#CEF17B", "#60a5fa", "#f472b6", "#fb923c", "#a78bfa", "#34d399"].map((color) => (
+    <Section title="Theme" description="Light, dark, or the same as your device. It changes straight away, on this device only.">
+      <div role="radiogroup" aria-label="Theme" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {THEME_OPTIONS.map(({ value, label, icon: Icon, desc }) => {
+          const isActive = theme === value;
+          return (
             <button
-              key={color}
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={isActive}
+              onClick={() => setTheme(value)}
               className={cn(
-                "size-8 rounded-full ring-2 ring-offset-2 dark:ring-offset-gray-900 transition-all",
-                color === "#CEF17B" ? "ring-gray-900 dark:ring-gray-100" : "ring-transparent hover:ring-gray-300"
+                "group relative flex flex-col items-center gap-3 rounded-xl border-2 p-5 text-center transition-colors",
+                isActive ? "border-brand-strong bg-brand/10" : "border-transparent bg-muted/60 hover:bg-muted"
               )}
-              style={{ backgroundColor: color }}
-            />
-          ))}
-        </div>
-        <p className="mt-3 text-[10px] text-muted-foreground">
-          Accent color customization coming soon. Currently using green.
-        </p>
-      </Section>
-
-      <Section title="Layout" description="How the navigation is displayed.">
-        <Field label="Navigation Style" hint="Choose how the main navigation appears.">
-          <Select defaultValue="top">
-            <SelectTrigger className="h-9 w-full rounded-lg border border-input bg-transparent dark:bg-gray-900 dark:text-gray-100 px-3 text-sm focus:ring-2 focus:ring-[#CEF17B]/50">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="top">Top navigation (current)</SelectItem>
-              <SelectItem value="left">Left sidebar</SelectItem>
-              <SelectItem value="compact">Compact sidebar</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
-        <p className="mt-3 text-[10px] text-muted-foreground">
-          Layout customization coming soon.
-        </p>
-      </Section>
-    </>
+            >
+              {/* A small picture of the theme */}
+              <div className={cn(
+                "flex size-16 items-center justify-center rounded-xl shadow-sm ring-1",
+                value === "light"
+                  ? "bg-white ring-gray-200"
+                  : value === "dark"
+                    ? "bg-gray-900 ring-gray-700"
+                    : "bg-gradient-to-br from-white from-50% to-gray-900 to-50% ring-gray-300"
+              )}>
+                <Icon className={cn("size-6", value === "dark" ? "text-gray-100" : "text-gray-700", value === "system" && "rounded-md bg-white/90 p-0.5")} />
+              </div>
+              <div>
+                <p className={cn("text-sm font-semibold", isActive ? "text-brand-strong" : "text-foreground")}>{label}</p>
+                <p className="mt-0.5 text-caption text-muted-foreground">{desc}</p>
+              </div>
+              {isActive && (
+                <span className="absolute top-2.5 right-2.5 flex size-5 items-center justify-center rounded-full bg-brand">
+                  <Check className="size-3 text-brand-foreground" />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </Section>
   );
 }
 
@@ -1470,12 +1614,18 @@ function AppearanceTab() {
 
 /** Main settings page with tabbed navigation for workspace, security, and preferences. */
 export default function SettingsPage() {
-  const navigate = useNavigate();
   const { tab } = useParams();
-  const activeTab = TABS.some((t) => t.id === tab) ? tab! : "general";
+  const requestedTab = TABS.some((t) => t.id === tab) ? tab! : "general";
+  // Settings tabs an influencer may open. Anything else is an organization
+  // setting they have no business in, and the layout would bounce them off it
+  // anyway — listing it would just be a dead link. Channels is why they are
+  // here; Security and Appearance are their own.
+  const INFLUENCER_TABS = ["channels", "security", "appearance"];
   const [showInvite, setShowInvite] = useState(false);
   // Member whose section-access editor is open.
   const [accessMemberId, setAccessMemberId] = useState<string | null>(null);
+  // Member being moved to Vendor, while their vendor is chosen.
+  const [vendorMember, setVendorMember] = useState<OrgMember | null>(null);
   /**
    * Drives the org-setup sheet:
    *   - `null`     — sheet closed
@@ -1488,16 +1638,45 @@ export default function SettingsPage() {
 
   const authUser = useAuthStore((state) => state.user);
   const currentOrgId = useAuthStore((state) => state.currentOrgId);
-  const logout = useAuthStore((state) => state.logout);
 
   // Org data
   const { data: org, isLoading: orgLoading } = useCurrentOrg();
   const { data: members, isLoading: membersLoading } = useOrgMembers(currentOrgId);
-  const { data: invites } = useOrgInvites(currentOrgId);
+  const { role: memberRole, isInfluencer } = useCurrentRole();
+  const { data: invites } = useOrgInvites(currentOrgId, memberRole === "OWNER" || memberRole === "ADMIN");
+  const { canAccess } = useSectionAccess();
+  // Who may change the workspace (name, localization) and its team (invites,
+  // roles, removal), and see billing and developer keys. The server is the
+  // real boundary (`requireRole` / @Roles on each route); this hides
+  // affordances that would only be refused.
+  const canManageTeam = memberRole === "OWNER" || memberRole === "ADMIN";
+  // Inbox settings are for members who can open the Inbox; billing and
+  // developers for owners and admins. The store, tax and invoice set-up is
+  // read by Orders, Products and Invoices, and the server refuses it to
+  // members without one of them.
+  const canSeeSetup = canAccess("/orders") || canAccess("/products") || canAccess("/orders/invoices");
+  const visibleTabs = isInfluencer
+    ? TABS.filter((t) => INFLUENCER_TABS.includes(t.id))
+    : TABS.filter(
+        (t) =>
+          (t.id !== "inbox" || canAccess("/inbox")) &&
+          (!SETUP_TABS.includes(t.id) || canSeeSetup) &&
+          ((t.id !== "billing" && t.id !== "developers") || canManageTeam),
+      );
+  const activeTab = !isInfluencer && SETUP_TABS.includes(requestedTab) && !canSeeSetup ? "general" : requestedTab;
+  // Staff only. Influencers hold a membership like anyone else, but they are an
+  // outside party managed in their own section, with their own lifecycle.
+  const staffMembers = (members ?? []).filter((m) => m.role !== "INFLUENCER");
+  // Same reason: an influencer's invitation belongs in the influencer table,
+  // not in the pending-team-invitations list beside it.
+  const staffInvites = (invites ?? []).filter((i) => i.role !== "INFLUENCER");
 
   // ── Mutations for organization, member, and invite operations ──
   const updateOrg = useUpdateOrganizationMutation(currentOrgId ?? "");
-  const deleteOrg = useDeleteOrganizationMutation();
+  // The delete-workspace dialog, open while the owner confirms.
+  const [deletingWorkspace, setDeletingWorkspace] = useState(false);
+  // The delete-account dialog, open while the person confirms with their password.
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const updateRole = useUpdateMemberRoleMutation(currentOrgId ?? "");
   const removeMember = useRemoveMemberMutation(currentOrgId ?? "");
   const revokeInvite = useRevokeInviteMutation(currentOrgId ?? "");
@@ -1505,38 +1684,48 @@ export default function SettingsPage() {
   const myRole = members?.find((m) => m.user.id === authUser?.id)?.role;
   const canManageAccess = myRole === "OWNER" || myRole === "ADMIN";
 
-  // General form state
+  // General: the workspace's details and region, one form saved together.
   const [orgName, setOrgName] = useState<string | null>(null);
   const [orgWebsite, setOrgWebsite] = useState<string | null>(null);
   const [orgIndustry, setOrgIndustry] = useState<string | null>(null);
   const [orgTimezone, setOrgTimezone] = useState<string | null>(null);
   const [orgCurrency, setOrgCurrency] = useState<string | null>(null);
 
-  const displayName = orgName ?? org?.name ?? "";
-  const displayWebsite = orgWebsite ?? org?.website ?? "";
-  const displayIndustry = orgIndustry ?? org?.industry ?? "";
-  const displayTimezone = orgTimezone ?? org?.timezone ?? "UTC";
-  const displayCurrency = orgCurrency ?? org?.currency ?? "USD";
+  const saved = {
+    name: org?.name ?? "",
+    website: org?.website ?? "",
+    industry: org?.industry ?? "",
+    timezone: org?.timezone ?? "UTC",
+    currency: org?.currency ?? "USD",
+  };
+  const general = {
+    name: orgName ?? saved.name,
+    // A website can be changed but not cleared: the server only takes a URL.
+    website: orgWebsite ?? saved.website,
+    industry: orgIndustry ?? saved.industry,
+    timezone: orgTimezone ?? saved.timezone,
+    currency: orgCurrency ?? saved.currency,
+  };
+  const generalPatch: UpdateOrganizationRequest = Object.fromEntries(
+    (Object.keys(general) as Array<keyof typeof general>)
+      .map((key) => [key, general[key].trim()] as const)
+      .filter(([key, value]) => value !== saved[key] && !(key === "website" && value === "")),
+  );
+  const generalDirty = !!org && Object.keys(generalPatch).length > 0;
+  const generalNameInvalid = general.name.trim().length < 2;
+  const generalWebsiteInvalid = !!general.website.trim() && !/^\S+\.\S+$/.test(general.website.trim());
+
+  function discardGeneral() {
+    setOrgName(null);
+    setOrgWebsite(null);
+    setOrgIndustry(null);
+    setOrgTimezone(null);
+    setOrgCurrency(null);
+  }
 
   function handleSaveGeneral() {
-    updateOrg.mutate({
-      name: orgName ?? org?.name,
-      website: orgWebsite ?? org?.website ?? undefined,
-      industry: orgIndustry ?? org?.industry ?? undefined,
-    });
-  }
-
-  function handleSaveLocalization() {
-    updateOrg.mutate({
-      timezone: orgTimezone ?? org?.timezone,
-      currency: orgCurrency ?? org?.currency,
-    });
-  }
-
-  function handleDeleteOrg() {
-    if (!currentOrgId) return;
-    if (!window.confirm("Are you sure? This will permanently delete this workspace and all its data.")) return;
-    deleteOrg.mutate(currentOrgId);
+    if (!generalDirty || generalNameInvalid || generalWebsiteInvalid) return;
+    updateOrg.mutate(generalPatch, { onSuccess: discardGeneral });
   }
 
   // Password form
@@ -1561,68 +1750,61 @@ export default function SettingsPage() {
     },
   });
 
-  // Delete account
-  const deleteAccount = useMutation({
-    mutationFn: () => userService.deleteAccount(),
-    onSuccess: () => {
-      toast.success("Account deleted.");
-      logout();
-      navigate("/auth/login");
-    },
-    onError: () => toast.error("Failed to delete account."),
+  // A lost or shared phone: end every session but this one.
+  const signOutOthers = useMutation({
+    mutationFn: () => userService.signOutOtherDevices(),
+    onSuccess: () => toast.success("Signed out of every other device. This one stays signed in."),
+    onError: (error) => handleMutationError(error, "Could not sign out the other devices."),
   });
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          Manage your workspace configuration, security, and preferences.
-        </p>
+    <div className="settings-page space-y-6">
+      <div className="space-y-2">
+        <h1 className="text-[27px] font-semibold tracking-tight text-foreground md:font-heading md:text-page-title md:tracking-normal"><span className="md:hidden">{tab ? visibleTabs.find((item) => item.id === activeTab)?.label ?? "Settings" : "Settings"}</span><span className="hidden md:inline">Settings</span></h1>
+        <p className={cn("text-sm leading-relaxed text-muted-foreground", tab && "max-md:hidden")}>Make Collabo work your way.</p>
       </div>
 
-      <div className="flex gap-6 items-start">
+      {!tab && <div className="space-y-5 md:hidden">
+        <div className="flex items-center gap-4 rounded-3xl bg-brand/35 p-5"><span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-card"><Building2 className="size-6 text-brand-strong" strokeWidth={1.7} /></span><div className="min-w-0"><p className="text-xs text-muted-foreground">Your workspace</p><p className="mt-1 truncate text-base font-semibold">{org?.name || "Workspace settings"}</p></div></div>
+        {TAB_GROUPS.map((group) => {
+          const entries = group.ids.flatMap((id) => visibleTabs.filter((item) => item.id === id));
+          if (!entries.length) return null;
+          return <section key={group.label}><h2 className="mb-2.5 px-1 text-xs font-medium text-muted-foreground">{group.label}</h2><div className="divide-y divide-border/60 overflow-hidden rounded-3xl bg-card px-4">{entries.map(({ id, label, icon: Icon }) => <Link key={id} to={`/settings/${id}`} className="flex min-h-16 items-center gap-3 py-3"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-surface-sunken"><Icon className="size-[18px] text-brand-strong" strokeWidth={1.7} /></span><span className="text-sm font-medium">{label}</span><ChevronRight className="ml-auto size-4 text-muted-foreground" /></Link>)}</div></section>;
+        })}
+      </div>}
+
+      <div className={cn("flex gap-6 items-start", !tab && "max-md:hidden")}>
         {/* Sidebar */}
         <aside className="hidden w-52 shrink-0 md:block">
-          <div className="rounded-xl bg-white dark:bg-gray-900 p-2 shadow-sm ring-1 ring-border">
-            {TABS.map(({ id, label, icon: Icon }) => (
-              <Link
-                key={id}
-                to={`/settings/${id}`}
-                aria-current={activeTab === id ? "page" : undefined}
-                className={cn(
-                  "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors text-left",
-                  activeTab === id
-                    ? "bg-[#CEF17B] text-gray-900"
-                    : "text-gray-500 dark:text-gray-400 hover:bg-[#f1f7fa] dark:hover:bg-gray-800/60 hover:text-gray-900 dark:hover:text-gray-100"
-                )}
-              >
-                <Icon className="size-4 shrink-0" />
-                {label}
-                {activeTab === id && <ChevronRight className="ml-auto size-3.5" />}
-              </Link>
-            ))}
-          </div>
+          <nav aria-label="Settings" className="space-y-2 rounded-xl bg-card p-2 shadow-sm ring-1 ring-border">
+            {TAB_GROUPS.map((group) => {
+              const entries = group.ids.flatMap((id) => visibleTabs.filter((item) => item.id === id));
+              if (!entries.length) return null;
+              return (
+                <div key={group.label}>
+                  <p className="px-3 pb-1 pt-1.5 text-caption font-medium text-muted-foreground">{group.label}</p>
+                  {entries.map(({ id, label, icon: Icon }) => (
+                    <Link
+                      key={id}
+                      to={`/settings/${id}`}
+                      aria-current={activeTab === id ? "page" : undefined}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-left",
+                        activeTab === id
+                          ? "bg-brand text-brand-foreground"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                      )}
+                    >
+                      <Icon className="size-4 shrink-0" />
+                      {label}
+                      {activeTab === id && <ChevronRight className="ml-auto size-3.5" />}
+                    </Link>
+                  ))}
+                </div>
+              );
+            })}
+          </nav>
         </aside>
-
-        {/* Mobile tabs */}
-        <div className="flex gap-1 overflow-x-auto md:hidden">
-          {TABS.map(({ id, label }) => (
-            <Link
-              key={id}
-              to={`/settings/${id}`}
-              aria-current={activeTab === id ? "page" : undefined}
-              className={cn(
-                "shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-                activeTab === id
-                  ? "bg-[#CEF17B] text-gray-900"
-                  : "bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 ring-1 ring-border"
-              )}
-            >
-              {label}
-            </Link>
-          ))}
-        </div>
 
         {/* Content */}
         <div className="min-w-0 flex-1 space-y-4">
@@ -1630,25 +1812,36 @@ export default function SettingsPage() {
           {/* ─── GENERAL ─── */}
           {activeTab === "general" && (
             <>
-              <Section title="Organization" description="Basic information about your workspace.">
-                {orgLoading ? (
-                  <div className="flex items-center gap-2 py-4 text-sm text-gray-400">
-                    <Loader2 className="size-4 animate-spin" /> Loading…
-                  </div>
-                ) : (
-                  <>
+              <form
+                id="general-settings"
+                className="space-y-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  handleSaveGeneral();
+                }}
+              >
+                <Section title="Workspace" description="Basic information about your workspace.">
+                  {orgLoading ? (
+                    <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                      <Loader2 className="size-4 animate-spin" /> Loading…
+                    </div>
+                  ) : (
                     <div className="space-y-4 divide-y divide-border">
-                      <Field label="Organization Name" hint="The name shown across your CRM.">
-                        <input
-                          value={displayName}
+                      <Field label="Workspace name" hint="The name shown across Collabo." htmlFor="org-name">
+                        <Input
+                          id="org-name"
+                          value={general.name}
                           onChange={(e) => setOrgName(e.target.value)}
-                          className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                          disabled={!canManageTeam}
+                          aria-invalid={generalNameInvalid || undefined}
+                          aria-describedby={generalNameInvalid ? "org-name-error" : undefined}
                         />
+                        {generalNameInvalid && <p id="org-name-error" className="mt-1 text-caption text-danger-text">Use at least 2 characters.</p>}
                       </Field>
                       <div className="pt-4">
-                        <Field label="Industry" hint="Your primary business vertical.">
-                          <Select value={displayIndustry || undefined} onValueChange={setOrgIndustry}>
-                            <SelectTrigger className="w-full h-9 border-input bg-transparent">
+                        <Field label="Industry" hint="Your main line of business." htmlFor="org-industry">
+                          <Select value={general.industry || undefined} onValueChange={setOrgIndustry} disabled={!canManageTeam}>
+                            <SelectTrigger id="org-industry" aria-labelledby="org-industry-label" className="w-full h-9 border-input bg-transparent">
                               <SelectValue placeholder="Select industry" />
                             </SelectTrigger>
                             <SelectContent>
@@ -1660,167 +1853,167 @@ export default function SettingsPage() {
                         </Field>
                       </div>
                       <div className="pt-4">
-                        <Field label="Website" hint="Your company's public website.">
-                          <input
-                            value={displayWebsite}
+                        <Field label="Website" hint="Your company's public website." htmlFor="org-website">
+                          <Input
+                            id="org-website"
+                            value={general.website}
                             onChange={(e) => setOrgWebsite(e.target.value)}
                             placeholder="https://yourstore.com"
-                            className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                            disabled={!canManageTeam}
+                            aria-invalid={generalWebsiteInvalid || undefined}
+                            aria-describedby={generalWebsiteInvalid ? "org-website-error" : undefined}
                           />
+                          {generalWebsiteInvalid && <p id="org-website-error" className="mt-1 text-caption text-danger-text">Enter a web address, like yourstore.com.</p>}
                         </Field>
                       </div>
                       {org?.type === "ORGANIZATION" && (
                         <div className="pt-4">
-                          <Field label="Workspace Type" hint="This workspace is a team organization.">
-                            <div className="flex items-center gap-2">
-                              <span className="inline-flex rounded-full bg-[#CEF17B]/30 px-2.5 py-1 text-xs font-semibold text-[#084734]">
-                                Organization
+                          <Field label="Workspace type" hint="A workspace for a team.">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="inline-flex rounded-full bg-brand/30 px-2.5 py-1 text-xs font-semibold text-brand-strong">
+                                Team
                               </span>
-                              <button
-                                onClick={() => setOrgSheetMode("create")}
-                                className="inline-flex h-7 items-center gap-1 rounded-md border bg-white dark:bg-gray-900 px-2.5 text-[11px] font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
-                              >
-                                Create another organization
-                                <ChevronRight className="size-3" />
-                              </button>
+                              <Button type="button" variant="outline" size="sm" onClick={() => setOrgSheetMode("create")}>
+                                Create another workspace
+                                <ChevronRight />
+                              </Button>
                             </div>
                           </Field>
                         </div>
                       )}
                       {org?.type === "PERSONAL" && (
                         <div className="pt-4">
-                          <Field label="Workspace Type" hint="This is your personal workspace.">
-                            <div className="flex items-center gap-2">
-                              <span className="inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                          <Field label="Workspace type" hint="Your personal workspace.">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="inline-flex rounded-full bg-info-subtle px-2.5 py-1 text-xs font-semibold text-info-text">
                                 Personal
                               </span>
-                              <button
-                                onClick={() => setOrgSheetMode("default")}
-                                className="inline-flex h-7 items-center gap-1 rounded-md border bg-white dark:bg-gray-900 px-2.5 text-[11px] font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
-                              >
-                                Set up as organization
-                                <ChevronRight className="size-3" />
-                              </button>
+                              <Button type="button" variant="outline" size="sm" onClick={() => setOrgSheetMode("default")}>
+                                Set up for a team
+                                <ChevronRight />
+                              </Button>
                             </div>
                           </Field>
                         </div>
                       )}
                     </div>
-                    <div className="mt-5 flex justify-end">
-                      <button
-                        onClick={handleSaveGeneral}
-                        disabled={updateOrg.isPending}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-4 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors disabled:opacity-50"
-                      >
-                        {updateOrg.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                        Save Changes
-                      </button>
-                    </div>
-                  </>
-                )}
-              </Section>
+                  )}
+                </Section>
 
-              <Section title="Localization" description="Timezone, currency, and regional settings.">
-                <div className="space-y-4 divide-y divide-border">
-                  <Field label="Timezone">
-                    <Select value={displayTimezone} onValueChange={setOrgTimezone}>
-                      <SelectTrigger className="w-full h-9 border-input bg-transparent">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {TIMEZONES.map((tz) => (
-                          <SelectItem key={tz.value} value={tz.value}>{tz.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <div className="pt-4">
-                    <Field label="Currency">
-                      <Select value={displayCurrency} onValueChange={setOrgCurrency}>
-                        <SelectTrigger className="w-full h-9 border-input bg-transparent">
+                <Section title="Region" description="The timezone and currency your reports and prices use.">
+                  <div className="space-y-4 divide-y divide-border">
+                    <Field label="Timezone" htmlFor="org-timezone">
+                      <Select value={general.timezone} onValueChange={setOrgTimezone} disabled={!canManageTeam}>
+                        <SelectTrigger id="org-timezone" aria-labelledby="org-timezone-label" className="w-full h-9 border-input bg-transparent">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {CURRENCIES.map((currency) => (
-                            <SelectItem key={currency.value} value={currency.value}>{currency.label}</SelectItem>
+                          {TIMEZONES.map((tz) => (
+                            <SelectItem key={tz.value} value={tz.value}>{tz.label}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                     </Field>
+                    <div className="pt-4">
+                      <Field label="Currency" htmlFor="org-currency">
+                        <Select value={general.currency} onValueChange={setOrgCurrency} disabled={!canManageTeam}>
+                          <SelectTrigger id="org-currency" aria-labelledby="org-currency-label" className="w-full h-9 border-input bg-transparent">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {CURRENCIES.map((currency) => (
+                              <SelectItem key={currency.value} value={currency.value}>{currency.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                    </div>
                   </div>
-                </div>
-                <div className="mt-5 flex justify-end">
-                  <button
-                    onClick={handleSaveLocalization}
-                    disabled={updateOrg.isPending}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-4 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors disabled:opacity-50"
-                  >
-                    {updateOrg.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                    Save Changes
-                  </button>
-                </div>
-              </Section>
+                </Section>
 
-              <div className="rounded-xl bg-white dark:bg-gray-900 p-6 shadow-sm ring-1 ring-red-100">
-                <div className="flex items-start gap-3">
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-red-100">
-                    <AlertTriangle className="size-4 text-red-600" />
+                {canManageTeam ? (
+                  <SaveBar
+                    dirty={generalDirty}
+                    saving={updateOrg.isPending}
+                    invalid={generalNameInvalid || generalWebsiteInvalid}
+                    onDiscard={discardGeneral}
+                    what="the workspace settings"
+                  />
+                ) : (
+                  <p className="text-xs text-muted-foreground">{OWNER_ADMIN_ONLY}</p>
+                )}
+              </form>
+
+              {/* Only the owner may delete the workspace. */}
+              {memberRole === "OWNER" && (
+                <div className="rounded-xl bg-white dark:bg-gray-900 p-6 shadow-sm ring-1 ring-red-100">
+                  <div className="flex items-start gap-3">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-red-100">
+                      <AlertTriangle className="size-4 text-red-600" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Danger zone</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Permanently delete this workspace and all its data. This action cannot be undone.
+                      </p>
+                      <Button variant="destructive" className="mt-3" onClick={() => setDeletingWorkspace(true)}>
+                        Delete workspace
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Danger Zone</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      Permanently delete this workspace and all its data. This action cannot be undone.
-                    </p>
-                    <button
-                      onClick={handleDeleteOrg}
-                      disabled={deleteOrg.isPending}
-                      className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 px-4 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                    >
-                      {deleteOrg.isPending && <Loader2 className="size-3.5 animate-spin" />}
-                      Delete Workspace
-                    </button>
-                  </div>
+                  {deletingWorkspace && currentOrgId && org && (
+                    <DeleteWorkspaceDialog orgId={currentOrgId} name={org.name} onClose={() => setDeletingWorkspace(false)} />
+                  )}
                 </div>
-              </div>
+              )}
             </>
           )}
 
           {/* ─── SECURITY ─── */}
           {activeTab === "security" && (
             <>
-              <Section title="Change Password" description="Update your account password regularly.">
+              <Section title="Change password" description="Update your account password regularly.">
                 <form onSubmit={passwordForm.handleSubmit((formData) => changePassword.mutate(formData))} className="space-y-3">
-                  <Field label="Current Password">
+                  <Field label="Current password" htmlFor="currentPassword">
                     <input
+                      id="currentPassword"
                       type="password"
                       placeholder="••••••••"
+                      aria-invalid={!!passwordForm.formState.errors.currentPassword}
+                      aria-describedby={passwordForm.formState.errors.currentPassword ? "currentPassword-error" : undefined}
                       {...passwordForm.register("currentPassword")}
-                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                     {passwordForm.formState.errors.currentPassword && (
-                      <p className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.currentPassword.message}</p>
+                      <p id="currentPassword-error" className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.currentPassword.message}</p>
                     )}
                   </Field>
-                  <Field label="New Password" hint="Minimum 8 characters.">
+                  <Field label="New password" hint="Minimum 8 characters." htmlFor="newPassword">
                     <input
+                      id="newPassword"
                       type="password"
                       placeholder="••••••••"
+                      aria-invalid={!!passwordForm.formState.errors.newPassword}
+                      aria-describedby={passwordForm.formState.errors.newPassword ? "newPassword-error" : undefined}
                       {...passwordForm.register("newPassword")}
-                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                     {passwordForm.formState.errors.newPassword && (
-                      <p className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.newPassword.message}</p>
+                      <p id="newPassword-error" className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.newPassword.message}</p>
                     )}
                   </Field>
-                  <Field label="Confirm New Password">
+                  <Field label="Confirm new password" htmlFor="confirmPassword">
                     <input
+                      id="confirmPassword"
                       type="password"
                       placeholder="••••••••"
+                      aria-invalid={!!passwordForm.formState.errors.confirmPassword}
+                      aria-describedby={passwordForm.formState.errors.confirmPassword ? "confirmPassword-error" : undefined}
                       {...passwordForm.register("confirmPassword")}
-                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                      className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                     {passwordForm.formState.errors.confirmPassword && (
-                      <p className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.confirmPassword.message}</p>
+                      <p id="confirmPassword-error" className="mt-1 text-xs text-red-500">{passwordForm.formState.errors.confirmPassword.message}</p>
                     )}
                   </Field>
                   <div className="flex justify-end pt-2">
@@ -1830,10 +2023,22 @@ export default function SettingsPage() {
                       className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-4 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors disabled:opacity-50"
                     >
                       {changePassword.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                      Update Password
+                      Update password
                     </button>
                   </div>
                 </form>
+              </Section>
+
+              <Section title="Signed-in devices" description="Lost a phone, or signed in on a shared computer? End those sessions.">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+                    Every other phone, tablet and computer signed in to your account is signed out at once. This one stays signed in.
+                  </p>
+                  <Button variant="outline" onClick={() => signOutOthers.mutate()} disabled={signOutOthers.isPending}>
+                    {signOutOthers.isPending ? <Loader2 className="animate-spin" /> : <LogOut />}
+                    Sign out of other devices
+                  </Button>
+                </div>
               </Section>
 
               {/* <Section title="Two-Factor Authentication" description="Add an extra layer of security.">
@@ -1861,65 +2066,36 @@ export default function SettingsPage() {
                     <AlertTriangle className="size-4 text-red-600" />
                   </div>
                   <div className="flex-1">
-                    <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Delete Account</p>
+                    <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Delete account</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       Permanently delete your account. This cannot be undone.
                     </p>
-                    <button
-                      onClick={() => {
-                        if (window.confirm("Are you sure you want to delete your account? This cannot be undone.")) {
-                          deleteAccount.mutate();
-                        }
-                      }}
-                      disabled={deleteAccount.isPending}
-                      className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 px-4 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                    >
-                      {deleteAccount.isPending && <Loader2 className="size-3.5 animate-spin" />}
-                      Delete My Account
-                    </button>
+                    <Button variant="destructive" className="mt-3" onClick={() => setDeletingAccount(true)}>
+                      Delete my account
+                    </Button>
                   </div>
                 </div>
+                {deletingAccount && <DeleteAccountDialog onClose={() => setDeletingAccount(false)} />}
               </div>
             </>
-          )}
-
-          {/* ─── NOTIFICATIONS ─── */}
-          {activeTab === "notifications" && (
-            <Section title="Notification Preferences" description="Choose which events trigger email or push notifications.">
-              <div className="divide-y divide-border">
-                <NotifRow label="New Order" hint="When a new order is placed." email push />
-                <NotifRow label="Order Status Changed" hint="When an order moves to a new status." email push={false} />
-                <NotifRow label="New Customer" hint="When a new customer is added." email={false} push />
-                <NotifRow label="Low Stock Alert" hint="When a product falls below threshold." email push />
-                <NotifRow label="New Message" hint="When a customer sends a message." email push />
-                <NotifRow label="Weekly Summary" hint="A weekly digest of your CRM activity." email push={false} />
-                <NotifRow label="Team Updates" hint="When a team member joins or changes role." email={false} push={false} />
-              </div>
-              <div className="mt-5 flex justify-end">
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-4 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors">
-                  <Check className="size-3.5" /> Save Preferences
-                </button>
-              </div>
-            </Section>
           )}
 
           {/* ─── TEAM MEMBERS ─── */}
           {activeTab === "members" && (
             <>
-              <Section title="Team Members" description="Manage who has access to your workspace.">
+              <Section title="Team members" description="Manage who has access to your workspace.">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <p className="text-xs text-muted-foreground">
-                    {membersLoading ? "Loading…" : `${members?.length ?? 0} member${(members?.length ?? 0) !== 1 ? "s" : ""}`}
+                    {membersLoading ? "Loading…" : `${staffMembers.length} member${staffMembers.length !== 1 ? "s" : ""}`}
                   </p>
-                  <button
-                    onClick={() => setShowInvite(true)}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#CEF17B] px-3 text-xs font-medium text-gray-900 hover:bg-[#BADE6F] transition-colors"
-                  >
-                    <Plus className="size-3.5" /> Invite Member
-                  </button>
+                  {canManageTeam && (
+                    <Button type="button" onClick={() => setShowInvite(true)}>
+                      <Plus /> Invite member
+                    </Button>
+                  )}
                 </div>
 
-                {showInvite && currentOrgId && (
+                {showInvite && canManageTeam && currentOrgId && (
                   <div className="mb-4">
                     <InviteForm orgId={currentOrgId} onDone={() => setShowInvite(false)} />
                   </div>
@@ -1931,7 +2107,12 @@ export default function SettingsPage() {
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {members?.map((member, index) => {
+                    {/* Influencers are members too, but they are an outside
+                        party with their own lifecycle and their own section
+                        below. Listing them here would put them in the staff
+                        role dropdown, where an admin could quietly demote one
+                        into an AGENT with access to the whole organization. */}
+                    {staffMembers?.map((member, index) => {
                       const initials = `${member.user.firstName[0]}${member.user.lastName[0]}`.toUpperCase();
                       const isOwner = member.role === "OWNER";
                       const isCurrentUser = member.user.id === authUser?.id;
@@ -1939,36 +2120,49 @@ export default function SettingsPage() {
 
                       return (
                         <div key={member.id} className="space-y-2">
-                        <div className="flex items-center gap-3 rounded-lg bg-[#f1f7fa] dark:bg-gray-800/60 px-4 py-3">
+                        {/* A phone stacks the member: who on the first line, their
+                            access, role and remove on the second. */}
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-muted/60 px-4 py-3 md:flex-nowrap">
                           <div className={cn("flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold", AVATAR_COLORS[index % AVATAR_COLORS.length])}>
                             {initials}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="text-xs font-medium text-gray-900 dark:text-gray-100">
+                            <p className="truncate text-xs font-medium text-gray-900 dark:text-gray-100">
                               {member.user.firstName} {member.user.lastName}
-                              {isCurrentUser && <span className="ml-1.5 text-[10px] text-gray-400">(you)</span>}
+                              {isCurrentUser && <span className="ml-1.5 text-caption text-muted-foreground">(you)</span>}
                             </p>
-                            <p className="text-[10px] text-muted-foreground">{member.user.email}</p>
+                            {member.user.email && <p className="truncate text-caption text-muted-foreground">{member.user.email}</p>}
                           </div>
 
+                          <div className="flex shrink-0 items-center gap-3 max-md:w-full max-md:gap-2">
                           {hasSectionAccess && canManageAccess && (
                             <button
                               type="button"
                               onClick={() => setAccessMemberId(accessMemberId === member.id ? null : member.id)}
-                              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[10px] font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+                              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-input bg-card px-2 text-caption font-medium text-muted-foreground hover:text-foreground transition-colors max-md:h-11 max-md:px-3"
                             >
                               <Lock className="size-3" /> {sectionAccessLabel(member.permissions)}
                             </button>
                           )}
 
                           {isOwner ? (
-                            <span className="shrink-0 rounded-full bg-[#CEF17B]/30 px-2 py-0.5 text-[10px] font-semibold text-[#084734]">
+                            <span className="shrink-0 rounded-full bg-brand/30 px-2 py-0.5 text-caption font-semibold text-brand-strong">
                               Owner
+                            </span>
+                          ) : !canManageTeam ? (
+                            <span className="shrink-0 rounded-full bg-card px-2 py-0.5 text-caption font-medium text-muted-foreground ring-1 ring-border">
+                              {roleLabel(member.role)}
                             </span>
                           ) : (
                             <Select
                               value={member.role}
-                              onValueChange={(selectedRole) =>
+                              onValueChange={(selectedRole) => {
+                                // Vendor needs the vendor they supply first; the role
+                                // shown stays as it is until that is saved.
+                                if (selectedRole === "VENDOR") {
+                                  setVendorMember(member);
+                                  return;
+                                }
                                 updateRole.mutate(
                                   { memberId: member.id, data: { role: selectedRole as UserRole } },
                                   {
@@ -1983,10 +2177,13 @@ export default function SettingsPage() {
                                       }
                                     },
                                   },
-                                )
-                              }
+                                );
+                              }}
                             >
-                              <SelectTrigger className="h-7 w-[100px] shrink-0 border-input bg-white dark:bg-gray-900 text-xs">
+                              <SelectTrigger
+                                aria-label={`Role for ${member.user.firstName} ${member.user.lastName}`}
+                                className="h-7 w-[100px] shrink-0 border-input bg-white dark:bg-gray-900 text-xs max-md:min-w-24 max-md:flex-1"
+                              >
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
@@ -1997,18 +2194,21 @@ export default function SettingsPage() {
                             </Select>
                           )}
 
-                          {!isOwner && !isCurrentUser && (
+                          {canManageTeam && !isOwner && !isCurrentUser && (
                             <button
+                              type="button"
                               onClick={() => {
                                 if (window.confirm(`Remove ${member.user.firstName} from this workspace?`)) {
                                   removeMember.mutate(member.id);
                                 }
                               }}
-                              className="shrink-0 text-gray-300 hover:text-red-500 transition-colors"
+                              aria-label={`Remove ${member.user.firstName} ${member.user.lastName}`}
+                              className="inline-flex shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-danger-text transition-colors md:-m-1.5 md:p-1.5 max-md:size-11 max-md:rounded-lg max-md:text-danger-text"
                             >
-                              <Trash2 className="size-3.5" />
+                              <Trash2 className="size-3.5 max-md:size-4" />
                             </button>
                           )}
+                          </div>
                         </div>
                         {hasSectionAccess && accessMemberId === member.id && currentOrgId && (
                           <MemberAccessEditor
@@ -2022,21 +2222,25 @@ export default function SettingsPage() {
                     })}
                   </div>
                 )}
+
+                {vendorMember && canManageTeam && currentOrgId && (
+                  <VendorRoleDialog orgId={currentOrgId} member={vendorMember} onClose={() => setVendorMember(null)} />
+                )}
               </Section>
 
               {/* Pending invites */}
-              {invites && invites.length > 0 && (
-                <Section title="Pending Invitations" description="Invitations that haven't been accepted yet.">
+              {staffInvites.length > 0 && (
+                <Section title="Pending invitations" description="Invitations that haven't been accepted yet.">
                   <div className="space-y-2">
-                    {invites.map((invite) => (
-                      <div key={invite.id} className="flex items-center justify-between gap-3 rounded-lg bg-[#f1f7fa] dark:bg-gray-800/60 px-4 py-3">
+                    {staffInvites.map((invite) => (
+                      <div key={invite.id} className="flex items-center justify-between gap-3 rounded-lg bg-muted/60 px-4 py-3">
                         <div className="flex items-center gap-3">
                           <div className="flex size-8 items-center justify-center rounded-full bg-orange-100 text-xs font-bold text-orange-700">
                             <Mail className="size-3.5" />
                           </div>
                           <div>
                             <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{invite.email}</p>
-                            <p className="text-[10px] text-muted-foreground">
+                            <p className="text-caption text-muted-foreground">
                               Invited as {invite.role.toLowerCase()}
                               {isSectionScopedRole(invite.role) && ` · ${sectionAccessLabel(invite.permissions)}`} · Expires {new Date(invite.expiresAt).toLocaleDateString()}
                             </p>
@@ -2053,58 +2257,23 @@ export default function SettingsPage() {
                   </div>
                 </Section>
               )}
+
+              {/* Influencers: external collaborators, invited and tracked here,
+                  who connect their own Instagram from Settings -> Channels. */}
+              {currentOrgId && platformOffered("INSTAGRAM") && (
+                <InfluencersSection
+                  orgId={currentOrgId}
+                  canManage={canManageTeam}
+                  isPersonalWorkspace={org?.type === "PERSONAL"}
+                />
+              )}
             </>
           )}
 
           {/* ─── BILLING ─── */}
-          {activeTab === "billing" && (
-            <>
-              {(() => {
-                const plan = org ? getPricingPlan(org.billingPlan) : null;
-                const interval = org?.billingInterval ?? null;
-                return (
-                  <Section
-                    title="Current Plan"
-                    description={plan ? `You are on the ${plan.name} plan.` : ""}
-                  >
-                    <div className="flex items-center justify-between gap-4 rounded-lg bg-[#f1f7fa] dark:bg-gray-800/60 p-4">
-                      <div>
-                        <p className="text-sm font-bold text-gray-900 dark:text-gray-100">
-                          {plan?.name ?? "—"} Plan
-                          {interval && (
-                            <span className="ml-2 text-xs font-normal text-gray-500">
-                              ({interval.toLowerCase()})
-                            </span>
-                          )}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Billing managed via Stripe.
-                        </p>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {plan?.features.map((feature) => (
-                            <span
-                              key={feature}
-                              className="inline-flex items-center gap-1 rounded-full bg-[#CEF17B]/30 px-2 py-0.5 text-[10px] font-medium text-[#084734]"
-                            >
-                              <Check className="size-2.5" /> {feature}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      <button className="shrink-0 inline-flex h-8 items-center rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800/60 transition-colors">
-                        Change plan
-                      </button>
-                    </div>
-                  </Section>
-                );
-              })()}
-
-              <Section title="Payment Method" description="Manage your billing information.">
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-dashed border-input px-3 text-xs text-muted-foreground hover:border-[#CEF17B] hover:text-gray-900 dark:hover:text-gray-100 transition-colors">
-                  + Add Payment Method
-                </button>
-              </Section>
-            </>
+          {activeTab === "billing" && org && (memberRole === "OWNER" || memberRole === "ADMIN") && <BillingTab orgId={org.id} />}
+          {activeTab === "billing" && memberRole && memberRole !== "OWNER" && memberRole !== "ADMIN" && (
+            <p className="rounded-2xl bg-card p-6 text-sm text-muted-foreground shadow-sm ring-1 ring-border">Only the workspace owner and admins can see billing and plans.</p>
           )}
 
           {/* ─── PRODUCT SETTINGS ─── */}
@@ -2118,10 +2287,18 @@ export default function SettingsPage() {
           {/* ── Channels ─────────────────────────────────────────── */}
           {activeTab === "channels" && <ChannelSettingsTab />}
 
+          {activeTab === "inbox" && <InboxSettingsTab />}
+          {activeTab === "developers" && canManageTeam && <DevelopersTab />}
+          {activeTab === "developers" && memberRole && !canManageTeam && (
+            <p className="rounded-2xl bg-card p-6 text-sm text-muted-foreground shadow-sm ring-1 ring-border">Only the workspace owner and admins can manage API keys and webhooks.</p>
+          )}
+
           {/* ─── TAX & GST ─── */}
           {activeTab === "tax-gst" && org && (
             <TaxGstTab orgId={org.id} gstEnabled={org.gstEnabled ?? false} />
           )}
+
+          {activeTab === "invoices" && <InvoiceSettingsTab />}
 
           {/* ─── LOYALTY TIERS ─── */}
           {activeTab === "loyalty" && org && (

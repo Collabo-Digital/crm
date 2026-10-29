@@ -20,6 +20,8 @@ interface ShopifyConnectDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Pre-filled when the merchant arrives from the embedded Shopify app (?install_shop=). */
   initialDomain?: string;
+  /** A connect that needed no redirect, so the caller can go on to its locations. */
+  onConnected?: (channelId: string) => void;
 }
 
 /**
@@ -37,7 +39,7 @@ interface ShopifyConnectDialogProps {
  *        the same OAuth flow runs but with the entered credentials; the
  *        token is fetched automatically.
  */
-export function ShopifyConnectDialog({ open, onOpenChange, initialDomain }: ShopifyConnectDialogProps) {
+export function ShopifyConnectDialog({ open, onOpenChange, initialDomain, onConnected }: ShopifyConnectDialogProps) {
   // ── Public app section ──
   const [shopDomain, setShopDomain] = useState("");
 
@@ -93,9 +95,10 @@ export function ShopifyConnectDialog({ open, onOpenChange, initialDomain }: Shop
           accessToken: accessToken.trim(),
         },
         {
-          onSuccess: () => {
+          onSuccess: (response) => {
             resetCustomForm();
             onOpenChange(false);
+            onConnected?.(response.channelId);
           },
         },
       );
@@ -140,7 +143,7 @@ export function ShopifyConnectDialog({ open, onOpenChange, initialDomain }: Shop
                 onChange={(e) => setShopDomain(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handlePublicInstall()}
                 placeholder="my-store"
-                className="flex-1 rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#CEF17B]/50 placeholder:text-gray-400"
+                className="flex-1 rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-sm outline-none placeholder:text-gray-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
               />
               <span className="shrink-0 text-xs text-muted-foreground">.myshopify.com</span>
             </div>
@@ -217,7 +220,7 @@ export function ShopifyConnectDialog({ open, onOpenChange, initialDomain }: Shop
                     value={customDomain}
                     onChange={(e) => setCustomDomain(e.target.value)}
                     placeholder="my-store"
-                    className="flex-1 rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#CEF17B]/50 placeholder:text-gray-400"
+                    className="flex-1 rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-sm outline-none placeholder:text-gray-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                   <span className="shrink-0 text-xs text-muted-foreground">.myshopify.com</span>
                 </div>
@@ -232,7 +235,7 @@ export function ShopifyConnectDialog({ open, onOpenChange, initialDomain }: Shop
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder="From the app's API credentials"
-                  className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-[#CEF17B]/50 placeholder:text-gray-400"
+                  className="mt-1 w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-sm font-mono outline-none placeholder:text-gray-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
               </div>
 
@@ -247,7 +250,7 @@ export function ShopifyConnectDialog({ open, onOpenChange, initialDomain }: Shop
                     value={apiSecret}
                     onChange={(e) => setApiSecret(e.target.value)}
                     placeholder="shpss_xxxxxxxxxxxxxxxxxxxxx"
-                    className="w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 pr-10 text-sm font-mono outline-none focus:ring-2 focus:ring-[#CEF17B]/50 placeholder:text-gray-400"
+                    className="w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 pr-10 text-sm font-mono outline-none placeholder:text-gray-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                   <button
                     type="button"
@@ -271,7 +274,7 @@ export function ShopifyConnectDialog({ open, onOpenChange, initialDomain }: Shop
                     value={accessToken}
                     onChange={(e) => setAccessToken(e.target.value)}
                     placeholder="shpat_xxxxxxxxxxxxxxxxxxxxx — leave empty for Partner Dashboard apps"
-                    className="w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 pr-10 text-sm font-mono outline-none focus:ring-2 focus:ring-[#CEF17B]/50 placeholder:text-gray-400"
+                    className="w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 pr-10 text-sm font-mono outline-none placeholder:text-gray-400 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   />
                   <button
                     type="button"

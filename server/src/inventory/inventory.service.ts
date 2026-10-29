@@ -6,16 +6,28 @@ import {
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { Prisma, StockBucket } from '@prisma/client';
+import {
+  ChannelPlatform,
+  ChannelStatus,
+  Prisma,
+  StockBucket,
+  StockLocationKind,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { InventoryLedgerService } from './inventory-ledger.service';
 import { WarehouseService } from './warehouse.service';
+import { DEFAULT_LOCATION_CODE, DEFAULT_LOCATION_NAME } from './default-location';
 import { INVENTORY_QUEUE, InventoryJobData } from './inventory.queue';
 import {
+  PUSH_JOB_OPTS,
   SHOPIFY_PUSH_QUEUE,
   ShopifyPushJobData,
+  addAvailabilityPush,
+  addDedupedPushJob,
+  pushJobId,
 } from '../channel/shopify-push.queue';
+import { Priority } from '../rate-limit/rate-limit.types';
 import {
   BulkAdjustmentDto,
   CreateAdjustmentDto,
@@ -82,29 +94,7 @@ export class InventoryService {
     });
     if (!org) throw new NotFoundException('Organization not found');
 
-    // Default warehouse — idempotent: reuse one if a previous enable attempt
-    // got this far before the seed job failed.
-    let warehouse = await this.prisma.warehouse.findFirst({
-      where: { organizationId: orgId, isDefault: true },
-    });
-    if (!warehouse) {
-      const shopify = await this.prisma.channel.findFirst({
-        where: { organizationId: orgId, platform: 'SHOPIFY' },
-        select: { metadata: true },
-      });
-      const shopifyLocationId =
-        (shopify?.metadata as { shopifyLocationId?: string } | null)
-          ?.shopifyLocationId ?? null;
-      warehouse = await this.prisma.warehouse.create({
-        data: {
-          organizationId: orgId,
-          name: 'Main Warehouse',
-          code: 'WH1',
-          isDefault: true,
-          shopifyLocationId: shopifyLocationId ? String(shopifyLocationId) : null,
-        },
-      });
-    }
+    const warehouse = await this.ensureEnableWarehouse(orgId);
 
     await this.inventoryQueue.add(
       'enable-seed',
@@ -112,6 +102,46 @@ export class InventoryService {
       { attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
     );
     return { status: 'SEEDING' as const, warehouseId: warehouse.id };
+  }
+
+  /**
+   * The start-up switch of an existing workspace to stock locations: the
+   * enable flow above, run inside one queued job instead of from a click.
+   * Re-checks the flag, so a job left over from an earlier start is a no-op.
+   */
+  async runSwitchOver(orgId: string): Promise<void> {
+    const settings = await this.settings.getInventorySettings(orgId);
+    if (settings.warehousingEnabled) return;
+    await this.ensureEnableWarehouse(orgId);
+    await this.runEnableSeed(orgId);
+  }
+
+  /**
+   * Default warehouse — idempotent: reuse one if a previous enable attempt
+   * got this far before the seed job failed.
+   */
+  private async ensureEnableWarehouse(orgId: string) {
+    const existing = await this.prisma.warehouse.findFirst({
+      where: { organizationId: orgId, isDefault: true },
+    });
+    if (existing) return existing;
+    const shopify = await this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: 'SHOPIFY' },
+      select: { metadata: true },
+    });
+    const shopifyLocationId =
+      (shopify?.metadata as { shopifyLocationId?: string } | null)
+        ?.shopifyLocationId ?? null;
+    return this.prisma.warehouse.create({
+      data: {
+        organizationId: orgId,
+        name: DEFAULT_LOCATION_NAME,
+        code: DEFAULT_LOCATION_CODE,
+        kind: StockLocationKind.WAREHOUSE,
+        isDefault: true,
+        shopifyLocationId: shopifyLocationId ? String(shopifyLocationId) : null,
+      },
+    });
   }
 
   /**
@@ -206,17 +236,31 @@ export class InventoryService {
       cursor = variants[variants.length - 1].id;
     }
 
-    // Flip LAST — from this moment the bucket path owns the org.
-    await this.settings.setWarehousingEnabled(orgId, true);
+    // Flip LAST — from this moment the bucket path owns the org. A connected
+    // store's locations are marked to be linked as they always were; the
+    // locations sync that does it clears the mark, so a failed one is retried
+    // by the next sync rather than left to the merchant.
+    const shopify = await this.prisma.channel.findFirst({
+      where: {
+        organizationId: orgId,
+        platform: ChannelPlatform.SHOPIFY,
+        status: { not: ChannelStatus.DISCONNECTED },
+      },
+      select: { id: true },
+    });
+    await this.settings.setWarehousingEnabled(orgId, true, {
+      linkShopifyLocations: shopify !== null,
+    });
     this.ledger.invalidateFlagCache(orgId);
     this.logger.log(`enable-seed: org ${orgId} seeded ${seeded} stock lines`);
 
     // Everything above put the org-wide quantity into the single default
     // warehouse, which is right for an org with no Shopify store and only an
-    // approximation for one with several locations. This job mirrors the rest
-    // of the locations as warehouses and reconciles each against Shopify's
-    // per-location quantities — correcting the default warehouse down to its
-    // real number and distributing the remainder.
+    // approximation for one with several locations. This job links the rest
+    // of the locations to warehouses of their own (recording each as the
+    // merchant's decision) and reconciles each against Shopify's per-location
+    // quantities — correcting the default warehouse down to its real number
+    // and distributing the remainder.
     //
     // Deliberately AFTER the flag flip: the reconcile writes through
     // applyMovement, which only owns the org once warehousing is on. It is
@@ -228,10 +272,16 @@ export class InventoryService {
   /** Fire-and-forget: a missed location sync is recovered by the next channel sync. */
   private async enqueueLocationSync(orgId: string) {
     try {
-      await this.shopifyPushQueue.add(
+      await addDedupedPushJob(
+        this.shopifyPushQueue,
         'sync-locations',
-        { type: 'sync-locations', organizationId: orgId },
-        { attempts: 3, backoff: { type: 'exponential', delay: 10_000 } },
+        { type: 'sync-locations', organizationId: orgId, autoLink: true, priority: Priority.NORMAL },
+        {
+          ...PUSH_JOB_OPTS,
+          attempts: 3,
+          jobId: pushJobId.locations(orgId),
+          priority: Priority.NORMAL,
+        },
       );
     } catch (err) {
       this.logger.warn(`Failed to enqueue location sync for org ${orgId}: ${err}`);
@@ -470,31 +520,40 @@ export class InventoryService {
 
     const warehouse = await this.resolveWarehouse(orgId, dto.warehouseId);
 
-    let delta = dto.delta ?? 0;
-    if (dto.setTo !== undefined) {
-      const level = await this.prisma.stockLevel.findFirst({
-        where: { variantId: dto.variantId, warehouseId: warehouse.id, locationId: null },
-      });
-      const current = level ? level[dto.bucket.toLowerCase() as 'available'] : 0;
-      delta = dto.setTo - current;
-      if (delta === 0) {
-        return { ok: true, changed: false, inventoryQuantity: undefined };
-      }
-    }
-
     const reason = dto.reason ?? 'adjustment';
-    const result = await this.ledger.applyMovement({
-      orgId,
-      variantId: dto.variantId,
-      warehouseId: warehouse.id,
-      fromBucket: delta < 0 ? dto.bucket : null,
-      toBucket: delta > 0 ? dto.bucket : null,
-      quantity: Math.abs(delta),
-      reason,
-      referenceType: 'manual_adjustment',
-      referenceId: dto.note ?? undefined,
-      actorId: userId,
+    const result = await this.prisma.$transaction(async (tx) => {
+      // A "set to" is counted from the level read under the movement's own
+      // lock. Read before it, a sale or Shopify update landing in between
+      // leaves a "set to 10" at 9 or 11.
+      await tx.$queryRaw`SELECT 1 FROM "product_variants" WHERE "id" = ${dto.variantId} FOR UPDATE`;
+      let delta = dto.delta ?? 0;
+      if (dto.setTo !== undefined) {
+        const level = await tx.stockLevel.findFirst({
+          where: { variantId: dto.variantId, warehouseId: warehouse.id, locationId: null },
+        });
+        const current = level ? level[dto.bucket.toLowerCase() as 'available'] : 0;
+        delta = dto.setTo - current;
+        if (delta === 0) return null;
+      }
+      return this.ledger.applyMovement(
+        {
+          orgId,
+          variantId: dto.variantId,
+          warehouseId: warehouse.id,
+          fromBucket: delta < 0 ? dto.bucket : null,
+          toBucket: delta > 0 ? dto.bucket : null,
+          quantity: Math.abs(delta),
+          reason,
+          referenceType: 'manual_adjustment',
+          referenceId: dto.note ?? undefined,
+          actorId: userId,
+        },
+        tx,
+      );
     });
+    if (!result) {
+      return { ok: true, changed: false, inventoryQuantity: undefined };
+    }
 
     // CRM-origin stock op touching the sellable bucket → push to Shopify.
     if (dto.bucket === StockBucket.AVAILABLE) {
@@ -551,42 +610,41 @@ export class InventoryService {
       throw new NotFoundException('Variant not found: ' + missing.join(', '));
     }
 
-    // Current quantities for every line in one read, so the `setTo` deltas are
-    // all computed against the same snapshot.
-    const levels = await this.prisma.stockLevel.findMany({
-      where: {
-        variantId: { in: variantIds },
-        warehouseId: warehouse.id,
-        locationId: null,
-      },
-    });
-    const levelByVariant = new Map(levels.map((l) => [l.variantId, l]));
-
-    const planned = dto.items
-      .map((item) => {
-        let delta = item.delta ?? 0;
-        if (item.setTo !== undefined) {
-          const level = levelByVariant.get(item.variantId);
-          const current = level
-            ? level[item.bucket.toLowerCase() as 'available']
-            : 0;
-          delta = item.setTo - current;
-        }
-        return { ...item, delta };
-      })
-      // A no-op line is dropped rather than rejected: the UI sends whatever is
-      // dirty, and typing a value back to its original is not an error.
-      .filter((p) => p.delta !== 0)
-      // applyMovement requires multi-variant transactions to take their locks
-      // in a stable order, or two concurrent batches sharing a variant deadlock.
-      .sort((a, b) => a.variantId.localeCompare(b.variantId));
-
-    if (planned.length === 0) {
-      return { ok: true, applied: 0, results: [] };
-    }
-
     const reason = dto.reason ?? 'correction';
     const results = await this.prisma.$transaction(async (tx) => {
+      // Every variant is locked before any level is read, so the whole batch
+      // counts from one snapshot that no sale can move until it commits. In id
+      // order, the order applyMovement's callers lock in, or two batches
+      // sharing variants deadlock.
+      for (const variantId of [...variantIds].sort((a, b) => a.localeCompare(b))) {
+        await tx.$queryRaw`SELECT 1 FROM "product_variants" WHERE "id" = ${variantId} FOR UPDATE`;
+      }
+      const levels = await tx.stockLevel.findMany({
+        where: {
+          variantId: { in: variantIds },
+          warehouseId: warehouse.id,
+          locationId: null,
+        },
+      });
+      const levelByVariant = new Map(levels.map((l) => [l.variantId, l]));
+
+      const planned = dto.items
+        .map((item) => {
+          let delta = item.delta ?? 0;
+          if (item.setTo !== undefined) {
+            const level = levelByVariant.get(item.variantId);
+            const current = level
+              ? level[item.bucket.toLowerCase() as 'available']
+              : 0;
+            delta = item.setTo - current;
+          }
+          return { ...item, delta };
+        })
+        // A no-op line is dropped rather than rejected: the UI sends whatever is
+        // dirty, and typing a value back to its original is not an error.
+        .filter((p) => p.delta !== 0)
+        .sort((a, b) => a.variantId.localeCompare(b.variantId));
+
       const out: {
         variantId: string;
         bucket: StockBucket;
@@ -791,11 +849,7 @@ export class InventoryService {
 
   async enqueueAvailabilityPush(orgId: string, variantIds: string[]) {
     try {
-      await this.shopifyPushQueue.add(
-        'push-availability',
-        { type: 'push-availability', organizationId: orgId, variantIds },
-        { attempts: 5, backoff: { type: 'exponential', delay: 10_000 } },
-      );
+      await addAvailabilityPush(this.shopifyPushQueue, orgId, variantIds, Priority.NORMAL);
     } catch (err) {
       this.logger.warn(`Failed to enqueue availability push: ${err}`);
     }

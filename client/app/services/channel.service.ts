@@ -11,9 +11,21 @@ import type {
   OAuthInstallResponse,
   ManualConnectShopifyRequest,
   ManualConnectShopifyResponse,
+  SaveShopifyLocationsRequest,
+  ShopifyLocationsResponse,
+  WhatsAppInstallRequest,
   WhatsAppInstallResponse,
   WhatsAppCallbackRequest,
   WhatsAppCallbackResponse,
+  InstagramInstallRequest,
+  InstagramPendingResponse,
+  CompleteInstagramRequest,
+  CompleteInstagramResponse,
+  WhatsAppSetupOutcome,
+  WhatsAppNumberHealth,
+  MessengerInstallResponse,
+  MessengerCallbackRequest,
+  MessengerCallbackResponse,
 } from "~/types/api";
 
 /**
@@ -55,14 +67,50 @@ export const channelService = {
   manualConnectShopify: (data: ManualConnectShopifyRequest) =>
     apiClient.post<ManualConnectShopifyResponse>("/channels/shopify/manual-connect", data).then((response) => response.data),
 
-  installInstagram: () =>
-    apiClient.post<OAuthInstallResponse>("/channels/instagram/install").then((response) => response.data),
+  /** The store's Shopify locations and what each one does in Collabo. */
+  getShopifyLocations: (id: string) =>
+    apiClient.get<ShopifyLocationsResponse>(`/channels/${id}/shopify/locations`).then((response) => response.data),
+
+  /** Decide several Shopify locations at once; answers with the updated list. */
+  saveShopifyLocations: (id: string, data: SaveShopifyLocationsRequest) =>
+    apiClient.post<ShopifyLocationsResponse>(`/channels/${id}/shopify/locations`, data).then((response) => response.data),
+
+  /**
+   * Start Facebook Login for Instagram. Pass `reconnectChannelId` to re-authorize
+   * an existing account rather than add another one.
+   */
+  installInstagram: (data: InstagramInstallRequest = {}) =>
+    apiClient.post<OAuthInstallResponse>("/channels/instagram/install", data).then((response) => response.data),
+
+  /** The accounts one Facebook login granted, when the merchant must pick one. */
+  getInstagramPending: (pendingId: string) =>
+    apiClient.get<InstagramPendingResponse>(`/channels/instagram/pending/${pendingId}`).then((response) => response.data),
+
+  /** Connect the Instagram account the merchant picked. */
+  completeInstagramInstall: (data: CompleteInstagramRequest) =>
+    apiClient.post<CompleteInstagramResponse>("/channels/instagram/complete", data).then((response) => response.data),
 
   /** Step 1 of WhatsApp Embedded Signup: get the configId + CSRF state to feed into FB.login. */
-  installWhatsApp: () =>
-    apiClient.post<WhatsAppInstallResponse>("/channels/whatsapp/install").then((response) => response.data),
+  installWhatsApp: (data: WhatsAppInstallRequest = {}) =>
+    apiClient.post<WhatsAppInstallResponse>("/channels/whatsapp/install", data).then((response) => response.data),
 
   /** Step 2 of WhatsApp Embedded Signup: forward the code Meta returned to the backend. */
   completeWhatsAppInstall: (data: WhatsAppCallbackRequest) =>
     apiClient.post<WhatsAppCallbackResponse>("/channels/whatsapp/callback", data).then((response) => response.data),
+
+  /** Re-run webhook subscription and number registration after a partial setup failure. */
+  retryWhatsAppSetup: (id: string) =>
+    apiClient.post<WhatsAppSetupOutcome>(`/channels/${id}/whatsapp/retry-setup`).then((response) => response.data),
+
+  /** Re-read the number's quality rating, messaging limit and name status from Meta. */
+  refreshWhatsAppHealth: (id: string) =>
+    apiClient.post<WhatsAppNumberHealth>(`/channels/${id}/whatsapp/refresh-health`).then((response) => response.data),
+
+  /** Step 1 of connecting Facebook Pages (and their Instagram accounts). */
+  installMessenger: () =>
+    apiClient.post<MessengerInstallResponse>("/channels/messenger/install").then((response) => response.data),
+
+  /** Step 2: forward the popup's code; every Page granted is connected. */
+  completeMessengerInstall: (data: MessengerCallbackRequest) =>
+    apiClient.post<MessengerCallbackResponse>("/channels/messenger/callback", data).then((response) => response.data),
 };

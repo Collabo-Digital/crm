@@ -71,6 +71,21 @@ export function formatCurrency(
 }
 
 /**
+ * A price or cost as a number, or null when it is not set. An empty box is
+ * not set: `Number("")` is 0, which made a product with no cost read as a
+ * 100% margin.
+ */
+function moneyInput(value: number | string | null | undefined): number | null {
+  if (value == null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const n = typeof value === "string" ? Number(value) : value;
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Said in place of a margin while the cost is empty. */
+export const NO_COST_MARGIN = "Add a cost to see margin";
+
+/**
  * Compute profit (price − cost) and margin percentage. Returns null when
  * cost isn't set or pricing is invalid, so callers can render an "—".
  */
@@ -78,24 +93,23 @@ export function calcMargin(
   price: number | string | null | undefined,
   cost: number | string | null | undefined,
 ): { profit: number; marginPct: number } | null {
-  const p = typeof price === "string" ? Number(price) : price;
-  const c = typeof cost === "string" ? Number(cost) : cost;
-  if (p == null || c == null || !Number.isFinite(p) || !Number.isFinite(c) || p <= 0) {
-    return null;
-  }
+  const p = moneyInput(price);
+  const c = moneyInput(cost);
+  if (p == null || c == null || p <= 0) return null;
   const profit = p - c;
   return { profit, marginPct: (profit / p) * 100 };
 }
 
 /**
- * Render margin as "$5.00 (33%)" using the org's currency. Returns "—" when
- * margin can't be computed (e.g. cost is not set).
+ * Render margin as "$5.00 (33%)" using the org's currency. Asks for a cost
+ * while there is none, and "—" when the price makes margin meaningless.
  */
 export function formatMargin(
   price: number | string | null | undefined,
   cost: number | string | null | undefined,
   currency: string,
 ): string {
+  if (moneyInput(cost) == null) return NO_COST_MARGIN;
   const m = calcMargin(price, cost);
   if (!m) return "—";
   return `${formatCurrency(m.profit, currency)} (${m.marginPct.toFixed(0)}%)`;

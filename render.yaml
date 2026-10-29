@@ -12,7 +12,7 @@ services:
     startCommand: cd server && node dist/main
     envVars:
       - key: NODE_VERSION
-        value: "20"
+        value: "24"
       - key: NODE_ENV
         value: production
       - key: PORT
@@ -31,7 +31,22 @@ services:
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
-      - key: RESEND_API_KEY
+      # Render's load balancer is one proxy hop; without this every client
+      # shares one rate-limit bucket.
+      - key: TRUST_PROXY
+        value: "1"
+      # Verification codes, password resets and invites are sent over SMTP.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: FROM_EMAIL
+        sync: false
+      - key: FROM_NAME
         sync: false
       - key: SHOPIFY_CLIENT_ID
         sync: false

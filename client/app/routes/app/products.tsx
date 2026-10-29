@@ -4,9 +4,9 @@ import { Link, useNavigate } from "react-router";
 import {
   Plus, Package, ListChecks,
   PackageX, Loader2, Pencil, Trash2, UploadCloud,
-  Download, Upload, Boxes, Barcode,
+  Download, Upload, Boxes, Barcode, MoreHorizontal,
 } from "lucide-react";
-import { StatCard } from "~/components/app/stat-card";
+import { STAT_STRIP, StatCard } from "~/components/app/stat-card";
 import { Skeleton } from "~/components/ui/skeleton";
 import { ProductFormDialog } from "~/components/app/product-create/product-form-dialog";
 import { BulkActionBar } from "~/components/app/products/bulk-action-bar";
@@ -22,6 +22,7 @@ import {
   type ColumnDef,
   type FilterDef,
 } from "~/components/app/data-table";
+import { toneClasses } from "~/lib/status-tone";
 import { cn, formatCurrency } from "~/lib/utils";
 import { useProducts, useProductTypes, useProductStats, useProductVendors } from "~/hooks/use-product-queries";
 import { useCodeStatus } from "~/hooks/use-inventory-queries";
@@ -38,10 +39,13 @@ import {
   productSyncActionTitle,
   type ProductSyncAction,
 } from "~/lib/product-shopify-sync";
-import { ShopifySyncCell } from "~/components/app/shopify-sync-cell";
+import { ShopifySyncCell, syncNeedsAttention } from "~/components/app/shopify-sync-cell";
+import { AppBarActions } from "~/components/app/app-bar-actions";
 import type { ProductStatus, ProductListParams, Product, ProductStatsResponse, StockStatus } from "~/types/api";
 import { Separator } from "~/components/ui/separator";
 import { Button } from "~/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
+import { PageHeader, PageHeaderContent, PageHeaderTitle, PageHeaderDescription, PageHeaderActions } from "~/components/ui/page-header";
 
 export function meta() {
   return [{ title: "Products | Collabo CRM" }];
@@ -64,11 +68,11 @@ const STAT_CARDS = [
   icon: React.ReactNode;
 }>;
 
-const STATUS_CLASS: Record<ProductStatus, string> = {
-  ACTIVE: "bg-brand/30 text-brand-strong",
-  DRAFT: "bg-muted text-muted-foreground",
-  ARCHIVED: "bg-warning-strong-subtle text-warning-strong",
-};
+const STATUS_CLASS = toneClasses<ProductStatus>({
+  ACTIVE: "success",
+  DRAFT: "neutral",
+  ARCHIVED: "neutral",
+});
 
 /** Filter chip options carry the API value, so the URL and the request agree. */
 const STATUS_OPTIONS: ReadonlyArray<{ value: ProductStatus; label: string }> = [
@@ -84,7 +88,13 @@ const STOCK_OPTIONS: ReadonlyArray<{ value: StockStatus; label: string }> = [
 
 export default function ProductsPage() {
   const navigate = useNavigate();
-  const { isVendor } = useCurrentRole();
+  const { role, isVendor } = useCurrentRole();
+  // Mirror the server's role groups on the product write routes
+  // (server/src/auth/decorators/roles.decorator.ts): editing is ORG_OPERATORS,
+  // permanent delete and CSV import are ORG_MANAGERS. A Viewer sees the
+  // catalogue without buttons the API would refuse.
+  const canManage = role === "OWNER" || role === "ADMIN" || role === "MANAGER";
+  const canEdit = canManage || role === "AGENT";
   // The whole view — page, search, filters, sort, page size — lives in the
   // URL so Back from a product (and the product page's breadcrumb) return to
   // the exact list the row was opened from, while the navbar's bare link
@@ -348,22 +358,22 @@ export default function ProductsPage() {
     }
   }
 
-  const showDock = !isVendor && selectedProducts.length > 0;
+  const showDock = canEdit && selectedProducts.length > 0;
 
   return (
     // Bottom padding while the bulk-action dock is up, so it never covers the
     // pagination row.
-    <div className={showDock ? "space-y-6 pb-24" : "space-y-6"}>
+    <div className={cn("space-y-4 md:space-y-6", showDock && "pb-24")}>
       {/* Page header */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Products</h1>
-          <p className="text-sm text-muted-foreground">
-            Manage your product catalog, inventory, and pricing.
-          </p>
-        </div>
+      {/* On a phone its buttons live in the app bar, so it takes no room. */}
+      <PageHeader className="max-md:contents">
+        <PageHeaderContent>
+          <PageHeaderTitle>Products</PageHeaderTitle>
+          <PageHeaderDescription>Your catalogue, stock and pricing in one place.</PageHeaderDescription>
+        </PageHeaderContent>
         {!isVendor && (
-          <div className="flex items-center gap-2">
+          <PageHeaderActions className="max-md:hidden">
+            <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="action"
@@ -374,15 +384,17 @@ export default function ProductsPage() {
               {exporting ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
               Export
             </Button>
-            <Button
-              variant="outline"
-              size="action"
-              onClick={() => setImportOpen(true)}
-              title="Import products from a Shopify-format CSV"
-            >
-              <Upload className="size-3.5" />
-              Import
-            </Button>
+            {canManage && (
+              <Button
+                variant="outline"
+                size="action"
+                onClick={() => setImportOpen(true)}
+                title="Import products from a Shopify-format CSV"
+              >
+                <Upload className="size-3.5" />
+                Import
+              </Button>
+            )}
             {/* Codes belong to the catalogue, not to a location, so this is
                 their home. The Inventory page carries the same dialog, but it
                 is gated on warehousing — without this trigger an org that has
@@ -395,23 +407,53 @@ export default function ProductsPage() {
               <Barcode className="size-3.5" />
               {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}
             </Button>
-            <Button
-              variant="brand"
-              size="action"
-              onClick={() => setCreatingProduct(true)}
-            >
-              <Plus className="size-3.5" />
-              Add Product
-            </Button>
-          </div>
+            </div>
+            {canEdit && (
+              <Button
+                variant="brand"
+                size="action"
+                onClick={() => setCreatingProduct(true)}
+                className="h-8 rounded-lg px-3"
+              >
+                <Plus className="size-3.5" />
+                Add Product
+              </Button>
+            )}
+          </PageHeaderActions>
         )}
-      </div>
+      </PageHeader>
+      {/* Phones: the actions sit in the app bar, so the list starts higher. */}
+      {!isVendor && (
+        <AppBarActions>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="rounded-full" aria-label="More product actions">
+                <MoreHorizontal className="size-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={handleExport} disabled={exporting}><Download /> Export products</DropdownMenuItem>
+              {canManage && (
+                <DropdownMenuItem onSelect={() => setImportOpen(true)}><Upload /> Import products</DropdownMenuItem>
+              )}
+              <DropdownMenuItem onSelect={() => setCodesOpen(true)}><Barcode /> {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {canEdit && (
+            <Button variant="brand" size="sm" className="rounded-full px-3.5" onClick={() => setCreatingProduct(true)}>
+              <Plus className="size-4" />
+              Add product
+            </Button>
+          )}
+        </AppBarActions>
+      )}
 
       <ProductCodesDialog open={codesOpen} onOpenChange={setCodesOpen} />
 
       {/* Floating bulk-action dock — only up while a product is selected */}
       {showDock && (
         <BulkActionBar
+          canDelete={canManage}
           selectedProducts={selectedProducts}
           offPageCount={selectedProducts.length - selectedOnPageCount}
           onClear={() => setSelected(new Map())}
@@ -419,22 +461,21 @@ export default function ProductsPage() {
       )}
 
       {/* Stat cards */}
-      <div className="grid grid-cols-1  sm:grid-cols-2 lg:grid-cols-4  bg-white p-3 rounded-xl gap-5">
+      <div className={cn("grid grid-cols-2 gap-4 rounded-3xl bg-card p-4 md:gap-5 md:rounded-xl md:p-3 lg:grid-cols-4", STAT_STRIP)}>
         {statsLoading ? (
           Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="rounded-xl bg-white dark:bg-gray-900 p-5 shadow-sm ring-1 ring-border">
+            <div key={i} className="min-w-0 p-1 md:p-5">
               <Skeleton className="h-3 w-24 mb-4" />
               <Skeleton className="h-7 w-20" />
             </div>
           ))
         ) : stats ? (
           STAT_CARDS.map(({ key, label, icon }, i, arr) => (
-            <div key={key} className="flex items-center gap-4">
+            <div key={key} className="flex min-w-0 items-center gap-4">
               <StatCard
                 variant="inline"
                 label={label}
                 value={stats[key].toLocaleString()}
-                change={0}
                 icon={icon}
                 className="flex-1"
               />
@@ -445,7 +486,7 @@ export default function ProductsPage() {
           ))
         ) : (
           STAT_CARDS.map(({ key, label, icon }) => (
-            <StatCard key={key} variant="inline" label={label} value="—" change={0} icon={icon} />
+            <StatCard key={key} variant="inline" label={label} value="—" icon={icon} />
           ))
         )}
       </div>
@@ -459,6 +500,7 @@ export default function ProductsPage() {
         noun="products"
         searchPlaceholder="Search by name, vendor or SKU…"
         onRowClick={(product) => navigate(`/products/${product.id}`)}
+        mobileRow={(product) => <ProductMobileSummary product={product} currency={orgCurrency} lowStockThreshold={lowStockThreshold} />}
         selection={{
           isSelected: (product) => selected.has(product.id),
           onToggle: toggleSelect,
@@ -504,6 +546,38 @@ export default function ProductsPage() {
   );
 }
 
+/** A product as a compact phone card: picture, name, then price, status and stock on one line. */
+function ProductMobileSummary({ product, currency, lowStockThreshold }: { product: Product; currency: string; lowStockThreshold: number }) {
+  const priceCurrency = product.channel?.currency ?? currency;
+  const [failedImage, setFailedImage] = useState<string | null>(null);
+  const sync = describeProductShopifySync(product);
+  return (
+    <div className="flex items-start gap-3">
+      {product.image?.src && failedImage !== product.image.src ? (
+        <img src={product.image.src} alt="" loading="lazy" onError={() => setFailedImage(product.image!.src)} className="size-12 shrink-0 rounded-xl bg-muted object-cover" />
+      ) : (
+        <span className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground"><Package className="size-5" /></span>
+      )}
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <p className="line-clamp-2 text-sm font-semibold leading-snug text-foreground">{product.title}</p>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-caption">
+          <span className="font-semibold tabular-nums text-foreground">
+            {formatCurrency(product.priceRange.min, priceCurrency)}
+            {product.priceRange.min !== product.priceRange.max && <>–{formatCurrency(product.priceRange.max, priceCurrency)}</>}
+          </span>
+          <StatusPill className={cn("h-6 px-2.5", STATUS_CLASS[product.status])}>{STATUS_LABEL[product.status]}</StatusPill>
+          <span className={cn("inline-flex items-center gap-1.5 font-medium", product.totalStock === 0 ? "text-danger" : product.totalStock <= lowStockThreshold ? "text-warning-strong" : "text-muted-foreground")}>
+            <span className="size-1.5 rounded-full bg-current" />
+            {product.totalStock === 0 ? "Out of stock" : `${product.totalStock.toLocaleString("en-IN")} in stock`}
+            {product.totalStock > 0 && product.totalStock <= lowStockThreshold && " · Low"}
+          </span>
+        </div>
+        {syncNeedsAttention(sync) && <ShopifySyncCell summary={sync} />}
+      </div>
+    </div>
+  );
+}
+
 // ── Product Row Actions ─────────────────────────────────────────────────────
 // Right-most cell of each product row. Edit / Archive are always available
 // (synced products are now editable too — local edits push back via the Sync
@@ -535,7 +609,8 @@ function ProductRowActions({
   const thisRowSyncing = syncMutation.isPending && syncMutation.variables === product.id;
 
   return (
-    <div className="inline-flex items-center gap-1">
+    <>
+    <div className="hidden items-center gap-1 md:inline-flex">
       {syncAction !== null && (
         <Button
           type="button"
@@ -568,5 +643,23 @@ function ProductRowActions({
         <Trash2 className="size-3.5" />
       </Button>
     </div>
+    {/* Phones: one menu in the card's corner instead of a row of buttons. */}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" className="md:hidden" aria-label={`Actions for ${product.title}`}>
+          <MoreHorizontal className="text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {syncAction !== null && (
+          <DropdownMenuItem disabled={syncMutation.isPending} onSelect={() => syncMutation.mutate(product.id)}>
+            <UploadCloud /> {SYNC_ACTION_LABEL[syncAction]} to Shopify
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem onSelect={onEdit}><Pencil /> Edit product</DropdownMenuItem>
+        <DropdownMenuItem variant="destructive" onSelect={onArchive}><Trash2 /> Archive product</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+    </>
   );
 }

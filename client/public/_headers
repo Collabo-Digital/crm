@@ -1,0 +1,14 @@
+# Security headers for every page and file of the web app. Cloudflare
+# (Workers static assets) reads this file from build/client, and the API sends
+# the same `/*` headers when it hosts the app itself (SERVE_STATIC=true).
+#
+# The Content-Security-Policy line is added to the built copy of this file
+# after each build (client/security-headers.ts): it names the API's origin
+# from VITE_API_BASE_URL and the hashes of the page's inline scripts, which
+# change with every build. docs/security-headers.md explains each header.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(self), microphone=(self), geolocation=()
+  Strict-Transport-Security: max-age=31536000

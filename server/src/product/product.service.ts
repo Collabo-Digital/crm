@@ -17,6 +17,7 @@ import {
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { sanitizeProductHtml } from '../common/utils/sanitize-product-html.util';
 import { QueryProductsDto } from './dto/query-products.dto';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -34,6 +35,7 @@ import {
   UpdateImageDto,
 } from './dto/image.dto';
 import { ProductOptionDto } from './dto/option.dto';
+import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { ShopifyPushEnqueuer } from '../channel/shopify-push.enqueuer';
 import {
   ShopifyPushService,
@@ -71,6 +73,21 @@ const ALLOWED_IMAGE_MIME = new Set([
 ]);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_IMAGES_PER_PRODUCT = 10;
+const UPLOADS_PATH = '/uploads/products/';
+
+/**
+ * The storage key of an image this organization uploaded, from its URL
+ * (…/uploads/products/<orgId>/<file>), or null. A src can also come from a
+ * CSV import and name any path, another store's image included: removing
+ * such an image must not delete that file.
+ */
+function ownUploadKey(src: string, orgId: string): string | null {
+  const at = src.indexOf(UPLOADS_PATH);
+  if (at < 0) return null;
+  const [folder, file, ...rest] = src.slice(at + UPLOADS_PATH.length).split('/');
+  if (folder !== orgId || rest.length > 0 || !file || file === '.' || file === '..' || /[\\%?#\0]/.test(file)) return null;
+  return `${orgId}/${file}`;
+}
 
 type ShopifySyncStatus = 'PENDING' | 'SYNCED' | 'FAILED' | 'OUT_OF_SYNC';
 
@@ -541,31 +558,24 @@ export class ProductService {
 
     const product = await this.prisma.$transaction(async (tx) => {
       // Lazy-create the MANUAL channel.
-      const channel = await tx.channel.upsert({
-        where: {
-          organizationId_platform: {
-            organizationId: orgId,
-            platform: ChannelPlatform.MANUAL,
-          },
-        },
-        create: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-          name: 'In-Store / Manual',
-          status: ChannelStatus.CONNECTED,
-          isEnabled: true,
-        },
-        update: {},
-      });
+      const channel = await ensureManualChannel(tx, orgId);
+
+      const incoming = hasMulti ? dto.variants! : [dto.variant!];
+      const openingStock = await this.openingStockFor(tx, orgId, incoming);
 
       // Build variants payload.
       // Product create is admin-only (no @AllowVendor on the route), so no
       // vendor scope to thread here; the builder still takes one for parity.
-      const variantsCreate = hasMulti
-        ? dto.variants!.map((v, idx) =>
-          this.buildVariantCreate(orgId, v, idx + 1, dto.options),
-        )
-        : [this.buildVariantCreate(orgId, dto.variant!, 1, undefined)];
+      // A variant given stock per location starts at 0; the movements below
+      // bring its quantity to the sum.
+      const variantsCreate = incoming.map((v, idx) =>
+        this.buildVariantCreate(
+          orgId,
+          openingStock[idx] ? { ...v, inventoryQuantity: 0 } : v,
+          idx + 1,
+          hasMulti ? dto.options : undefined,
+        ),
+      );
 
       // SKUs and barcodes must be free — the same check `createVariant`,
       // `updateVariant` and the bulk update already run. Product create was
@@ -573,7 +583,6 @@ export class ProductService {
       // colliding codes: three products were created here sharing SKU
       // "QA-DUP-001". Inventory, label printing and barcode scanning all
       // identify a variant by these codes, so a duplicate is not cosmetic.
-      const incoming = hasMulti ? dto.variants! : [dto.variant!];
       for (const v of incoming) {
         await this.assertVariantCodesFree(orgId, v);
       }
@@ -605,7 +614,7 @@ export class ProductService {
           productType: dto.productType ?? null,
           status: dto.status ?? ProductStatus.ACTIVE,
           tags: dto.tags ?? [],
-          bodyHtml: dto.bodyHtml ?? null,
+          bodyHtml: dto.bodyHtml == null ? null : sanitizeProductHtml(dto.bodyHtml),
           hsnCode: dto.hsnCode ?? null,
           gstRate: dto.gstRate ?? null,
           // Canonicalised, like variantGstOverride: a lowercase "nos" stored raw
@@ -642,12 +651,48 @@ export class ProductService {
         _userId,
       );
 
+      // Variants are matched to their payload by the external id minted for
+      // them, since the payload's `position` need not follow its order.
+      const stockByExternalId = new Map(
+        variantsCreate.map((v, idx) => [v.externalId, openingStock[idx]]),
+      );
+      const seededQuantity = new Map<string, number>();
+      // Sorted: applyMovement locks each variant, and a transaction moving
+      // several must take those locks in a stable order.
+      const withStock = created.variants
+        .filter((v) => stockByExternalId.get(v.externalId))
+        .sort((a, b) => a.id.localeCompare(b.id));
+      for (const v of withStock) {
+        seededQuantity.set(
+          v.id,
+          await this.inventoryLedger.recordOpeningStock(tx, {
+            orgId,
+            variantId: v.id,
+            stock: stockByExternalId.get(v.externalId)!,
+            referenceType: 'product',
+            referenceId: created.id,
+            actorId: _userId,
+          }),
+        );
+      }
+
       // …and a stock row per variant, in the same transaction. Without this a
       // warehousing org's new product never appears in Inventory, so it can
       // never be given stock, so the order builder permanently disables it.
-      await this.inventoryLedger.ensureStockRows(tx, orgId, created.variants);
+      await this.inventoryLedger.ensureStockRows(
+        tx,
+        orgId,
+        created.variants.filter((v) => !seededQuantity.has(v.id)),
+      );
 
-      return created;
+      return {
+        ...created,
+        variants: created.variants.map((v) =>
+          seededQuantity.has(v.id)
+            ? { ...v, inventoryQuantity: seededQuantity.get(v.id)! }
+            : v,
+        ),
+      };
     });
 
     // Give every new variant a SKU, then a scannable barcode, before anything
@@ -704,13 +749,8 @@ export class ProductService {
       const productSettings =
         await this.settings.getProductSettings(orgId);
       if (productSettings.autoSyncToShopify) {
-        const shopify = await this.prisma.channel.findUnique({
-          where: {
-            organizationId_platform: {
-              organizationId: orgId,
-              platform: ChannelPlatform.SHOPIFY,
-            },
-          },
+        const shopify = await this.prisma.channel.findFirst({
+          where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
         });
         if (shopify?.status === ChannelStatus.CONNECTED) {
           const outcome = await this.queueShopifyPush(
@@ -787,6 +827,63 @@ export class ProductService {
   }
 
   /**
+   * The opening stock lines each new variant is created with, by payload
+   * index, or null for a variant that gets the old seed instead (one row at
+   * the default location, via `ensureStockRows`). Lines apply only where
+   * stock is tracked per location and the variant tracks quantity.
+   *
+   * Every location must be one of the org's active locations, listed once per
+   * variant; anything else is refused before a row is written.
+   */
+  private async openingStockFor(
+    db: Prisma.TransactionClient,
+    orgId: string,
+    variants: CreateVariantDto[],
+  ): Promise<Array<Array<{ warehouseId: string; quantity: number }> | null>> {
+    const lines = variants.map((v) =>
+      v.stock && v.stock.length > 0 && v.trackQuantity !== false ? v.stock : null,
+    );
+    if (!lines.some(Boolean)) return lines;
+    if (!(await this.inventoryLedger.isWarehousingEnabled(orgId))) {
+      return lines.map(() => null);
+    }
+
+    const warehouseIds = [
+      ...new Set(lines.flatMap((stock) => (stock ?? []).map((line) => line.warehouseId))),
+    ];
+    const warehouses = await db.warehouse.findMany({
+      where: { id: { in: warehouseIds }, organizationId: orgId },
+      select: { id: true, name: true, isActive: true },
+    });
+    if (warehouses.length !== warehouseIds.length) {
+      throw new BadRequestException(
+        'One of the stock locations is not a location of this workspace.',
+      );
+    }
+    const inactive = warehouses.find((w) => !w.isActive);
+    if (inactive) {
+      throw new BadRequestException(
+        `${inactive.name} is inactive. Choose an active location for this stock.`,
+      );
+    }
+    const nameById = new Map(warehouses.map((w) => [w.id, w.name]));
+    for (const stock of lines) {
+      const seen = new Set<string>();
+      for (const line of stock ?? []) {
+        if (seen.has(line.warehouseId)) {
+          throw new BadRequestException(
+            `${nameById.get(line.warehouseId)} is listed more than once for the same variant. Give each location one quantity.`,
+          );
+        }
+        seen.add(line.warehouseId);
+      }
+    }
+    return lines.map((stock) =>
+      stock ? stock.map((line) => ({ warehouseId: line.warehouseId, quantity: line.quantity })) : null,
+    );
+  }
+
+  /**
    * The four per-variant GST override columns from a DTO, empty strings
    * collapsed to null (= inherit from the product). Callers apply the vendor
    * guard; this only shapes the values.
@@ -821,13 +918,8 @@ export class ProductService {
     if (!product) throw new NotFoundException('Product not found');
     this.assertVendorOwnsProduct(product.vendor, vendorScope);
 
-    const shopify = await this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.SHOPIFY,
-        },
-      },
+    const shopify = await this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
     if (!shopify || shopify.status !== ChannelStatus.CONNECTED) {
       throw new ForbiddenException(
@@ -980,7 +1072,8 @@ export class ProductService {
       if (dto.status !== undefined) productPatch.status = dto.status;
       if (dto.tags !== undefined) productPatch.tags = dto.tags;
       if (dto.bodyHtml !== undefined)
-        productPatch.bodyHtml = dto.bodyHtml;
+        productPatch.bodyHtml =
+          dto.bodyHtml == null ? null : sanitizeProductHtml(dto.bodyHtml);
       if (!isVendor && dto.hsnCode !== undefined)
         productPatch.hsnCode = dto.hsnCode || null;
       if (!isVendor && dto.gstRate !== undefined)
@@ -1262,6 +1355,7 @@ export class ProductService {
     await this.assertVariantCodesFree(orgId, dto);
 
     const created = await this.prisma.$transaction(async (tx) => {
+      const [openingStock] = await this.openingStockFor(tx, orgId, [dto]);
       const row = await tx.productVariant.create({
       data: {
         productId,
@@ -1274,7 +1368,7 @@ export class ProductService {
         price,
         compareAtPrice: dto.compareAtPrice ?? null,
         cost: dto.cost ?? null,
-        inventoryQuantity: dto.inventoryQuantity ?? 0,
+        inventoryQuantity: openingStock ? 0 : (dto.inventoryQuantity ?? 0),
         trackQuantity: dto.trackQuantity ?? true,
         continueSellingWhenOutOfStock:
           dto.continueSellingWhenOutOfStock ?? false,
@@ -1293,6 +1387,16 @@ export class ProductService {
         ...(vendorScope ? {} : this.variantGstOverride(dto)),
       },
       });
+      if (openingStock) {
+        const inventoryQuantity = await this.inventoryLedger.recordOpeningStock(tx, {
+          orgId,
+          variantId: row.id,
+          stock: openingStock,
+          referenceType: 'variant',
+          referenceId: row.id,
+        });
+        return { ...row, inventoryQuantity };
+      }
       // Ledger: initial stock when created with a non-zero quantity.
       await this.inventoryLedger.recordInitialQuantities(
         tx,
@@ -1965,14 +2069,8 @@ export class ProductService {
 
     // Best-effort delete from storage; DB row removal is the source of truth.
     try {
-      // Recover storageKey from the URL: /uploads/products/<orgId>/<filename>
-      const idx = image.src.indexOf('/uploads/products/');
-      if (idx >= 0) {
-        const storageKey = image.src.substring(
-          idx + '/uploads/products/'.length,
-        );
-        await this.imageStorage.delete(storageKey);
-      }
+      const storageKey = ownUploadKey(image.src, orgId);
+      if (storageKey) await this.imageStorage.delete(storageKey);
     } catch (err) {
       this.logger.warn(
         `Failed to delete image file for ${imageId}: ${err}`,
@@ -2209,13 +2307,41 @@ export class ProductService {
         skipped.push({ id, reason: 'Must be archived first' });
       }
     }
-    const toDelete = ok.filter((id) => allowed.has(id));
-    if (toDelete.length === 0) return { ok: [], skipped, deleted: 0 };
+    const archived = ok.filter((id) => allowed.has(id));
+    if (archived.length === 0) return { ok: [], skipped, deleted: 0 };
 
-    const result = await this.prisma.product.deleteMany({
-      where: { id: { in: toDelete }, organizationId: orgId },
+    // Warehousing orgs give every tracked variant a stock row, and stock rows
+    // block a variant's delete (ON DELETE RESTRICT), so this used to fail
+    // whole with "Related resource not found". Same rule as deleteVariant:
+    // a product still holding stock is skipped, all-zero rows go with it.
+    // Legacy orgs have no stock rows, so nothing changes for them.
+    const { toDelete, deleted } = await this.prisma.$transaction(async (tx) => {
+      const holding = await tx.stockLevel.findMany({
+        where: {
+          variant: { productId: { in: archived } },
+          OR: [
+            { available: { not: 0 } },
+            { reserved: { not: 0 } },
+            { qc: { not: 0 } },
+            { damaged: { not: 0 } },
+          ],
+        },
+        select: { variant: { select: { productId: true } } },
+      });
+      const withStock = new Set(holding.map((l) => l.variant.productId));
+      for (const id of withStock) {
+        skipped.push({ id, reason: 'Still has stock. Adjust it to zero before deleting.' });
+      }
+      const ids = archived.filter((id) => !withStock.has(id));
+      if (ids.length === 0) return { toDelete: ids, deleted: 0 };
+
+      await tx.stockLevel.deleteMany({ where: { variant: { productId: { in: ids } } } });
+      const result = await tx.product.deleteMany({
+        where: { id: { in: ids }, organizationId: orgId },
+      });
+      return { toDelete: ids, deleted: result.count };
     });
-    return { ok: toDelete, skipped, deleted: result.count };
+    return { ok: toDelete, skipped, deleted };
   }
 
   async bulkAddTags(orgId: string, productIds: string[], tags: string[]) {
@@ -2298,13 +2424,8 @@ export class ProductService {
     );
     if (ok.length === 0) return { ok: [], skipped, queued: 0 };
 
-    const shopify = await this.prisma.channel.findUnique({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.SHOPIFY,
-        },
-      },
+    const shopify = await this.prisma.channel.findFirst({
+      where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
     });
     if (!shopify || shopify.status !== ChannelStatus.CONNECTED) {
       throw new ForbiddenException(
@@ -2365,22 +2486,7 @@ export class ProductService {
     // We allow duplicating SHOPIFY-channel products as a quick way to seed a
     // new MANUAL product from a synced one. The duplicate lives on MANUAL
     // and starts unsynced, so the read-only constraint isn't relevant.
-    const manual = await this.prisma.channel.upsert({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-        },
-      },
-      create: {
-        organizationId: orgId,
-        platform: ChannelPlatform.MANUAL,
-        name: 'In-Store / Manual',
-        status: ChannelStatus.CONNECTED,
-        isEnabled: true,
-      },
-      update: {},
-    });
+    const manual = await ensureManualChannel(this.prisma, orgId);
 
     const created = await this.prisma.product.create({
       data: {
@@ -2388,7 +2494,7 @@ export class ProductService {
         channelId: manual.id,
         externalId: `manual_${randomUUID()}`,
         title: `${original.title} (Copy)`,
-        bodyHtml: original.bodyHtml,
+        bodyHtml: original.bodyHtml == null ? null : sanitizeProductHtml(original.bodyHtml),
         vendor: original.vendor,
         productType: original.productType,
         status: 'DRAFT',
@@ -2667,22 +2773,7 @@ export class ProductService {
     let processed = 0;
 
     // Lazy MANUAL channel
-    const manual = await this.prisma.channel.upsert({
-      where: {
-        organizationId_platform: {
-          organizationId: orgId,
-          platform: ChannelPlatform.MANUAL,
-        },
-      },
-      create: {
-        organizationId: orgId,
-        platform: ChannelPlatform.MANUAL,
-        name: 'In-Store / Manual',
-        status: ChannelStatus.CONNECTED,
-        isEnabled: true,
-      },
-      update: {},
-    });
+    const manual = await ensureManualChannel(this.prisma, orgId);
 
     for (const candidate of products) {
       try {

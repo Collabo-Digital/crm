@@ -25,6 +25,7 @@ import {
 import { SectionCard } from "~/components/app/section-card";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { cn, formatCurrency } from "~/lib/utils";
+import { formatDate } from "~/lib/format-date";
 import { DRAFT_STATUS_CLASSES, DRAFT_STATUS_LABELS } from "~/lib/draft-status";
 import {
   ModalShell,
@@ -32,6 +33,7 @@ import {
   CheckboxRow,
 } from "~/components/app/order-dialog-primitives";
 import type { OfflinePaymentMethod } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Draft | Collabo CRM" }];
@@ -87,10 +89,11 @@ export default function DraftDetailPage() {
       {/* Breadcrumb + actions */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption">
-          <Link to={draftsPath} className="text-muted-foreground hover:text-foreground">
+          {/* On a phone the app bar's back arrow replaces the link. */}
+          <Link to={draftsPath} className="text-muted-foreground hover:text-foreground max-md:hidden">
             Drafts
           </Link>
-          <ChevronRight className="size-3 text-muted-foreground" />
+          <ChevronRight className="size-3 text-muted-foreground max-md:hidden" />
           <span className="font-medium text-foreground">{draftName}</span>
         </nav>
         {!isCompleted && (
@@ -110,6 +113,7 @@ export default function DraftDetailPage() {
       {/* Title */}
       <div className="space-y-1">
         <div className="flex items-center gap-3">
+          <title>{pageTitle(/^draft\b/i.test(draftName) ? draftName : `Draft ${draftName}`)}</title>
           <h1 className="text-subhead text-foreground">{draftName}</h1>
           <span
             className={cn(
@@ -254,13 +258,13 @@ export default function DraftDetailPage() {
               {draft.completedAt && (
                 <DescRow
                   label="Completed"
-                  value={new Date(draft.completedAt).toLocaleDateString("en-IN")}
+                  value={formatDate(draft.completedAt)}
                 />
               )}
               {draft.invoiceSentAt && (
                 <DescRow
                   label="Invoice sent"
-                  value={new Date(draft.invoiceSentAt).toLocaleDateString("en-IN")}
+                  value={formatDate(draft.invoiceSentAt)}
                 />
               )}
               {draft.invoiceUrl && (

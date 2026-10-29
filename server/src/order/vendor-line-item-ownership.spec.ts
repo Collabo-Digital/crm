@@ -35,6 +35,7 @@ function build() {
     orderTimelineEvent: { create: jest.fn().mockResolvedValue({}) },
     order: { update: jest.fn().mockResolvedValue({}) },
     $executeRaw: jest.fn().mockResolvedValue(1),
+    $queryRaw: jest.fn().mockResolvedValue([{ id: ORDER, cancelledAt: null }]),
   };
   const prisma = {
     order: {
@@ -65,7 +66,7 @@ function build() {
   const service = new OrderService(
     prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
     {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-    {} as any,
+    {} as any, { order: jest.fn() } as any /* commerceEvents */,
   );
   return { service, prisma, tx };
 }
@@ -159,15 +160,18 @@ describe('setVendorItemsStatus — bulk status change', () => {
 });
 
 describe('markVendorItemDelivered — single line', () => {
-  it('lets a vendor mark their own line delivered', async () => {
-    const { service, tx } = build();
+  it('lets a vendor mark their own shipped line delivered', async () => {
+    const { service, prisma, tx } = build();
+    prisma.orderLineItem.findFirst.mockResolvedValueOnce({
+      ...MY_LINE, fulfillmentStatus: 'fulfilled', fulfilledQuantity: 1,
+    } as any);
 
     const res = await service.markVendorItemDelivered(ORDER, ORG, 'u1', MY_LINE.id, ME);
 
     expect(res).toEqual({ id: MY_LINE.id, status: 'delivered' });
-    expect(tx.orderLineItem.update).toHaveBeenCalledWith(
+    expect(tx.orderLineItem.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: MY_LINE.id },
+        where: expect.objectContaining({ id: MY_LINE.id, orderId: ORDER }),
         data: { fulfillmentStatus: 'delivered' },
       }),
     );

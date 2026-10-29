@@ -4,7 +4,7 @@ import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
 
 import { isString, useSessionState } from "~/hooks/use-session-state";
 import type { ListUrlState } from "~/hooks/use-list-url-state";
-import { Download, Plus, Clock, AlertTriangle } from "lucide-react";
+import { Download, Plus, Clock, AlertTriangle, Info, MoreHorizontal } from "lucide-react";
 
 import {
   PageHeader,
@@ -23,10 +23,17 @@ import {
 import { Button } from "~/components/ui/button";
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
-import { StatCard } from "~/components/app/stat-card";
+import { STAT_STRIP, StatCard } from "~/components/app/stat-card";
 import { SegmentedTabs } from "~/components/app/segmented-tabs";
 import { DataTable, useDataTableState } from "~/components/app/data-table";
-import { InvoiceRowActions, useInvoiceColumns } from "~/components/app/invoices-table";
+import { InvoiceMobileSummary, InvoiceRowActions, useInvoiceColumns } from "~/components/app/invoices-table";
+import { AppBarActions } from "~/components/app/app-bar-actions";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu";
 import { CreditNoteDialog } from "~/components/app/credit-note-dialog";
 import { CancelInvoiceDialog } from "~/components/app/cancel-invoice-dialog";
 import {
@@ -60,6 +67,7 @@ import {
 } from "~/hooks/use-invoice-queries";
 import { useInvoiceActionGates } from "~/hooks/use-invoice-action-gates";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
+import { useOrganizationSettings } from "~/hooks/use-settings-queries";
 import { useGstins } from "~/hooks/use-gst-queries";
 import { useWarehouses } from "~/hooks/use-inventory-queries";
 import {
@@ -68,7 +76,7 @@ import {
 } from "~/components/app/mark-filed-dialog";
 import { invoiceService } from "~/services/invoice.service";
 import { downloadBlob } from "~/lib/download-blob";
-import { formatCurrency } from "~/lib/utils";
+import { cn, formatCurrency } from "~/lib/utils";
 import {
   MONTHS,
   b2bSectionTotals,
@@ -233,6 +241,9 @@ function InvoicesView() {
   const { data: org } = useCurrentOrg();
   const currency = org?.currency ?? "INR";
   const { canIssue, canCancel } = useInvoiceActionGates();
+  // Composition taxpayers file CMP-08 and GSTR-4, so the GSTR-1 reminder is
+  // not theirs and the returns below are for reference only.
+  const composition = useOrganizationSettings().data?.taxSettings.composition ?? false;
 
   // Only used to decide whether a GSTIN filter is worth showing at all — a
   // single-registration org has nothing to filter by.
@@ -392,31 +403,33 @@ function InvoicesView() {
     }
   }
 
+  const exportList = () =>
+    download(
+      "list",
+      // Exports exactly what the table is showing: the server shares
+      // one `where` builder between the list and the export, so the
+      // search box, date range and chips all reach the file.
+      () => invoiceService.exportCsv(listParams),
+      `invoices-${financialYear}.csv`,
+      "Could not export invoices. Please try again.",
+    );
+
   return (
-    <div className="space-y-6">
-      <PageHeader>
+    <div className="space-y-4 md:space-y-6">
+      {/* On a phone its buttons live in the app bar, so it takes no room. */}
+      <PageHeader className="max-md:contents">
         <PageHeaderContent>
           <PageHeaderTitle>Invoices</PageHeaderTitle>
           <PageHeaderDescription>
             GST invoices and tax return summaries for your business.
           </PageHeaderDescription>
         </PageHeaderContent>
-        <PageHeaderActions>
+        <PageHeaderActions className="max-md:hidden">
           <Button
             variant="outline"
             size="action"
             disabled={downloading !== null}
-            onClick={() =>
-              download(
-                "list",
-                // Exports exactly what the table is showing: the server shares
-                // one `where` builder between the list and the export, so the
-                // search box, date range and chips all reach the file.
-                () => invoiceService.exportCsv(listParams),
-                `invoices-${financialYear}.csv`,
-                "Could not export invoices. Please try again.",
-              )
-            }
+            onClick={exportList}
           >
             <Download className="size-3.5" />
             Export CSV
@@ -434,6 +447,29 @@ function InvoicesView() {
           )}
         </PageHeaderActions>
       </PageHeader>
+      {/* Phones: the actions sit in the app bar, so the list starts higher. */}
+      <AppBarActions>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="rounded-full" aria-label="More invoice actions">
+              <MoreHorizontal className="size-5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={exportList} disabled={downloading !== null}>
+              <Download /> Export CSV
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {canIssue && (
+          <Button variant="brand" size="sm" className="rounded-full px-3.5" asChild>
+            <Link to="/orders">
+              <Plus className="size-4" />
+              New invoice
+            </Link>
+          </Button>
+        )}
+      </AppBarActions>
 
       {/* View switch */}
       <div className="flex flex-wrap items-center gap-3">
@@ -523,10 +559,10 @@ function InvoicesView() {
           role="tabpanel"
           id="view-panel-invoices"
           aria-labelledby="view-tab-invoices"
-          className="space-y-6"
+          className="space-y-4 md:space-y-6"
         >
           {/* KPI row */}
-          <div className="grid grid-cols-1 gap-5 rounded-xl bg-card p-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className={cn("grid grid-cols-1 gap-5 rounded-xl bg-card p-3 sm:grid-cols-2 lg:grid-cols-4", STAT_STRIP)}>
             {statsLoading || !stats ? (
               Array.from({ length: 4 }).map((_, index) => (
                 <div key={index} className="p-5">
@@ -552,6 +588,8 @@ function InvoicesView() {
                     maximumFractionDigits: 0,
                   }),
                   change: stats.taxCollected.changePct ?? undefined,
+                  // Tax follows sales; more of it is neither good nor bad news.
+                  goodWhen: "neither" as const,
                   changeLabel: "CGST + SGST + IGST",
                 },
                 {
@@ -560,7 +598,7 @@ function InvoicesView() {
                   value: formatCurrency(stats.outstanding.amount, currency, {
                     maximumFractionDigits: 0,
                   }),
-                  changeLabel: `${stats.outstanding.invoiceCount} invoices unpaid`,
+                  changeLabel: `${stats.outstanding.invoiceCount} ${stats.outstanding.invoiceCount === 1 ? "invoice" : "invoices"} unpaid`,
                 },
                 {
                   key: "issued",
@@ -575,6 +613,7 @@ function InvoicesView() {
                     label={card.label}
                     value={card.value}
                     change={card.change}
+                    goodWhen={card.goodWhen}
                     changeLabel={card.changeLabel}
                     className="flex-1"
                   />
@@ -587,8 +626,8 @@ function InvoicesView() {
           </div>
 
           {/* Filing reminder */}
-          {gstr1DueDate && gstr1DaysLeft !== null && gstr1DaysLeft >= 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-brand px-5 py-3">
+          {!composition && gstr1DueDate && gstr1DaysLeft !== null && gstr1DaysLeft >= 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-brand px-5 py-3 max-md:flex-nowrap max-md:gap-2 max-md:py-1.5 max-md:pr-1.5 max-md:pl-4">
               <p className="flex items-center gap-2 text-caption text-brand-foreground">
                 <Clock className="size-4 shrink-0" />
                 <span>
@@ -596,9 +635,11 @@ function InvoicesView() {
                     GSTR-1 for {periodLabel} is due in {gstr1DaysLeft}{" "}
                     {gstr1DaysLeft === 1 ? "day" : "days"}.
                   </strong>{" "}
-                  {stats
-                    ? `${stats.counts.issued} issued invoices in FY ${financialYear}.`
-                    : null}
+                  {stats && (
+                    <span className="max-md:hidden">
+                      {stats.counts.issued} issued invoices in FY {financialYear}.
+                    </span>
+                  )}
                 </span>
               </p>
               <Button
@@ -629,6 +670,7 @@ function InvoicesView() {
             }}
             searchPlaceholder="Invoice #, buyer or GSTIN…"
             onRowClick={(invoice) => navigate(`/orders/invoices/${invoice.id}`)}
+            mobileRow={(invoice) => <InvoiceMobileSummary invoice={invoice} currency={currency} />}
             rowActions={(invoice) => (
               <InvoiceRowActions
                 invoice={invoice}
@@ -662,6 +704,16 @@ function InvoicesView() {
               product in the live catalogues carries an HSN code, and adding them
               is hours of data entry), and a warning that can be neither quieted
               nor acted on is one people learn to look past. */}
+          {composition && (
+            <div className="flex items-start gap-2 rounded-xl bg-info-subtle px-5 py-3">
+              <Info className="mt-0.5 size-4 shrink-0 text-info" />
+              <p className="text-caption">
+                <strong className="font-semibold">You're on the composition scheme.</strong>{" "}
+                Composition taxpayers file CMP-08 every quarter and GSTR-4 once a year, not GSTR-1 or GSTR-3B.
+                The returns below are for your reference.
+              </p>
+            </div>
+          )}
           {stats && stats.uninvoicedPaidOrders > 0 && (
             <DismissibleWarning
               id="uninvoiced-orders"

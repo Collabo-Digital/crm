@@ -1,6 +1,8 @@
 import { ChannelPlatform, ChannelStatus, Prisma } from '@prisma/client';
 import {
+  CRM_DISCOUNT_CODE,
   ShopifyPushService,
+  unpushableOrderReason,
   isStalePendingSync,
   readStoredTaxLines,
   shopifyOrderCustomer,
@@ -13,6 +15,7 @@ import {
   INVENTORY_LEVEL_AT_LOCATION_QUERY,
   INVENTORY_SET_QUANTITIES_MUTATION,
   ORDER_CREATE_MUTATION,
+  PRODUCT_SET_MUTATION,
 } from './shopify-graphql.types';
 
 /**
@@ -62,6 +65,7 @@ function offlineOrder(overrides: Record<string, unknown> = {}) {
         variantTitle: null,
         quantity: 1,
         price: decimal('120'),
+        totalDiscount: decimal('0'),
         channelTaxLines: [
           { title: 'CGST', rate: 0.09, price: '10.80' },
           { title: 'SGST', rate: 0.09, price: '10.80' },
@@ -75,6 +79,7 @@ function offlineOrder(overrides: Record<string, unknown> = {}) {
         variantTitle: 'Large',
         quantity: 2,
         price: decimal('50'),
+        totalDiscount: decimal('0'),
         channelTaxLines: null,
         variant: { externalId: 'manual_variant_x' },
       },
@@ -103,7 +108,15 @@ function orderCreateResponse() {
 
 function build(order: ReturnType<typeof offlineOrder> | null, channel: unknown = SHOPIFY_CHANNEL) {
   const prisma = {
-    channel: { findUnique: jest.fn().mockResolvedValue(channel), update: jest.fn() },
+    // Both, deliberately: resolving "the org's Shopify channel" is a findFirst
+    // now that a Channel row is one connected account and (organizationId,
+    // platform) is no longer unique, while the by-id lookup in
+    // resolveChannelCredentials is still a genuine findUnique on the PK.
+    channel: {
+      findFirst: jest.fn().mockResolvedValue(channel),
+      findUnique: jest.fn().mockResolvedValue(channel),
+      update: jest.fn(),
+    },
     order: { findFirst: jest.fn().mockResolvedValue(order) },
     orderLineItem: { update: jest.fn((args) => args) },
     // The org's currency is the source side of a catalogue-price conversion —
@@ -307,6 +320,97 @@ describe('ShopifyPushService.pushOrder', () => {
 
     expect(fulfil).toHaveBeenCalledTimes(1);
     expect(fulfil).toHaveBeenCalledWith(expect.anything(), 'gid://shopify/Order/6418037801012');
+  });
+
+  // 1 × ₹1,000 with ₹100 off at 18% GST is ₹1,062 in the CRM. Without the
+  // discount Shopify totalled 1,000 + 162 = ₹1,162 against a ₹1,062 SALE.
+  it('sends the line discounts as one fixed amount off, so the totals match the SALE', async () => {
+    const order = offlineOrder({ totalPrice: decimal('1062.00') });
+    order.lineItems[0].totalDiscount = decimal('100');
+    order.lineItems[1].totalDiscount = decimal('0.50');
+    const { service, graphql } = build(order);
+
+    await service.pushOrder(ORDER_ID, ORG);
+
+    const input = (graphql.request.mock.calls.find((c) => c[1] === ORDER_CREATE_MUTATION)![2] as any).order;
+    expect(input.discountCode).toEqual({
+      itemFixedDiscountCode: {
+        code: CRM_DISCOUNT_CODE,
+        amountSet: { shopMoney: { amount: '100.50', currencyCode: 'INR' } },
+      },
+    });
+  });
+
+  it('sends no discount code for an undiscounted order', async () => {
+    const { service, graphql } = build(offlineOrder());
+    await service.pushOrder(ORDER_ID, ORG);
+    const input = (graphql.request.mock.calls.find((c) => c[1] === ORDER_CREATE_MUTATION)![2] as any).order;
+    expect(input).not.toHaveProperty('discountCode');
+  });
+
+  it('does not decrement Shopify stock again when the sale already pushed it', async () => {
+    const { service, graphql } = build(
+      offlineOrder({ metadata: { source: 'offline', paymentMethod: 'CARD', shopifyStockPushed: true } }),
+    );
+    await service.pushOrder(ORDER_ID, ORG);
+    const vars = graphql.request.mock.calls.find((c) => c[1] === ORDER_CREATE_MUTATION)![2] as any;
+    expect(vars.options.inventoryBehaviour).toBe('BYPASS');
+  });
+
+  // A store's sale: its stock is the store's. A store linked to Shopify had its
+  // own figure pushed; one that is not linked must leave Shopify's alone.
+  it.each([
+    ['a store linked to Shopify', '2222'],
+    ['a store not linked to Shopify', null],
+  ])('never decrements Shopify stock for a sale from %s', async (_label, shopifyLocationId) => {
+    const { service, graphql } = build(
+      offlineOrder({
+        metadata: { source: 'offline', paymentMethod: 'CASH', shopifyStockPushed: true },
+        dispatchWarehouse: { shopifyLocationId },
+      }),
+    );
+    await service.pushOrder(ORDER_ID, ORG);
+    const vars = graphql.request.mock.calls.find((c) => c[1] === ORDER_CREATE_MUTATION)![2] as any;
+    expect(vars.options.inventoryBehaviour).toBe('BYPASS');
+  });
+
+  it.each([
+    ['cancelled', { cancelledAt: new Date('2026-10-01T10:00:00Z') }, /cancelled/],
+    ['refunded', { financialStatus: 'REFUNDED' }, /refunded/],
+    ['voided', { financialStatus: 'VOIDED' }, /voided/],
+  ])('never creates a Shopify order for a %s sale, and says why', async (_label, over, reason) => {
+    const { service, graphql, prisma } = build(offlineOrder(over));
+    await service.pushOrder(ORDER_ID, ORG);
+    expect(graphql.request).not.toHaveBeenCalled();
+    expect(lastSyncPatch(prisma)).toMatchObject({ status: 'FAILED', attempts: 0 });
+    expect(lastSyncPatch(prisma).error).toMatch(reason);
+  });
+});
+
+describe('ShopifyPushService.planBulkOrderPush', () => {
+  it('leaves cancelled, refunded and voided sales out of the backlog', async () => {
+    const prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch_manual' }) },
+      order: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new ShopifyPushService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    jest.spyOn((service as any).logger, 'log').mockImplementation(() => undefined);
+
+    await service.planBulkOrderPush(ORG);
+
+    expect(prisma.order.findMany.mock.calls[0][0].where).toMatchObject({
+      channelId: 'ch_manual',
+      cancelledAt: null,
+      financialStatus: { notIn: ['REFUNDED', 'VOIDED'] },
+    });
+  });
+});
+
+describe('unpushableOrderReason', () => {
+  it('lets a live paid or pending sale through', () => {
+    expect(unpushableOrderReason({ cancelledAt: null, financialStatus: 'PAID' })).toBeNull();
+    expect(unpushableOrderReason({ cancelledAt: null, financialStatus: 'PENDING' })).toBeNull();
+    expect(unpushableOrderReason({ cancelledAt: null, financialStatus: 'PARTIALLY_REFUNDED' })).toBeNull();
   });
 });
 
@@ -707,11 +811,11 @@ describe('ShopifyPushService — which locations a stock push writes to', () => 
   const invIds = new Map([['v1', '1']]);
 
   /** `mappedRows` are the variant's rows at Shopify locations; `anyRows` at any location. */
-  function setup(mappedRows: unknown[], anyRows: unknown[]) {
+  function setup(mappedRows: unknown[], anyRows: unknown[], linked = [{ id: 'wh_shop', shopifyLocationId: '111' }]) {
     const { service, prisma } = build(null);
     const p = prisma as any;
     p.warehouse = {
-      findMany: jest.fn().mockResolvedValue([{ id: 'wh_shop', shopifyLocationId: '111' }]),
+      findMany: jest.fn().mockResolvedValue(linked),
     };
     p.stockLevel = {
       findMany: jest.fn((args: { where: { warehouseId?: unknown } }) =>
@@ -720,9 +824,9 @@ describe('ShopifyPushService — which locations a stock push writes to', () => 
     };
     (service as any).inventoryLedger = { isWarehousingEnabled: jest.fn().mockResolvedValue(true) };
     jest.spyOn(service as any, 'resolveLocationId').mockResolvedValue('999');
-    const run = () =>
-      (service as any).buildAvailabilityQuantities('org_1', 'ch', 'shop', 'tok', [VARIANT], invIds);
-    return { run };
+    const run = (onlyWarehouseId?: string) =>
+      (service as any).buildAvailabilityQuantities('org_1', 'ch', 'shop', 'tok', [VARIANT], invIds, onlyWarehouseId);
+    return { run, prisma: p };
   }
 
   it('writes each Shopify location its own quantity', async () => {
@@ -743,11 +847,215 @@ describe('ShopifyPushService — which locations a stock push writes to', () => 
   });
 
   it('still falls back to the primary location for a variant with no stock row anywhere', async () => {
-    const { run } = setup([], []);
+    const { run } = setup([], [], [
+      { id: 'wh_shop', shopifyLocationId: '111' },
+      { id: 'wh_main', shopifyLocationId: '999' },
+    ]);
 
     expect(await run()).toEqual([
       { inventoryItemId: 'gid://shopify/InventoryItem/1', locationId: 'gid://shopify/Location/999', quantity: 50 },
     ]);
+  });
+
+  // The primary is synced only once the merchant has linked it to a location.
+  it('writes nothing to a primary location no location is linked to', async () => {
+    const { run } = setup([], []);
+
+    expect(await run()).toEqual([]);
+  });
+
+  it('writes nothing at all while no Shopify location is linked', async () => {
+    const { run } = setup([], [], []);
+
+    expect(await run()).toEqual([]);
+  });
+
+  // A sale at one store: only that store's Shopify location hears of it.
+  it('writes only the one location a sale or restock moved stock at', async () => {
+    const row = { variantId: 'v1', warehouseId: 'wh_shop', available: 4 };
+    const { run, prisma } = setup([row], []);
+
+    expect(await run('wh_shop')).toEqual([
+      { inventoryItemId: 'gid://shopify/InventoryItem/1', locationId: 'gid://shopify/Location/111', quantity: 4 },
+    ]);
+    expect(prisma.warehouse.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: 'wh_shop' }) }),
+    );
+  });
+});
+
+/**
+ * Linking a location with "keep Collabo's counts": its own count of every
+ * tracked variant goes to its Shopify location, before anything is pulled.
+ */
+/**
+ * A product made in the CRM reaches Shopify through productSet. Where stock is
+ * held per location, its stock must follow the rule an Inventory adjustment
+ * follows: each location linked to a Shopify location sends its own count
+ * there, and stock at a location that is not linked never reaches Shopify.
+ */
+describe('ShopifyPushService.pushProduct — a new product’s stock per location', () => {
+  const LINKED = { id: 'wh_kochi', shopifyLocationId: '111' };
+  const PRIMARY = 999;
+
+  function setup(warehousing: boolean) {
+    const { service, prisma, graphql } = build(null);
+    const p = prisma as any;
+    // 5 at Kochi (linked to Shopify location 111) and 3 at a store that is
+    // not linked: 8 in all.
+    const variant = {
+      id: 'v1', externalId: 'manual_v1', inventoryItemId: null, inventoryQuantity: 8,
+      price: decimal('1000'), compareAtPrice: null, cost: null, sku: 'LIN-M', barcode: null, barcodeSource: null,
+      option1: 'Default Title', option2: null, option3: null, requiresShipping: true, taxable: true,
+      weight: null, weightUnit: null, hsCode: null, countryOfOrigin: null,
+      trackQuantity: true, continueSellingWhenOutOfStock: false,
+    };
+    p.product = {};
+    p.product.findFirst = jest.fn().mockResolvedValue({
+      id: 'p1', organizationId: ORG, title: 'Linen shirt', bodyHtml: null, vendor: null, productType: null,
+      status: 'ACTIVE', tags: [], options: null, metadata: {}, externalId: 'manual_p1',
+      variants: [variant], images: [], channel: { platform: ChannelPlatform.MANUAL, currency: 'INR' },
+    });
+    // After the rebadge, which persisted the Shopify inventory item.
+    p.productVariant = {
+      findMany: jest.fn().mockResolvedValue([{ id: 'v1', externalId: '501', inventoryItemId: '601', inventoryQuantity: 8 }]),
+    };
+    p.warehouse = { findMany: jest.fn().mockResolvedValue([LINKED]) };
+    p.stockLevel = {
+      findMany: jest.fn((args: { where: { warehouseId?: unknown } }) =>
+        Promise.resolve(
+          args.where.warehouseId
+            ? [{ variantId: 'v1', warehouseId: LINKED.id, available: 5 }]
+            : [{ variantId: 'v1' }],
+        ),
+      ),
+    };
+    const s = service as any;
+    s.orgSettings = {
+      getProductSettings: jest.fn().mockResolvedValue({}),
+      getInventorySettings: jest.fn().mockResolvedValue({}),
+    };
+    s.inventoryLedger = { isWarehousingEnabled: jest.fn().mockResolvedValue(warehousing) };
+    jest.spyOn(s, 'priceConverter').mockResolvedValue((v: unknown) => String(v));
+    jest.spyOn(s, 'resolveLocationId').mockResolvedValue(PRIMARY);
+    jest.spyOn(s, 'recordProductSuccess').mockResolvedValue(undefined);
+    jest.spyOn(s, 'applyPendingLocationChanges').mockResolvedValue(undefined);
+    graphql.request.mockImplementation(async (_auth: unknown, query: string) => {
+      if (query === PRODUCT_SET_MUTATION) {
+        return {
+          productSet: {
+            product: {
+              id: 'gid://shopify/Product/401',
+              variants: { nodes: [{ id: 'gid://shopify/ProductVariant/501', inventoryItem: { id: 'gid://shopify/InventoryItem/601' } }] },
+              media: { nodes: [] },
+            },
+            userErrors: [],
+          },
+        };
+      }
+      if (query === INVENTORY_SET_QUANTITIES_MUTATION) {
+        return { inventorySetQuantities: { inventoryAdjustmentGroup: { createdAt: 'now' }, userErrors: [] } };
+      }
+      return {};
+    });
+    const sent = (query: string) => graphql.request.mock.calls.filter((c) => c[1] === query).map((c) => c[2] as any);
+    return { run: () => service.pushProduct('p1', ORG), sent };
+  }
+
+  it('creates the product without seeding any location’s stock', async () => {
+    const { run, sent } = setup(true);
+    await run();
+
+    const [productSet] = sent(PRODUCT_SET_MUTATION);
+    expect(productSet.input.variants[0].inventoryQuantities).toBeUndefined();
+  });
+
+  it('then sends the linked location its own count, and nothing for the location that is not linked', async () => {
+    const { run, sent } = setup(true);
+    await run();
+
+    // Every stock figure Shopify was given, by either mutation.
+    const seeded = sent(PRODUCT_SET_MUTATION).flatMap((v) =>
+      v.input.variants.flatMap((variant: any) => variant.inventoryQuantities ?? []),
+    );
+    const set = sent(INVENTORY_SET_QUANTITIES_MUTATION).flatMap((v) => v.input.quantities);
+    expect([...seeded, ...set]).toEqual([
+      { inventoryItemId: 'gid://shopify/InventoryItem/601', locationId: 'gid://shopify/Location/111', quantity: 5 },
+    ]);
+  });
+
+  it('a workspace without locations still seeds its one quantity at the primary location', async () => {
+    const { run, sent } = setup(false);
+    await run();
+
+    const [productSet] = sent(PRODUCT_SET_MUTATION);
+    expect(productSet.input.variants[0].inventoryQuantities).toEqual([
+      { locationId: `gid://shopify/Location/${PRIMARY}`, name: 'available', quantity: 8 },
+    ]);
+    expect(sent(INVENTORY_SET_QUANTITIES_MUTATION)).toEqual([]);
+  });
+});
+
+describe('ShopifyPushService.pushWarehouseStock', () => {
+  function setup(shopifyLocationId: string | null) {
+    const { service, prisma } = build(null);
+    const p = prisma as any;
+    p.warehouse = { findFirst: jest.fn().mockResolvedValue({ shopifyLocationId }) };
+    p.productVariant = {
+      findMany: jest
+        .fn()
+        .mockResolvedValueOnce([{ id: 'v1', inventoryItemId: '11' }, { id: 'v2', inventoryItemId: '22' }])
+        .mockResolvedValue([]),
+    };
+    p.stockLevel = {
+      findMany: jest.fn().mockResolvedValue([{ variantId: 'v1', available: 7 }]),
+      findFirst: jest.fn().mockResolvedValue({ id: 'sl_1' }),
+    };
+    (service as any).orgSettings = { getProductSettings: jest.fn().mockResolvedValue({}) };
+    const set = jest.spyOn(service as any, 'setInventoryQuantities').mockResolvedValue(undefined);
+    return { service, set, p };
+  }
+
+  it('sends the location’s count of each variant, and 0 where it holds none', async () => {
+    const { service, set, p } = setup('2222');
+
+    await service.pushWarehouseStock('org_1', 'wh_store');
+
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(set.mock.calls[0][2]).toEqual({ strict: true });
+    expect(set.mock.calls[0][1]).toEqual([
+      { inventoryItemId: 'gid://shopify/InventoryItem/11', locationId: 'gid://shopify/Location/2222', quantity: 7 },
+      { inventoryItemId: 'gid://shopify/InventoryItem/22', locationId: 'gid://shopify/Location/2222', quantity: 0 },
+    ]);
+    // Shopify keeps no count for an untracked item.
+    expect(p.productVariant.findMany.mock.calls[0][0].where).toEqual(expect.objectContaining({ trackQuantity: true }));
+  });
+
+  it('sends nothing for a location not linked to Shopify', async () => {
+    const { service, set } = setup(null);
+
+    await service.pushWarehouseStock('org_1', 'wh_store');
+
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing for a location holding no stock — its zeros would wipe Shopify’s', async () => {
+    const { service, set, p } = setup('2222');
+    p.stockLevel.findFirst.mockResolvedValue(null);
+
+    await service.pushWarehouseStock('org_1', 'wh_store');
+
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it('fails, so the pull after it never runs, when Shopify refuses a write', async () => {
+    const { service, set } = setup('2222');
+    set.mockRestore();
+    (service as any).graphql.request.mockResolvedValue({
+      inventorySetQuantities: { userErrors: [{ field: ['input'], message: 'Throttled', code: 'INVALID' }] },
+    });
+
+    await expect(service.pushWarehouseStock('org_1', 'wh_store')).rejects.toThrow(/rejected 1 of 2/);
   });
 });
 

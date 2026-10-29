@@ -26,7 +26,7 @@ function build(opts: { rows: number; matched?: number }) {
   const service = new OrderService(
     prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
     {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-    {} as any,
+    {} as any, { order: jest.fn() } as any /* commerceEvents */,
   );
   return { service, prisma };
 }

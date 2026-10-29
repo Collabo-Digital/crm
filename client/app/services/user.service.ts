@@ -17,6 +17,11 @@ export const userService = {
   changePassword: (data: ChangePasswordRequest) =>
     apiClient.post<{ message: string }>("/users/me/change-password", data).then((response) => response.data),
 
-  deleteAccount: () =>
-    apiClient.delete<{ message: string }>("/users/me").then((response) => response.data),
+  /** The server checks the password before closing the account. */
+  deleteAccount: (password: string) =>
+    apiClient.delete<{ message: string }>("/users/me", { data: { password } }).then((response) => response.data),
+
+  /** Ends every other session of this account; this one stays signed in. */
+  signOutOtherDevices: () =>
+    apiClient.post<{ message: string }>("/users/me/sign-out-other-devices").then((response) => response.data),
 };

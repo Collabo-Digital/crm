@@ -10,6 +10,7 @@ import {
   QueryAnalyticsDto,
   rangeToDays,
 } from './dto/query-analytics.dto';
+import { dayMonthLabel } from '../common/utils/day-label.util';
 
 // ─── DTOs returned to the client ─────────────────────────────────────────
 
@@ -18,12 +19,13 @@ export interface DashboardStat {
   label: string;
   value: number;
   /// Percent change vs the previous comparable window. Positive = up.
-  change: number;
+  /// Null when the previous window had none to compare with.
+  change: number | null;
   changeLabel: string;
 }
 
 export interface DashboardTrendPoint {
-  /// Day ("MM-DD") for 30d windows, month ("Jan") for longer ones.
+  /// Day ("21 Oct") for 30d windows, month ("Jan") for longer ones.
   label: string;
   addToCart: number;
   reachedCheckout: number;
@@ -203,9 +205,12 @@ export class AnalyticsDashboardService {
     prevValue: number,
     changeLabel: string,
   ): DashboardStat {
-    // 0 when there's no previous data — a flat trend beats a misleading
-    // "+100%" during cold start.
-    const change = prevValue > 0 ? Math.round(((value - prevValue) / prevValue) * 100) : 0;
+    // Nothing in the previous window means there is no rate of change: null,
+    // not "+100%", and not the flat 0% this used to send, which the cards
+    // showed beside a real rise (Total Checkout 4, "0%"). Zero against zero
+    // really is no change.
+    const change =
+      prevValue > 0 ? Math.round(((value - prevValue) / prevValue) * 100) : value > 0 ? null : 0;
     return { key, label, value, change, changeLabel };
   }
 
@@ -321,7 +326,7 @@ export class AnalyticsDashboardService {
         d.setUTCDate(d.getUTCDate() - i);
         const key = d.toISOString().slice(0, 10);
         buckets.set(key, {
-          label: key.slice(5),
+          label: dayMonthLabel(d),
           addToCart: 0,
           reachedCheckout: 0,
           completedOrders: 0,

@@ -39,7 +39,10 @@ function build({ warehousing, dispatchWarehouseId = null as string | null }) {
     isWarehousingEnabled: jest.fn().mockResolvedValue(warehousing),
     applyMovement: jest.fn().mockResolvedValue({ skipped: false, inventoryQuantity: 8 }),
   };
-  const queue = { add: jest.fn().mockResolvedValue(undefined) };
+  const queue = {
+    add: jest.fn().mockResolvedValue(undefined),
+    getJob: jest.fn().mockResolvedValue(null),
+  };
   const settings = {
     getProductSettings: jest.fn().mockResolvedValue({ trackQuantityGlobally: true }),
   };
@@ -47,7 +50,7 @@ function build({ warehousing, dispatchWarehouseId = null as string | null }) {
   const service = new OrderService(
     prisma, {} as any, {} as any, {} as any, {} as any,
     {} as any, {} as any, {} as any, settings as any, { recomputeForCustomer: jest.fn() } as any,
-    ledger as any, {} as any /* fx */, queue as any,
+    ledger as any, {} as any /* fx */, queue as any, { order: jest.fn() } as any /* commerceEvents */,
   );
   // A MANUAL order with nothing to cancel remotely.
   (service as any).loadOrderWithChannel = jest.fn().mockResolvedValue({

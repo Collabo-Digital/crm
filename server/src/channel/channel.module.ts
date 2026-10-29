@@ -5,40 +5,53 @@ import { ChannelController } from './channel.controller';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { ShopifyWebhookController } from './shopify-webhook.controller';
 import { InstagramOAuthService } from './instagram-oauth.service';
-import { InstagramWebhookController } from './instagram-webhook.controller';
+import { InstagramTokenScheduler } from './instagram-token.scheduler';
 import { WhatsAppOAuthService } from './whatsapp-oauth.service';
 import { WhatsAppMessagingService } from './whatsapp-messaging.service';
 import { WhatsAppMessagingProcessor } from './whatsapp.processor';
-import { WhatsAppTriggerService } from './whatsapp-trigger.service';
 import { ShopifySyncService } from './shopify-sync.service';
 import { ShopifyLocationSyncService } from './shopify-location-sync.service';
+import { ShopifyLocationDecisionService } from './shopify-location-decision.service';
 import { ShopifyAnalyticsService } from './shopify-analytics.service';
 import { ShopifyPushService } from './shopify-push.service';
 import { ShopifyPushProcessor } from './shopify-push.processor';
 import { ShopifyPushEnqueuer } from './shopify-push.enqueuer';
 import { ShopifyGraphqlClient } from './shopify-graphql.client';
+import { MetaGraphClient } from './meta-graph.client';
 import { ShopifyPixelService } from './shopify-pixel.service';
 import { SyncProcessor } from './sync.processor';
 import { EncryptionService } from './encryption.service';
 import { SYNC_QUEUE } from './sync.queue';
 import { SHOPIFY_PUSH_QUEUE } from './shopify-push.queue';
 import { WHATSAPP_MESSAGING_QUEUE } from './whatsapp.queue';
+import { WHATSAPP_ONBOARDING_QUEUE } from './whatsapp-onboarding.queue';
+import { TEMPLATE_PACK_QUEUE } from '../campaigns/templates/pack/template-pack.queue';
+import { WhatsAppAccountService } from './whatsapp-account.service';
+import { WhatsAppOnboardingProcessor } from './whatsapp-onboarding.processor';
+import { MetaPagesOAuthService } from './meta-pages-oauth.service';
+import { WhatsAppHealthScheduler } from './whatsapp-health.scheduler';
+import { ShopifyOrderCatchUpScheduler } from './shopify-order-catch-up.scheduler';
 import { DRAFT_MIRROR_QUEUE } from '../draft-order/draft-mirror.queue';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { OrganizationSettingsModule } from '../organization-settings/organization-settings.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { InvoiceModule } from '../invoice/invoice.module';
+import { CommerceEventsModule } from '../commerce/commerce-events.module';
 
 @Module({
   imports: [
     BullModule.registerQueue({ name: SYNC_QUEUE }),
     BullModule.registerQueue({ name: SHOPIFY_PUSH_QUEUE }),
     BullModule.registerQueue({ name: WHATSAPP_MESSAGING_QUEUE }),
+    BullModule.registerQueue({ name: WHATSAPP_ONBOARDING_QUEUE }),
     // Register a reference to the draft-mirror queue so ShopifySyncService
     // can enqueue `bulk-mirror` trigger jobs without depending on the
     // DraftOrderModule (which already depends on us). BullMQ multi-registers
     // are safe — they share the same underlying Redis queue.
     BullModule.registerQueue({ name: DRAFT_MIRROR_QUEUE }),
+    // WhatsApp and Shopify connect start Collabo's recommended templates on
+    // this queue; its processor is in CampaignsModule, which imports this one.
+    BullModule.registerQueue({ name: TEMPLATE_PACK_QUEUE }),
     LoyaltyModule,
     OrganizationSettingsModule,
     // InventoryLedgerService — sync/webhook paths must respect the
@@ -50,21 +63,25 @@ import { InvoiceModule } from '../invoice/invoice.module';
     // paid. No cycle: InvoiceModule imports only GstModule, and nothing in the
     // invoice module reaches back into channels.
     InvoiceModule,
+    // Order and checkout events for automations. Depends only on Prisma and
+    // the automation queue, so no cycle with the messaging stack.
+    CommerceEventsModule,
   ],
-  controllers: [ChannelController, ShopifyWebhookController, InstagramWebhookController],
+  controllers: [ChannelController, ShopifyWebhookController],
   providers: [
-    ChannelService, ShopifyOAuthService, InstagramOAuthService, WhatsAppOAuthService,
-    WhatsAppMessagingService, WhatsAppMessagingProcessor, WhatsAppTriggerService,
-    ShopifySyncService, ShopifyLocationSyncService, ShopifyAnalyticsService, SyncProcessor, EncryptionService,
+    ChannelService, ShopifyOAuthService, InstagramOAuthService, InstagramTokenScheduler, WhatsAppOAuthService,
+    WhatsAppMessagingService, WhatsAppMessagingProcessor,
+    WhatsAppAccountService, WhatsAppOnboardingProcessor, MetaPagesOAuthService, WhatsAppHealthScheduler,
+    ShopifySyncService, ShopifyLocationSyncService, ShopifyLocationDecisionService, ShopifyAnalyticsService, SyncProcessor, EncryptionService,
     ShopifyPushService, ShopifyPushProcessor, ShopifyPushEnqueuer,
-    ShopifyGraphqlClient, ShopifyPixelService,
+    ShopifyGraphqlClient, MetaGraphClient, ShopifyPixelService, ShopifyOrderCatchUpScheduler,
   ],
   exports: [
     ChannelService, ShopifyOAuthService, InstagramOAuthService, WhatsAppOAuthService,
-    WhatsAppMessagingService, WhatsAppTriggerService,
+    WhatsAppMessagingService, WhatsAppAccountService,
     ShopifySyncService, ShopifyLocationSyncService, ShopifyAnalyticsService, EncryptionService,
     ShopifyPushService, ShopifyPushEnqueuer,
-    ShopifyGraphqlClient,
+    ShopifyGraphqlClient, MetaGraphClient,
   ],
 })
 export class ChannelModule { }

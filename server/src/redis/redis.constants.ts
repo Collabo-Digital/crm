@@ -2,7 +2,17 @@ export const REDIS_PREFIX = 'crm:';
 
 export const REDIS_KEYS = {
     SESSION: 'session:',
+    /// Replaced whenever a user's cached session is evicted (see RedisService.setSession).
+    SESSION_REVISION: 'session_rev:',
     LOGIN_ATTEMPTS: 'login_attempts:',
+    /// Tries at an account's current email verification code.
+    VERIFY_ATTEMPTS: 'verify_attempts:',
+    /// Set for a short gap after an email of one kind goes to one recipient.
+    EMAIL_SEND_GAP: 'email_gap:',
+    /// Emails of one kind sent to one recipient in the last hour.
+    EMAIL_SEND_COUNT: 'email_count:',
+    /// Invitation emails one member sent today.
+    INVITE_SENDER_COUNT: 'invite_sender_count:',
     REFRESH_TOKEN: 'refresh:',
     USER_REFRESH_TOKENS: 'user_tokens:',
     REFRESH_ROTATION: 'refresh_rotation:',
@@ -10,10 +20,25 @@ export const REDIS_KEYS = {
     USER_AUTH_SESSIONS: 'user_sids:',
     OAUTH_SHOPIFY: 'oauth:shopify:',
     OAUTH_INSTAGRAM: 'oauth:instagram:',
+    OAUTH_WHATSAPP: 'oauth:whatsapp:',
+    /// Holds the Instagram accounts one login turned out to grant, between the
+    /// Meta redirect and the merchant picking one. Short-lived and single-use.
+    OAUTH_INSTAGRAM_PENDING: 'oauth:instagram:pending:',
+    /// Facebook Login for Business for Pages + their Instagram accounts.
+    OAUTH_META_PAGES: 'oauth:meta-pages:',
+    /// Facebook Login with ads_read, for the Ads page's results.
+    OAUTH_META_ADS: 'oauth:meta-ads:',
+    /// Google OAuth for Google Sheets in automations.
+    OAUTH_GOOGLE: 'oauth:google:',
+    /// A Google access token minted from the organization's refresh token, kept until just before it expires.
+    GOOGLE_ACCESS_TOKEN: 'google:access:',
+    /// Bytes a workspace's members uploaded on one UTC day (see UploadQuotaService).
+    UPLOAD_BYTES: 'upload_bytes:',
 };
 
 export const REDIS_TTL = {
     SESSION: 900,           // 15 minutes (matches access token)
+    SESSION_REVISION: 86400, // outlives any session write in flight
     LOGIN_ATTEMPTS: 900,    // 15 minute window
     REFRESH_TOKEN: 604800,  // 7 days
     REFRESH_ROTATION: 10,   // grace for a duplicate of a just-spent refresh token
@@ -21,6 +46,43 @@ export const REDIS_TTL = {
 };
 
 export const LOGIN_RATE_LIMIT = {
+    /** Per address from one IP address. */
+    MAX_ATTEMPTS: 5,
+    /**
+     * Per address from anywhere. High enough that a stranger who knows the
+     * address must work at it to lock the owner out, low enough to stop
+     * guessing spread over many IP addresses.
+     */
+    MAX_ATTEMPTS_ANY_IP: 50,
+    WINDOW_SECONDS: 900,
+};
+
+/**
+ * Tries at one email verification code, per account from anywhere: six digits
+ * fall to guessing spread over many IP addresses. Past the limit the code is
+ * spent and only a new one can verify the address. The window outlasts the
+ * code (ten minutes), so the count cannot lapse while the code still works.
+ */
+export const VERIFY_CODE_LIMIT = {
     MAX_ATTEMPTS: 5,
     WINDOW_SECONDS: 900,
+};
+
+/**
+ * Password reset and verification emails, per recipient. The gap is a little
+ * under the client's 60-second resend timer so a patient click always sends.
+ */
+export const EMAIL_SEND_LIMIT = {
+    MIN_GAP_SECONDS: 50,
+    MAX_PER_HOUR: 5,
+};
+
+/**
+ * Invitation emails one member may send in a day, on top of the
+ * per-recipient limit above. Any signed-in account can make a workspace and
+ * invite from it, and invitations share the SMTP account that carries every
+ * workspace's sign-up and password-reset mail.
+ */
+export const INVITE_SEND_LIMIT = {
+    MAX_PER_SENDER_PER_DAY: 200,
 };

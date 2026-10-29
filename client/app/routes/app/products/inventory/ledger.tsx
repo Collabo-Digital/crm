@@ -18,6 +18,7 @@ import { InventoryTabs } from "~/components/app/inventory/inventory-tabs";
 import { LocationPicker } from "~/components/app/inventory/location-picker";
 import { bucketLabel, reasonLabel } from "~/lib/inventory-vocabulary";
 import type { InventoryEvent, LedgerParams } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 const REASONS = [
   "sale",
@@ -116,6 +117,10 @@ const COLUMNS: ColumnDef<InventoryEvent>[] = [
     cell: (e) => <TextCell>{reasonLabel(e.reason)}</TextCell>,
   },
 ];
+
+export function meta() {
+  return [{ title: pageTitle("Movement history", "Inventory") }];
+}
 
 export default function InventoryLedgerPage() {
   // Page, reason and page size live in the URL; the location picker writes

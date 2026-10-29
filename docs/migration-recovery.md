@@ -48,7 +48,8 @@ npx prisma migrate status
 > DATABASE_URL` or close the terminal so a later command doesn't silently hit
 > production.
 
-Reads must go through a real SQL client (the Supabase SQL editor, `psql`).
+Reads must go through a real SQL client (`psql` against `DIRECT_URL`; on the
+droplet, `docker run --rm postgres:17-alpine psql "$DIRECT_URL"`).
 `prisma db execute` runs a file but discards result rows — it only prints
 "Script executed successfully", so you cannot inspect anything with it.
 

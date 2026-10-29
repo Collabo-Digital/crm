@@ -46,8 +46,11 @@ export interface User {
 /** Metric used to decide a customer's loyalty tier. */
 export type LoyaltyMetric = "ORDERS" | "TOTAL_SPENT";
 
-/** Available pricing plan tiers. Mirrors the Prisma `BillingPlan` enum. */
+/** Available pricing plan tiers. Mirrors the Prisma `BillingPlan` enum; ADVANCE is Enterprise. */
 export type BillingPlan = "BASIC" | "GROWTH" | "ADVANCE";
+
+/** The currencies plans are sold in. */
+export type BillingCurrency = "INR" | "USD";
 
 /** Billing cadence for a plan. Mirrors the Prisma `BillingInterval` enum. */
 export type BillingInterval = "MONTHLY" | "YEARLY";
@@ -74,6 +77,100 @@ export interface BillingConfigResponse {
 export interface StartOnboardingCheckoutRequest {
   billingPlan: BillingPlan;
   billingInterval: BillingInterval;
+  currency?: BillingCurrency;
+}
+
+/** A price in each currency's main unit (rupees, dollars). */
+export type Money = Record<BillingCurrency, number>;
+
+/** So many a month without charge, then a fee for each one over. `included: null` is unlimited. */
+export interface PlanAllowance {
+  included: number | null;
+  fee: Money | null;
+}
+
+/** One plan from GET /billing/plans. */
+export interface PricingPlan {
+  id: BillingPlan;
+  name: string;
+  tagline: string;
+  /** A month, before GST. Null: priced per contract (Enterprise). */
+  price: Money | null;
+  highlighted?: boolean;
+  selfServe: boolean;
+  conversations: PlanAllowance;
+  members: PlanAllowance;
+  callingMinutes: PlanAllowance;
+  /** Each connected Instagram account, a month. Null: included. */
+  instagram: Money | null;
+}
+
+/** Response from GET /billing/plans. */
+export interface BillingPlansResponse {
+  plans: PricingPlan[];
+  gstPercent: number;
+  /** The currencies each self-serve plan can be bought in right now. */
+  checkout: Partial<Record<BillingPlan, BillingCurrency[]>>;
+  salesEmail: string | null;
+}
+
+/** What an organization used in a month. */
+export interface BillingUsage {
+  conversations: number;
+  callingMinutes: number;
+  members: number;
+  instagramAccounts: number;
+}
+
+export interface UsageChargeLine {
+  key: "conversations" | "callingMinutes" | "members" | "instagram";
+  quantity: number;
+  /** In the main unit (rupees, dollars). */
+  unitPrice: number;
+  /** In the smallest unit (paise, cents). */
+  amount: number;
+}
+
+/** Amounts in the smallest unit (paise, cents). */
+export interface UsageCharges {
+  lines: UsageChargeLine[];
+  subtotal: number;
+  tax: number;
+  total: number;
+}
+
+export type UsageBillStatus = "PROCESSING" | "NOTHING_DUE" | "ADDED" | "LINK_SENT" | "PAID" | "SKIPPED" | "FAILED";
+
+/** A month's usage over the plan, billed after the month ends. Amounts in the smallest unit. */
+export interface UsageBill {
+  id: string;
+  period: string;
+  status: UsageBillStatus;
+  currency: BillingCurrency | null;
+  usage: BillingUsage | null;
+  lines: UsageChargeLine[] | null;
+  subtotal: number | null;
+  tax: number | null;
+  total: number | null;
+  paymentUrl: string | null;
+  note: string | null;
+  updatedAt: string;
+}
+
+/** Response from GET /billing/usage (owners and admins). */
+export interface BillingUsageSummary {
+  /** This month, "2026-10" (UTC). */
+  period: string;
+  usage: BillingUsage;
+  subscription: {
+    plan: BillingPlan;
+    status: SubscriptionStatus;
+    currency: BillingCurrency;
+    currentPeriodEnd: string | null;
+  } | null;
+  /** What this month would add on the plan, in the subscription's currency; null without a usage-priced subscription. */
+  estimate: UsageCharges | null;
+  bills: UsageBill[];
 }
 
 /** Response from POST /billing/onboarding-checkout. */
@@ -124,14 +221,30 @@ export interface OrganizationMembership {
   role: UserRole;
   /** For VENDOR role: the Product.vendor value this membership is scoped to. */
   vendorScope?: string | null;
-  /** Fine-grained grants (`section.*`, `inventory.*`) — see lib/sections.ts. */
+  /**
+   * Fine-grained grants (`section.*`, `inventory.*`, `campaigns.*`) — see
+   * lib/sections.ts. Absent when the session predates them, in which case the
+   * role's defaults apply.
+   */
   permissions?: string[];
   isActive: boolean;
   organization: Organization;
 }
 
 /** Possible roles a user can hold within an organization. */
-export type UserRole = "OWNER" | "ADMIN" | "MANAGER" | "AGENT" | "VIEWER" | "VENDOR";
+export type UserRole =
+  | "OWNER"
+  | "ADMIN"
+  | "MANAGER"
+  | "AGENT"
+  | "VIEWER"
+  | "VENDOR"
+  /**
+   * External creator invited to collaborate. Like VENDOR, an outside party:
+   * deny-by-default on the server, and confined here to the sections their
+   * permissions name plus the channels they personally connected.
+   */
+  | "INFLUENCER";
 
 // ─── Vendor-scoped order shapes (returned to VENDOR-role users) ──────────────
 
@@ -385,6 +498,12 @@ export interface CreatePersonalRequest {
   billingInterval: BillingInterval;
 }
 
+/** What the owner types to delete a workspace: their password, and the workspace's name as shown. */
+export interface DeleteOrganizationRequest {
+  password: string;
+  confirmName: string;
+}
+
 /** Payload for updating an existing organization's settings. */
 export interface UpdateOrganizationRequest {
   name?: string;
@@ -433,17 +552,21 @@ export interface OrgMember {
   joinedAt: string;
   user: {
     id: string;
-    email: string;
+    /** Sent to owners, admins and managers, and for the member's own row. */
+    email?: string;
     firstName: string;
     lastName: string;
     avatarUrl: string | null;
-    lastLoginAt: string | null;
+    /** As `email`. */
+    lastLoginAt?: string | null;
   };
 }
 
 /** Payload for changing a member's role. */
 export interface UpdateMemberRoleRequest {
   role: UserRole;
+  /** Required when role is VENDOR: the Product.vendor value to scope them to. */
+  vendorScope?: string;
 }
 
 // ─── Team Invite Types ────────────────────────────────────────────────────
@@ -451,6 +574,8 @@ export interface UpdateMemberRoleRequest {
 /** Payload for sending a team invitation. */
 export interface SendInviteRequest {
   email: string;
+  /** What to call the person before they have an account. */
+  name?: string;
   role: UserRole;
   /** Required when role is VENDOR: the Product.vendor value to scope them to. */
   vendorScope?: string;
@@ -463,17 +588,67 @@ export interface UpdateMemberPermissionsRequest {
   grants: string[];
 }
 
-/** A pending team invitation record. */
+/** Payload for inviting an influencer. The role is fixed by the endpoint. */
+export interface InviteInfluencerRequest {
+  email: string;
+  name?: string;
+}
+
+/**
+ * What an invitation is, as the merchant should see it.
+ *
+ * EXPIRED is derived server-side rather than stored: nothing writes it when the
+ * date passes, so a lapsed invitation is still PENDING in the table.
+ */
+export type InviteState = "PENDING" | "ACCEPTED" | "EXPIRED" | "REVOKED";
+
+/** A team invitation record. */
 export interface OrgInvite {
   id: string;
   email: string;
+  name: string | null;
   role: UserRole;
   permissions?: string[];
-  status: "PENDING";
+  status: InviteState;
   token?: string;
   invitedBy: string;
   expiresAt: string;
   createdAt: string;
+}
+
+// ─── Influencers ──────────────────────────────────────────────────────────
+
+/** An Instagram account an influencer has connected, as shown to an admin. */
+export interface InfluencerChannel {
+  id: string;
+  platform: ChannelPlatform;
+  name: string;
+  status: ChannelStatus;
+  externalStoreId: string | null;
+  externalStoreUrl: string | null;
+  connectedAt: string | null;
+}
+
+/**
+ * One row of influencer management: either someone who joined, or an invitation
+ * still in flight. The server returns both in one list because the UI shows
+ * them in one table.
+ */
+export interface InfluencerRow {
+  kind: "MEMBER" | "INVITE";
+  memberId: string | null;
+  inviteId: string | null;
+  userId: string | null;
+  email: string;
+  name: string | null;
+  avatarUrl: string | null;
+  /** ACTIVE once they have joined; otherwise the invitation's state. */
+  status: InviteState | "ACTIVE";
+  invitedAt: string;
+  joinedAt: string | null;
+  expiresAt?: string;
+  /** Comes from the channel system, not a second copy kept for display. */
+  channels: InfluencerChannel[];
 }
 
 // ─── Invite Types (Auth-level) ────────────────────────────────────────────
@@ -481,6 +656,7 @@ export interface OrgInvite {
 /** Response when fetching invite details by token (pre-accept). */
 export interface GetInviteResponse {
   email: string;
+  name: string | null;
   role: UserRole;
   organization: {
     id: string;
@@ -488,7 +664,12 @@ export interface GetInviteResponse {
     slug: string;
     logo: string | null;
   };
+  /**
+   * True when the invited address already has an account. Acceptance then
+   * requires signing in as that account — holding the link is not enough.
+   */
   userExists: boolean;
+  expiresAt: string;
 }
 
 /** Payload for accepting a team invitation (new or existing user). */
@@ -509,6 +690,11 @@ export interface AcceptInviteResponse {
     firstName: string;
     lastName: string;
   };
+  /**
+   * The role actually granted. Returned so the client stores the truth: it used
+   * to assume AGENT, which left every later role check wrong until a reload.
+   */
+  role: UserRole;
   organization: {
     id: string;
     name: string;
@@ -545,26 +731,109 @@ export type ChannelPlatform =
   | "TIKTOK"
   | "MANUAL";
 
-/** Connection status of a channel. */
+/** Raw connection status stored on the channel row. */
 export type ChannelStatus = "CONNECTED" | "DISCONNECTED" | "ERROR" | "SYNCING";
+
+/**
+ * What the merchant is shown about a connection.
+ *
+ * Derived server-side, and deliberately not `ChannelStatus`: that enum is
+ * overloaded (SYNCING is a Shopify data phase, and the sync path writes
+ * ERROR/CONNECTED to it for reasons unrelated to whether the account is linked).
+ */
+export type ChannelConnectionState =
+  | "CONNECTED"
+  | "ERROR"
+  | "EXPIRED"
+  | "DISCONNECTED";
 
 /** Current synchronization status. */
 export type SyncStatus = "IDLE" | "IN_PROGRESS" | "COMPLETED" | "FAILED";
 
-/** A connected sales channel (e.g. Shopify store). */
+/**
+ * The non-secret identity of a connected account.
+ *
+ * Built server-side by whitelisting display fields out of the encrypted
+ * credentials blob — never the blob itself.
+ */
+export interface ChannelAccountSummary {
+  /** Provider account id: Instagram business account id, WABA id, shop id. */
+  externalId: string | null;
+  /** The short label a merchant recognises: @handle, phone number, domain. */
+  handle: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
+  /** One line of context: which Facebook Page, which WhatsApp Business Account. */
+  detail: string | null;
+}
+
+/** One connected account on a channel (an Instagram handle, a WABA, a store). */
 export interface Channel {
   id: string;
-  organizationId: string;
   name: string;
   platform: ChannelPlatform;
   status: ChannelStatus;
   isEnabled: boolean;
+  connectionState: ChannelConnectionState;
+  /** Null for platforms with nothing to show, and for a never-connected row. */
+  account: ChannelAccountSummary | null;
+  /** WhatsApp / Messenger / Instagram health. Null for other platforms. */
+  messaging?: ChannelMessagingStatus | null;
+  externalStoreId: string | null;
   externalStoreUrl: string | null;
+  /** When this account was linked. Not `createdAt` — a revived row keeps that. */
+  connectedAt: string | null;
+  /** Why the connection is unhealthy, in words to show the merchant. */
+  lastError: string | null;
+  /** Null when the grant does not expire (Shopify offline, WhatsApp system user). */
+  tokenExpiresAt: string | null;
+  disconnectedAt: string | null;
   lastSyncedAt: string | null;
   syncStatus: SyncStatus;
-  metadata: Record<string, unknown> | null;
+  /**
+   * Set by the outbound rate limiter when Shopify / Meta actually refused a
+   * request and a cooldown is running. A past value is stale, not an error:
+   * only treat it as active while it is in the future (see `rateLimit` on
+   * ChannelDetail for the pre-computed flag).
+   */
+  rateLimitedUntil?: string | null;
+  rateLimitReason?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Messaging health for a WhatsApp number, Facebook Page or Instagram account. */
+export interface ChannelMessagingStatus {
+  /** WhatsApp number also used on the WhatsApp Business app (coexistence). */
+  isOnBizApp: boolean;
+  quality: string | null;
+  messagingLimit: string | null;
+  throughput: string | null;
+  nameStatus: string | null;
+  coexistence: { state: string; sendsPaused: boolean } | null;
+  historySync: {
+    status: "pending" | "requested" | "importing" | "complete" | "declined" | "failed" | "expired" | (string & {});
+    progress: number | null;
+    messagesReceived: number | null;
+    error: string | null;
+  } | null;
+  setup: { webhooks: string; registration: string } | null;
+  webhooksOk: boolean | null;
+  /** WhatsApp: whether Meta lets the number send, and what blocks it. */
+  sending: WhatsAppSendingHealth | null;
+}
+
+/** Meta's health_status for a WhatsApp number: AVAILABLE, LIMITED or BLOCKED, with the reasons. */
+export interface WhatsAppSendingHealth {
+  state: "AVAILABLE" | "LIMITED" | "BLOCKED" | (string & {});
+  problems: Array<{ description: string; solution: string | null }>;
+}
+
+/** Live outbound rate-limit summary for a channel (from GET /channels/:id). */
+export interface ChannelRateLimit {
+  limitedUntil: string | null;
+  reason: string | null;
+  active: boolean;
 }
 
 /** A single sync log entry recording a synchronization attempt. */
@@ -585,6 +854,8 @@ export interface SyncLog {
 /** Channel detail including recent sync history. */
 export interface ChannelDetail extends Channel {
   syncLogs: SyncLog[];
+  metadata: Record<string, unknown> | null;
+  rateLimit?: ChannelRateLimit;
 }
 
 /** Payload for updating a channel's name or enabled status. */
@@ -655,9 +926,95 @@ export interface ManualConnectShopifyResponse {
   shopDomain: string;
 }
 
+/**
+ * What happens to one Shopify location's stock: it shares stock with an
+ * existing Collabo location, became a new one, or is not tracked. Null until
+ * the merchant decides — nothing syncs for that location before then.
+ */
+export type ShopifyLocationDecision =
+  | { action: "link"; warehouseId: string; warehouseName: string }
+  | { action: "create"; warehouseId: string; warehouseName: string }
+  | { action: "ignore" };
+
+export interface ShopifyLocation {
+  id: string;
+  name: string;
+  isPrimary: boolean;
+  isActive: boolean;
+  address: { city: string; stateCode: string } | null;
+  decision: ShopifyLocationDecision | null;
+}
+
+/** GET/POST /channels/:id/shopify/locations. PENDING while any location is undecided. */
+export interface ShopifyLocationsResponse {
+  status: "PENDING" | "DONE";
+  locations: ShopifyLocation[];
+  /** The workspace's own locations, as candidates to share stock with. */
+  warehouses: Array<{
+    id: string;
+    name: string;
+    kind: LocationKind;
+    hasStock: boolean;
+    shopifyLocationId: string | null;
+  }>;
+}
+
+export type ShopifyLocationDecisionInput =
+  | { shopifyLocationId: string; action: "link"; warehouseId: string; stockSource: LocationStockSource }
+  | { shopifyLocationId: string; action: "create"; kind: LocationKind; name?: string }
+  | { shopifyLocationId: string; action: "ignore" };
+
+export interface SaveShopifyLocationsRequest {
+  decisions: ShopifyLocationDecisionInput[];
+}
+
 /** Response containing the OAuth redirect URL. */
 export interface OAuthInstallResponse {
   authUrl: string;
+}
+
+/**
+ * Payload for POST /channels/instagram/install.
+ *
+ * `reconnectChannelId` means "re-authorize THIS account" rather than "add
+ * another", which is what the Reconnect action on an errored or expired row
+ * sends. Omitted for a plain connect.
+ */
+export interface InstagramInstallRequest {
+  reconnectChannelId?: string;
+}
+
+/** One Instagram account a single Facebook login turned out to grant. */
+export interface InstagramCandidate {
+  igUserId: string;
+  username: string | null;
+  name: string | null;
+  profilePictureUrl: string | null;
+  pageId: string;
+  pageName: string;
+}
+
+/** Response from GET /channels/instagram/pending/:id — the picker's options. */
+export interface InstagramPendingResponse {
+  pendingId: string;
+  candidates: InstagramCandidate[];
+}
+
+/** Payload for POST /channels/instagram/complete — the merchant's choice. */
+export interface CompleteInstagramRequest {
+  pendingId: string;
+  igUserId: string;
+}
+
+/** Response after the picked Instagram account is connected. */
+export interface CompleteInstagramResponse {
+  channelId: string;
+  account: ChannelAccountSummary | null;
+}
+
+/** Payload for POST /channels/whatsapp/install. */
+export interface WhatsAppInstallRequest {
+  reconnectChannelId?: string;
 }
 
 /** Response from POST /channels/whatsapp/install — config for the Meta JS SDK. */
@@ -670,12 +1027,62 @@ export interface WhatsAppInstallResponse {
 export interface WhatsAppCallbackRequest {
   code: string;
   state: string;
+  /** Session info Embedded Signup posted to the page on FINISH. */
+  phoneNumberId?: string;
+  wabaId?: string;
+  isOnBizApp?: boolean;
+  businessId?: string;
+}
+
+export interface WhatsAppSetupOutcome {
+  webhooks: "ok" | "failed";
+  webhooksError?: string;
+  registration: "ok" | "failed" | "not_needed";
+  registrationError?: string;
 }
 
 /** Response from POST /channels/whatsapp/callback after the channel is created. */
 export interface WhatsAppCallbackResponse {
   channelId: string;
   redirectUrl: string;
+  account: ChannelAccountSummary | null;
+  /** The number also stays on the WhatsApp Business app (coexistence). */
+  isOnBizApp: boolean;
+  setup: WhatsAppSetupOutcome;
+}
+
+/** Response from POST /channels/:id/whatsapp/refresh-health. */
+export interface WhatsAppNumberHealth {
+  id: string;
+  display_phone_number?: string;
+  verified_name?: string;
+  quality_rating?: string;
+  platform_type?: string;
+  throughput?: { level?: string };
+  name_status?: string;
+  is_on_biz_app?: boolean;
+  whatsapp_business_manager_messaging_limit?: string;
+}
+
+/** Facebook Login for Business: Pages (Messenger) and their Instagram accounts. */
+export interface MessengerInstallResponse {
+  configId: string;
+  state: string;
+}
+
+export interface MessengerCallbackRequest {
+  code: string;
+  state: string;
+}
+
+export interface MessengerCallbackResponse {
+  connected: Array<{
+    channelId: string;
+    platform: ChannelPlatform;
+    account: ChannelAccountSummary | null;
+    webhooks: "ok" | "failed";
+  }>;
+  skipped: Array<{ name: string; reason: string }>;
 }
 
 // ─── Product Types ───────────────────────────────────────────────────────────
@@ -849,6 +1256,12 @@ export interface ProductImportJob {
 }
 
 /** Variant block on a create-product / update-product request. */
+/** A new variant's starting quantity at one location. */
+export interface OpeningStockLine {
+  warehouseId: string;
+  quantity: number;
+}
+
 export interface ProductVariantInput {
   /** Existing variant id when editing — `undefined` for a freshly-added row. */
   id?: string;
@@ -858,6 +1271,11 @@ export interface ProductVariantInput {
   compareAtPrice?: number;
   cost?: number;
   inventoryQuantity?: number;
+  /**
+   * Opening stock per location, for workspaces with stock locations (create
+   * only). The server ignores `inventoryQuantity` when this is sent.
+   */
+  stock?: OpeningStockLine[];
   trackQuantity?: boolean;
   continueSellingWhenOutOfStock?: boolean;
   weight?: number;
@@ -1085,6 +1503,8 @@ export interface Order {
    * Read it through `orderShopifySyncOf`, which handles both shapes.
    */
   shopifySync?: OrderShopifySync | null;
+  /** LIST endpoint only: the order is cash on delivery, by its payment gateway names. */
+  cashOnDelivery?: boolean;
   /**
    * Row insert time. On the DETAIL endpoint this is the local DB timestamp, not
    * when the order was placed — the list and vendor endpoints map
@@ -1255,6 +1675,10 @@ export interface OrderDetail extends Order {
     Invoice,
     "id" | "invoiceNumber" | "invoiceDate" | "status" | "grandTotal"
   >[];
+  /** Raw column: true for a point-of-sale counter sale, which is never packed. */
+  posSale?: boolean;
+  /** The order's packing task, when one was started. */
+  packing?: OrderPacking | null;
 }
 
 /**
@@ -1305,11 +1729,18 @@ export interface AdjacentOrders {
   total: number;
 }
 
+/**
+ * The orders list's payment filter: paid, pending (unpaid, not cash on
+ * delivery), COD (unpaid cash on delivery) or refunded (fully or partly).
+ */
+export type OrderPaymentFilter = "paid" | "pending" | "cod" | "refunded";
+
 export interface OrderListParams {
   page?: number;
   limit?: number;
   financialStatus?: FinancialStatus;
   fulfillmentStatus?: FulfillmentStatus;
+  payment?: OrderPaymentFilter;
   channelId?: string;
   productId?: string;
   customerId?: string;
@@ -1537,6 +1968,12 @@ export interface OrderSettings {
    * soft-fails server-side and the order still syncs.
    */
   autoInvoiceOnPayment: boolean;
+  /**
+   * When true, a cash-on-delivery order is invoiced when it ships rather than
+   * when it is paid, since GST wants the invoice by dispatch. Shopify
+   * fulfilments and shipments made in the CRM. Default false.
+   */
+  autoInvoiceCodOnShipping: boolean;
 }
 
 /** Per-org GST/tax settings. Both values change STATUTORY OUTPUT. */
@@ -1572,6 +2009,26 @@ export interface TaxSettings {
    * number is read back per prefix.
    */
   invoicePrefix: string;
+  /**
+   * "Catalogue prices include GST": GST is taken out of a product's price, or
+   * one typed into an order, instead of added on top. Null until the merchant
+   * chooses; until then the store's Shopify orders decide (see
+   * `OrganizationSettingsResponse.pricesIncludeTax`).
+   */
+  pricesIncludeTax: boolean | null;
+  /**
+   * Registered under the composition scheme: every sale is charged and
+   * invoiced at no GST, documents are Bills of Supply, and sales to another
+   * state are refused. Never on together with `eInvoicing` (the server says
+   * so with a 400).
+   */
+  composition: boolean;
+  /**
+   * Turnover above the e-invoicing limit. Invoices and credit notes to
+   * GST-registered buyers, and exports, are refused until Collabo can get an
+   * IRN; other documents print the Rule 46(s) declaration.
+   */
+  eInvoicing: boolean;
 }
 
 /**
@@ -1600,9 +2057,75 @@ export interface StoreProfileSettings {
   whatsappPhone: string;
   supportEmail: string;
   website: string;
-  /** Absolute URL — there is no upload pipeline for this yet. */
+  /** Absolute URL: the uploaded logo's, or one typed in on Store profile. */
   logoUrl: string;
+  /**
+   * The uploaded file behind `logoUrl`, blank when the logo was typed in as a
+   * link. PDFs print only an uploaded logo; a typed one prints the trading
+   * name instead. Set and cleared only by the logo upload routes.
+   */
+  logoStorageKey: string;
 }
+
+/** IDs a brand can print beside its GSTIN. PAN is not one: it is read off the GSTIN. */
+export type BusinessIdType = "CIN" | "FSSAI" | "UDYAM" | "IEC" | "LUT" | "DL" | "CUSTOM";
+
+export interface BusinessId {
+  type: BusinessIdType;
+  /** Printed only for CUSTOM; the others carry their standard label. */
+  label: string;
+  value: string;
+  onA4: boolean;
+  onReceipt: boolean;
+}
+
+/** Whether a document prints the buyer's phone (and email on A4): not at all, masked, or in full. */
+export type ContactShown = "hide" | "mask" | "show";
+
+/**
+ * How the organization's invoices, bills and receipts look. Mirrors
+ * `InvoiceSettingsSchema` in server/src/organization-settings/schemas/
+ * invoice-settings.schema.ts; the server fills every default. Issued documents
+ * keep a copy of these, so a change never alters one already sent.
+ */
+export interface InvoiceSettings {
+  theme: "modern" | "classic";
+  /** Invoices to GST-registered buyers use Classic whatever `theme` says. */
+  classicForB2b: boolean;
+  /** `#RRGGBB`, or null to print in ink. */
+  brandColor: string | null;
+  showPan: boolean;
+  businessIds: BusinessId[];
+  registeredOffice: string;
+  /** The store profile's support phone, WhatsApp and email in the header and footer. */
+  showSupportContact: boolean;
+  /** One term per line; printed numbered. */
+  terms: string;
+  returnPolicy: string;
+  returnPolicyUrl: string;
+  footerNote: string;
+  /** Credit notes carry a signatory block whatever this says. */
+  signatureMode: "computer" | "image" | "blank";
+  /** Set and cleared by the signature upload routes only. */
+  signature: { storageKey: string; url: string } | null;
+  signatoryName: string;
+  signatoryDesignation: string;
+  showSku: boolean;
+  amountInWords: boolean;
+  /** `auto`: when the document has more than one HSN or rate. Business invoices always carry it. */
+  taxSummary: "auto" | "always" | "never";
+  customerContact: ContactShown;
+  receiptCustomerContact: ContactShown;
+  /** A UPI QR for the balance on unpaid invoices. Never on cash-on-delivery orders. */
+  upiQr: "unpaid" | "never";
+  receiptQr: "ebill" | "upi-when-due" | "off";
+}
+
+/** PATCH /organization/settings/invoice. The signature image is set by its own upload. */
+export type UpdateInvoiceSettingsRequest = Partial<Omit<InvoiceSettings, "signature">>;
+
+/** The sample documents the settings preview can draw. */
+export type InvoiceSample = "tax_invoice" | "tax_invoice_b2b" | "bill_of_supply" | "credit_note" | "bill";
 
 /** Response from GET /organization/settings — every domain returned together. */
 export interface OrganizationSettingsResponse {
@@ -1611,10 +2134,17 @@ export interface OrganizationSettingsResponse {
   inventorySettings: InventorySettings;
   taxSettings: TaxSettings;
   storeProfileSettings: StoreProfileSettings;
+  invoiceSettings: InvoiceSettings;
+  /**
+   * How orders and drafts read a catalogue or typed price. `effective` is
+   * `taxSettings.pricesIncludeTax` once chosen, else `detected` (what the
+   * store's own Shopify orders say, null with none), else false.
+   */
+  pricesIncludeTax: { effective: boolean; detected: boolean | null };
 }
 
 /** Patch payload for PATCH /organization/settings/store-profile. */
-export type UpdateStoreProfileSettingsRequest = Partial<StoreProfileSettings>;
+export type UpdateStoreProfileSettingsRequest = Partial<Omit<StoreProfileSettings, "logoStorageKey">>;
 
 /** Patch payload for PATCH /organization/settings/products. */
 export type UpdateProductSettingsRequest = Partial<ProductSettings>;
@@ -1896,6 +2426,8 @@ export interface CustomerDetail extends Customer {
    * form's shape (GST `stateCode` resolved, phone in E.164). Null if none.
    */
   prefillAddress?: OrderAddressInput | null;
+  /** Every WhatsApp number and Instagram or Messenger profile linked to this customer, latest first. */
+  chats: CustomerChat[];
 }
 
 /** Query parameters for the customer list endpoint. */
@@ -1917,6 +2449,10 @@ export interface UpdateCustomerRequest {
   internalNotes?: string;
   segments?: string[];
   tags?: string[];
+  /** Saved as E.164; an empty string removes it. */
+  phone?: string;
+  /** Replaces the saved default address. */
+  defaultAddress?: OrderAddressInput;
   gstin?: string;
   billingStateCode?: string;
   billingStateName?: string;
@@ -2077,6 +2613,16 @@ export interface DashboardRecentOrder {
 }
 
 /** Full dashboard overview response. */
+/** GET /dashboard/setup — the "Get started" checklist, each step read from the workspace's data. */
+export interface SetupProgress {
+  whatsapp: boolean;
+  catalogue: boolean;
+  storeProfile: boolean;
+  gst: boolean;
+  team: boolean;
+  automations: boolean;
+}
+
 export interface DashboardOverview {
   period: DashboardPeriod;
   /**
@@ -2097,6 +2643,88 @@ export interface DashboardOverview {
    *  absent from servers that predate it. */
   lowStockVariants?: DashboardLowStockVariant[];
   recentOrders: DashboardRecentOrder[];
+}
+
+// ─── Store Report Types (point of sale) ─────────────────────────────────────
+// PosPaymentMethod is declared with the point-of-sale types further down.
+
+/** Query for GET /pos/reports/summary. Days are `YYYY-MM-DD` in the org's reporting zone. */
+export interface PosReportParams {
+  from: string;
+  /** Included. */
+  to: string;
+  /** A warehouse id; omitted for every store. */
+  storeId?: string;
+}
+
+/**
+ * Store sales over a period: POS bills less cancelled and deleted ones, paid or
+ * not. Money is in `currency`, converted at each bill's stored rate.
+ */
+export interface PosReportSummary {
+  period: { from: string; to: string; timezone: string };
+  currency: string;
+  totals: {
+    sales: number;
+    /** Bills. */
+    orders: number;
+    avgBill: number;
+    discounts: number;
+    tax: number;
+    itemsSold: number;
+    /** Taken against these bills, by any method. */
+    paid: number;
+    /** Still to collect on part-paid and unpaid bills, round-off included. */
+    balanceDue: number;
+  };
+  /** Every day of the period, zero on days without bills. */
+  byDay: Array<{ date: string; sales: number; orders: number }>;
+  byStore: Array<{ storeId: string | null; storeName: string; sales: number; orders: number }>;
+  /** `posStaffId` null is bills rung up without a staff PIN. */
+  byStaff: Array<{
+    posStaffId: string | null;
+    name: string;
+    sales: number;
+    orders: number;
+    avgBill: number;
+  }>;
+  /** Always all four methods, in this order: cash, UPI, card, other. */
+  byPayment: Array<{ method: PosPaymentMethod; amount: number; count: number }>;
+  /** Top 10 by units sold. `variantId` null is an item typed in at the counter. */
+  topProducts: Array<{ variantId: string | null; title: string; quantity: number; sales: number }>;
+  partPaid: { orders: number; balanceDue: number };
+  /** Bills left out of every figure because their exchange rate is unknown. */
+  unconvertedOrders: number;
+}
+
+/** sale, unlock, pin_failed and approval are written today; others may follow. */
+export type PosActivityType = "sale" | "unlock" | "pin_failed" | "approval" | (string & {});
+
+export interface PosActivityParams {
+  from?: string;
+  to?: string;
+  type?: string;
+  limit?: number;
+}
+
+export interface PosActivityEntry {
+  id: string;
+  type: PosActivityType;
+  createdAt: string;
+  details: Record<string, unknown> | null;
+  /** Who was signed in at the till with their PIN. */
+  staff: { id: string; name: string } | null;
+  /** The manager whose PIN approved it. */
+  approvedBy: { id: string; name: string } | null;
+  order: { id: string; name: string } | null;
+  /** The Collabo member the device was signed in as. */
+  deviceUser: { id: string; name: string } | null;
+}
+
+export interface PosActivityResponse {
+  items: PosActivityEntry[];
+  /** More entries match than the page holds. */
+  hasMore: boolean;
 }
 
 // ─── Customer Stats Types ──────────────────────────────────────────────────
@@ -2218,6 +2846,9 @@ export type GstType = "CGST_SGST" | "IGST";
 /** Invoice status. */
 export type InvoiceStatus = "DRAFT" | "ISSUED" | "CANCELLED" | "CREDIT_NOTE";
 
+/** A Bill of Supply is issued under the composition scheme, or when nothing on it is taxable. */
+export type InvoiceDocumentType = "TAX_INVOICE" | "BILL_OF_SUPPLY";
+
 /** An invoice line item with full tax breakdown. */
 export interface InvoiceLineItem {
   id: string;
@@ -2266,6 +2897,11 @@ export interface Invoice {
   currency: string;
   status: InvoiceStatus;
   cancelledAt: string | null;
+  /**
+   * `render` is what the document looked like when it was issued. Invoices
+   * issued before it existed have none, and were all tax invoices.
+   */
+  metadata?: { render?: { documentType?: InvoiceDocumentType } } | null;
   /** `financialStatus` drives the derived "Unpaid" pill — see `lib/invoice-status.ts`. */
   order: {
     id: string;
@@ -2398,10 +3034,16 @@ export interface CreateCreditNoteRequest {
   reason: string;
   /**
    * Amount to credit, inclusive of tax. Omit for a FULL reversal of whatever
-   * remains uncredited. A partial credit is apportioned pro-rata across the
-   * original lines, so each keeps its own GST rate.
+   * remains uncredited. A partial credit is spread across the original lines,
+   * so each keeps its own GST rate, and credits goods before untaxed shipping.
    */
   amount?: number;
+  /**
+   * GST included in `amount`, when known (the refund reports it). The note
+   * then reverses exactly this much GST; the rest beyond the goods it was
+   * charged on is untaxed shipping. Sent only with `amount`.
+   */
+  tax?: number;
   notes?: string;
 }
 
@@ -2699,8 +3341,14 @@ export interface Gstr1B2csRow {
 
 /** One GSTR-1 Table 9B row — a credit note against an earlier invoice. */
 export interface Gstr1CreditNoteRow {
-  /** CDNR when the buyer is registered, CDNUR when they are not. */
+  /**
+   * CDNR when the buyer is registered. CDNUR only for an unregistered buyer
+   * whose original invoice was B2CL or an export; a note against an ordinary
+   * B2C sale is netted out of B2CS instead and has no row here.
+   */
   section: "CDNR" | "CDNUR";
+  /** CDNUR's "UR type": B2CL, EXPWP or EXPWOP. Null on CDNR. */
+  urType: "B2CL" | "EXPWP" | "EXPWOP" | null;
   noteNumber: string;
   noteDate: string;
   buyerGstin: string | null;
@@ -2940,11 +3588,40 @@ export interface InventoryStatus {
   warehouseCount: number;
 }
 
+/** A Store sells with the point of sale; a Warehouse only holds stock. */
+export type LocationKind = "STORE" | "WAREHOUSE";
+
+/**
+ * Which GST registration a location's sales are billed under. `existing` uses
+ * one of the workspace's GSTINs for the location's state, `new` adds the
+ * location's own, and `none` leaves it without one.
+ */
+export type LocationGstChoice =
+  | { mode: "existing"; gstinId: string }
+  | { mode: "new"; gstin: string; legalName?: string; tradeName?: string }
+  | { mode: "none" };
+
+/** Whose counts win when a location that already holds stock is linked to Shopify. */
+export type LocationStockSource = "shopify" | "collabo";
+
+export interface LocationAddress {
+  address1: string;
+  address2?: string;
+  city: string;
+  zip: string;
+  stateCode: string;
+}
+
 export interface Warehouse {
   id: string;
   name: string;
   code: string;
+  kind: LocationKind;
   shopifyLocationId: string | null;
+  /** The Shopify location this one shares stock with. */
+  shopifyLocation: { id: string; name: string } | null;
+  /** A sentence about this location's GST setup that needs the merchant's attention. */
+  gstWarning: string | null;
   address: Record<string, unknown> | null;
   /** GST registration this warehouse is an additional place of business of. */
   gstinId: string | null;
@@ -3208,20 +3885,30 @@ export interface VariantStockDetail {
 export interface CreateWarehouseRequest {
   name: string;
   code: string;
-  address?: Record<string, unknown>;
-  gstinId?: string | null;
+  kind: LocationKind;
+  address: LocationAddress;
+  /** Sent only while GST is on for the workspace. */
+  gst?: LocationGstChoice;
+  /** Merchant's own confirmation that the address is declared on the GST portal. */
   apobDeclared?: boolean;
   isDefault?: boolean;
+  shopifyLocationId?: string;
+  /** Required when linking to Shopify a location that already holds stock. */
+  stockSource?: LocationStockSource;
 }
 
 export interface UpdateWarehouseRequest {
   name?: string;
-  address?: Record<string, unknown>;
-  /** null unlinks the registration; omit to leave it unchanged. */
-  gstinId?: string | null;
+  code?: string;
+  kind?: LocationKind;
+  address?: LocationAddress;
+  gst?: LocationGstChoice;
   apobDeclared?: boolean;
   isDefault?: boolean;
   isActive?: boolean;
+  /** null unlinks the Shopify location; omit to leave it unchanged. */
+  shopifyLocationId?: string | null;
+  stockSource?: LocationStockSource;
 }
 
 export interface BulkLocationsRequest {
@@ -3269,4 +3956,1948 @@ export interface LabelData {
   barcode: string | null;
   price: number | string;
   defaultQty: number;
+}
+
+// ─── Inbox Types ────────────────────────────────────────────────────────────
+// Mirrors server/src/inbox. Dates arrive as ISO strings.
+
+export type ConversationStatus = "OPEN" | "SNOOZED" | "CLOSED";
+export type InboxListView = "all" | "mine" | "unassigned";
+export type InboxListStatus = "open" | "snoozed" | "closed" | "any";
+export type MessageDirection = "INBOUND" | "OUTBOUND";
+/** PLAYED: a voice note the customer has listened to; it comes after READ. */
+export type InboxMessageStatus = "QUEUED" | "SENT" | "DELIVERED" | "READ" | "PLAYED" | "FAILED";
+export type InboxMessageKind =
+  | "TEXT"
+  | "TEMPLATE"
+  | "DOCUMENT"
+  | "IMAGE"
+  | "PRIVATE_REPLY"
+  | "VIDEO"
+  | "AUDIO"
+  | "STICKER"
+  | "LOCATION"
+  | "CONTACTS"
+  | "INTERACTIVE"
+  | "REACTION"
+  | "PRODUCT"
+  | "ORDER"
+  | "SYSTEM"
+  | "UNSUPPORTED"
+  | "COMMENT";
+/** Who sent an outbound message, or that the customer did. */
+export type MessageSource =
+  | "CUSTOMER"
+  | "AGENT"
+  | "AUTOMATION"
+  | "BROADCAST"
+  | "BUSINESS_APP"
+  | "OTHER_APP"
+  | "SYSTEM";
+export type InboxAvailability = "ONLINE" | "AWAY";
+export type InboxPresence = "online" | "away" | "offline";
+export type InboxShareScope = "PERSONAL" | "TEAM" | "ORGANIZATION";
+export type InboxMediaKind = "image" | "video" | "audio" | "document";
+
+export interface InboxPerson {
+  id: string;
+  name: string;
+  avatarUrl?: string | null;
+}
+
+export interface InboxTeamRef {
+  id: string;
+  name: string;
+}
+
+export interface ReplyWindowState {
+  open: boolean;
+  /** WhatsApp: when free-form replies stop. Null until the customer writes. */
+  closesAt: string | null;
+  /** Messenger / Instagram: a person may still reply until here. */
+  humanAgentUntil: string | null;
+}
+
+export interface InboxConversation {
+  id: string;
+  platform: ChannelPlatform;
+  status: ConversationStatus;
+  snoozedUntil: string | null;
+  channel: { id: string; name: string; platform: ChannelPlatform };
+  contact: {
+    id: string;
+    name: string;
+    username: string | null;
+    phone: string | null;
+    avatarUrl: string | null;
+    tags: string[];
+    optedOut: boolean;
+    blocked: boolean;
+    /** A WhatsApp group's chat, not a person. */
+    isGroup: boolean;
+  };
+  group: { id: string; status: WhatsAppGroupStatus; participantCount: number } | null;
+  customerId: string | null;
+  assignee: InboxPerson | null;
+  team: InboxTeamRef | null;
+  lastMessagePreview: string | null;
+  lastMessageAt: string | null;
+  lastInboundAt: string | null;
+  unreadCount: number;
+  awaitingReplySince: string | null;
+  window: ReplyWindowState;
+}
+
+// ─── WhatsApp calls ─────────────────────────────────────────────────────────
+
+export type WhatsAppCallStatus = "RINGING" | "CONNECTING" | "ACTIVE" | "COMPLETED" | "MISSED" | "REJECTED" | "FAILED";
+
+export interface WhatsAppCallView {
+  id: string;
+  conversationId: string | null;
+  direction: "USER_INITIATED" | "BUSINESS_INITIATED";
+  status: WhatsAppCallStatus;
+  contactName: string;
+  phone: string | null;
+  agentUserId: string | null;
+  startedAt: string;
+  answeredAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number | null;
+  failure: string | null;
+  /** Meta's answer to a business call has arrived. */
+  hasAnswer: boolean;
+}
+
+export interface WhatsAppCallDetail extends WhatsAppCallView {
+  offerSdp: string | null;
+  answerSdp: string | null;
+}
+
+export interface CallPermission {
+  status: string;
+  canCall: boolean;
+  canAsk: boolean;
+}
+
+export interface CallSettings {
+  available: boolean;
+  reason: string | null;
+  enabled: boolean;
+  showCallButton: boolean;
+  callbackPermission: boolean;
+}
+
+// ─── WhatsApp groups ────────────────────────────────────────────────────────
+
+export type WhatsAppGroupStatus = "CREATING" | "ACTIVE" | "SUSPENDED" | "DELETING" | "DELETED" | "FAILED";
+
+export interface WhatsAppGroupSummary {
+  id: string;
+  channelId: string;
+  channelName: string;
+  subject: string;
+  description: string | null;
+  joinApprovalMode: "auto_approve" | "approval_required";
+  inviteLink: string | null;
+  status: WhatsAppGroupStatus;
+  statusReason: string | null;
+  participantCount: number;
+  pendingJoinRequests: number;
+  conversationId: string | null;
+  createdAt: string;
+}
+
+export interface WhatsAppGroupDetail extends WhatsAppGroupSummary {
+  participants: Array<{ waId: string; name: string | null; joinedAt: string }>;
+  joinRequests: Array<{ id: string; waId: string; requestedAt: string }>;
+}
+
+export interface WhatsAppGroupsResponse {
+  /** The organization's WhatsApp numbers, and whether each can run groups. */
+  numbers: Array<{ channelId: string; name: string; available: boolean; reason: string | null }>;
+  groups: WhatsAppGroupSummary[];
+}
+
+export interface CreateGroupRequest {
+  channelId: string;
+  subject: string;
+  description?: string;
+  joinApprovalMode: "auto_approve" | "approval_required";
+}
+
+export interface InboxCursor {
+  beforeAt: string | undefined;
+  beforeId: string;
+}
+
+export interface InboxConversationPage {
+  items: InboxConversation[];
+  nextCursor: InboxCursor | null;
+}
+
+export interface InboxCustomerMatch {
+  id: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  ordersCount: number;
+}
+
+/** One of a customer's chats: a WhatsApp number or an Instagram or Messenger profile. */
+export interface CustomerChat {
+  contactId: string;
+  platform: ChannelPlatform;
+  channel: { name: string };
+  name: string;
+  phone: string | null;
+  username: string | null;
+  /** Null for a contact who has no chat yet, such as an imported number. */
+  conversationId: string | null;
+  lastMessageAt: string | null;
+}
+
+export interface InboxOtherChat extends CustomerChat {
+  lastMessagePreview: string | null;
+  optedIn: boolean;
+}
+
+export interface InboxContactDetail {
+  id: string;
+  platform: ChannelPlatform;
+  /** A WhatsApp group's chat, not a person. */
+  isGroup: boolean;
+  name: string;
+  displayName: string | null;
+  addressBookName: string | null;
+  username: string | null;
+  phone: string | null;
+  externalId: string;
+  avatarUrl: string | null;
+  tags: string[];
+  attributes: Record<string, string | number | boolean>;
+  optedOutAt: string | null;
+  optInAt: string | null;
+  blockedAt: string | null;
+  firstSeenAt: string;
+  lastInboundAt: string | null;
+  owner: { user: InboxPerson | null; team: InboxTeamRef | null };
+  customer: {
+    id: string;
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+    ordersCount: number;
+    totalSpent: string;
+    vipLevel: VipLevel;
+    tags: string[];
+    since: string;
+    recentOrders: Array<{
+      id: string;
+      name: string;
+      totalPrice: string;
+      currency: string;
+      financialStatus: FinancialStatus;
+      fulfillmentStatus: FulfillmentStatus;
+      createdAt: string;
+      cancelledAt: string | null;
+    }>;
+  } | null;
+  phoneMatches: InboxCustomerMatch[];
+  /** The same customer's other numbers and profiles, latest first. Chats the member cannot open are left out. */
+  otherChats: InboxOtherChat[];
+  consent: Array<{ type: "OPT_IN" | "OPT_OUT"; source: string; occurredAt: string }>;
+  /** The latest click-to-message ad this person came from. */
+  fromAd: { adId: string; headline: string | null; body: string | null; sourceUrl: string | null; mediaUrl: string | null; occurredAt: string } | null;
+}
+
+export interface InboxConversationDetail extends Omit<InboxConversation, "contact"> {
+  contact: InboxContactDetail;
+  reply: { canReply: boolean; window: ReplyWindowState };
+}
+
+export interface InboxMedia {
+  mime: string | null;
+  filename: string | null;
+  size: number | null;
+  voice: boolean;
+  /** A voice note we sent: its length, as the server measured it. */
+  durationMs?: number | null;
+  /** A template's header file: what it was sent as. Null for a media message, whose kind is the message's own. */
+  kind?: "image" | "video" | "document" | null;
+  /** Signed, expiring link; null while the file is still downloading. */
+  url: string | null;
+  pending: boolean;
+  error: string | null;
+}
+
+export interface InboxCommentDetails {
+  postId: string | null;
+  parentId: string | null;
+  mediaProductType: string | null;
+  post: { permalink: string | null; thumbnailUrl: string | null; caption: string | null } | null;
+  privateReplied: boolean;
+  publicReplied: boolean;
+}
+
+/** The structured parts of a message beyond its text; shape depends on kind. */
+export interface InboxMessageDetails {
+  payload?: Record<string, unknown> & { type?: string };
+  order?: { catalog_id?: string; text?: string; product_items?: Array<{ product_retailer_id: string; quantity: number; item_price: number; currency: string }> } | null;
+  location?: { latitude: number; longitude: number; name?: string; address?: string } | null;
+  contacts?: Array<{ name?: { formatted_name?: string }; phones?: Array<{ phone?: string }> }> | null;
+  reply?: Record<string, unknown> | null;
+  referral?: Record<string, unknown>;
+  comment?: InboxCommentDetails;
+}
+
+export interface InboxMessage {
+  id: string;
+  direction: MessageDirection;
+  kind: InboxMessageKind;
+  source: MessageSource;
+  text: string | null;
+  status: InboxMessageStatus;
+  createdAt: string;
+  sentAt: string | null;
+  deliveredAt: string | null;
+  readAt: string | null;
+  failedAt: string | null;
+  errorMessage: string | null;
+  /** History imported from the WhatsApp Business app. */
+  imported: boolean;
+  editedAt: string | null;
+  revokedAt: string | null;
+  /** { customer?: emoji, business?: emoji } */
+  reactions: Record<string, string | null> | null;
+  templateName: string | null;
+  sentBy: { id: string; name: string | null } | null;
+  /** In a WhatsApp group: the participant who wrote it. */
+  groupSender: { waId: string; name: string | null } | null;
+  replyTo: { id: string; text: string | null; kind: InboxMessageKind; direction: MessageDirection } | null;
+  media: InboxMedia | null;
+  details: InboxMessageDetails | null;
+}
+
+export interface InboxNote {
+  id: string;
+  body: string;
+  mentions: string[];
+  createdAt: string;
+  /** Set when no member wrote it. */
+  source: "automation" | "inbox_rule" | null;
+  author: { id: string; name: string } | null;
+}
+
+export interface InboxMessagePage {
+  messages: InboxMessage[];
+  notes: InboxNote[];
+  nextCursor: InboxCursor | null;
+}
+
+export interface InboxCounts {
+  mine: number;
+  unassigned: number;
+  all: number;
+  unread: number;
+  teams: Record<string, number>;
+  views: Record<string, number>;
+}
+
+export interface InboxMember extends InboxPerson {
+  role: UserRole;
+  presence: InboxPresence;
+  teamIds: string[];
+}
+
+export interface InboxMe {
+  userId: string;
+  status: InboxAvailability;
+  teams: InboxTeamRef[];
+  access: {
+    seesAll: boolean;
+    seesUnassigned: boolean;
+    canReply: boolean;
+    canAssignOthers: boolean;
+    canManage: boolean;
+  };
+}
+
+export interface InboxTeam {
+  id: string;
+  name: string;
+  openConversations: number;
+  members: Array<{ id: string; name: string; presence: InboxPresence }>;
+}
+
+export interface QuickReplyAttachment {
+  storageKey: string;
+  mime: string;
+  filename: string | null;
+  mediaKind: InboxMediaKind;
+}
+
+export interface QuickReply {
+  id: string;
+  shortcut: string;
+  body: string;
+  keywords: string[];
+  attachment: QuickReplyAttachment | null;
+  scope: InboxShareScope;
+  team: InboxTeamRef | null;
+  canEdit: boolean;
+  updatedAt: string;
+}
+
+export interface SaveQuickReplyRequest {
+  shortcut: string;
+  body: string;
+  keywords?: string[];
+  attachment?: QuickReplyAttachment | null;
+  scope: InboxShareScope;
+  teamId?: string;
+}
+
+/** Same shape as the conversation list query, minus the cursor. */
+export interface InboxFilters {
+  view?: InboxListView;
+  status?: InboxListStatus;
+  channelId?: string;
+  platform?: ChannelPlatform;
+  tag?: string;
+  /** A team id, or "none". */
+  teamId?: string;
+  assigneeId?: string;
+  unread?: boolean;
+  comments?: boolean;
+  search?: string;
+}
+
+export interface InboxSavedView {
+  id: string;
+  name: string;
+  filters: InboxFilters;
+  scope: InboxShareScope;
+  team: InboxTeamRef | null;
+  position: number;
+  canEdit: boolean;
+}
+
+export interface SaveInboxViewRequest {
+  name: string;
+  filters: InboxFilters;
+  scope: InboxShareScope;
+  teamId?: string;
+}
+
+export interface InboxUpload {
+  storageKey: string;
+  mime: string;
+  size: number;
+  filename: string;
+  mediaKind: InboxMediaKind;
+  /** Voice uploads only: the recording's length. */
+  durationMs?: number;
+}
+
+/** What the composer can send. Mirrors the server's send payload schema. */
+export type InboxSendPayload =
+  | { type: "text"; text: string }
+  | { type: "media"; mediaKind: InboxMediaKind; storageKey: string; mime: string; filename?: string; caption?: string; voice?: boolean }
+  | { type: "buttons"; text: string; buttons: Array<{ id: string; title: string }>; footer?: string }
+  | { type: "quick_replies"; text: string; replies: Array<{ title: string; payload: string }> }
+  | { type: "reaction"; messageId: string; emoji: string }
+  | { type: "private_reply"; commentMessageId: string; text: string }
+  | { type: "comment_reply"; commentMessageId: string; text: string }
+  /** WhatsApp: one product, or a list of up to 30, from the number's catalog. */
+  | { type: "products"; variantIds: string[]; header?: string; text?: string; format?: "list" | "cards" }
+  | { type: "catalog"; text: string }
+  | {
+      type: "template";
+      name: string;
+      language: string;
+      category?: "MARKETING" | "UTILITY" | "AUTHENTICATION";
+      components?: unknown[];
+      headerMedia?: { storageKey: string; mime: string; kind: "image" | "video" | "document"; filename?: string };
+      /** The body as this person reads it, for the thread. Never sent to Meta. */
+      previewText?: string;
+    };
+
+export type InboxSendRefusal =
+  | "channel_unavailable"
+  | "contact_blocked"
+  | "opted_out"
+  | "window_closed"
+  | "unsupported_on_platform"
+  | "invalid_payload";
+
+export type InboxSendOutcome =
+  | { ok: true; messageId: string; duplicate?: boolean }
+  | { ok: false; code: InboxSendRefusal; message: string };
+
+export type InboxBulkAction = "assign" | "team" | "close" | "reopen" | "snooze" | "mark_read" | "tag" | "untag";
+
+export interface InboxBulkRequest {
+  ids: string[];
+  action: InboxBulkAction;
+  assignedUserId?: string | null;
+  teamId?: string | null;
+  snoozedUntil?: string;
+  tag?: string;
+}
+
+export interface InboxBulkResult {
+  updated: number;
+  skipped: Array<{ id: string; reason: string }>;
+}
+
+export interface UpdateInboxContactRequest {
+  displayName?: string;
+  tags?: string[];
+  attributes?: Record<string, string | number | boolean | null>;
+  customerId?: string | null;
+  blocked?: boolean;
+  ownerUserId?: string | null;
+  ownerTeamId?: string | null;
+}
+
+export interface InboxContactRow {
+  id: string;
+  name: string;
+  platform: ChannelPlatform;
+  channel: { id: string; name: string };
+  phone: string | null;
+  username: string | null;
+  avatarUrl: string | null;
+  tags: string[];
+  /** A recorded opt-in, not withdrawn. */
+  optedIn: boolean;
+  optedOut: boolean;
+  blocked: boolean;
+  customer: { id: string; name: string | null } | null;
+  owner: { user: InboxPerson | null; team: InboxTeamRef | null };
+  lastInboundAt: string | null;
+  createdAt: string;
+  conversationId: string | null;
+}
+
+export interface InboxContactQuery {
+  page?: number;
+  limit?: number;
+  sortBy?: "createdAt" | "lastInboundAt";
+  sortOrder?: "asc" | "desc";
+  search?: string;
+  platform?: ChannelPlatform;
+  channelId?: string;
+  tag?: string;
+  ownerUserId?: string;
+  ownerTeamId?: string;
+  consent?: "subscribed" | "opted_out" | "blocked";
+  from?: string;
+  to?: string;
+}
+
+/** One live inbox change; the stream names ids, never content. */
+export type InboxStreamEvent =
+  | { type: "conversation.updated"; conversationId: string }
+  | { type: "message.created"; conversationId: string; messageId: string }
+  | { type: "message.updated"; conversationId: string; messageId: string }
+  | { type: "note.created"; conversationId: string; noteId: string }
+  | { type: "call.updated"; conversationId: string; callId: string };
+
+// ─── Campaign Types ─────────────────────────────────────────────────────────
+// Mirrors server/src/campaigns.
+
+export type TemplateCategory = "MARKETING" | "UTILITY" | "AUTHENTICATION";
+export type ParameterFormat = "POSITIONAL" | "NAMED";
+export type HeaderMediaFormat = "IMAGE" | "VIDEO" | "DOCUMENT";
+
+export type TemplateDraftButton =
+  | { type: "QUICK_REPLY"; text: string }
+  | { type: "URL"; text: string; url: string; example?: string }
+  | { type: "PHONE_NUMBER"; text: string; phoneNumber: string }
+  | { type: "COPY_CODE"; example: string };
+
+export interface TemplateDraft {
+  name: string;
+  language: string;
+  category: TemplateCategory;
+  parameterFormat: ParameterFormat;
+  header?:
+    | { format: "TEXT"; text: string; example?: string }
+    | { format: HeaderMediaFormat; storageKey?: string; mime?: string; filename?: string }
+    | { format: "LOCATION" };
+  body: { text: string; examples: Record<string, string> };
+  footer?: string;
+  buttons?: TemplateDraftButton[];
+}
+
+/** One value a template send has to supply. */
+export interface TemplateParam {
+  /** header, body.1, body.first_name, button.0, coupon.1 */
+  key: string;
+  component: "header" | "body" | "button";
+  kind: "text" | "image" | "video" | "document" | "location" | "coupon_code";
+  name: string;
+  buttonIndex?: number;
+  example?: string;
+}
+
+export interface TemplateRender {
+  header: string | null;
+  headerFormat: string | null;
+  body: string;
+  footer: string | null;
+  buttons: string[];
+}
+
+export interface MessageTemplate {
+  id: string;
+  externalId: string | null;
+  name: string;
+  language: string;
+  category: TemplateCategory;
+  /** What the business asked for, when Meta approved it as another category. */
+  requestedCategory: TemplateCategory | null;
+  /** Meta's status: PENDING, APPROVED, REJECTED, PAUSED, DISABLED, … */
+  status: string;
+  statusReason: string | null;
+  qualityScore: string | null;
+  parameterFormat: ParameterFormat;
+  components: Array<Record<string, unknown>>;
+  params: TemplateParam[];
+  preview: TemplateRender;
+  draft: TemplateDraft;
+  editable: boolean;
+  starterKey: string | null;
+  submittedAt: string | null;
+  syncedAt: string | null;
+  updatedAt: string;
+  /** The recommended-pack slot this template fills; null for the merchant's own templates. */
+  packSlot: PackSlotKey | null;
+  packVersion: number | null;
+  /** Created from Meta's Template Library, or from Collabo's own wording. */
+  packSource: "library" | "collabo" | null;
+  libraryTemplateName: string | null;
+  /** Meta's structured reason for a rejection, and what it recommends. */
+  rejectionInfo: TemplateRejectionInfo | null;
+  /** When Meta last changed the status. */
+  statusUpdatedAt: string | null;
+}
+
+export interface TemplateRejectionInfo {
+  reason?: string;
+  recommendation?: string;
+}
+
+// ─── Recommended template pack ──────────────────────────────────────────────
+// Mirrors server/src/campaigns/templates/pack (GET /campaigns/templates/pack).
+
+export type PackSet = "core" | "payment" | "online_store";
+
+export type PackSlotKey =
+  | "order_confirmed"
+  | "cod_confirm"
+  | "order_shipped"
+  | "out_for_delivery"
+  | "order_delivered"
+  | "order_cancelled"
+  | "refund_processed"
+  | "gst_invoice"
+  | "store_bill"
+  | "review_request"
+  | "optin_confirmed"
+  | "payment_link"
+  | "pay_online"
+  | "cart_reminder_1"
+  | "cart_reminder_2"
+  | "cart_reminder_3";
+
+/** approved · pending (in review) · paused by Meta · attention (rejected, disabled or filed as marketing) · not created yet */
+export type PackSlotState = "approved" | "pending" | "paused" | "attention" | "not_created";
+
+export interface CartDiscount {
+  /** 3 to 20 characters, A–Z and 0–9. */
+  code: string;
+  /** What the shopper gets, like "₹200" or "10%". */
+  text: string;
+  /** 1 to 30. */
+  validDays: number;
+}
+
+/** PUT /automations/pack/cart-discount, and its answer. `cartDiscount: null` removes the discount. */
+export interface CartDiscountUpdate {
+  cartDiscount: CartDiscount | null;
+}
+
+export interface TemplatePackSlot {
+  slot: PackSlotKey;
+  set: PackSet;
+  title: string;
+  description: string;
+  category: "UTILITY" | "MARKETING";
+  state: PackSlotState;
+  /** Why the slot needs the merchant, as a plain sentence: Meta refused the template, or the merchant deleted it. */
+  reason: string | null;
+  template: null | {
+    id: string;
+    name: string;
+    status: string;
+    category: string;
+    requestedCategory: string | null;
+    statusReason: string | null;
+    rejectionInfo: TemplateRejectionInfo | null;
+    qualityScore: string | null;
+    source: "library" | "collabo";
+    packVersion: number;
+  };
+}
+
+export interface TemplatePackView {
+  pack: null | {
+    status: "pending" | "running" | "ready" | "stopped";
+    origin: "connect" | "backfill" | "manual";
+    /** Pack automations go live by themselves once their templates are approved. */
+    autoActivate: boolean;
+    version: number;
+    stoppedReason: string | null;
+    lastRunAt: string | null;
+    cartDiscount: CartDiscount | null;
+  };
+  /** The sets that apply to this organization now. */
+  sets: PackSet[];
+  /** Only slots of the sets that apply. */
+  slots: TemplatePackSlot[];
+  counts: { total: number; approved: number; pending: number; attention: number };
+}
+
+export interface TemplateStarter {
+  key: string;
+  useCase: "orders" | "shipping" | "payments" | "recovery" | "promotions" | "engagement";
+  title: string;
+  description: string;
+  draft: Omit<TemplateDraft, "language">;
+}
+
+/** Whether the AI template writer is set up on the server. */
+export interface TemplateWriterStatus {
+  available: boolean;
+  draftsPerDay: number;
+}
+
+export interface WriteTemplateRequest {
+  brief: string;
+  language: string;
+  category?: "MARKETING" | "UTILITY";
+}
+
+/** A draft written by AI for the template editor; nothing has gone to Meta yet. */
+export interface WrittenTemplate {
+  draft: TemplateDraft;
+  notes: string;
+  model: string;
+}
+
+export interface CampaignUpload {
+  storageKey: string;
+  mime: string;
+  size: number;
+  filename: string;
+  kind: "image" | "video" | "document";
+}
+
+export type RfmGroup = "champions" | "loyal" | "new" | "needs_attention" | "at_risk" | "hibernating" | "lost";
+
+export type SegmentRule =
+  | { field: "tag"; op: "has" | "not_has"; value: string }
+  | { field: "channel"; op: "is" | "is_not"; value: string }
+  | { field: "attribute"; key: string; op: "equals" | "not_equals" | "contains" | "exists" | "not_exists"; value?: string }
+  | { field: "consent"; op: "is"; value: "opted_in" | "not_opted_out" | "opted_out" }
+  | { field: "last_message"; op: "within_days" | "before_days" | "never"; value?: number }
+  | { field: "first_seen"; op: "within_days" | "before_days"; value: number }
+  | { field: "customer"; op: "linked" | "not_linked" }
+  | { field: "orders_count"; op: "gte" | "lte" | "eq"; value: number }
+  | { field: "total_spent"; op: "gte" | "lte"; value: number }
+  | { field: "last_order"; op: "within_days" | "before_days"; value: number }
+  | { field: "vip"; op: "in"; value: VipLevel[] }
+  | { field: "rfm"; op: "in"; value: RfmGroup[] }
+  /** A customer segment from the Shopify admin, linked under Segments; value is the linked segment's id. */
+  | { field: "shopify_segment"; op: "in" | "not_in"; value: string }
+  | { field: "broadcast"; op: "received" | "read" | "replied" | "clicked" | "not_read" | "failed"; value: string };
+
+export interface ShopifySegmentView {
+  id: string;
+  externalId: string;
+  name: string;
+  query: string | null;
+  memberCount: number | null;
+  /** Members Collabo has as store customers. */
+  matchedCount: number | null;
+  syncedAt: string | null;
+  lastError: string | null;
+}
+
+export interface ShopifySegmentsList {
+  connected: boolean;
+  error: string | null;
+  linked: ShopifySegmentView[];
+  available: Array<{ externalId: string; name: string; query: string | null }>;
+}
+
+export interface SegmentDefinition {
+  match: "all" | "any";
+  rules: SegmentRule[];
+}
+
+export interface Segment {
+  id: string;
+  name: string;
+  description: string | null;
+  definition: SegmentDefinition;
+  lastCount: number | null;
+  lastCountedAt: string | null;
+  updatedAt: string;
+}
+
+export interface SegmentPreview {
+  count: number;
+  sample: Array<{ id: string; name: string; platform: ChannelPlatform; phone: string | null; username: string | null; tags: string[] }>;
+}
+
+export type BroadcastStatus = "DRAFT" | "SCHEDULED" | "SENDING" | "COMPLETED" | "CANCELLED" | "FAILED";
+export type BroadcastRecipientStatus = "PENDING" | "SKIPPED" | "QUEUED" | "SENT" | "DELIVERED" | "READ" | "FAILED";
+
+export interface BroadcastAudience {
+  everyone: boolean;
+  segmentIds: string[];
+  tags: string[];
+  exclude: { segmentIds: string[]; tags: string[]; broadcastIds: string[]; messagedWithinHours: number | null };
+  requireOptIn: boolean;
+}
+
+export type VariableSourceKind = "static" | "first_name" | "full_name" | "phone" | "attribute" | "customer_name" | "customer_email";
+
+export interface VariableSource {
+  source: VariableSourceKind;
+  value?: string;
+  fallback?: string;
+}
+
+export interface BroadcastVariables {
+  values: Record<string, VariableSource>;
+  headerMedia?: { storageKey: string; mime: string; kind: "image" | "video" | "document"; filename?: string };
+  headerLocation?: { latitude: number; longitude: number; name?: string; address?: string };
+}
+
+export interface BroadcastStats {
+  total: number;
+  pending: number;
+  sent: number;
+  delivered: number;
+  read: number;
+  replied: number;
+  clicked: number;
+  failed: number;
+  skipped: number;
+  byStatus: Partial<Record<BroadcastRecipientStatus, number>>;
+}
+
+export interface Broadcast {
+  id: string;
+  name: string;
+  campaign: string | null;
+  status: BroadcastStatus;
+  channelId: string;
+  templateId: string | null;
+  templateName: string | null;
+  templateCategory: TemplateCategory | null;
+  variables: BroadcastVariables;
+  audience: BroadcastAudience;
+  scheduledAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  stats: BroadcastStats;
+}
+
+export interface BroadcastDetail extends Broadcast {
+  template: MessageTemplate | null;
+}
+
+export interface BroadcastPreview {
+  ready: boolean;
+  blockers: string[];
+  warnings: string[];
+  audience: { total: number; sending: number; skipped: Record<string, number>; skippedLabels: Record<string, string> };
+  limit: { tier: string; limit: number; usedToday: number | null } | null;
+  cost: {
+    category: TemplateCategory | null;
+    totals: Array<{ currency: string; amount: number; count: number }>;
+    unpriced: number;
+    ratesConfigured: boolean;
+  };
+  sample: Array<{ contact: string; preview: TemplateRender }>;
+}
+
+export interface BroadcastRecipientRow {
+  id: string;
+  status: BroadcastRecipientStatus;
+  skipReason: string | null;
+  skipLabel: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  sentAt: string | null;
+  deliveredAt: string | null;
+  readAt: string | null;
+  repliedAt: string | null;
+  clickedAt: string | null;
+  failedAt: string | null;
+  contact: { id: string; name: string; phone: string | null; conversationId: string | null };
+}
+
+export interface MessageRate {
+  countryPrefix: string;
+  label: string | null;
+  currency: string;
+  marketing: number | null;
+  utility: number | null;
+  authentication: number | null;
+}
+
+export interface CampaignsOverview {
+  last30Days: { broadcasts: number; sent: number; delivered: number; read: number; replied: number; clicked: number; failed: number };
+  templates: Record<string, number>;
+  number: {
+    channelId: string;
+    name: string;
+    status: string;
+    quality: string | null;
+    messagingLimit: string | null;
+    marketingMessagesApi: string | null;
+    sending: WhatsAppSendingHealth | null;
+  } | null;
+  recent: Array<{ id: string; name: string; status: BroadcastStatus; templateName: string | null; startedAt: string | null; scheduledAt: string | null; createdAt: string }>;
+}
+
+export interface ContactImportPreview {
+  headers: string[];
+  sample: string[][];
+  rowCount: number;
+}
+
+export interface ContactImportMapping {
+  phone: string;
+  name?: string;
+  tags?: string;
+  optIn?: string;
+  attributes?: Record<string, string>;
+}
+
+export interface ContactImportResult {
+  id: string;
+  rowCount: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: Array<{ row: number; error: string }>;
+}
+
+// ─── Automation Types ───────────────────────────────────────────────────────
+
+export type AutomationStatus = "DRAFT" | "ACTIVE" | "PAUSED" | "ERROR" | "ARCHIVED";
+export type AutomationRunStatus = "PENDING" | "RUNNING" | "WAITING" | "COMPLETED" | "FAILED" | "SKIPPED" | "CANCELLED";
+export type AutomationPlatform = "INSTAGRAM" | "WHATSAPP" | "FACEBOOK";
+export type AutomationChannelKey = "instagram" | "whatsapp" | "facebook";
+
+export type AutomationBlockType =
+  | "trigger"
+  | "send_message"
+  | "reply_comment"
+  | "send_invoice"
+  | "send_payment_link"
+  | "wait"
+  | "wait_for_reply"
+  | "condition"
+  | "add_tag"
+  | "remove_tag"
+  | "set_attribute"
+  | "assign"
+  | "set_status"
+  | "add_note"
+  | "http_request"
+  | "store_action"
+  | "post_review"
+  | "sheet_add_row";
+
+/** One block of a flow. Condition (yes / no) and wait-for-reply (replied / timeout) carry branches. */
+export interface AutomationStep {
+  id: string;
+  type: AutomationBlockType;
+  // Each block type has its own config; lib/automation-blocks.ts knows them.
+  // Pack fields: a trigger may carry `skipPos` and `stopWhen` (AutomationStopWhen);
+  // a template step may carry `templateSlot` (PackSlotKey) instead of `templateId`.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  config: Record<string, any>;
+  branches?: Record<string, AutomationStep[]>;
+}
+
+/** Trigger `stopWhen`: checked each time a run wakes from a wait; a stopped run ends as completed. */
+export interface AutomationStopWhen {
+  orderPlaced?: boolean;
+  replied?: boolean;
+  optedOut?: boolean;
+}
+
+export interface AutomationIssue {
+  stepId: string;
+  code: string;
+  title: string;
+  body: string;
+}
+
+export interface AutomationSettings {
+  oncePerContact?: "ever" | "perDay" | "never";
+}
+
+export interface Automation {
+  id: string;
+  name: string;
+  description: string | null;
+  status: AutomationStatus;
+  platform: AutomationPlatform | null;
+  version: number;
+  publishedAt: string | null;
+  triggeredCount: number;
+  lastTriggeredAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+  channel: { id: string; name: string; platform: AutomationPlatform } | null;
+  ownerUser: { id: string; firstName: string; lastName: string; email: string } | null;
+  /** Set on the automations Collabo creates for its recommended templates. */
+  packKey: string | null;
+}
+
+/**
+ * Where a recommended-pack automation stands: live · waiting (goes live by
+ * itself once Meta approves its templates) · ready (off, templates approved) ·
+ * off · attention (a template was rejected, disabled or moved to marketing) ·
+ * duplicate (held back: one of the merchant's automations does the same job).
+ */
+export type AutomationPackState = "live" | "waiting" | "ready" | "off" | "attention" | "duplicate";
+
+/** A row of GET /automations. */
+export interface AutomationListItem extends Automation {
+  packState: AutomationPackState | null;
+  /** A plain sentence about the pack state. */
+  packNote: string | null;
+}
+
+export interface AutomationDetail extends Automation {
+  definition: { steps: AutomationStep[] };
+  settings: AutomationSettings | null;
+  issues: AutomationIssue[];
+  lastErrorAt: string | null;
+  publishedVersion: { id: string; version: number; publishedAt: string } | null;
+  /** The draft differs from the published version that runs. */
+  unpublishedChanges: boolean;
+}
+
+export interface AutomationStats {
+  runs: Record<AutomationRunStatus, number>;
+  total: number;
+  skipReasons: Record<string, number>;
+  /** Per step id: how many runs reached it, by outcome. */
+  steps: Record<string, Partial<Record<AutomationRunStatus, number>>>;
+  messages: { sent: number; delivered: number; read: number; failed: number; queued: number };
+  daily: Array<{ day: string; runs: number; completed: number }>;
+}
+
+export interface AutomationRunRow {
+  id: string;
+  status: AutomationRunStatus;
+  skipReason: string | null;
+  error: string | null;
+  version: number;
+  currentStepKey: string | null;
+  resumeAt: string | null;
+  waitingForReply: boolean;
+  createdAt: string;
+  completedAt: string | null;
+  contact: { id: string; name: string; platform: AutomationPlatform } | null;
+  conversationId: string | null;
+  steps: Array<{
+    stepKey: string;
+    blockType: AutomationBlockType;
+    status: AutomationRunStatus;
+    error: string | null;
+    output: Record<string, unknown> | null;
+    startedAt: string;
+    finishedAt: string | null;
+  }>;
+}
+
+export interface AutomationTestStep {
+  stepId: string;
+  type: AutomationBlockType;
+  status: "done" | "waits" | "error";
+  detail: string;
+  branch?: string;
+}
+
+export interface AutomationTestResult {
+  contact: { id: string | null; name: string | null };
+  /** The sample order an order trigger was tried with. */
+  order: { name: string; payment: string; total: string } | null;
+  issues: AutomationIssue[];
+  steps: AutomationTestStep[];
+}
+
+export interface InstagramPost {
+  id: string;
+  externalId: string;
+  mediaType: string | null;
+  permalink: string | null;
+  thumbnailUrl: string | null;
+  caption: string | null;
+  postedAt: string | null;
+  likeCount: number | null;
+  commentCount: number | null;
+}
+
+export interface ConversationStarters {
+  platform: "FACEBOOK" | "INSTAGRAM";
+  getStarted: { enabled: boolean; payload: string };
+  iceBreakers: Array<{ question: string; payload: string }>;
+  persistentMenu: Array<{ title: string; type: "postback" | "web_url"; payload: string; url: string }>;
+  pushedAt: string | null;
+}
+
+// ─── Inbox Rules Types ──────────────────────────────────────────────────────
+
+export interface InboxAutoReply {
+  enabled: boolean;
+  message: string;
+  platforms: AutomationPlatform[];
+  cooldownHours: number;
+}
+
+export interface InboxRoutingRule {
+  id: string;
+  name: string;
+  match: "all" | "any";
+  conditions: Array<{ field: "message" | "platform" | "channel" | "tag" | "customer"; op: "contains" | "is" | "has" | "linked" | "vip"; value: string }>;
+  assign: { mode: "user" | "team" | "round_robin"; userId: string; teamId: string };
+}
+
+export interface InboxRulesSettings {
+  businessHours: { enabled: boolean; timezone: string; days: Array<{ day: number; open: string; close: string }> };
+  welcome: InboxAutoReply;
+  away: InboxAutoReply;
+  routing: { rules: InboxRoutingRule[] };
+  roundRobin: { enabled: boolean; teamId: string; maxOpenPerAgent: number };
+  autoClose: { enabled: boolean; afterHours: number };
+  spam: { enabled: boolean; tag: string; blockOnWhatsApp: boolean };
+}
+
+export interface InboxRulesSettingsView extends InboxRulesSettings {
+  organizationTimeZone: string;
+}
+
+// ─── Commerce Types ─────────────────────────────────────────────────────────
+
+/** One sellable variant, for the inbox's product tray. */
+export interface StoreProduct {
+  variantId: string;
+  productId: string;
+  title: string;
+  variantTitle: string | null;
+  price: string;
+  currency: string;
+  image: string | null;
+  url: string | null;
+  inStock: boolean;
+  /** Synced to this WhatsApp number's catalog, so it can go as a product card. */
+  inCatalog: boolean;
+}
+
+export interface StoreProductsResponse {
+  catalog: { catalogId: string; name: string | null } | null;
+  /** WhatsApp number with a catalog, not shared with the Business app. */
+  canSendProducts: boolean;
+  /** Shopify collections with active products, for the product panel's filter. */
+  collections: Array<{ id: string; title: string; productCount: number; url: string | null }>;
+  /** More variants match than were returned; search or pick a collection. */
+  more: boolean;
+  products: StoreProduct[];
+}
+
+export interface DraftFromCart {
+  draftId: string;
+  name: string | null;
+  total: string;
+  checkoutUrl: string | null;
+  missing: string[];
+  /** The cart had a draft order already; this is that one. */
+  existing: boolean;
+}
+
+// ─── Payments (the organization's own Razorpay account) ────────────────────
+
+export interface PaymentAccount {
+  connected: boolean;
+  provider: "RAZORPAY";
+  keyId: string | null;
+  livemode: boolean;
+  /** The webhook URL's secret path segment; owners and admins only. */
+  webhookToken: string | null;
+  webhookEvents: string[];
+  lastWebhookAt: string | null;
+  connectedAt: string | null;
+}
+
+/** Returned once, on connect: the secret to paste into Razorpay's webhook form. */
+export interface PaymentAccountConnected extends PaymentAccount {
+  webhookSecret: string;
+}
+
+export type PaymentLinkStatus = "CREATED" | "PARTIALLY_PAID" | "PAID" | "EXPIRED" | "CANCELLED";
+
+export interface PaymentLink {
+  id: string;
+  /** RAZORPAY: a link to pay · WHATSAPP_PAY: a Review and Pay bill in the chat (no link). */
+  provider: "RAZORPAY" | "WHATSAPP_PAY";
+  shortUrl: string;
+  amount: string;
+  currency: string;
+  description: string;
+  status: PaymentLinkStatus;
+  orderId: string | null;
+  draftOrderId: string | null;
+  expiresAt: string;
+  paidAt: string | null;
+  paymentMethod: string | null;
+  /** Paid, but the order or draft could not be updated; the payment stands. */
+  followUpError: string | null;
+  createdAt: string;
+  /** An open link for the same order or draft was reused. */
+  existing?: boolean;
+}
+
+export interface ConversationPayments {
+  links: PaymentLink[];
+  unpaidOrders: Array<{ id: string; name: string; totalPrice: string; currency: string; paymentGateways: string[]; createdAt: string }>;
+  /** This chat's WhatsApp number has WhatsApp Pay turned on. */
+  whatsappPay: boolean;
+}
+
+export interface WhatsAppPayConfiguration {
+  name: string;
+  provider: string | null;
+  status: string;
+  active: boolean;
+}
+
+export interface WhatsAppPayView {
+  selected: { configurationName: string; provider: string; status: string; active: boolean; selectedAt: string } | null;
+  configurations: WhatsAppPayConfiguration[];
+  /** Meta's answer when the configurations could not be read. */
+  error: string | null;
+}
+
+export interface CreatePaymentLinkRequest {
+  orderId?: string;
+  draftOrderId?: string;
+  amount?: number;
+  description?: string;
+  expiresInHours?: number;
+}
+
+// ─── Growth tools ───────────────────────────────────────────────────────────
+
+export interface GrowthLink {
+  id: string;
+  name: string;
+  code: string;
+  /** Collabo's short link: counts the click, then opens the chat. */
+  shortUrl: string;
+  /** Where it opens: wa.me, m.me or ig.me. */
+  target: string | null;
+  prefilledText: string | null;
+  tag: string | null;
+  clicks: number;
+  /** WhatsApp chats whose first message carried this link's reference. */
+  chats: number;
+  lastClickAt: string | null;
+  createdAt: string;
+  channel: { id: string; name: string; platform: ChannelPlatform };
+  /** The website chat button's own link. */
+  isWidgetButton: boolean;
+}
+
+export interface WidgetSettings {
+  button: { label: string; color: string; position: "right" | "left"; greeting: string; greetingDelaySeconds: number; prefilledText: string; hideOnMobile: boolean };
+  popup: { enabled: boolean; title: string; text: string; buttonLabel: string; consentText: string; successText: string; delaySeconds: number; tag: string; defaultCountryCode: string; confirmOnWhatsApp: boolean };
+}
+
+export interface SiteWidgetView {
+  configured: boolean;
+  enabled: boolean;
+  channelId: string | null;
+  settings: WidgetSettings;
+  allowedDomains: string[];
+  /** The script tag's src, once saved. */
+  scriptUrl: string | null;
+  stats: { clicks: number; chats: number; popupViews: number; signups: number };
+}
+
+// ─── Ads ────────────────────────────────────────────────────────────────────
+
+export interface AdAccountView {
+  connected: boolean;
+  externalId?: string | null;
+  name?: string | null;
+  currency?: string | null;
+  available?: Array<{ id: string; name: string; currency: string | null }>;
+  tokenExpiresAt?: string | null;
+  lastError?: string | null;
+}
+
+export interface AdReportRow {
+  adId: string;
+  headline: string | null;
+  platform: ChannelPlatform | null;
+  /** People who started a chat from the ad in the period. */
+  chats: number;
+  /** Their orders in the 7 days after, and those orders' value in the organization's currency. */
+  orders: number;
+  revenue: number;
+  lastChatAt: string | null;
+  /** From Meta, when an ad account is connected. */
+  name: string | null;
+  campaign: string | null;
+  spend: number | null;
+  impressions: number | null;
+  clicks: number | null;
+  conversationsStarted: number | null;
+}
+
+export interface AdsReport {
+  period: { from: string; to: string; days: number; timeZone: string };
+  currency: string;
+  account: AdAccountView;
+  metaError: string | null;
+  totals: { chats: number; orders: number; revenue: number; spend: number | null };
+  ads: AdReportRow[];
+}
+
+export interface ConversionSetting {
+  channelId: string;
+  name: string;
+  enabled: boolean;
+  datasetId: string | null;
+  sent: number;
+  failed: number;
+}
+
+// ─── Developers: API keys and webhooks ──────────────────────────────────────
+
+export interface ApiKeyView {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  lastUsedAt: string | null;
+  createdAt: string;
+  /** Only when just made. */
+  key?: string;
+}
+
+export interface WebhookEndpointView {
+  id: string;
+  url: string;
+  description: string | null;
+  events: string[];
+  enabled: boolean;
+  createdByApi: boolean;
+  consecutiveFailures: number;
+  disabledReason: string | null;
+  lastDeliveryAt: string | null;
+  createdAt: string;
+  /** Only when just made. */
+  secret?: string;
+}
+
+export interface WebhookDeliveryView {
+  id: string;
+  event: string;
+  status: "PENDING" | "SENT" | "FAILED";
+  attempts: number;
+  responseStatus: number | null;
+  error: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
+}
+
+export interface CatalogView {
+  channelId: string;
+  onBusinessApp: boolean;
+  catalog: {
+    catalogId: string;
+    name: string | null;
+    productCount: number | null;
+    connectedAt: string;
+    lastSync?: { at: string; sent: number; removed: number; skipped: number; errors: number; handles: string[] };
+  } | null;
+  commerce: { cartEnabled: boolean; catalogVisible: boolean } | null;
+  commerceError: string | null;
+  items: Partial<Record<"SYNCED" | "ERROR" | "SKIPPED" | "REMOVED", number>>;
+  problems: Array<{ variantId: string; name: string; status: string; error: string | null }>;
+}
+
+// ─── Messaging Analytics Types ──────────────────────────────────────────────
+
+export interface MessagingAnalytics {
+  period: { from: string; to: string; timeZone: string; days: number; channelId: string | null };
+  volume: {
+    inbound: number;
+    outbound: number;
+    outboundBySource: Partial<Record<"AGENT" | "AUTOMATION" | "BROADCAST" | "SYSTEM" | "BUSINESS_APP" | "OTHER_APP", number>>;
+    comments: number;
+    activeConversations: number;
+    newPeople: number;
+    byPlatform: Array<{ platform: string; inbound: number; outbound: number }>;
+    daily: Array<{ day: string; inbound: number; outbound: number }>;
+  };
+  responses: {
+    asked: number;
+    answeredByPerson: number;
+    firstAnswerByAutomation: number;
+    unanswered: number;
+    medianFirstReplySec: number | null;
+    p90FirstReplySec: number | null;
+    within1h: number;
+  };
+  resolution: { closed: number; timed: number; medianSec: number | null; p90Sec: number | null };
+  agents: Array<{
+    userId: string;
+    name: string;
+    role: string;
+    replies: number;
+    conversations: number;
+    firstReplies: number;
+    medianFirstReplySec: number | null;
+    closed: number;
+    openNow: number;
+  }>;
+  broadcasts: {
+    count: number;
+    recipients: number;
+    sent: number;
+    delivered: number;
+    read: number;
+    replied: number;
+    clicked: number;
+    failed: number;
+    skipped: number;
+    items: Array<{ id: string; name: string; recipients: number; sent: number; delivered: number; read: number; replied: number; clicked: number; failed: number }>;
+  };
+  automations: Array<{ id: string; name: string; started: number; completed: number; failed: number; waiting: number; skipped: number; messagesSent: number; messagesRead: number }>;
+  revenue: {
+    windowDays: number;
+    currency: string;
+    ordersInPeriod: number;
+    revenueInPeriod: number;
+    orders: number;
+    revenue: number;
+    bySource: { broadcast: { orders: number; revenue: number }; automation: { orders: number; revenue: number } };
+    top: Array<{ source: "broadcast" | "automation"; refId: string | null; name: string; orders: number; revenue: number }>;
+  };
+  cost: {
+    categories: Array<{ category: string; billable: number; free: number; unpriced: number; amounts: Array<{ currency: string; amount: number }> }>;
+    totals: Array<{ currency: string; amount: number }>;
+    billable: number;
+    free: number;
+    unpriced: number;
+  };
+}
+
+// ─── Reviews (Campaigns → Reviews) ─────────────────────────────────────────
+
+/** The store's Judge.me, where reviews collected on WhatsApp are published. */
+export interface ReviewAccountView {
+  connected: boolean;
+  provider: "JUDGEME";
+  shopDomain: string | null;
+  shopName: string | null;
+  /** Whether Judge.me publishes new reviews without approval; null when unknown. */
+  autopublish: boolean | null;
+  connectedAt: string | null;
+}
+
+/** POSTED: sent to Judge.me · SAVED: kept in Collabo only, with the reason · FAILED: Judge.me refused it. */
+export type ProductReviewStatus = "POSTED" | "SAVED" | "FAILED";
+
+export interface ProductReviewView {
+  id: string;
+  rating: number;
+  body: string;
+  /** Null for a review of the shop. */
+  productTitle: string | null;
+  reviewerName: string;
+  contactName: string;
+  order: { id: string; name: string } | null;
+  conversationId: string | null;
+  status: ProductReviewStatus;
+  reason: string | null;
+  createdAt: string;
+  postedAt: string | null;
+}
+
+export interface ReviewsList {
+  reviews: ProductReviewView[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Over every review, whatever the filters. */
+  stats: { count: number; average: number | null; byRating: Record<number, number>; published: number };
+}
+
+// ─── Google Sheets (Campaigns → Automations → Google Sheets) ───────────────
+
+export interface GoogleSheetView {
+  id: string;
+  title: string;
+  url: string;
+  /** The tab rows are read from and added to. */
+  tab: string;
+  /** created by Collabo, or picked in Google's picker. */
+  origin: "created" | "picked";
+  /** An active "A row is added to a sheet" automation reads it. */
+  watched: boolean;
+  checkedAt: string | null;
+  /** Why it could not be read last time; cleared when it can. */
+  lastError: string | null;
+  /** The last new row that started nothing, and why. */
+  skippedRow: string | null;
+  createdAt: string;
+}
+
+export interface GoogleIntegration {
+  /** Collabo has its Google OAuth client set up. */
+  configured: boolean;
+  connected: boolean;
+  email: string | null;
+  connectedAt: string | null;
+  sheets: GoogleSheetView[];
+}
+
+/** A sheet's column: its header, and the {{sheet.<key>}} a new row's cell arrives as. */
+export interface SheetColumn {
+  header: string;
+  key: string;
+}
+
+// ─── Point of sale (Orders → Point of sale) ─────────────────────────────────
+// Money is rupees as numbers. Prices are GST-inclusive.
+
+export interface PosSettings {
+  upiId: string | null;
+  upiPayeeName: string | null;
+  roundOff: boolean;
+  requireStaffPin: boolean;
+  /** A discount above this share of the price needs a manager's PIN. Null: never. */
+  discountApprovalPercent: number | null;
+  priceOverrideNeedsApproval: boolean;
+  receiptWidth: 58 | 80;
+  receiptFooter: string | null;
+  tileVariantIds: string[];
+  /** Whether Charge first asks who is buying: never, with a skip, or always. */
+  customerAtCheckout: "off" | "ask" | "required";
+  /** From this payable the bill needs the buyer's name and address (GST Rule 46). Null: never. */
+  customerRequiredAbove: number | null;
+  /** Send the bill on WhatsApp after every sale with a mobile number. */
+  autoSendBill: boolean;
+}
+
+export interface PosStore {
+  id: string;
+  name: string;
+  code: string | null;
+  isDefault: boolean;
+}
+
+export type PosStaffRole = "CASHIER" | "MANAGER";
+
+export interface PosStaffView {
+  id: string;
+  name: string;
+  role: PosStaffRole;
+  isActive: boolean;
+}
+
+export interface PosProduct {
+  variantId: string;
+  productId: string;
+  title: string;
+  variantTitle: string | null;
+  sku: string | null;
+  barcode: string | null;
+  price: number;
+  imageUrl: string | null;
+  /** Null when the store does not count this variant's stock. */
+  stockAtStore: number | null;
+  trackQuantity: boolean;
+  allowOversell: boolean;
+  /** Not in the contract yet; the GST estimate uses it when the server sends it. */
+  gstRate?: number | null;
+}
+
+export interface PosSetup {
+  settings: PosSettings;
+  stores: PosStore[];
+  warehousingEnabled: boolean;
+  /** Active staff only. */
+  staff: PosStaffView[];
+  tiles: PosProduct[];
+  gstEnabled: boolean;
+  /** Composition sellers charge no GST, so the till shows no GST estimate. */
+  composition: boolean;
+  storeName: string;
+  currency: "INR";
+  billDelivery: {
+    whatsapp: { connected: boolean; template: "approved" | "pending" | "missing"; templateName: string | null };
+  };
+}
+
+export interface PosUnlockResult {
+  staff: PosStaffView;
+  staffToken: string;
+  expiresAt: string;
+}
+
+export type PosApprovalReason = "discount" | "price_override";
+
+export interface PosApprovalResult {
+  approver: PosStaffView;
+  approvalToken: string;
+  expiresAt: string;
+}
+
+export interface PosCustomer {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  gstin: string | null;
+  ordersCount: number;
+  totalSpent: number;
+  vipLevel: VipLevel;
+}
+
+export type PosPaymentMethod = "CASH" | "UPI" | "CARD" | "OTHER";
+
+export interface PosDiscount {
+  type: "percent" | "amount";
+  value: number;
+}
+
+export interface PosPaymentInput {
+  method: PosPaymentMethod;
+  amount: number;
+  /** Cash handed over, when it is more than `amount`. */
+  tendered?: number;
+  reference?: string;
+}
+
+export interface PosAddressInput {
+  address1: string;
+  city: string;
+  zip: string;
+  stateCode: string;
+}
+
+/**
+ * A phone given for the bill is consent for the bill itself; `offersOptIn` is
+ * marketing consent, sent only when the customer agreed.
+ */
+export interface PosSaleCustomerInput {
+  customerId?: string;
+  phone?: string;
+  name?: string;
+  email?: string;
+  gstin?: string;
+  billingStateCode?: string;
+  address?: PosAddressInput;
+  offersOptIn?: boolean;
+}
+
+export type PosSaleLineInput =
+  | { variantId: string; quantity: number; unitPrice?: number; discount?: PosDiscount }
+  | { custom: { title: string; unitPrice: number; gstRate?: number; hsn?: string }; quantity: number; discount?: PosDiscount };
+
+export interface PosSaleRequest {
+  /** Same id on a retry, so the server bills once. */
+  clientSaleId: string;
+  storeId?: string;
+  /** Omitted for a walk-in. */
+  customer?: PosSaleCustomerInput;
+  lines: PosSaleLineInput[];
+  cartDiscount?: PosDiscount;
+  payments: PosPaymentInput[];
+  note?: string;
+  staffToken?: string;
+  approvalToken?: string;
+}
+
+export interface PosSaleResult {
+  orderId: string;
+  orderName: string;
+  total: number;
+  payable: number;
+  roundOff: number;
+  paid: number;
+  balanceDue: number;
+  change: number;
+  financialStatus: "PAID" | "PARTIALLY_PAID" | "PENDING";
+  invoiceId: string | null;
+  invoiceNumber: string | null;
+  customerId: string | null;
+  /** The public bill page, e.g. https://app.example/b/<token>. */
+  billUrl: string;
+  delivery: PosBillDelivery[];
+}
+
+export type PosBillDeliveryStatus = "sending" | "sent" | "delivered" | "read" | "not_sent" | "failed";
+
+/** How the bill went out on one channel. `reason` is a plain sentence when it was not sent. */
+export interface PosBillDelivery {
+  channel: "whatsapp";
+  status: PosBillDeliveryStatus;
+  to: string | null;
+  reason: string | null;
+}
+
+/** GET /pos/sales/:orderId/delivery and POST /pos/sales/:orderId/send-bill. */
+export interface PosBillState {
+  billUrl: string;
+  delivery: PosBillDelivery[];
+}
+
+/** GET /pos/receipts/:orderId, and the customer's public bill at GET /public/bills/:token. */
+export interface PosReceipt {
+  width: 58 | 80;
+  footer: string | null;
+  store: {
+    name: string;
+    address: string | null;
+    phone: string | null;
+    gstin: string | null;
+    logoUrl: string | null;
+    legalName: string | null;
+    whatsapp: string | null;
+    /** PAN and the business IDs marked for receipts, labelled ("FSSAI Lic. No."). */
+    ids: Array<{ label: string; value: string }>;
+  };
+  /** `subtitle` is the composition scheme's Rule 5(1)(f) line, when it applies. */
+  document: { title: "TAX INVOICE" | "BILL OF SUPPLY" | "BILL"; subtitle: string | null };
+  order: { id: string; name: string; createdAt: string; staffName: string | null; storeName: string | null };
+  invoice: { number: string; date: string; placeOfSupply: string | null; gstType: "INTRA" | "INTER" | null } | null;
+  /** `phoneShown` follows the receipt's customer-contact setting: masked, in full, or null. */
+  customer: { name: string | null; phone: string | null; gstin: string | null; phoneShown: string | null } | null;
+  lines: Array<{
+    /** "A", "B"… by ascending rate, keyed to `gstSummary`; null on an untaxed line. */
+    taxCode: string | null;
+    title: string;
+    variantTitle: string | null;
+    hsn: string | null;
+    quantity: number;
+    unitPrice: number;
+    discount: number;
+    taxableValue: number;
+    gstRate: number;
+    cgst: number;
+    sgst: number;
+    igst: number;
+    total: number;
+  }>;
+  totals: { subtotal: number; discount: number; taxable: number; cgst: number; sgst: number; igst: number; roundOff: number; total: number; payable: number };
+  gstSummary: Array<{ code: string; rate: number; taxable: number; cgst: number; sgst: number; igst: number }>;
+  payments: Array<{ method: PosPaymentMethod; amount: number; tendered: number | null; change: number | null; reference: string | null }>;
+  paid: number;
+  balanceDue: number;
+  returnPolicy: string | null;
+  /** The e-bill link, a UPI QR for the balance, or none, as the receipt QR setting says. */
+  qr: { kind: "ebill"; url: string } | { kind: "upi"; uri: string; amount: number } | null;
+  /** The receipt was printed before, so this print is a duplicate. */
+  printedBefore: boolean;
+}
+
+// ─── Public store links ─────────────────────────────────────────────────────
+// What a customer's /t/:token and /c/:token links show. Public: no customer
+// name, phone or address.
+
+export type PublicOrderStatus = "confirmed" | "shipped" | "out_for_delivery" | "delivered" | "cancelled";
+
+/** GET /public/links/order/:token */
+export interface PublicOrderLink {
+  storeName: string;
+  order: {
+    name: string;
+    status: PublicOrderStatus;
+    carrier: string | null;
+    trackingNumber: string | null;
+    trackingUrl: string | null;
+    /** The tracking address is a known courier's https page, which opens at once. */
+    knownCourier?: boolean;
+  };
+}
+
+/** GET /public/links/cart/:token */
+export interface PublicCartLink {
+  storeName: string;
+  /** The checkout's recovery URL; null unless it is https. */
+  url: string | null;
+  completed: boolean;
+}
+
+// ─── Packing (Orders → Packing) ─────────────────────────────────────────────
+// Packing checks that the right items go into the parcel. It never ships,
+// never moves stock and never calls Shopify.
+
+export type PackingBucket = "to_pack" | "packing" | "on_hold" | "packed";
+export type PackTaskStatus = "PACKING" | "ON_HOLD" | "PACKED" | "CANCELLED";
+/** `prepaid` is not COD and PAID; anything else that is not COD is `unpaid`. */
+export type PackingPayment = "cod" | "prepaid" | "unpaid";
+export type PackHoldReason = "items_short" | "damaged" | "customer_request" | "other";
+export type PackProblemReason = "missing" | "damaged" | "wrong_item_on_shelf";
+export type PackConfirmReason = "no_barcode" | "barcode_damaged" | "other";
+export type PackScanResult = "matched" | "over" | "not_in_order" | "unknown";
+
+/** GET /packing/queue */
+export interface PackingQueueParams {
+  bucket?: PackingBucket;
+  /** An order's dispatch location; `none` for orders without one. */
+  warehouseId?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface PackingQueueTask {
+  id: string;
+  status: PackTaskStatus;
+  packedUnits: number;
+  requiredUnits: number;
+  holdReason: PackHoldReason | null;
+  holdNote: string | null;
+  updatedAt: string;
+  lastPackerName: string | null;
+}
+
+export interface PackingQueueRow {
+  orderId: string;
+  orderName: string;
+  createdAt: string;
+  customerName: string | null;
+  city: string | null;
+  units: number;
+  lines: number;
+  payment: PackingPayment;
+  /** COD orders only: tagged `cod-confirmed`. Null for other orders. */
+  codConfirmed: boolean | null;
+  warehouse: { id: string; name: string } | null;
+  task: PackingQueueTask | null;
+}
+
+export interface PackingQueueResponse {
+  data: PackingQueueRow[];
+  meta: { total: number; page: number; limit: number };
+  counts: Record<PackingBucket, number>;
+}
+
+export interface PackTaskLine {
+  id: string;
+  orderLineItemId: string;
+  title: string;
+  variantTitle: string | null;
+  sku: string | null;
+  barcode: string | null;
+  imageUrl: string | null;
+  required: number;
+  /** Scanned + hand-confirmed + counted. Never above `required`. */
+  packed: number;
+  handConfirmed: number;
+  counted: number;
+  problem: { reason: PackProblemReason; qty: number } | null;
+  /** The line has a variant with a barcode or a SKU. */
+  scannable: boolean;
+}
+
+export interface PackTask {
+  id: string;
+  orderId: string;
+  orderName: string;
+  status: PackTaskStatus;
+  customerName: string | null;
+  city: string | null;
+  payment: PackingPayment;
+  codConfirmed: boolean | null;
+  /** Prepaid only: a COD order split in two means two cash collections. */
+  partialAllowed: boolean;
+  partial: boolean;
+  holdReason: PackHoldReason | null;
+  holdNote: string | null;
+  heldAt: string | null;
+  warehouse: { id: string; name: string } | null;
+  updatedAt: string;
+  packedAt: string | null;
+  lines: PackTaskLine[];
+}
+
+/** POST /packing/tasks/:id/scan */
+export interface PackScanResponse {
+  result: PackScanResult;
+  lineId?: string;
+  /** `not_in_order` only: the organization's product the code belongs to. */
+  product?: { title: string; variantTitle: string | null };
+  task: PackTask;
+}
+
+/** GET /packing/accuracy */
+export interface PackingAccuracyCounts {
+  ordersPacked: number;
+  unitsScanned: number;
+  unitsHandConfirmed: number;
+  unitsCounted: number;
+  wrongScans: number;
+  overScans: number;
+  problems: number;
+}
+
+export interface PackingAccuracyRow extends PackingAccuracyCounts {
+  userId: string;
+  name: string;
+}
+
+export interface PackingAccuracyResponse {
+  rows: PackingAccuracyRow[];
+  totals: PackingAccuracyCounts;
+  /** The instants the range resolved to (days in the organization's reporting zone). */
+  from: string;
+  to: string;
+}
+
+/** `OrderDetail.packing` */
+export interface OrderPacking {
+  taskId: string;
+  status: PackTaskStatus;
+  packedUnits: number;
+  requiredUnits: number;
+  holdReason: PackHoldReason | null;
+  packedAt: string | null;
+  packedByName: string | null;
 }

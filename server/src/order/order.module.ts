@@ -9,6 +9,8 @@ import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { BullModule } from '@nestjs/bullmq';
 import { SHOPIFY_PUSH_QUEUE } from '../channel/shopify-push.queue';
+import { CommerceEventsModule } from '../commerce/commerce-events.module';
+import { PackingModule } from '../packing/packing.module';
 
 // WHY these imports?
 //   GstModule                  — tax math (GstCalculatorService, TaxResolverService).
@@ -27,11 +29,15 @@ import { SHOPIFY_PUSH_QUEUE } from '../channel/shopify-push.queue';
     OrganizationSettingsModule,
     LoyaltyModule,
     InventoryModule,
+    // Order events for automations (no cycle: it depends only on Prisma and a queue).
+    CommerceEventsModule,
     // Cancelling a MANUAL order restocks into a warehouse bucket, and the new
     // quantity has to reach Shopify. Registering the queue by name rather than
     // importing a Shopify service keeps this the same cycle-free seam
     // InventoryModule uses for its own availability pushes.
     BullModule.registerQueue({ name: SHOPIFY_PUSH_QUEUE }),
+    // The order detail's packing line (PackingModule needs only Prisma).
+    PackingModule,
   ],
   controllers: [OrderController],
   providers: [OrderService],

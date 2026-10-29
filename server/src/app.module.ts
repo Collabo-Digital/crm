@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { ScheduleModule } from '@nestjs/schedule';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { BullModule } from '@nestjs/bullmq';
+import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
+import type { Response } from 'express';
 import { join } from 'path';
 
 import { AppController } from './app.controller';
@@ -12,16 +14,20 @@ import { AppService } from './app.service';
 import configuration from './config/configuration';
 import { validationSchema } from './config/validation.schema';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
+import { spaStaticOptions } from './common/utils/spa-headers.util';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
+import { RateLimitModule } from './rate-limit/rate-limit.module';
 import { FxModule } from './common/fx/fx.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { OrgRequiredGuard } from './auth/guards/org-required.guard';
 import { VendorAccessGuard } from './auth/guards/vendor-access.guard';
+import { InfluencerAccessGuard } from './auth/guards/influencer-access.guard';
 import { PermissionsGuard } from './auth/guards/permissions.guard';
 import { SectionAccessGuard } from './auth/guards/section-access.guard';
 import { SuperAdminGuard } from './auth/guards/super-admin.guard';
@@ -36,6 +42,7 @@ import { DraftOrderModule } from './draft-order/draft-order.module';
 import { ProductModule } from './product/product.module';
 import { CustomerModule } from './customer/customer.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { PosReportsModule } from './pos/reports/pos-reports.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { GstModule } from './gst/gst.module';
 import { InvoiceModule } from './invoice/invoice.module';
@@ -43,23 +50,37 @@ import { LoyaltyModule } from './loyalty/loyalty.module';
 import { AdminModule } from './admin/admin.module';
 import { BillingModule } from './billing/billing.module';
 import { InventoryModule } from './inventory/inventory.module';
+import { AutomationModule } from './automation/automation.module';
+import { InboxModule } from './inbox/inbox.module';
+import { CampaignsModule } from './campaigns/campaigns.module';
+import { CommerceModule } from './commerce/commerce.module';
+import { PaymentsModule } from './payments/payments.module';
+import { GrowthModule } from './growth/growth.module';
+import { AdsModule } from './ads/ads.module';
+import { ReviewsModule } from './reviews/reviews.module';
+import { GoogleModule } from './integrations/google/google.module';
+import { DeveloperModule } from './developer/developer.module';
+import { PosModule } from './pos/pos.module';
+import { PackingModule } from './packing/packing.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, load: [configuration], validationSchema }),
     ScheduleModule.forRoot(),
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 60 }]),
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        throttlers: [{ ttl: 60000, limit: 60 }],
+        storage: new ThrottlerStorageRedisService(config.get<string>('redis.url')),
+      }),
+    }),
     // Only mount the static SPA when explicitly enabled.
     // Set SERVE_STATIC=true on full-stack deploys (Render/Railway).
     // Leave unset on API-only deploys (DigitalOcean Droplet) so the server
     // doesn't try to serve a non-existent client/build/client/ directory.
+    // Its pages carry the build's _headers, Content-Security-Policy included.
     ...(process.env.SERVE_STATIC === 'true'
-      ? [
-          ServeStaticModule.forRoot({
-            rootPath: join(__dirname, '..', '..', '..', 'client', 'build', 'client'),
-            exclude: ['/api/(.*)', '/uploads/(.*)'],
-          }),
-        ]
+      ? [ServeStaticModule.forRoot(spaStaticOptions(join(__dirname, '..', '..', '..', 'client', 'build', 'client')))]
       : []),
     // Always mount /uploads (product images, future attachments). Local image
     // storage writes here; the path matches LocalImageStorage's URL builder.
@@ -68,9 +89,15 @@ import { InventoryModule } from './inventory/inventory.module';
     ServeStaticModule.forRoot({
       rootPath: join(process.cwd(), 'uploads'),
       serveRoot: '/uploads',
+      // The app shows these from another origin; Helmet's same-origin
+      // Cross-Origin-Resource-Policy would make the browser refuse them.
+      serveStaticOptions: {
+        setHeaders: (res: Response) => res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'),
+      },
     }),
     PrismaModule,
     RedisModule,
+    RateLimitModule,
     FxModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
@@ -92,6 +119,7 @@ import { InventoryModule } from './inventory/inventory.module';
     ProductModule,
     CustomerModule,
     DashboardModule,
+    PosReportsModule,
     AnalyticsModule,
     GstModule,
     InvoiceModule,
@@ -99,16 +127,32 @@ import { InventoryModule } from './inventory/inventory.module';
     AdminModule,
     BillingModule,
     InventoryModule,
+    AutomationModule,
+    InboxModule,
+    CampaignsModule,
+    CommerceModule,
+    PaymentsModule,
+    GrowthModule,
+    AdsModule,
+    ReviewsModule,
+    GoogleModule,
+    DeveloperModule,
+    PosModule,
+    PackingModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // After sign-in, so members are counted one by one; see UserThrottlerGuard.
+    { provide: APP_GUARD, useClass: UserThrottlerGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: OrgRequiredGuard },
     { provide: APP_GUARD, useClass: VendorAccessGuard },
-    // After VendorAccess so vendor rules resolve first; enforces
+    // The other deny-by-default outside role. Sits beside VendorAccess: both
+    // close every route their role has not been explicitly opened to.
+    { provide: APP_GUARD, useClass: InfluencerAccessGuard },
+    // After the outside-role guards so their rules resolve first; enforces
     // @RequirePermissions on top of @Roles (allow-by-default without it).
     { provide: APP_GUARD, useClass: PermissionsGuard },
     // Per-member section access (@RequireSection) — same allow-by-default shape.

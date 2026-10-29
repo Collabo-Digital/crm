@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:1.6@sha256:ac85f380a63b13dfcefa89046420e1781752bab202122f8f50032edf31be0021
 # ──────────────────────────────────────────────────────────────────────────────
 # Server-only Dockerfile for the NestJS API.
 #
@@ -11,7 +11,9 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ─── Stage 1: Build ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+# Base images are pinned by digest (the tag is there to read); see
+# docs/deploy-hardening.md to move them to a newer image.
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS builder
 
 WORKDIR /app
 
@@ -33,12 +35,12 @@ RUN NODE_OPTIONS="--max-old-space-size=2048" npm run build
 
 
 # ─── Stage 2: Runtime ────────────────────────────────────────────────────────
-FROM node:20-alpine AS runtime
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runtime
 
 WORKDIR /app
 
-# Prisma + healthcheck use these
-RUN apk add --no-cache openssl wget
+# Prisma + healthcheck use these; ffmpeg converts inbox voice notes
+RUN apk add --no-cache openssl wget ffmpeg
 
 # Install only production dependencies (smaller image)
 COPY package.json package-lock.json ./

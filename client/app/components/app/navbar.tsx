@@ -1,3 +1,4 @@
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { motion, LayoutGroup } from "framer-motion";
 import {
@@ -17,6 +18,22 @@ import {
   ArrowLeftRight,
   FileText,
   Lock,
+  MessageSquare,
+  Contact,
+  Megaphone,
+  Send,
+  LayoutTemplate,
+  Filter,
+  Workflow,
+  MessagesSquare,
+  ShoppingBag,
+  QrCode,
+  Star,
+  Target,
+  Store,
+  PackageCheck,
+  LifeBuoy,
+  ChevronLeft,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
@@ -28,16 +45,30 @@ import {
   DropdownMenuLabel,
 } from "~/components/ui/dropdown-menu";
 import { cn } from "~/lib/utils";
+import { MobileNavigation } from "~/components/app/mobile-navigation";
+import { HelpDialog } from "~/components/app/help-dialog";
 import { BrandLogo } from "~/components/app/brand-logo";
+import { APP_BAR_ACTIONS_ID, SECTION_BAR_ACTIONS_ID } from "~/components/app/app-bar-actions";
 import { Tip } from "~/components/ui/tooltip";
 import { useAuthStore, normalizeOrganizations } from "~/stores/auth.store";
-import { apiClient } from "~/lib/api-client";
+import { signOut } from "~/lib/sign-out";
 import { authService } from "~/services/auth.service";
 import { useStopImpersonating } from "~/hooks/use-admin-queries";
 import { useSectionAccess } from "~/hooks/use-section-access";
+import { useCurrentRole } from "~/hooks/use-current-role";
+import { useInboxCounts } from "~/hooks/use-inbox-queries";
 import { toast } from "sonner";
+import { roleLabel } from "~/lib/labels";
+import { LIST_QUERY_KEYS, parentScreen, withQuery, type Screen } from "~/lib/app-bar";
+import { isString, readSessionState } from "~/hooks/use-session-state";
 
-type NavChild = { label: string; href: string; icon: typeof LayoutDashboard };
+type NavChild = {
+  label: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+  /** Children sharing a group sit together, set apart from the rest, under this name. */
+  group?: string;
+};
 type NavItem = {
   label: string;
   href: string;
@@ -50,6 +81,10 @@ type NavItem = {
 /** Sub-nav for the Orders section — these used to be four separate top-level pills. */
 const ORDERS_CHILDREN: NavChild[] = [
   { label: "All orders", href: "/orders", icon: ShoppingCart },
+  // Gated on inventory.pack, not the Orders section (see lib/sections.ts), so
+  // a Packer's Orders pill opens straight onto it.
+  { label: "Packing", href: "/orders/packing", icon: PackageCheck },
+  { label: "Point of sale", href: "/orders/pos", icon: Store },
   { label: "Drafts", href: "/orders/drafts", icon: FileText },
   { label: "Customers", href: "/orders/customers", icon: Users },
   { label: "Invoices", href: "/orders/invoices", icon: Receipt },
@@ -65,12 +100,58 @@ const PRODUCTS_CHILDREN: NavChild[] = [
   { label: "Inventory", href: "/products/inventory", icon: Boxes },
 ];
 
+/** Sub-nav for the Inbox section. */
+const INBOX_CHILDREN: NavChild[] = [
+  { label: "Conversations", href: "/inbox", icon: MessageSquare },
+  { label: "Contacts", href: "/inbox/contacts", icon: Contact },
+  { label: "Groups", href: "/inbox/groups", icon: Users },
+];
+
+/**
+ * Sub-nav for Campaigns, in three jobs: Automations (the messages that send
+ * themselves, next to Overview so it is never off-screen on a phone), Messages
+ * sent by hand, and Growth. Overview keeps the parent href, like "All orders".
+ * The URLs are unchanged.
+ */
+const CAMPAIGNS_CHILDREN: NavChild[] = [
+  { label: "Overview", href: "/campaigns", icon: Megaphone },
+  { label: "Automations", href: "/campaigns/automations", icon: Workflow, group: "Automations" },
+  { label: "Broadcasts", href: "/campaigns/broadcasts", icon: Send, group: "Messages" },
+  { label: "Templates", href: "/campaigns/templates", icon: LayoutTemplate, group: "Messages" },
+  { label: "Segments", href: "/campaigns/segments", icon: Filter, group: "Messages" },
+  { label: "Catalogue", href: "/campaigns/catalog", icon: ShoppingBag, group: "Growth" },
+  { label: "Links & widget", href: "/campaigns/growth", icon: QrCode, group: "Growth" },
+  { label: "Ads", href: "/campaigns/ads", icon: Target, group: "Growth" },
+  { label: "Reviews", href: "/campaigns/reviews", icon: Star, group: "Growth" },
+];
+
+/** Shortcuts in the phone's More sheet, for pages a section's tabs would bury. */
+const MOBILE_SHORTCUTS: NavChild[] = [{ label: "Automations", href: "/campaigns/automations", icon: Workflow }];
+
+/** Sub-nav for Analytics: the storefront, and chats. */
+const ANALYTICS_CHILDREN: NavChild[] = [
+  { label: "Store", href: "/analytics", icon: BarChart3 },
+  { label: "Messaging", href: "/analytics/messaging", icon: MessagesSquare },
+];
+
+/** Phone app-bar titles for screens outside the main sections. */
+const SCREEN_TITLES: Record<string, string> = { settings: "Settings", profile: "Profile", admin: "Admin" };
+
 const NAV_LINKS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Orders", href: "/orders", icon: ShoppingCart, children: ORDERS_CHILDREN },
   { label: "Products", href: "/products", icon: Package, children: PRODUCTS_CHILDREN },
-  { label: "Analytics", href: "/analytics", icon: BarChart3 },
+  { label: "Inbox", href: "/inbox", icon: MessageSquare, children: INBOX_CHILDREN },
+  { label: "Campaigns", href: "/campaigns", icon: Megaphone, children: CAMPAIGNS_CHILDREN },
+  { label: "Analytics", href: "/analytics", icon: BarChart3, children: ANALYTICS_CHILDREN },
 ];
+
+/** Every screen a phone's back arrow can return to: the sections, their tabs and Settings. */
+const SCREENS: Screen[] = [
+  ...NAV_LINKS,
+  ...NAV_LINKS.flatMap((item) => item.children ?? []).filter((child) => !NAV_LINKS.some((item) => item.href === child.href)),
+  { href: "/settings", label: "Settings" },
+].map(({ href, label }) => ({ href, label }));
 
 /**
  * The nav entry owning `pathname`, longest matching href first — so
@@ -86,23 +167,16 @@ function matchNav<T extends { href: string }>(items: T[], pathname: string): T |
 }
 
 /** Top navigation bar with pill-style nav links, notification icons, and user/workspace dropdown. */
-export function Navbar() {
+export function Navbar({ immersive = false }: { immersive?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, organizations, currentOrgId, impersonatedBy, logout, refreshToken, setCurrentOrg, setTokens, setOrganizations } =
+  const { user, organizations, currentOrgId, impersonatedBy, setCurrentOrg, setTokens, setOrganizations } =
     useAuthStore();
   const stopImpersonating = useStopImpersonating();
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const { canAccess, landingPath, lockReason } = useSectionAccess();
-
-  // Every member sees every pill; the ones they cannot open render locked
-  // rather than hidden (see lib/sections.ts for who can open what). An extra
-  // Super Admin link is visible to real Collabo-team super admins (never while
-  // impersonating — the impersonation token has isSuperAdmin=false).
-  const navLinks: NavItem[] =
-    user?.isSuperAdmin && !impersonatedBy
-      ? [...NAV_LINKS, { label: "Super Admin", href: "/admin/users", icon: ShieldCheck }]
-      : NAV_LINKS;
+  const { isInfluencer } = useCurrentRole();
 
   // A pill opens its own page, or — when only a sub-page is granted (Customers
   // without Orders) — the first sub-page the member can open. It is locked only
@@ -112,10 +186,49 @@ export function Navbar() {
       ? item.href
       : item.children?.find((child) => canAccess(child.href))?.href ?? null;
 
+  // Every member sees every pill; the ones they cannot open render locked
+  // rather than hidden (see lib/sections.ts for who can open what). An extra
+  // Super Admin link is visible to real Collabo-team super admins (never while
+  // impersonating — the impersonation token has isSuperAdmin=false).
+  //
+  // Influencers are the exception: they are an outside party, so they see only
+  // the sections their permissions open rather than a bar of locked staff tabs.
+  const allLinks: NavItem[] =
+    user?.isSuperAdmin && !impersonatedBy
+      ? [...NAV_LINKS, { label: "Super Admin", href: "/admin/users", icon: ShieldCheck }]
+      : NAV_LINKS;
+  // Unread chats on the Inbox pill, for members who can open it.
+  const { data: inboxCounts } = useInboxCounts(canAccess("/inbox") && !isInfluencer);
+  const withBadges = allLinks.map((item) =>
+    item.href === "/inbox" && inboxCounts?.unread ? { ...item, badge: inboxCounts.unread } : item,
+  );
+  const navLinks = isInfluencer ? withBadges.filter((item) => pillTarget(item) !== null) : withBadges;
+
   // Longest-prefix match, so a child route keeps its parent pill lit.
   const activeTop = matchNav(navLinks, location.pathname);
   const sectionChildren = activeTop?.children;
   const activeChild = sectionChildren ? matchNav(sectionChildren, location.pathname) : undefined;
+  // Phones name the screen in the bar, as apps do; only Home shows the logo.
+  const mobileTitle =
+    location.pathname === "/dashboard"
+      ? null
+      : (activeTop?.label ?? SCREEN_TITLES[location.pathname.split("/")[1] ?? ""] ?? null);
+  // A page under another screen (an order, a new draft, a settings tab) gets a
+  // back arrow to it on a phone, in place of the title and section tabs. A
+  // list comes back as it was left: its filters, search and page.
+  const parent = parentScreen(location.pathname, SCREENS);
+  const queryKey = parent ? LIST_QUERY_KEYS[parent.href] : undefined;
+  const backTo = parent && withQuery(parent.href, queryKey ? readSessionState(queryKey, "", isString) : "");
+  // On a phone the section tabs scroll sideways; keep the current one in view.
+  const sectionNavRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = sectionNavRef.current;
+    const tab = box?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!box || !tab || box.scrollWidth <= box.clientWidth) return;
+    const b = box.getBoundingClientRect();
+    const t = tab.getBoundingClientRect();
+    box.scrollLeft += t.left - b.left - (b.width - t.width) / 2;
+  }, [activeChild?.href]);
 
   async function handleSwitchOrg(orgId: string) {
     if (orgId === currentOrgId) return;
@@ -135,29 +248,34 @@ export function Navbar() {
   }
 
   async function handleSignOut() {
-    try {
-      if (refreshToken) {
-        await apiClient.post("/auth/logout", { refreshToken });
-      }
-    } catch {
-      // silent
-    } finally {
-      logout();
-      navigate("/auth/login");
-    }
+    await signOut();
+    navigate("/auth/login");
   }
 
   const initials = user ? `${user.firstName[0]}${user.lastName[0]}`.toUpperCase() : "?";
   const currentOrg = organizations.find((membership) => membership.organization.id === currentOrgId);
 
   return (
-    <header className="sticky top-0 z-50 w-full bg-[#f1f7fa] dark:bg-gray-950">
-      <div className="mx-auto flex h-[72px] max-w-screen-xl items-center justify-between px-6">
+    <>
+    <header className={cn("app-header sticky top-0 z-40 w-full bg-surface-sunken", immersive && "hidden md:block")}>
+      <div className="mx-auto flex h-14 max-w-screen-xl items-center justify-between gap-2 px-4 md:h-[72px] md:px-6">
 
         {/* ── Logo ──────────────────────────────────────────────────── */}
-        <Link to={landingPath} className="flex shrink-0 items-center">
-          <BrandLogo className="h-7" />
+        <Link to={landingPath} className={cn("shrink-0 items-center pointer-coarse:min-h-11", mobileTitle ? "hidden md:flex" : "flex")}>
+          <BrandLogo className="h-6 md:h-7" />
         </Link>
+        {parent && backTo ? (
+          <Link
+            to={backTo}
+            aria-label={`Back to ${parent.label}`}
+            className="-ml-2.5 flex min-h-11 min-w-0 items-center gap-0.5 rounded-full pr-3 text-foreground md:hidden"
+          >
+            <ChevronLeft className="size-6 shrink-0" />
+            <span className="truncate font-heading text-[19px] font-semibold tracking-tight">{parent.label}</span>
+          </Link>
+        ) : mobileTitle && (
+          <span className="min-w-0 truncate font-heading text-[22px] font-semibold tracking-tight text-foreground md:hidden">{mobileTitle}</span>
+        )}
 
         {/* ── Nav — pill container ─────────────────────────────── */}
         <LayoutGroup id="navbar">
@@ -173,7 +291,7 @@ export function Navbar() {
                       role="link"
                       aria-disabled="true"
                       tabIndex={0}
-                      className="flex shrink-0 cursor-not-allowed items-center gap-1 rounded-full p-2.5 text-sm font-medium text-background/40 select-none dark:text-gray-600"
+                      className="flex shrink-0 cursor-not-allowed items-center gap-1 rounded-full p-2.5 text-sm font-medium text-background/40 select-none focus-visible:outline-brand dark:text-gray-600 pointer-coarse:min-h-11"
                     >
                       <Lock className="size-3" />
                       {label}
@@ -185,10 +303,11 @@ export function Navbar() {
                 <Link
                   key={href}
                   to={target}
+                  aria-current={isActive ? "page" : undefined}
                   className={cn(
-                    "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none p-2.5",
+                    "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none p-2.5 focus-visible:outline-brand pointer-coarse:min-h-11",
                     isActive
-                      ? "font-semibold text-gray-900 dark:text-gray-900"
+                      ? "font-semibold text-brand-foreground"
                       : "font-medium text-background hover:text-background/70 dark:text-gray-400 dark:hover:text-gray-200"
                   )}
                 >
@@ -196,7 +315,7 @@ export function Navbar() {
                     <motion.span
                       layoutId="nav-pill"
                       initial={false}
-                      className="absolute inset-0 rounded-full bg-[#CEF17B]"
+                      className="absolute inset-0 rounded-full bg-brand"
                       transition={{
                         type: "spring",
                         stiffness: 380,
@@ -217,14 +336,11 @@ export function Navbar() {
 
                   <span className="relative z-10">{label}</span>
 
+                  {/* Same badge as the phone tab bar's (.mobile-unread in app.css). */}
                   {badge && (
-                    <span
-                      className={cn(
-                        "relative z-10 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white",
-                        isActive ? "bg-gray-800" : "bg-red-500"
-                      )}
-                    >
-                      {badge}
+                    <span className="relative z-10 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-unread px-1 text-caption font-semibold text-unread-foreground">
+                      {badge > 99 ? "99+" : badge}
+                      <span className="sr-only"> unread</span>
                     </span>
                   )}
                 </Link>
@@ -234,9 +350,10 @@ export function Navbar() {
         </LayoutGroup>
 
         {/* ── Right: icons + user ───────────────────────────────────── */}
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-1 md:gap-3">
+          <div id={APP_BAR_ACTIONS_ID} className="flex items-center gap-0.5 md:hidden" />
 
-          <button onClick={() => navigate("/settings")} className="flex size-9 items-center justify-center rounded-full bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
+          <button aria-label="Settings" onClick={() => navigate("/settings")} className="hidden md:flex size-9 pointer-coarse:size-11 items-center justify-center rounded-full bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
             <Settings className="size-4" />
           </button>
           {/* 
@@ -247,10 +364,10 @@ export function Navbar() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="flex items-center gap-2 rounded-full bg-white dark:bg-gray-900 py-1.5 pl-1.5 pr-3 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+              <button aria-label="Account and workspace" className="flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full transition-colors md:justify-start md:bg-white md:py-1.5 md:pl-1.5 md:pr-3 md:shadow-sm md:ring-1 md:ring-black/[0.06] md:hover:bg-gray-50 md:dark:bg-gray-900 md:dark:ring-gray-700 md:dark:hover:bg-gray-800">
                 <Avatar size="sm">
                   <AvatarImage src={user?.avatarUrl ?? ""} alt={user?.firstName} />
-                  <AvatarFallback className="bg-[#CEF17B] text-gray-900 text-xs font-bold">
+                  <AvatarFallback className="bg-brand text-brand-foreground text-xs font-bold">
                     {initials}
                   </AvatarFallback>
                 </Avatar>
@@ -258,17 +375,15 @@ export function Navbar() {
                   <span className="text-xs font-semibold text-gray-900 dark:text-gray-100 leading-tight">
                     {user?.firstName ?? "Steve"} {user?.lastName ?? "Rogers"}
                   </span>
-                  <span className="text-[10px] text-gray-400 leading-tight">
+                  <span className="text-caption text-muted-foreground">
                     {impersonatedBy
                       ? "Impersonating"
                       : user?.isSuperAdmin
                         ? "Super Admin"
-                        : currentOrg?.role === "OWNER"
-                          ? "Owner"
-                          : currentOrg?.role?.toLowerCase() ?? "Member"}
+                        : roleLabel(currentOrg?.role)}
                   </span>
                 </div>
-                <ChevronDown className="size-3.5 text-gray-400" />
+                <ChevronDown className="hidden size-3.5 text-muted-foreground md:block" />
               </button>
             </DropdownMenuTrigger>
 
@@ -278,7 +393,7 @@ export function Navbar() {
                   <DropdownMenuItem
                     onClick={() => stopImpersonating.mutate()}
                     disabled={stopImpersonating.isPending}
-                    className="font-semibold text-amber-700 focus:text-amber-800"
+                    className="font-semibold text-warning-text focus:text-warning-text"
                   >
                     <ArrowLeftRight className="size-4" />
                     {stopImpersonating.isPending ? "Switching back..." : "Switch back to my account"}
@@ -304,7 +419,7 @@ export function Navbar() {
                     <DropdownMenuItem
                       key={membership.organization.id}
                       onClick={() => handleSwitchOrg(membership.organization.id)}
-                      className={cn(membership.organization.id === currentOrgId && "bg-[#CEF17B]/20 text-[#084734]")}
+                      className={cn(membership.organization.id === currentOrgId && "bg-brand/20 text-brand-strong")}
                     >
                       {membership.organization.name}
                     </DropdownMenuItem>
@@ -322,6 +437,9 @@ export function Navbar() {
                   <Settings className="size-4" /> Settings
                 </Link>
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setHelpOpen(true)}>
+                <LifeBuoy className="size-4" /> Help and support
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onClick={handleSignOut}>
                 <LogOut className="size-4" /> Sign out
@@ -335,58 +453,91 @@ export function Navbar() {
       {/* ── Section sub-nav — only for a section that has children ─── */}
       {sectionChildren && (
         <LayoutGroup id="section-nav">
-          <div className="mx-auto hidden max-w-screen-xl px-6 pb-3 mt-3 md:block">
+          <div className="mx-auto flex max-w-screen-xl items-center md:mt-3 md:gap-3 md:px-6 md:pb-3">
+          <div ref={sectionNavRef} className={cn("mobile-section-nav min-w-0 flex-1 overflow-x-auto px-1 max-md:border-b max-md:border-border/70 md:px-0", parent && "max-md:hidden")}>
             <nav
               aria-label={`${activeTop?.label} section`}
-              className="inline-flex items-center gap-0.5 rounded-full bg-white dark:bg-gray-900 px-1.5 py-1 shadow-sm ring-1 ring-black/[0.06] dark:ring-gray-700"
+              className="inline-flex min-w-max items-center gap-0.5 md:rounded-full md:bg-white md:px-1.5 md:py-1 md:shadow-sm md:ring-1 md:ring-black/[0.06] md:dark:bg-gray-900 md:dark:ring-gray-700"
             >
-              {sectionChildren.map(({ label, href, icon: Icon }) => {
+              {sectionChildren.map(({ label, href, icon: Icon, group }, index) => {
                 const isActive = activeChild?.href === href;
+                // A new group starts: a divider, and its name when it holds more than one page.
+                const startsGroup = group !== undefined && sectionChildren[index - 1]?.group !== group;
+                const groupHead = startsGroup && (
+                  <span className="flex items-center gap-2 pl-1.5 pr-1" aria-hidden>
+                    <span className="h-5 w-px bg-border" />
+                    {sectionChildren.filter((child) => child.group === group).length > 1 && (
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground max-md:hidden">{group}</span>
+                    )}
+                  </span>
+                );
                 if (!canAccess(href)) {
                   return (
-                    <Tip key={href} text={lockReason} side="bottom">
-                      <span
-                        role="link"
-                        aria-disabled="true"
-                        tabIndex={0}
-                        className="flex cursor-not-allowed items-center gap-1.5 rounded-full p-2.5 text-xs font-medium text-gray-300 select-none dark:text-gray-600"
-                      >
-                        <Lock className="size-3.5" />
-                        {label}
-                      </span>
-                    </Tip>
+                    <Fragment key={href}>
+                      {groupHead}
+                      <Tip text={lockReason} side="bottom">
+                        {/* A tap says why: touch screens never show the tooltip. */}
+                        <span
+                          role="link"
+                          aria-disabled="true"
+                          tabIndex={0}
+                          onClick={() => toast.info(lockReason)}
+                          className="flex cursor-not-allowed items-center gap-1.5 rounded-full p-2.5 text-xs font-medium text-gray-300 select-none dark:text-gray-600 max-md:min-h-11 max-md:text-sm"
+                        >
+                          <Lock className="size-3.5" />
+                          {label}
+                        </span>
+                      </Tip>
+                    </Fragment>
                   );
                 }
                 return (
-                  <Link
-                    key={href}
-                    to={href}
-                    aria-current={isActive ? "page" : undefined}
-                    className={cn(
-                      "relative flex items-center gap-1.5 rounded-full p-2.5 text-xs select-none",
-                      isActive
-                        ? "font-semibold text-gray-900"
-                        : "font-medium text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
-                    )}
-                  >
-                    {isActive && (
-                      <motion.span
-                        layoutId="section-nav-pill"
-                        initial={false}
-                        className="absolute inset-0 rounded-full bg-[#CEF17B]"
-                        transition={{ type: "spring", stiffness: 380, damping: 32, mass: 1 }}
-                      />
-                    )}
-                    <Icon className="relative z-10 size-3.5" />
-                    <span className="relative z-10">{label}</span>
-                  </Link>
+                  <Fragment key={href}>
+                    {groupHead}
+                    <Link
+                      to={href}
+                      aria-current={isActive ? "page" : undefined}
+                      className={cn(
+                        "relative flex min-h-11 items-center gap-1.5 px-3 py-2.5 text-sm select-none md:min-h-0 md:rounded-full md:p-2.5 md:text-xs pointer-coarse:min-h-11",
+                        isActive
+                          ? "font-semibold text-foreground md:text-brand-foreground"
+                          : "font-medium text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {isActive && (
+                        <motion.span
+                          layoutId="section-nav-pill"
+                          initial={false}
+                          className="absolute inset-x-3 bottom-0 h-[3px] rounded-full bg-foreground md:inset-0 md:h-auto md:bg-brand"
+                          transition={{ type: "spring", stiffness: 380, damping: 32, mass: 1 }}
+                        />
+                      )}
+                      <Icon className="relative z-10 size-3.5 max-md:hidden" />
+                      <span className="relative z-10">{label}</span>
+                    </Link>
+                  </Fragment>
                 );
               })}
             </nav>
+          </div>
+          {/* A page's own buttons beside its section tabs, on desktop (SectionBarActions). */}
+          <div id={SECTION_BAR_ACTIONS_ID} className="hidden shrink-0 items-center gap-2 md:flex" />
           </div>
         </LayoutGroup>
       )}
 
     </header>
+    {!immersive && (
+      <MobileNavigation
+        items={navLinks.map((item) => ({ ...item, target: pillTarget(item) }))}
+        shortcuts={isInfluencer ? [] : MOBILE_SHORTCUTS.filter((shortcut) => canAccess(shortcut.href))}
+        workspace={currentOrg?.organization.name}
+        canAccess={canAccess}
+        lockReason={lockReason}
+        onHelp={() => setHelpOpen(true)}
+      />
+    )}
+    <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
+    </>
   );
 }

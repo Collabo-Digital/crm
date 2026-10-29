@@ -11,6 +11,8 @@ import { GstCalculatorService } from '../gst/gst-calculator.service';
 import { TaxResolverService } from '../gst/tax-resolver.service';
 import { InvoiceNumberService } from './invoice-number.service';
 import { InvoiceService } from './invoice.service';
+import { CommerceEventsService } from '../commerce/commerce-events.service';
+import { IMAGE_STORAGE } from '../product/image-storage/image-storage.interface';
 import { GstReturnType } from './dto/query-gst-return.dto';
 
 /**
@@ -93,6 +95,8 @@ describe('InvoiceService.getGstReturn', () => {
         { provide: GstCalculatorService, useValue: new GstCalculatorService() },
         { provide: TaxResolverService, useValue: {} },
         { provide: InvoiceNumberService, useValue: {} },
+        { provide: CommerceEventsService, useValue: { invoiceIssued: jest.fn() } },
+        { provide: IMAGE_STORAGE, useValue: {} },
       ],
     }).compile();
 
@@ -266,7 +270,7 @@ describe('InvoiceService.autoInvoiceForPaidOrder', () => {
       $transaction: jest.fn(),
     };
     const service = new InvoiceService(
-      prisma as any, {} as any, {} as any, {} as any, {} as any,
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any, {} as any,
     );
     const create = jest
       .spyOn(service, 'create')
@@ -323,6 +327,82 @@ describe('InvoiceService.autoInvoiceForPaidOrder', () => {
 });
 
 /**
+ * Cash-on-delivery invoicing at dispatch: GST wants the invoice by the time
+ * the goods leave, and a COD order is only paid after delivery.
+ */
+describe('InvoiceService.autoInvoiceForShippedCodOrder', () => {
+  const ORG = 'org_1';
+  const ORDER = 'order_1';
+
+  function build(
+    opts: { enabled?: boolean; gateways?: string[]; cancelled?: boolean; liveInvoice?: boolean; createError?: Error } = {},
+  ) {
+    const orderUpdates: Array<{ where: any; data: any }> = [];
+    const prisma = {
+      organizationSettings: {
+        findUnique: jest.fn().mockResolvedValue({
+          orderSettings: { autoInvoiceCodOnShipping: opts.enabled ?? true },
+        }),
+      },
+      order: {
+        findFirst: jest.fn().mockResolvedValue({
+          cancelledAt: opts.cancelled ? new Date() : null,
+          paymentGateways: opts.gateways ?? ['Cash on Delivery (COD)'],
+        }),
+        updateMany: jest.fn((args: any) => {
+          orderUpdates.push(args);
+          return Promise.resolve({ count: 1 });
+        }),
+      },
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(opts.liveInvoice ? { id: 'inv_1' } : null),
+      },
+    };
+    const service = new InvoiceService(
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any, {} as any,
+    );
+    const create = jest
+      .spyOn(service, 'create')
+      .mockImplementation(async () =>
+        opts.createError ? Promise.reject(opts.createError) : ({ invoiceNumber: 'INV-26-27/000001' } as any),
+      );
+    return { service, create, orderUpdates };
+  }
+
+  it('invoices a COD order when it ships', async () => {
+    const { service, create } = build();
+    await service.autoInvoiceForShippedCodOrder(ORG, ORDER);
+    expect(create).toHaveBeenCalledWith(ORG, { orderId: ORDER });
+  });
+
+  it('does nothing when the org has not opted in', async () => {
+    const { service, create } = build({ enabled: false });
+    await service.autoInvoiceForShippedCodOrder(ORG, ORDER);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('leaves prepaid orders to the on-payment path', async () => {
+    const { service, create } = build({ gateways: ['razorpay'] });
+    await service.autoInvoiceForShippedCodOrder(ORG, ORDER);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('skips cancelled and already-invoiced orders', async () => {
+    for (const opts of [{ cancelled: true }, { liveInvoice: true }]) {
+      const { service, create } = build(opts);
+      await service.autoInvoiceForShippedCodOrder(ORG, ORDER);
+      expect(create).not.toHaveBeenCalled();
+    }
+  });
+
+  it('records the reason and never throws when invoicing fails', async () => {
+    const { service, orderUpdates } = build({ createError: new Error('No GSTIN registration found.') });
+    await expect(service.autoInvoiceForShippedCodOrder(ORG, ORDER)).resolves.toBeUndefined();
+    expect(orderUpdates[0].data.invoiceError).toMatch(/No GSTIN/);
+  });
+});
+
+/**
  * Dating at issue time.
  *
  * `invoiceDate` used to be `new Date()`, so a September order invoiced on
@@ -347,6 +427,7 @@ describe('InvoiceService.createForOrderTx dating', () => {
       dispatchWarehouseId: null,
       placeOfSupplyCode: '29',
       customer: null,
+      channel: { platform: 'MANUAL' },
       lineItems: [
         {
           id: 'li_1',
@@ -403,6 +484,8 @@ describe('InvoiceService.createForOrderTx dating', () => {
       new GstCalculatorService(),
       taxResolver as any,
       invoiceNumber as any,
+      { invoiceIssued: jest.fn() } as any,
+      {} as any,
     );
     const warn = jest
       .spyOn((service as any).logger, 'warn')
@@ -524,6 +607,476 @@ describe('InvoiceService.createForOrderTx dating', () => {
   });
 });
 
+describe('InvoiceService.createForOrderTx amounts', () => {
+  const ORG = 'org_1';
+
+  function build(opts: {
+    taxesIncluded?: boolean | null;
+    price: string;
+    totalDiscount?: string;
+    shipping?: string;
+    totalTax: string;
+    taxShipping?: boolean;
+    platform?: 'MANUAL' | 'SHOPIFY';
+    sourceName?: string | null;
+    /** The org's "Catalogue prices include GST" choice. */
+    pricesIncludeTax?: boolean | null;
+    /** `taxesIncluded` on the store's latest Shopify order, if any. */
+    storeTaxesIncluded?: boolean;
+  }) {
+    const order = {
+      id: 'order_1',
+      organizationId: ORG,
+      externalCreatedAt: new Date('2026-10-05T10:00:00.000Z'),
+      createdAt: new Date('2026-10-05T10:00:00.000Z'),
+      currency: 'INR',
+      totalTax: opts.totalTax,
+      taxesIncluded: opts.taxesIncluded ?? null,
+      sourceName: opts.sourceName ?? null,
+      totalShippingPrice: opts.shipping ?? '0.00',
+      billingAddress: null,
+      dispatchWarehouseId: null,
+      placeOfSupplyCode: '29',
+      customer: null,
+      channel: { platform: opts.platform ?? 'MANUAL' },
+      lineItems: [
+        {
+          id: 'li_1',
+          title: 'Cotton Shirt',
+          variantTitle: null,
+          price: opts.price,
+          quantity: 1,
+          totalDiscount: opts.totalDiscount ?? '0.00',
+          taxable: true,
+          variant: null,
+        },
+      ],
+    };
+    const tx = {
+      order: {
+        // The order itself by id; otherwise the store's latest Shopify order.
+        findFirst: jest.fn(({ where }: any) =>
+          Promise.resolve(
+            where.id
+              ? order
+              : opts.storeTaxesIncluded === undefined
+                ? null
+                : { taxesIncluded: opts.storeTaxesIncluded },
+          ),
+        ),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn(({ data }: any) => Promise.resolve({ ...data, lineItems: [] })),
+      },
+      organization: {
+        findUnique: jest.fn().mockResolvedValue({ gstEnabled: true, timezone: 'Asia/Kolkata' }),
+      },
+      organizationSettings: {
+        findUnique: jest.fn().mockResolvedValue({
+          taxSettings: {
+            taxShipping: opts.taxShipping ?? false,
+            pricesIncludeTax: opts.pricesIncludeTax ?? null,
+          },
+        }),
+      },
+      organizationGstin: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'gstin_1',
+          gstin: '29AABCT1332L1ZN',
+          legalName: 'Test Seller',
+          address: null,
+          stateCode: '29',
+          stateName: 'Karnataka',
+        }),
+      },
+      warehouse: { findFirst: jest.fn().mockResolvedValue(null) },
+      gstFiling: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new InvoiceService(
+      {} as any,
+      {} as any,
+      new GstCalculatorService(),
+      { resolveLineGstRates: jest.fn().mockResolvedValue([18]) } as any,
+      { getNextInvoiceNumber: jest.fn().mockResolvedValue('INV-26-27/000001') } as any,
+      { invoiceIssued: jest.fn() } as any,
+      {} as any,
+    );
+    jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+    return { service, tx };
+  }
+
+  async function issue(opts: Parameters<typeof build>[0]) {
+    const { service, tx } = build(opts);
+    await service.createForOrderTx(tx as any, ORG, 'order_1', {});
+    return tx.invoice.create.mock.calls[0][0].data;
+  }
+
+  beforeEach(() => jest.useFakeTimers({ now: new Date('2026-10-08T09:00:00.000Z') }));
+  afterEach(() => jest.useRealTimers());
+
+  it('backs GST out of a tax-inclusive Shopify price instead of adding it on top', async () => {
+    const data = await issue({ taxesIncluded: true, price: '1180.00', totalTax: '180.00' });
+
+    expect(data.subtotal).toBe(1000);
+    expect(data.totalTax).toBe(180);
+    expect(data.grandTotal).toBe(1180);
+    expect(data.taxMismatch).toBe(false);
+    expect(data.lineItems.create[0]).toEqual(
+      expect.objectContaining({ unitPrice: 1000, discount: 0, taxableValue: 1000, totalAmount: 1180 }),
+    );
+  });
+
+  it('prints a tax-inclusive discount before tax, so the row still adds up', async () => {
+    const data = await issue({
+      taxesIncluded: true,
+      price: '1180.00',
+      totalDiscount: '118.00',
+      totalTax: '162.00',
+    });
+
+    expect(data.subtotal).toBe(900);
+    expect(data.totalTax).toBe(162);
+    expect(data.grandTotal).toBe(1062);
+    expect(data.totalDiscount).toBe(100);
+    expect(data.lineItems.create[0]).toEqual(
+      expect.objectContaining({ unitPrice: 1000, discount: 100, taxableValue: 900 }),
+    );
+  });
+
+  it('still adds GST on top of a price that excludes it', async () => {
+    const data = await issue({ taxesIncluded: false, price: '1000.00', totalTax: '180.00' });
+
+    expect(data.subtotal).toBe(1000);
+    expect(data.totalTax).toBe(180);
+    expect(data.grandTotal).toBe(1180);
+  });
+
+  it('backs GST out of an old Shopify order with no recorded basis when the org says prices include it', async () => {
+    const data = await issue({
+      platform: 'SHOPIFY',
+      price: '1180.00',
+      totalTax: '180.00',
+      pricesIncludeTax: true,
+    });
+
+    expect(data.subtotal).toBe(1000);
+    expect(data.totalTax).toBe(180);
+    expect(data.grandTotal).toBe(1180);
+  });
+
+  it('reads an unset choice from the store’s own Shopify orders for an old Shopify order', async () => {
+    const data = await issue({
+      platform: 'SHOPIFY',
+      price: '1180.00',
+      totalTax: '180.00',
+      storeTaxesIncluded: true,
+    });
+
+    expect(data.grandTotal).toBe(1180);
+  });
+
+  it('lets the org’s choice override what its Shopify orders say', async () => {
+    const data = await issue({
+      platform: 'SHOPIFY',
+      price: '1000.00',
+      totalTax: '180.00',
+      pricesIncludeTax: false,
+      storeTaxesIncluded: true,
+    });
+
+    expect(data.subtotal).toBe(1000);
+    expect(data.grandTotal).toBe(1180);
+  });
+
+  it('keeps the basis an order recorded, whatever the org setting says', async () => {
+    const data = await issue({
+      platform: 'SHOPIFY',
+      taxesIncluded: false,
+      price: '1000.00',
+      totalTax: '180.00',
+      pricesIncludeTax: true,
+    });
+
+    expect(data.grandTotal).toBe(1180);
+  });
+
+  it('prices an old counter sale with no recorded basis before tax, as it was sold', async () => {
+    const data = await issue({ price: '1000.00', totalTax: '180.00', pricesIncludeTax: true });
+
+    expect(data.subtotal).toBe(1000);
+    expect(data.grandTotal).toBe(1180);
+  });
+
+  it('keeps untaxed shipping as a separate add-on', async () => {
+    const data = await issue({ price: '1000.00', shipping: '100.00', totalTax: '180.00' });
+
+    expect(data.shippingCharge).toBe(100);
+    expect(data.grandTotal).toBe(1280);
+  });
+
+  it('does not list shipping again once it is taxed into the lines', async () => {
+    const data = await issue({
+      price: '1000.00',
+      shipping: '100.00',
+      totalTax: '198.00',
+      taxShipping: true,
+    });
+
+    expect(data.subtotal).toBe(1100);
+    expect(data.totalTax).toBe(198);
+    expect(data.shippingCharge).toBe(0);
+    expect(data.grandTotal).toBe(1298);
+  });
+
+  it('taxes tax-inclusive shipping into the lines without adding GST on top', async () => {
+    const data = await issue({
+      taxesIncluded: true,
+      price: '1180.00',
+      shipping: '118.00',
+      totalTax: '198.00',
+      taxShipping: true,
+    });
+
+    expect(data.subtotal).toBe(1100);
+    expect(data.totalTax).toBe(198);
+    expect(data.shippingCharge).toBe(0);
+    expect(data.grandTotal).toBe(1298);
+  });
+});
+
+describe('InvoiceService credit notes', () => {
+  const ORG = 'org_1';
+
+  const line = (over: Record<string, string> = {}) => ({
+    orderLineItemId: 'li_1',
+    description: 'Shirt',
+    hsnCode: '6109',
+    unitOfMeasure: 'NOS',
+    supplyType: 'TAXABLE',
+    quantity: 1,
+    unitPrice: '1000.00',
+    discount: '0.00',
+    taxableValue: '1000.00',
+    gstRate: '18.00',
+    cgstRate: '9.00',
+    cgstAmount: '90.00',
+    sgstRate: '9.00',
+    sgstAmount: '90.00',
+    igstRate: '0.00',
+    igstAmount: '0.00',
+    totalTax: '180.00',
+    totalAmount: '1180.00',
+    ...over,
+  });
+
+  // 1000 of goods + 180 GST + 100 of untaxed shipping.
+  function build(
+    opts: { lines?: object[]; totals?: Record<string, string>; credited?: Record<string, string | null> } = {},
+  ) {
+    const original = {
+      id: 'inv_1',
+      organizationId: ORG,
+      orderId: 'order_1',
+      status: 'ISSUED',
+      sellerGstinId: 'gstin_1',
+      invoiceNumber: 'INV-26-27/000001',
+      grandTotal: '1280.00',
+      subtotal: '1000.00',
+      totalCgst: '90.00',
+      totalSgst: '90.00',
+      totalIgst: '0.00',
+      totalTax: '180.00',
+      totalDiscount: '0.00',
+      shippingCharge: '100.00',
+      currency: 'INR',
+      gstType: 'CGST_SGST',
+      reverseCharge: false,
+      lineItems: opts.lines ?? [line()],
+      ...opts.totals,
+    };
+    const tx = {
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(original),
+        aggregate: jest.fn().mockResolvedValue({
+          _sum: { grandTotal: null, subtotal: null, totalTax: null, ...opts.credited },
+        }),
+        create: jest.fn(({ data }: any) => Promise.resolve(data)),
+      },
+      organization: {
+        findUnique: jest.fn().mockResolvedValue({ gstEnabled: true, timezone: 'Asia/Kolkata' }),
+      },
+      gstFiling: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new InvoiceService(
+      {} as any,
+      {} as any,
+      new GstCalculatorService(),
+      {} as any,
+      { getNextCreditNoteNumber: jest.fn().mockResolvedValue('CN-26-27/000001') } as any,
+      {} as any,
+      {} as any,
+    );
+    jest.spyOn((service as any).logger, 'log').mockImplementation(() => undefined);
+    const raise = async (dto: { amount?: number; tax?: number }) => {
+      const note: any = await (service as any).createCreditNoteTx(tx, ORG, 'inv_1', {
+        reason: 'Goods returned',
+        ...dto,
+      });
+      return {
+        subtotal: Number(note.subtotal),
+        tax: Number(note.totalTax),
+        shipping: Number(note.shippingCharge),
+        total: Number(note.grandTotal),
+        lines: note.lineItems.create.map((l: any) => ({
+          taxable: Number(l.taxableValue),
+          tax: Number(l.totalTax),
+        })),
+      };
+    };
+    return { raise, tx };
+  }
+
+  it('reverses all the GST of a returned item, not a share diluted by untaxed shipping', async () => {
+    const note = await build().raise({ amount: 1180 });
+
+    expect(note).toEqual(expect.objectContaining({ subtotal: 1000, tax: 180, shipping: 0, total: 1180 }));
+  });
+
+  it("follows the refund's own GST when it is given", async () => {
+    const note = await build().raise({ amount: 690, tax: 90 });
+
+    expect(note).toEqual(expect.objectContaining({ subtotal: 500, tax: 90, shipping: 100, total: 690 }));
+  });
+
+  it('credits a refunded delivery charge without reversing any GST', async () => {
+    const note = await build().raise({ amount: 100, tax: 0 });
+
+    expect(note).toEqual(expect.objectContaining({ subtotal: 0, tax: 0, shipping: 100, total: 100 }));
+  });
+
+  it('refuses GST that does not fit the amount on this invoice', async () => {
+    await expect(build().raise({ amount: 1180, tax: 0 })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(build().raise({ amount: 1000, tax: 180 })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('credits the shipping that is left once the goods are fully credited', async () => {
+    const note = await build({
+      credited: { grandTotal: '1180.00', subtotal: '1000.00', totalTax: '180.00' },
+    }).raise({});
+
+    expect(note).toEqual(expect.objectContaining({ subtotal: 0, tax: 0, shipping: 100, total: 100 }));
+  });
+
+  it('reverses the whole invoice when no amount is given', async () => {
+    const note = await build().raise({});
+
+    expect(note).toEqual(expect.objectContaining({ subtotal: 1000, tax: 180, shipping: 100, total: 1280 }));
+  });
+
+  it('keeps every line at its own rate and the parts adding up to the amount', async () => {
+    const { raise } = build({
+      lines: [
+        line(),
+        line({
+          orderLineItemId: 'li_2',
+          taxableValue: '333.33',
+          gstRate: '5.00',
+          cgstRate: '2.50',
+          cgstAmount: '8.33',
+          sgstRate: '2.50',
+          sgstAmount: '8.33',
+          totalTax: '16.66',
+          totalAmount: '349.99',
+        }),
+      ],
+      totals: {
+        subtotal: '1333.33',
+        totalCgst: '98.33',
+        totalSgst: '98.33',
+        totalTax: '196.66',
+        grandTotal: '1529.99',
+        shippingCharge: '0.00',
+      },
+    });
+
+    const note = await raise({ amount: 500 });
+
+    expect(note.total).toBe(500);
+    expect(note.shipping).toBe(0);
+    expect(Math.round((note.subtotal + note.tax) * 100) / 100).toBe(500);
+    // Same share of each line: 18% stays 18%, 5% stays 5%.
+    expect(note.lines[0].tax / note.lines[0].taxable).toBeCloseTo(0.18, 3);
+    expect(note.lines[1].tax / note.lines[1].taxable).toBeCloseTo(0.05, 2);
+  });
+});
+
+describe('InvoiceService.cancel', () => {
+  const ORG = 'org_1';
+
+  function build(opts: { claimed: number; existing: object | null }) {
+    const prisma = {
+      invoice: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            invoiceDate: new Date('2026-10-10T00:00:00.000Z'),
+            status: 'ISSUED',
+            sellerGstinId: 'gstin_1',
+          })
+          .mockResolvedValueOnce(opts.existing),
+        updateMany: jest.fn().mockResolvedValue({ count: opts.claimed }),
+      },
+      organization: {
+        findUnique: jest.fn().mockResolvedValue({ gstEnabled: true, timezone: 'Asia/Kolkata' }),
+      },
+      gstFiling: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new InvoiceService(
+      prisma as any,
+      {} as any,
+      new GstCalculatorService(),
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    return { service, prisma };
+  }
+
+  it('only cancels an invoice with no live credit note against it', async () => {
+    const { service, prisma } = build({
+      claimed: 0,
+      existing: {
+        invoiceNumber: 'INV-26-27/000001',
+        status: 'ISSUED',
+        creditNotes: [{ invoiceNumber: 'CN-26-27/000001' }],
+      },
+    });
+
+    await expect(service.cancel('inv_1', ORG)).rejects.toThrow(
+      /has credit note CN-26-27\/000001 against it\. Cancel that credit note first/,
+    );
+    expect(prisma.invoice.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          creditNotes: { none: { status: InvoiceStatus.CREDIT_NOTE } },
+        }),
+      }),
+    );
+  });
+
+  it('still says when the invoice is already cancelled', async () => {
+    const { service } = build({
+      claimed: 0,
+      existing: { invoiceNumber: 'INV-26-27/000001', status: 'CANCELLED', creditNotes: [] },
+    });
+
+    await expect(service.cancel('inv_1', ORG)).rejects.toThrow('Invoice is already cancelled');
+  });
+});
+
 /**
  * Editing an issued invoice.
  *
@@ -577,7 +1130,7 @@ describe('InvoiceService.update', () => {
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const service = new InvoiceService(
-      prisma as any, {} as any, {} as any, {} as any, {} as any,
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any, {} as any,
     );
     return { service, prisma, updates, events };
   }
@@ -714,7 +1267,7 @@ describe('InvoiceService.bulkCreate', () => {
       },
     };
     const service = new InvoiceService(
-      prisma as any, {} as any, {} as any, {} as any, {} as any,
+      prisma as any, {} as any, {} as any, {} as any, {} as any, { invoiceIssued: jest.fn() } as any, {} as any,
     );
     let n = 0;
     const create = jest.spyOn(service, 'create').mockImplementation(async (_org, dto) => {

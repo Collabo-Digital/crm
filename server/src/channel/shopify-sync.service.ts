@@ -14,6 +14,7 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
+import { sanitizeProductHtml } from '../common/utils/sanitize-product-html.util';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
 import {
     extractShippingTax,
@@ -28,6 +29,8 @@ import {
     gstTypeForSupply,
     type SellerRegistrations,
 } from '../gst/seller-registration.util';
+import { CommerceEventsService } from '../commerce/commerce-events.service';
+import type { StoreEventKind } from '../commerce/order-vars';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import {
@@ -36,12 +39,20 @@ import {
     ShopifyAuthResolver,
 } from './shopify-graphql.client';
 import { ShopifyPushEnqueuer } from './shopify-push.enqueuer';
+import { Priority, RateLimitedError, isRateLimitedError } from '../rate-limit/rate-limit.types';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { ShopifyLocationSyncService } from './shopify-location-sync.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
 import { FxRateService } from '../common/fx/fx-rate.service';
 import { becamePaid } from './order-paid-transition.util';
+import {
+    DELIVERED_EVENT_WINDOW_MS,
+    FIRST_SIGHTING_EVENT_WINDOW_MS,
+    isOlderShopifyPayload,
+    isRefundNews,
+    isWithinWindow,
+} from './shopify-payload-age.util';
 import { CRM_SOURCE_NAME, carriesCrmMarker, isLocallyPushedPayload, localOrderIdOf } from './order-rebadge.util';
 import { localDraftIdOf } from './draft-rebadge.util';
 import {
@@ -50,6 +61,7 @@ import {
     shouldAcceptRemoteFulfilmentStatus,
     statusForShippedUnits,
 } from './fulfillment-line-map.util';
+import { quantityAfterEdits } from './line-quantity.util';
 import {
     DRAFT_MIRROR_QUEUE,
     DraftMirrorJobData,
@@ -64,6 +76,9 @@ import {
     ORDER_REFUNDS_QUERY,
     OrderRefundsResponse,
     OrderRefundsVariables,
+    ORDER_CHECKOUT_TOKENS_QUERY,
+    OrderCheckoutTokensResponse,
+    OrderCheckoutTokensVariables,
     OrderNode,
     ORDERS_LIST_QUERY,
     ORDERS_COUNT_QUERY,
@@ -90,6 +105,7 @@ import {
     OrderFulfillmentLocationsResponse,
 } from './shopify-graphql.types';
 import { singleDistinct } from './single-distinct.util';
+import { isTransientWebhookError } from './webhook-retry.util';
 import { pulledBarcodePatch } from './pulled-barcode.util';
 import { parseProductSettings } from '../organization-settings/schemas/product-settings.schema';
 
@@ -184,6 +200,14 @@ function channelTax(li: { tax_lines?: unknown }): {
 /** Short enough that a GSTIN edit mid-sync is picked up. */
 const GST_CONTEXT_TTL_MS = 60_000;
 
+/** What writing an order's fulfilments and refunds found to be news, for its store events. */
+interface OrderChildrenNews {
+    newlyDelivered: boolean;
+    newlyOutForDelivery: boolean;
+    /** Refunds to announce: money moved, recently. Already-announced ones are deduplicated by their event. */
+    refunds: Array<{ id: string; amount: string; currency: string }>;
+}
+
 /** Customer fields an empty Shopify value must not erase. */
 const IDENTITY_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'note', 'addresses', 'defaultAddress'];
 
@@ -240,6 +264,9 @@ export class ShopifySyncService {
         private readonly fx: FxRateService,
         @InjectQueue(DRAFT_MIRROR_QUEUE)
         private readonly draftMirrorQueue: Queue<DraftMirrorJobData>,
+        // Order events for automations (order messages, COD confirmation),
+        // raised on the live-webhook path only.
+        private readonly commerceEvents: CommerceEventsService,
     ) { }
 
     /**
@@ -267,7 +294,19 @@ export class ShopifySyncService {
         }
     }
 
-    async runSync(channelId: string, orgId: string, entityTypes: string[]): Promise<void> {
+    /**
+     * `pushAfter` runs the bulk push of unsynced CRM items once the pull is
+     * clean. Only a merchant's Sync press asks for it: the backfill queued on
+     * connect and the orders pull after a draft completion never push, so
+     * connecting a store cannot by itself send a CRM backlog to it.
+     */
+    async runSync(
+        channelId: string,
+        orgId: string,
+        entityTypes: string[],
+        priority: Priority = Priority.NORMAL,
+        opts: { pushAfter?: boolean } = {},
+    ): Promise<void> {
         const channel = await this.prisma.channel.findUnique({ where: { id: channelId } });
         if (!channel) throw new Error(`Channel ${channelId} not found`);
 
@@ -291,9 +330,11 @@ export class ShopifySyncService {
                     lastSyncedAt: new Date(),
                 },
             });
-            // No pull to fail here, so the push always runs - but it still
-            // honours the per-entity push toggles.
-            const enabledPush = await this.enabledEntities(channelId, 'push');
+            // No pull to fail here, so the push always runs when asked for -
+            // but it still honours the per-entity push toggles.
+            const enabledPush = opts.pushAfter
+                ? await this.enabledEntities(channelId, 'push')
+                : new Set<string>();
             try {
                 if (enabledPush.has('products')) {
                     await this.pushEnqueuer.enqueueBulkProductPush({
@@ -336,6 +377,10 @@ export class ShopifySyncService {
         /// pass's skip so the catalogue is only walked once.
         const completedEntities = new Set<string>();
         let initError: Error | null = null;
+        /// Set when the outbound limiter refused to let an entity continue.
+        /// Not a failure: the job is parked and re-entered, and the per-entity
+        /// watermarks mean the parts that finished are not re-read.
+        let parked: RateLimitedError | null = null;
         let token: string | null = null;
         let shopDomain: string | null = null;
 
@@ -372,7 +417,7 @@ export class ShopifySyncService {
                 // The initial resolve above stays, purely so bad credentials
                 // fail fast before any entity runs. Everything below re-resolves
                 // per request through this.
-                const getAuth = this.authResolver(channelId);
+                const getAuth = this.authResolver(channelId, priority);
                 const enabledPull = await this.enabledEntities(channelId, 'pull');
 
                 // Run in PULL_ENTITY_TYPES order rather than the order the job
@@ -421,6 +466,14 @@ export class ShopifySyncService {
                         // three full catalogue rescans per trigger.
                         await this.markEntitySynced(channelId, entityType, syncStartedAt);
                     } catch (error) {
+                        if (isRateLimitedError(error)) {
+                            // Stop here rather than trying the remaining
+                            // entities into the same closed door; the processor
+                            // parks the job and this run resumes from the
+                            // per-entity cursors.
+                            parked = error;
+                            break;
+                        }
                         allSucceeded = false;
                         // A 401 here does NOT mean the grant is dead. It used to
                         // flip the channel to DISCONNECTED, which stranded a
@@ -438,6 +491,21 @@ export class ShopifySyncService {
                         this.logger.error(`Sync failed for ${entityType} on channel ${channelId}`, error);
                     }
                 }
+
+                // Every finished sync re-reads the store's Shopify locations,
+                // so one added in Shopify since appears as waiting for the
+                // merchant's decision. Nothing is linked by this. Best-effort:
+                // the next sync tries again, and the run's outcome is the
+                // entities' alone.
+                if (!parked && enabledPull.has('locations') && !completedEntities.has('locations')) {
+                    try {
+                        await this.locationSync.syncLocations(channelId, orgId, getAuth);
+                    } catch (error) {
+                        this.logger.warn(
+                            `Could not refresh the Shopify locations of channel ${channelId}: ${error instanceof Error ? error.message : error}`,
+                        );
+                    }
+                }
             }
         } finally {
             // Defensive: even if the update itself throws (e.g. DB hiccup),
@@ -445,7 +513,13 @@ export class ShopifySyncService {
             await this.prisma.channel.update({
                 where: { id: channelId },
                 data: {
-                    syncStatus: allSucceeded ? SyncStatus.COMPLETED : SyncStatus.FAILED,
+                    // A parked run is still in progress from the merchant's
+                    // point of view: it will resume when the limiter lets it.
+                    syncStatus: parked
+                        ? SyncStatus.IN_PROGRESS
+                        : allSucceeded
+                            ? SyncStatus.COMPLETED
+                            : SyncStatus.FAILED,
                     // `status` is CONNECTION health and this method no longer
                     // writes a failure into it at all -- neither ERROR (which
                     // made a rate-limited backfill look unconnectable) nor
@@ -465,6 +539,17 @@ export class ShopifySyncService {
             });
         }
 
+        // Rate limited mid-run: hand the error to the processor, which parks
+        // the job (no attempt consumed) and re-runs it later. Nothing below
+        // should happen for a run that did not finish.
+        if (parked) {
+            this.logger.log(
+                `Sync for channel ${channelId} parked by the rate limiter until ${new Date(parked.retryAtMs).toISOString()}; ` +
+                `${completedEntities.size} entit${completedEntities.size === 1 ? 'y' : 'ies'} completed before the pause.`,
+            );
+            throw parked;
+        }
+
         // Push local items up to Shopify - but ONLY after a clean pull.
         //
         // This used to run unconditionally, before the throw below. With
@@ -475,7 +560,9 @@ export class ShopifySyncService {
         // start creating real Shopify orders from a backlog nobody has
         // reviewed - `pushOrder` calls `orderCreate`, and a Shopify order
         // cannot be un-created.
-        if (allSucceeded) {
+        if (!opts.pushAfter) {
+            // Connect-time backfill or a post-completion pull: never pushes.
+        } else if (allSucceeded) {
             const enabledPush = await this.enabledEntities(channelId, 'push');
             try {
                 if (enabledPush.has('products')) {
@@ -655,6 +742,7 @@ export class ShopifySyncService {
         return {
             id: ShopifyGraphqlClient.extractId(node.id),
             title: node.title,
+            handle: node.handle,
             body_html: node.descriptionHtml,
             vendor: node.vendor,
             product_type: node.productType,
@@ -732,6 +820,55 @@ export class ShopifySyncService {
             await this.failSyncLog(syncLog.id, processed, failed, error);
             throw error;
         }
+    }
+
+    /**
+     * Orders updated in Shopify since `since`, a page at a time, in the shape
+     * the orders webhooks carry, checkout token included. For
+     * ShopifyOrderCatchUpScheduler, which passes each through the webhook's
+     * own path.
+     */
+    async *ordersUpdatedSince(
+        channelId: string,
+        since: Date,
+    ): AsyncGenerator<Array<Record<string, any>>> {
+        const getAuth = this.authResolver(channelId, Priority.NORMAL);
+        const query = `updated_at:>='${since.toISOString()}'`;
+        for await (const page of this.paginateOrdersGraphql(getAuth, null, query)) {
+            for (const node of page.orders) {
+                await this.drainLineItems(getAuth, node);
+                await this.drainRefunds(getAuth, node);
+            }
+            const tokens = await this.checkoutTokens(getAuth, page.orders.map((o) => o.id));
+            yield page.orders.map((node) => ({
+                ...this.transformGraphqlOrder(node),
+                checkout_token: tokens.get(node.id) ?? null,
+            }));
+        }
+    }
+
+    private async checkoutTokens(getAuth: ShopifyAuthResolver, ids: string[]): Promise<Map<string, string>> {
+        if (ids.length === 0) return new Map();
+        let res: OrderCheckoutTokensResponse;
+        try {
+            res = await this.graphql.request<OrderCheckoutTokensResponse, OrderCheckoutTokensVariables>(
+                await getAuth(),
+                ORDER_CHECKOUT_TOKENS_QUERY,
+                { ids },
+                // See ORDER_CHECKOUT_TOKENS_QUERY.
+                '2026-10',
+            );
+        } catch (err) {
+            // Without tokens the orders are still recovered, only their checkouts stay open.
+            if (isTransientWebhookError(err)) throw err;
+            this.logger.warn(`Checkout tokens could not be read: ${err instanceof Error ? err.message : err}`);
+            return new Map();
+        }
+        const tokens = new Map<string, string>();
+        for (const node of res.nodes) {
+            if (node?.checkoutToken) tokens.set(node.id, node.checkoutToken);
+        }
+        return tokens;
     }
 
     // ─── ORDERS GRAPHQL PAGINATION ───
@@ -909,6 +1046,8 @@ export class ShopifySyncService {
             variant_title: li.variantTitle,
             sku: li.sku,
             quantity: li.quantity,
+            // REST name, as webhooks carry it; see `quantityAfterEdits`.
+            current_quantity: li.currentQuantity,
             price: li.originalUnitPriceSet?.shopMoney?.amount ?? '0',
             total_discount: li.totalDiscountSet?.shopMoney?.amount ?? '0',
             // Emitted under its REST name so both ingestion paths converge —
@@ -1010,6 +1149,7 @@ export class ShopifySyncService {
             source_identifier: node.sourceIdentifier ?? null,
             source_name: node.sourceName ?? null,
             source_label: node.app?.name ?? null,
+            payment_gateway_names: node.paymentGatewayNames,
             financial_status: node.displayFinancialStatus
                 ? node.displayFinancialStatus.toLowerCase()
                 : null,
@@ -1182,6 +1322,12 @@ export class ShopifySyncService {
         // warehousing org's stock never updated from Shopify at all.
         if (warehousing) {
             await this.completeSyncLog(syncLog.id, 0, 0);
+            // An enable flow whose linking has not happened yet links first,
+            // or this pull would read the store's stock into its default
+            // location alone.
+            if (await this.locationSync.autoLinkPending(orgId)) {
+                await this.locationSync.syncLocations(channelId, orgId, getAuth);
+            }
             await this.locationSync.pullLocationInventory(channelId, orgId, getAuth);
             return;
         }
@@ -1373,11 +1519,30 @@ export class ShopifySyncService {
         const normalizedOptions =
             normalizeShopifyOptions(sp.options) ?? Prisma.DbNull;
 
+        // Stored sanitised like every other description. This alone never
+        // queues a push: only local edits mark a product OUT_OF_SYNC, and the
+        // push leaves Shopify's description alone when sanitising is the only
+        // difference (see ShopifyPushService.descriptionUpdate).
+        const rawBody: unknown = sp.body_html;
+        const bodyHtml =
+            typeof rawBody === 'string' ? sanitizeProductHtml(rawBody) : (rawBody as null | undefined);
+
+        // Shopify does not order webhooks, so a retried or late products/update
+        // can carry an older title, price, status or stock than what is stored.
+        // Same rule as upsertOrder's compare-and-set: strictly older is
+        // skipped, equal is re-applied (idempotent).
+        if (await this.isStaleProductPayload(channelId, externalId, sp.updated_at)) {
+            this.logger.debug(
+                `Stale Shopify payload for product ${externalId} (updated_at=${sp.updated_at}) — newer state already stored, skipping.`,
+            );
+            return;
+        }
+
         const product = await this.prisma.product.upsert({
             where: { channelId_externalId: { channelId, externalId } },
             create: {
                 organizationId: orgId, channelId, externalId,
-                title: sp.title, bodyHtml: sp.body_html, vendor: sp.vendor, vendorKey: vendorKey ?? null,
+                title: sp.title, handle: sp.handle ?? null, bodyHtml, vendor: sp.vendor, vendorKey: vendorKey ?? null,
                 productType: sp.product_type, status: this.mapProductStatus(sp.status),
                 tags, options: normalizedOptions,
                 publishedAt: sp.published_at ? new Date(sp.published_at) : null,
@@ -1385,7 +1550,7 @@ export class ShopifySyncService {
                 externalUpdatedAt: sp.updated_at ? new Date(sp.updated_at) : null,
             },
             update: {
-                title: sp.title, bodyHtml: sp.body_html, vendor: sp.vendor, ...vendorKeyUpdate,
+                title: sp.title, ...(sp.handle ? { handle: sp.handle } : {}), bodyHtml, vendor: sp.vendor, ...vendorKeyUpdate,
                 productType: sp.product_type, status: this.mapProductStatus(sp.status),
                 tags, options: normalizedOptions,
                 publishedAt: sp.published_at ? new Date(sp.published_at) : null,
@@ -1887,7 +2052,12 @@ export class ShopifySyncService {
         // The line-item loop used to issue up to three serial queries per item;
         // these run before the transaction opens, so the transaction below
         // contains writes only and stays short.
-        const payloadLines: any[] = Array.isArray(so.line_items) ? so.line_items : [];
+        // Lines carry what is still on the order: a line an order edit took off
+        // is left out, so the reconcile below deletes it, and one an edit
+        // reduced keeps the reduced count.
+        const payloadLines: any[] = (Array.isArray(so.line_items) ? so.line_items : [])
+            .map((li: any) => ({ ...li, quantity: quantityAfterEdits(li, so.refunds) }))
+            .filter((li: any) => li.quantity > 0);
         const variantExternalIds = [
             ...new Set(
                 payloadLines.filter((li) => li.variant_id).map((li) => String(li.variant_id)),
@@ -2058,6 +2228,7 @@ export class ShopifySyncService {
             subtotalPrice: so.subtotal_price ?? undefined,
             currency: so.currency ?? undefined,
             note: so.note, tags,
+            ...(Array.isArray(so.payment_gateway_names) ? { paymentGateways: so.payment_gateway_names.map(String) } : {}),
             cancelReason: this.mapCancelReason(so.cancel_reason),
             cancelledAt: so.cancelled_at ? new Date(so.cancelled_at) : null,
             closedAt: so.closed_at ? new Date(so.closed_at) : null,
@@ -2094,6 +2265,13 @@ export class ShopifySyncService {
         // header, line items, fulfillments and refunds were four independent
         // commits, so a failure part-way left a half-written order that the
         // Shopify retry then landed on top of.
+        // Store events this write produced, raised after the commit (live webhooks only).
+        const storeEvents: StoreEventKind[] = [];
+        let eventOrderId: string | null = null;
+        /// First sighting of an order Shopify created long ago: imported
+        /// silently, as the backfill would — see FIRST_SIGHTING_EVENT_WINDOW_MS.
+        let quietFirstSighting = false;
+        let news: OrderChildrenNews = { newlyDelivered: false, newlyOutForDelivery: false, refunds: [] };
         await this.prisma.$transaction(async (tx) => {
             let orderId: string;
 
@@ -2113,6 +2291,7 @@ export class ShopifySyncService {
                         totalDiscounts: so.total_discounts || '0', totalShippingPrice: shippingPrice,
                         shippingAddress: so.shipping_address || null, billingAddress: so.billing_address || null,
                         note: so.note, tags,
+                        paymentGateways: Array.isArray(so.payment_gateway_names) ? so.payment_gateway_names.map(String) : [],
                         cancelReason: this.mapCancelReason(so.cancel_reason),
                         cancelledAt: so.cancelled_at ? new Date(so.cancelled_at) : null,
                         closedAt: so.closed_at ? new Date(so.closed_at) : null,
@@ -2143,10 +2322,18 @@ export class ShopifySyncService {
                 });
 
                 if (!alreadySeen) {
-                    // No prior state to diff against, so an order that arrives
-                    // already paid IS the transition.
-                    if (becamePaid(null, this.mapFinancialStatus(so.financial_status))) {
-                        becamePaidOrderId = orderId;
+                    if (!isWithinWindow(so.created_at, FIRST_SIGHTING_EVENT_WINDOW_MS)) {
+                        quietFirstSighting = true;
+                    } else {
+                        // No prior state to diff against, so an order that
+                        // arrives already paid IS the transition.
+                        if (becamePaid(null, this.mapFinancialStatus(so.financial_status))) {
+                            becamePaidOrderId = orderId;
+                            storeEvents.push('paid');
+                        }
+                        storeEvents.unshift('created');
+                        if (so.cancelled_at) storeEvents.push('cancelled');
+                        if (this.mapFulfillmentStatus(so.fulfillment_status) === OrderFulfillmentStatus.FULFILLED) storeEvents.push('fulfilled');
                     }
 
                     // One 'created' entry, dated to Shopify's own created_at so
@@ -2230,6 +2417,9 @@ export class ShopifySyncService {
                     },
                     incomingUpdatedAt ?? new Date(),
                 );
+                for (const e of timelineEvents) {
+                    if (e.action === 'paid' || e.action === 'fulfilled' || e.action === 'cancelled') storeEvents.push(e.action);
+                }
                 if (timelineEvents.length > 0) {
                     await tx.orderTimelineEvent.createMany({
                         data: timelineEvents.map((e) => ({
@@ -2244,7 +2434,8 @@ export class ShopifySyncService {
                 }
             }
 
-            await this.writeOrderChildren(tx, orderId, so, payloadLines, {
+            eventOrderId = orderId;
+            news = await this.writeOrderChildren(tx, orderId, so, payloadLines, {
                 variantByExternalId,
                 productByExternalId,
             });
@@ -2275,6 +2466,23 @@ export class ShopifySyncService {
             // document without a dispatch block for ever.
             await this.ensureDispatchWarehouseFromShopify(orgId, becamePaidOrderId);
             await this.maybeAutoInvoice(orgId, becamePaidOrderId);
+        }
+
+        // Shopify has no delivered order state, but a fulfilment's carrier
+        // tracking can say so. Raised on the change only — `writeOrderChildren`
+        // reports a fulfilment it has just recorded as delivered — never
+        // because a later edit to the order still shows it delivered.
+        if (opts.live && eventOrderId && !quietFirstSighting) {
+            if (news.newlyDelivered) storeEvents.push('delivered');
+            else if (news.newlyOutForDelivery) storeEvents.push('out_for_delivery');
+            if (storeEvents.includes('fulfilled')) {
+                // As on payment: the invoice snapshots the dispatch point, so resolve it first.
+                await this.ensureDispatchWarehouseFromShopify(orgId, eventOrderId);
+                await this.invoiceService.autoInvoiceForShippedCodOrder(orgId, eventOrderId);
+            }
+            await this.commerceEvents.order(eventOrderId, storeEvents);
+            // refunds/create raises the same refunds; each refund's event is raised once.
+            for (const refund of news.refunds) await this.commerceEvents.refunded(eventOrderId, refund);
         }
 
         // Learn the shop's currency from the order that just landed. Product
@@ -2497,7 +2705,9 @@ export class ShopifySyncService {
             variantByExternalId: Map<string, { id: string; product: { vendor: string | null; vendorKey: string | null } | null }>;
             productByExternalId: Map<string, { vendor: string | null; vendorKey: string | null }>;
         },
-    ): Promise<void> {
+    ): Promise<OrderChildrenNews> {
+        let newlyDelivered = false;
+        let outForDelivery = false;
         // Current per-line statuses, read once, so `statusForShippedUnits` can
         // be given a real `previous` and never demote a line the CRM already
         // marked delivered back to merely fulfilled.
@@ -2717,8 +2927,36 @@ export class ShopifySyncService {
                     ...(lineItemIds ? { metadata: { lineItemIds } as Prisma.InputJsonValue } : {}),
                 },
             });
-        }
 
+            // Record carrier delivery once (`deliveredAt: null` guard, which
+            // also leaves a delivery the CRM marked itself alone), so the
+            // 'delivered' store event follows the change, not every edit.
+            if (ff.shipment_status === 'delivered') {
+                const recorded = await tx.orderFulfillment.updateMany({
+                    where: { orderId, externalId, deliveredAt: null },
+                    data: { deliveredAt: new Date() },
+                });
+                if (recorded.count > 0 && isWithinWindow(ff.created_at, DELIVERED_EVENT_WINDOW_MS)) {
+                    newlyDelivered = true;
+                }
+            }
+            // The same once-only guard. A carrier status that lags behind a
+            // delivery (or one the CRM marked) never reads as news.
+            if (ff.shipment_status === 'out_for_delivery') {
+                const recorded = await tx.orderFulfillment.updateMany({
+                    where: { orderId, externalId, outForDeliveryAt: null, deliveredAt: null },
+                    data: { outForDeliveryAt: new Date() },
+                });
+                if (recorded.count > 0 && isWithinWindow(ff.created_at, DELIVERED_EVENT_WINDOW_MS)) {
+                    outForDelivery = true;
+                }
+            }
+        }
+        // Not once any part of the order has been delivered: "out for delivery" after "delivered" reads as a step back.
+        const newlyOutForDelivery =
+            outForDelivery && !newlyDelivered && (await tx.orderFulfillment.count({ where: { orderId, deliveredAt: { not: null } } })) === 0;
+
+        const refunds: OrderChildrenNews['refunds'] = [];
         for (const rf of so.refunds || []) {
             // Every transaction, not just the first: a split-tender refund
             // (part card, part store credit) was silently understated by the
@@ -2731,12 +2969,15 @@ export class ShopifySyncService {
                 taxLines: (refund.taxLines ?? undefined) as Prisma.InputJsonValue | undefined,
                 adjustments: (refund.adjustments ?? undefined) as Prisma.InputJsonValue | undefined,
             };
-            await tx.orderRefund.upsert({
+            const row = await tx.orderRefund.upsert({
                 where: { orderId_externalId: { orderId, externalId: String(rf.id) } },
                 create: { orderId, externalId: String(rf.id), amount: refund.amount, currency: so.currency || 'USD', reason: rf.note, note: rf.note, lineItems: rf.refund_line_items || null, processedAt: rf.processed_at ? new Date(rf.processed_at) : null, ...refundTaxPatch },
                 update: { amount: refund.amount, note: rf.note, lineItems: rf.refund_line_items || null, ...refundTaxPatch },
+                select: { id: true, currency: true },
             });
+            if (isRefundNews(rf, refund.amount)) refunds.push({ id: row.id, amount: refund.amount.toString(), currency: row.currency });
         }
+        return { newlyDelivered, newlyOutForDelivery, refunds };
     }
 
     /**
@@ -2791,8 +3032,8 @@ export class ShopifySyncService {
             select: { id: true },
         });
 
-        await this.prisma.$transaction(async (tx) => {
-            await tx.orderRefund.upsert({
+        const row = await this.prisma.$transaction(async (tx) => {
+            const written = await tx.orderRefund.upsert({
                 where: { orderId_externalId: { orderId: order.id, externalId: String(refund.id) } },
                 create: {
                     orderId: order.id, externalId: String(refund.id), amount,
@@ -2802,6 +3043,7 @@ export class ShopifySyncService {
                     ...refundTaxPatch,
                 },
                 update: { amount, note: refund.note, lineItems: refund.refund_line_items ?? null, ...refundTaxPatch },
+                select: { id: true, currency: true },
             });
 
             if (!alreadyRecorded) {
@@ -2826,8 +3068,13 @@ export class ShopifySyncService {
                     },
                 });
             }
+            return written;
         });
         this.logger.log(`Recorded refund ${refund.id} on order ${orderExternalId}.`);
+        // orders/updated can carry the same refund first; each refund's event is raised once.
+        if (isRefundNews(refund, amount)) {
+            await this.commerceEvents.refunded(order.id, { id: row.id, amount: amount.toString(), currency: row.currency });
+        }
     }
 
     /**
@@ -3124,7 +3371,7 @@ export class ShopifySyncService {
         const [byIdentity, byEmail] = await Promise.all([
             this.prisma.customer.findUnique({
                 where: { channelId_externalId: { channelId, externalId } },
-                select: { id: true },
+                select: { id: true, externalUpdatedAt: true },
             }),
             email
                 ? this.prisma.customer.findUnique({
@@ -3135,6 +3382,14 @@ export class ShopifySyncService {
         ]);
 
         if (byIdentity) {
+            // Shopify does not order webhooks: a late customers/update must
+            // not overwrite a newer name, phone, consent or address.
+            if (isOlderShopifyPayload(updateFields.externalUpdatedAt, byIdentity.externalUpdatedAt ?? null)) {
+                this.logger.debug(
+                    `Stale Shopify payload for customer ${externalId} — newer state already stored, skipping.`,
+                );
+                return { id: byIdentity.id };
+            }
             // The Shopify customer changed their email to one another CRM
             // customer already holds. Two rows cannot share an email, and
             // merging customers is not a call a sync should make — keep this
@@ -3244,10 +3499,12 @@ export class ShopifySyncService {
      * therefore costs almost nothing and is what lets a backfill outlive the
      * one-hour token lifetime.
      */
-    private authResolver(channelId: string): ShopifyAuthResolver {
+    private authResolver(channelId: string, priority: Priority = Priority.NORMAL): ShopifyAuthResolver {
         return async () => {
             const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(channelId);
-            return { shopDomain, accessToken: token };
+            // channelId + priority ride on the context so every paginator's
+            // request inherits them without a per-call argument.
+            return { shopDomain, accessToken: token, channelId, priority };
         };
     }
 
@@ -3374,31 +3631,64 @@ export class ShopifySyncService {
     }
 
     /**
-     * Entity types the merchant has NOT switched off for this direction.
+     * True when the stored product was written from a Shopify payload strictly
+     * newer than `updatedAt`. No stored row, or no usable time, is never stale.
+     */
+    private async isStaleProductPayload(
+        channelId: string,
+        externalId: string,
+        updatedAt: unknown,
+    ): Promise<boolean> {
+        const stored = await this.prisma.product.findUnique({
+            where: { channelId_externalId: { channelId, externalId } },
+            select: { externalUpdatedAt: true },
+        });
+        return isOlderShopifyPayload(updatedAt, stored?.externalUpdatedAt ?? null);
+    }
+
+    /**
+     * Entity types switched on for this direction.
      *
-     * Read as "enabled unless a row says otherwise" so channels that predate
-     * the toggles — and any entity a merchant has never touched — keep syncing
-     * exactly as they do today without needing rows seeded for them.
+     * Pull is "enabled unless a row says otherwise", so channels that predate
+     * the toggles keep pulling without rows seeded for them. Push is the
+     * reverse — enabled only by an explicit row — because a push creates real
+     * products and orders in the merchant's live store and a Shopify order
+     * cannot be un-created. A merchant who connects a store with a CRM backlog
+     * must choose to send it; nothing goes up by default.
      */
     private async enabledEntities(
         channelId: string,
         direction: 'pull' | 'push',
     ): Promise<Set<string>> {
-        const known: readonly string[] =
-            direction === 'pull' ? PULL_ENTITY_TYPES : PUSH_ENTITY_TYPES;
+        if (direction === 'push') {
+            try {
+                const rows = await this.prisma.channelSyncState.findMany({
+                    where: { channelId, direction, enabled: true },
+                    select: { entityType: true },
+                });
+                const enabled = new Set(rows.map((r) => r.entityType));
+                return new Set(PUSH_ENTITY_TYPES.filter((e) => enabled.has(e)));
+            } catch (err) {
+                this.logger.error(
+                    `Could not read push sync toggles for channel ${channelId} — pushing nothing`,
+                    err instanceof Error ? err.stack : err,
+                );
+                return new Set();
+            }
+        }
         try {
             const rows = await this.prisma.channelSyncState.findMany({
                 where: { channelId, direction, enabled: false },
                 select: { entityType: true },
             });
             const disabled = new Set(rows.map((r) => r.entityType));
-            return new Set(known.filter((e) => !disabled.has(e)));
+            return new Set(PULL_ENTITY_TYPES.filter((e) => !disabled.has(e)));
         } catch (err) {
             this.logger.error(
-                `Could not read ${direction} sync toggles for channel ${channelId} — assuming all enabled`,
+                `Could not read pull sync toggles for channel ${channelId} — assuming all enabled`,
                 err instanceof Error ? err.stack : err,
             );
-            return new Set(known);
+            return new Set(PULL_ENTITY_TYPES);
         }
     }
 
@@ -3482,7 +3772,9 @@ export class ShopifySyncService {
     // ─── ENUM MAPPERS ───
     private mapProductStatus(s: string): ProductStatus { return ({ active: 'ACTIVE', draft: 'DRAFT', archived: 'ARCHIVED' } as any)[s] || 'ACTIVE'; }
     private mapFinancialStatus(s: string): OrderFinancialStatus { return ({ pending: 'PENDING', authorized: 'AUTHORIZED', partially_paid: 'PARTIALLY_PAID', paid: 'PAID', partially_refunded: 'PARTIALLY_REFUNDED', refunded: 'REFUNDED', voided: 'VOIDED' } as any)[s] || 'PENDING'; }
-    private mapFulfillmentStatus(s: string | null): OrderFulfillmentStatus { if (!s) return 'UNFULFILLED'; return ({ fulfilled: 'FULFILLED', partial: 'PARTIAL', restocked: 'RESTOCKED' } as any)[s] || 'UNFULFILLED'; }
+    // REST webhooks say `partial`; the GraphQL pull's lowercased
+    // displayFulfillmentStatus says `partially_fulfilled`.
+    private mapFulfillmentStatus(s: string | null): OrderFulfillmentStatus { if (!s) return 'UNFULFILLED'; return ({ fulfilled: 'FULFILLED', partial: 'PARTIAL', partially_fulfilled: 'PARTIAL', restocked: 'RESTOCKED' } as any)[s] || 'UNFULFILLED'; }
     private mapCancelReason(s: string | null): OrderCancelReason | null { if (!s) return null; return ({ customer: 'CUSTOMER', fraud: 'FRAUD', inventory: 'INVENTORY', declined: 'DECLINED', other: 'OTHER' } as any)[s] || 'OTHER'; }
     private mapCustomerState(s: string): CustomerState { return ({ enabled: 'ENABLED', disabled: 'DISABLED', declined: 'DECLINED', invited: 'INVITED' } as any)[s] || 'ENABLED'; }
 

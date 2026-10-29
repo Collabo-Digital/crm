@@ -1,8 +1,10 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Link } from "react-router";
-import { ArrowRight, TrendingUp, TrendingDown } from "lucide-react";
+import { ArrowRight, Minus, TrendingUp, TrendingDown } from "lucide-react";
 
 import { Skeleton } from "~/components/ui/skeleton";
+import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
+import { trendBadge, type TrendGoodWhen } from "~/lib/trend";
 import { cn } from "~/lib/utils";
 import type { SparklinePoint } from "./chart-line-default";
 
@@ -41,12 +43,16 @@ interface StatCardProps {
      */
     value?: ReactNode;
     /**
-     * Omit when there is no trend to show — a failed request, or a metric with
-     * no comparison period. Callers used to pass 0 in that case, which rendered
-     * a GREEN up-trend "0%" badge (`change >= 0` is true for zero), so a failed
-     * stats request looked like four healthy metrics.
+     * Signed percent change on the previous period. Omit when there is no
+     * trend to show — a failed request, or no comparison period. Zero renders
+     * a neutral "0%", never a rise.
      */
     change?: number;
+    /**
+     * Which way is good news, which decides the badge colour: a rise in sales
+     * is green, a rise in pending orders red. Defaults to "up".
+     */
+    goodWhen?: TrendGoodWhen;
     changeLabel?: string;
     /** Renders a footer link instead of a trend badge. */
     linkTo?: string;
@@ -77,6 +83,13 @@ interface StatCardProps {
     tone?: "default" | "inverted";
 }
 
+/**
+ * Add to the grid that holds a list page's KPI cards: on a phone they become
+ * one sideways-swiping line, so the list below starts on the first screen.
+ */
+export const STAT_STRIP =
+    "max-md:flex max-md:snap-x max-md:scroll-px-3 max-md:gap-3 max-md:overflow-x-auto max-md:rounded-3xl max-md:p-3 max-md:[scrollbar-width:none] max-md:[&::-webkit-scrollbar]:hidden max-md:*:w-[46%] max-md:*:shrink-0 max-md:*:snap-start max-md:*:items-start";
+
 const iconChip =
     "flex size-8 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground";
 
@@ -85,6 +98,7 @@ export function StatCard({
     label,
     value,
     change,
+    goodWhen = "up",
     changeLabel,
     linkTo,
     linkLabel,
@@ -96,45 +110,46 @@ export function StatCard({
     variant = "card",
     tone = "default",
 }: StatCardProps) {
-    const hasTrend = change !== undefined;
-    const isPositive = (change ?? 0) >= 0;
     const isInverted = tone === "inverted";
+    const trend = change === undefined ? null : trendBadge(change, goodWhen);
+    const TrendIcon =
+        trend?.direction === "up" ? TrendingUp : trend?.direction === "down" ? TrendingDown : Minus;
 
-    const trendBadge = hasTrend && (
+    // Status colours, not the brand: lime is not a status, and the old ink
+    // "up" badge read as good news whatever the figure measured.
+    const trendEl = trend && (
         <span
             className={cn(
                 "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-caption font-semibold",
-                isPositive ? "bg-ink text-brand" : "bg-danger-subtle text-danger",
-                // The default positive badge is ink-on-lime, which disappears
-                // against an inverted card.
-                isInverted && isPositive && "bg-brand text-brand-foreground"
+                STATUS_TONE_CLASSES[trend.tone]
             )}
         >
-            {isPositive ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
-            {Math.abs(change!)}%
+            <TrendIcon aria-hidden className="size-3" />
+            <span aria-hidden>{trend.text}</span>
+            <span className="sr-only">{trend.label}</span>
         </span>
     );
 
     if (variant === "inline") {
         return (
-            <div className={cn("", className)}>
+            <div data-slot="stat-card" className={cn("min-w-0", className)}>
                 <div className="flex items-center gap-3">
-                    <div className="flex flex-1 flex-col gap-2">
+                    <div className="flex min-w-0 flex-1 flex-col gap-1 md:gap-2">
                         <div className="flex items-center gap-3">
-                            <p className="text-body font-medium text-muted-foreground">{label}</p>
+                            <p className="text-body font-medium text-muted-foreground max-md:truncate">{label}</p>
                             {/* {icon && <div className={iconChip}>{icon}</div>} */}
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
                             <p className="text-subhead text-foreground">{value ?? "—"}</p>
-                            {trendBadge}
+                            {trendEl}
                         </div>
                     </div>
-                    <div className="w-full flex-1">
+                    {Boolean(sparklineData?.length) && <div className="min-w-0 flex-1">
                         <Sparkline data={sparklineData} />
-                    </div>
+                    </div>}
                 </div>
                 {changeLabel && (
-                    <p className="mt-1.5 text-caption text-muted-foreground">{changeLabel}</p>
+                    <p className="mt-0.5 text-caption text-muted-foreground max-md:truncate md:mt-1.5">{changeLabel}</p>
                 )}
             </div>
         );
@@ -142,14 +157,15 @@ export function StatCard({
 
     return (
         <div
+            data-slot="stat-card"
             className={cn(
-                "bg-card p-5 shadow-sm ring-1 ring-border",
+                "min-w-0 rounded-xl bg-card p-4 md:p-5 shadow-sm ring-1 ring-border",
                 isInverted && "bg-ink ring-ink",
                 className
             )}
         >
             <div className="flex items-start justify-between gap-4">
-                <div className="flex flex-2 flex-col gap-3">
+                <div className="flex min-w-0 flex-2 flex-col gap-3">
                     <div className="flex items-start justify-between gap-2">
                         <p
                             className={cn(
@@ -175,7 +191,7 @@ export function StatCard({
                                 {value ?? "—"}
                             </p>
                         )}
-                        {trendBadge}
+                        {trendEl}
                     </div>
                 </div>
 

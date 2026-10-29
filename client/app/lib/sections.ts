@@ -1,4 +1,5 @@
 import { useAuthStore } from "~/stores/auth.store";
+import { hasPermission } from "~/lib/permissions";
 import type { UserRole } from "~/types/api";
 
 /**
@@ -36,13 +37,14 @@ const SECTIONS: SectionDef[] = [
   { id: "customers", label: "Customers", prefix: "/orders/customers" },
   { id: "invoices", label: "Invoices", prefix: "/orders/invoices" },
   { id: "products", label: "Products", prefix: "/products" },
+  { id: "chat", label: "Inbox", prefix: "/inbox" },
+  { id: "campaigns", label: "Campaigns", prefix: "/campaigns" },
   { id: "analytics", label: "Analytics", prefix: "/analytics" },
 ];
 
 /**
- * The sections this build actually has. Chat, Campaigns and Logistics are not
- * on the production branch; their ids stay in `SectionId` because a grant list
- * may still name them.
+ * The sections this build actually has. Logistics is not on this branch; its
+ * id stays in `SectionId` because a grant list may still name it.
  */
 export const AVAILABLE_SECTIONS: SectionDef[] = SECTIONS;
 
@@ -90,7 +92,28 @@ const VENDOR_DENIED_PREFIXES = [
   "/orders/customers",
   "/orders/invoices",
   "/orders/slips",
+  "/orders/pos",
   "/products/inventory",
+];
+
+// Influencers are an outside party, like vendors, so the same shape applies:
+// an allow list rather than a deny list, because a section added tomorrow must
+// be closed to them until someone decides otherwise. /settings is here on
+// purpose: connecting their own Instagram is why an influencer has an account.
+const INFLUENCER_ALLOWED_PREFIXES = ["/settings", "/profile"];
+
+// Settings pages an influencer must not reach. Checked first, because the allow
+// list is a prefix match that would otherwise sweep every settings tab in —
+// including the team page, where they could see and manage other members.
+const INFLUENCER_DENIED_PREFIXES = [
+  "/settings/members",
+  "/settings/general",
+  "/settings/store-profile",
+  "/settings/products",
+  "/settings/orders",
+  "/settings/tax-gst",
+  "/settings/loyalty",
+  "/settings/inbox",
 ];
 
 export interface SectionAccess {
@@ -117,17 +140,59 @@ export function resolveAccess(
   };
 }
 
+// Pages whose API is ORG_MANAGERS-only (`@Roles(...ORG_MANAGERS)`) whatever the
+// member's sections. Checked first, so no other rule can open them.
+const MANAGER_ONLY_PREFIXES = ["/orders/pos/reports"];
+const MANAGER_ROLES: ReadonlyArray<UserRole | undefined> = ["OWNER", "ADMIN", "MANAGER"];
+
 export function canAccessPath(access: SectionAccess, pathname: string): boolean {
+  if (
+    MANAGER_ONLY_PREFIXES.some((p) => isUnder(pathname, p)) &&
+    !MANAGER_ROLES.includes(access.role)
+  ) {
+    return false;
+  }
+  // Packing is opened by its permission, not by the Orders section: a
+  // "Packer" holds inventory.pack without section.orders. Vendors never.
+  if (isUnder(pathname, "/orders/packing")) {
+    const can = (key: "inventory.pack" | "inventory.reports") =>
+      hasPermission(access.role, access.grants, key);
+    return can("inventory.pack") && (!isUnder(pathname, "/orders/packing/accuracy") || can("inventory.reports"));
+  }
   if (access.role === "VENDOR") {
     return (
       !VENDOR_DENIED_PREFIXES.some((p) => isUnder(pathname, p)) &&
       VENDOR_ALLOWED_PREFIXES.some((p) => isUnder(pathname, p))
     );
   }
+  if (access.role === "INFLUENCER") {
+    // Their own Instagram automations open only while they hold
+    // `campaigns.view`, so revoking that grant closes them with no code
+    // change. The rest of Campaigns (broadcasts, templates, segments) is the
+    // store's, never theirs.
+    const allowed = [
+      ...INFLUENCER_ALLOWED_PREFIXES,
+      ...(access.grants.includes("campaigns.view") ? ["/campaigns/automations"] : []),
+    ];
+    return (
+      !INFLUENCER_DENIED_PREFIXES.some((p) => isUnder(pathname, p)) &&
+      allowed.some((p) => isUnder(pathname, p))
+    );
+  }
 
   const section = sectionForPath(pathname);
   if (!section) return true;
   if (access.sections !== "all" && !access.sections.has(section)) return false;
+
+  // Campaigns, like the stock pages below, also needs its own key: the
+  // campaign API refuses an AGENT / VIEWER without `campaigns.view`.
+  if (
+    isUnder(pathname, "/campaigns") &&
+    isSectionScopedRole(access.role) &&
+    !access.grants.includes("campaigns.view")
+  ) {
+    return false;
+  }
 
   // Inventory sits inside Products but keeps its own key: the stock API
   // refuses an AGENT / VIEWER without `inventory.view` whatever their sections.
@@ -143,6 +208,10 @@ export function canAccessPath(access: SectionAccess, pathname: string): boolean 
 
 /** Where a member lands: their first open section, in nav order. */
 export function firstAllowedPath(access: SectionAccess): string {
+  // An influencer has no dashboard; their work starts at their own channels.
+  if (access.role === "INFLUENCER") return "/settings/channels";
+  // A Packer's work is the packing list, whichever section comes first in the nav.
+  if (canAccessPath(access, "/orders/packing") && !canAccessPath(access, "/orders")) return "/orders/packing";
   return (
     AVAILABLE_SECTIONS.find((s) => canAccessPath(access, s.prefix))?.prefix ??
     "/profile"

@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { oneOf, useSessionState } from "~/hooks/use-session-state";
 import { Package, RefreshCw } from "lucide-react";
 import { cn } from "~/lib/utils";
+import { formatDateTime } from "~/lib/format-date";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -11,6 +12,7 @@ import {
   useRefreshAnalytics,
 } from "~/hooks/use-analytics-queries";
 import { QueryErrorState } from "~/components/app/query-error-state";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import type { SparklinePoint } from "~/components/app/chart-line-default";
 import type {
   AnalyticsRange,
@@ -37,9 +39,9 @@ export function meta() {
 /**
  * Pixel-first analytics dashboard.
  *
- * Channel filter (All / Shopify / Instagram / WhatsApp) scopes the read to
- * that platform's snapshot rows. Only Shopify writes data today — the other
- * filters return an empty-but-valid shape until their pipelines land.
+ * Only the Shopify storefront writes data today, so there is no channel
+ * filter: Instagram and WhatsApp options could only ever show nothing. The
+ * service still takes a channel for when another pipeline lands.
  */
 export default function AnalyticsPage() {
   const [range, setRange] = useSessionState<AnalyticsRange>(
@@ -47,15 +49,13 @@ export default function AnalyticsPage() {
     "7d",
     oneOf(["7d", "30d", "6m", "12m"]),
   );
-  const [channel, setChannel] = useSessionState<AnalyticsChannelFilter>(
-    "analytics.channel",
-    "all",
-    oneOf(["all", "shopify", "instagram", "whatsapp"]),
-  );
+  const channel: AnalyticsChannelFilter = "all";
 
   const { data, isLoading, isFetching, isError, isPlaceholderData, refetch } =
     useAnalyticsDashboard({ range, channel });
   const refresh = useRefreshAnalytics();
+  // Refreshing calls Shopify and rewrites the figures; the server refuses it to viewers.
+  const canRefresh = useCurrentRole().role !== "VIEWER";
   // First load only. A range/channel change keeps the previous data on screen
   // (dimmed via `stale`) rather than going back to skeletons.
   const initialLoading = isLoading && !data;
@@ -71,9 +71,9 @@ export default function AnalyticsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Analytics</h1>
+          <h1 className="font-heading text-page-title text-foreground">Analytics</h1>
           <p className="text-sm text-muted-foreground">
-            Storefront behaviour tracked by the Web Pixel.
+            What shoppers do on your Shopify store: visits, product views, carts and checkouts.
             {data?.meta.lastRefreshedAt ? (
               <span className="ml-2 text-xs">
                 · Last refreshed {formatLastRefreshed(data.meta.lastRefreshedAt)}
@@ -81,23 +81,9 @@ export default function AnalyticsPage() {
             ) : null}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Select
-            value={channel}
-            onValueChange={(v) => setChannel(v as AnalyticsChannelFilter)}
-          >
-            <SelectTrigger className="h-8 w-[140px] rounded-lg border border-input bg-white dark:bg-gray-900 dark:text-gray-300 px-3 text-xs text-muted-foreground shadow-sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Channels</SelectItem>
-              <SelectItem value="shopify">Shopify</SelectItem>
-              <SelectItem value="instagram">Instagram</SelectItem>
-              <SelectItem value="whatsapp">WhatsApp</SelectItem>
-            </SelectContent>
-          </Select>
+        <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:w-auto">
           <Select value={range} onValueChange={(v) => setRange(v as AnalyticsRange)}>
-            <SelectTrigger className="h-8 w-[135px] rounded-lg border border-input bg-white dark:bg-gray-900 dark:text-gray-300 px-3 text-xs text-muted-foreground shadow-sm">
+            <SelectTrigger aria-label="Period" className="h-8 w-full min-w-0 rounded-lg border border-input bg-card px-3 text-caption text-muted-foreground shadow-sm sm:w-36">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -107,15 +93,18 @@ export default function AnalyticsPage() {
               <SelectItem value="12m">Last 12 months</SelectItem>
             </SelectContent>
           </Select>
-          <button
-            type="button"
-            onClick={() => refresh.mutate({ range, channel })}
-            disabled={refresh.isPending}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-input bg-white dark:bg-gray-900 px-3 text-xs font-medium text-gray-700 dark:text-gray-300 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-800/60 disabled:opacity-60"
-          >
-            <RefreshCw className={`size-3.5 ${refresh.isPending ? "animate-spin" : ""}`} />
-            Refresh
-          </button>
+          {canRefresh && (
+            <button
+              type="button"
+              onClick={() => refresh.mutate({ range, channel })}
+              disabled={refresh.isPending}
+              aria-label="Refresh analytics"
+              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-input bg-card px-3 text-caption font-medium text-foreground shadow-sm hover:bg-muted disabled:opacity-60"
+            >
+              <RefreshCw className={`size-3.5 ${refresh.isPending ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -149,8 +138,10 @@ export default function AnalyticsPage() {
                 variant="inline"
                 label={label}
                 value={value.toLocaleString()}
-                change={change}
-                changeLabel={changeLabel}
+                change={change ?? undefined}
+                // Fewer abandoned carts is the good news.
+                goodWhen={key === "totalAbandonedCarts" ? "down" : "up"}
+                changeLabel={change === null ? "None in the previous period" : changeLabel}
                 sparklineData={sparklineFor(key, trend)}
                 className="flex-1"
               />
@@ -250,7 +241,7 @@ function formatLastRefreshed(iso: string): string {
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
-  return `on ${then.toLocaleDateString()} at ${then.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return `on ${formatDateTime(iso)}`;
 }
 
 /**
@@ -319,8 +310,8 @@ function TopList({
           ))
         ) : rows.length === 0 ? (
           <div className="px-5 py-6 text-xs text-muted-foreground">
-            No data for this period yet. Data appears after the Web Pixel
-            starts sending events and Refresh (or the hourly rollup) runs.
+            No data for this period yet. It appears once shoppers visit your
+            Shopify store; Collabo updates it every hour, or press Refresh.
           </div>
         ) : (
           rows.map((row) => (

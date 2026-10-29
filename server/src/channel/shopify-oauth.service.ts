@@ -7,7 +7,7 @@ import {
     Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ChannelPlatform, ChannelStatus, SyncStatus, Prisma } from '@prisma/client';
+import { Channel, ChannelPlatform, ChannelStatus, SyncStatus, Prisma } from '@prisma/client';
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -141,8 +141,8 @@ export class ShopifyOAuthService {
         // A DISCONNECTED channel (app uninstalled / dead token) may
         // reconnect — the callback then updates the row instead of creating
         // a duplicate (which would trip the org+platform unique constraint).
-        const existing = await this.prisma.channel.findUnique({
-            where: { organizationId_platform: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY } },
+        const existing = await this.prisma.channel.findFirst({
+            where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
         });
         if (existing && existing.status === ChannelStatus.CONNECTED && existing.credentials) {
             // Same shop re-authing (e.g. to grant newly added scopes) is fine —
@@ -326,10 +326,7 @@ export class ShopifyOAuthService {
         try {
             channel = await this.prisma.$transaction(async (tx) => {
                 const ch = stateData.reconnectChannelId
-                    ? await tx.channel.update({
-                        where: { id: stateData.reconnectChannelId },
-                        data: channelData,
-                    })
+                    ? await this.reuseChannelRow(tx, stateData.reconnectChannelId, channelData)
                     : await tx.channel.create({
                         data: {
                             organizationId: stateData.orgId,
@@ -375,6 +372,71 @@ export class ShopifyOAuthService {
     }
 
     /**
+     * Point an existing SHOPIFY channel row at the store in `channelData`.
+     *
+     * The org has one SHOPIFY row, so connecting a DIFFERENT store (a test
+     * store swapped for the live one) reuses it. Its sync position then
+     * belongs to the old store: with `backfillDone` and a watermark kept, the
+     * new store's first sync only asked for records changed since the old
+     * store was last synced, and most of its catalogue, customers and orders
+     * never arrived. For a different store the pull restarts with a full
+     * backfill, saved cursors and the cached primary location are dropped, and
+     * the push toggles go back off so nothing is sent to the new store until
+     * the merchant chooses. The same store reconnecting resumes as before.
+     *
+     * The row's previous store is `externalStoreId`, or, once disconnect has
+     * released that claim, `metadata.externalAccountId`. Unknown counts as
+     * different: a needless full backfill is only slow, a skipped one loses data.
+     */
+    private async reuseChannelRow(
+        tx: Prisma.TransactionClient,
+        channelId: string,
+        channelData: Prisma.ChannelUncheckedUpdateInput & { externalStoreId: string },
+    ): Promise<Channel> {
+        const prev = await tx.channel.findUniqueOrThrow({
+            where: { id: channelId },
+            select: { externalStoreId: true, metadata: true },
+        });
+        const meta =
+            prev.metadata && typeof prev.metadata === 'object' && !Array.isArray(prev.metadata)
+                ? (prev.metadata as Record<string, unknown>)
+                : {};
+        const previousStoreId =
+            prev.externalStoreId ??
+            (typeof meta.externalAccountId === 'string' ? meta.externalAccountId : null);
+        if (previousStoreId === channelData.externalStoreId) {
+            return tx.channel.update({ where: { id: channelId }, data: channelData });
+        }
+
+        await tx.channelSyncState.updateMany({
+            where: { channelId, direction: 'pull' },
+            data: { watermark: null, backfillDone: false, windowStart: null },
+        });
+        await tx.channelSyncState.updateMany({
+            where: { channelId, direction: 'push' },
+            data: { enabled: false },
+        });
+        await tx.syncLog.updateMany({
+            where: { channelId, cursor: { not: null } },
+            data: { cursor: null },
+        });
+        // The cached primary location belongs to the old store.
+        const keptMeta = { ...meta };
+        delete keptMeta.shopifyLocationId;
+        this.logger.log(
+            `Channel ${channelId} now points at a different Shopify store (${previousStoreId ?? 'unknown'} → ${channelData.externalStoreId}); its sync restarts with a full backfill.`,
+        );
+        return tx.channel.update({
+            where: { id: channelId },
+            data: {
+                ...channelData,
+                lastSyncedAt: null,
+                metadata: keptMeta as Prisma.InputJsonValue,
+            },
+        });
+    }
+
+    /**
      * What a channel's stored grant is short of, if anything.
      *
      * Shopify pins a token to the scopes it was issued with, so widening the
@@ -407,8 +469,8 @@ export class ShopifyOAuthService {
         // "Disconnect it first" as the only way out. Reconnecting the same
         // domain, or replacing a DISCONNECTED channel, updates the row in
         // place (which is also what the public-app Reconnect button does).
-        const existing = await this.prisma.channel.findUnique({
-            where: { organizationId_platform: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY } },
+        const existing = await this.prisma.channel.findFirst({
+            where: { organizationId: orgId, platform: ChannelPlatform.SHOPIFY },
         });
         const sameStore =
             existing?.externalStoreUrl === `https://${shopDomain}`;
@@ -511,13 +573,10 @@ export class ShopifyOAuthService {
         // reason.
         const channel = await this.prisma.$transaction(async (tx) => {
             const ch = existing
-                ? await tx.channel.update({
-                    where: { id: existing.id },
-                    // syncStatus / lastSyncedAt are deliberately left alone: a
-                    // reconnect should resume where the sync got to rather
-                    // than re-backfill from scratch.
-                    data: channelData,
-                })
+                // syncStatus / lastSyncedAt are deliberately left alone for the
+                // same store: a reconnect should resume where the sync got to
+                // rather than re-backfill from scratch.
+                ? await this.reuseChannelRow(tx, existing.id, channelData)
                 : await tx.channel.create({
                     data: {
                         organizationId: orgId,
@@ -557,7 +616,7 @@ export class ShopifyOAuthService {
     // enqueued a Shopify sync job for the wrong channel id); fail fast with a
     // clear message so the caller can be fixed, instead of silently flipping
     // unrelated channels to DISCONNECTED.
-    async getAccessToken(channelId: string): Promise<{ token: string; shopDomain: string }> {
+    async getAccessToken(channelId: string): Promise<{ token: string; shopDomain: string; channelId: string }> {
         const channel = await this.prisma.channel.findUnique({ where: { id: channelId } });
         if (!channel) {
             throw new BadRequestException(`Channel ${channelId} not found`);
@@ -593,14 +652,14 @@ export class ShopifyOAuthService {
 
         // Legacy custom-app channels carry a non-expiring token — no refresh.
         if (!creds.refreshToken || !creds.accessTokenExpiresAt) {
-            return { token: this.encryption.decrypt(creds.accessToken), shopDomain: creds.shopDomain };
+            return { token: this.encryption.decrypt(creds.accessToken), shopDomain: creds.shopDomain, channelId };
         }
 
         // Expiring offline token (public app, 1h TTL): return while it still
         // has >2 minutes of life, otherwise refresh before use.
         const expiresAt = new Date(creds.accessTokenExpiresAt).getTime();
         if (expiresAt - Date.now() > 2 * 60 * 1000) {
-            return { token: this.encryption.decrypt(creds.accessToken), shopDomain: creds.shopDomain };
+            return { token: this.encryption.decrypt(creds.accessToken), shopDomain: creds.shopDomain, channelId };
         }
 
         return this.refreshAccessToken(channelId);
@@ -612,7 +671,7 @@ export class ShopifyOAuthService {
      * one and consumes the old — so concurrent workers are serialised through
      * a short Redis lock; losers wait and re-read what the winner persisted.
      */
-    private async refreshAccessToken(channelId: string): Promise<{ token: string; shopDomain: string }> {
+    private async refreshAccessToken(channelId: string): Promise<{ token: string; shopDomain: string; channelId: string }> {
         const lockKey = `oauth:shopify:refresh:${channelId}`;
         const gotLock = await this.redis.acquireLock(lockKey, 15);
         if (!gotLock) {
@@ -639,7 +698,7 @@ export class ShopifyOAuthService {
                 ? new Date(current.accessTokenExpiresAt).getTime()
                 : 0;
             if (expiresAt - Date.now() > 2 * 60 * 1000) {
-                return { token: this.encryption.decrypt(current.accessToken), shopDomain: current.shopDomain };
+                return { token: this.encryption.decrypt(current.accessToken), shopDomain: current.shopDomain, channelId };
             }
 
             // Channels connected with a merchant-supplied custom app carry
@@ -709,7 +768,7 @@ export class ShopifyOAuthService {
             });
 
             this.logger.log(`Refreshed Shopify access token for channel ${channelId}`);
-            return { token: data.access_token, shopDomain: current.shopDomain };
+            return { token: data.access_token, shopDomain: current.shopDomain, channelId };
         } finally {
             await this.redis.del(lockKey);
         }

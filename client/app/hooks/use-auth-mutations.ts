@@ -7,6 +7,8 @@ import { useAuthStore } from "~/stores/auth.store";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { readTokenOrgId } from "~/lib/jwt";
 import { getLandingPath } from "~/lib/sections";
+import { defaultGrantsForRole } from "~/lib/permissions";
+import { safeNext, withNext } from "~/lib/return-path";
 import type {
   SignupRequest,
   LoginRequest,
@@ -45,15 +47,20 @@ function initialOrgId(
 
 // ─── Signup ──────────────────────────────────────────────────────────────────
 
+/** The verification page for `userId`, keeping the page to return to after it. */
+function verifyEmailPath(userId: string, next: string | null | undefined) {
+  return withNext(`/auth/verify-email?userId=${encodeURIComponent(userId)}`, next);
+}
+
 /** Mutation hook for new user registration. Navigates to email verification on success. */
-export function useSignupMutation() {
+export function useSignupMutation(next?: string | null) {
   const navigate = useNavigate();
 
   return useMutation({
     mutationFn: (data: SignupRequest) => authService.signup(data),
     onSuccess: (data) => {
       toast.success("Account created! Please verify your email.");
-      navigate(`/auth/verify-email?userId=${data.userId}`);
+      navigate(verifyEmailPath(data.userId, next));
     },
     onError: (error) => handleMutationError(error),
   });
@@ -62,7 +69,7 @@ export function useSignupMutation() {
 // ─── Login ───────────────────────────────────────────────────────────────────
 
 /** Mutation hook for user login. Sets auth state and navigates to the appropriate post-auth route. */
-export function useLoginMutation() {
+export function useLoginMutation(next?: string | null) {
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
 
@@ -74,7 +81,10 @@ export function useLoginMutation() {
       // setAuth normalizes them — use the org id directly
       const orgId = initialOrgId(data.accessToken, data.organizations);
       if (orgId) useAuthStore.getState().setCurrentOrg(orgId);
-      navigate(resolvePostAuthRoute(data.nextStep));
+      // An invitation sends people here to prove who they are, then expects
+      // them back. Without this the token is lost at the login screen and the
+      // invitation looks broken.
+      navigate(safeNext(next) ?? resolvePostAuthRoute(data.nextStep));
     },
     onError: (error) => {
       if (isAxiosError(error)) {
@@ -83,7 +93,7 @@ export function useLoginMutation() {
           const userId = error.response.data?.userId;
           if (userId) {
             toast.info("Please verify your email first.");
-            navigate(`/auth/verify-email?userId=${userId}`);
+            navigate(verifyEmailPath(userId, next));
             return;
           }
         }
@@ -102,7 +112,7 @@ export function useLoginMutation() {
 // ─── Email Verification ─────────────────────────────────────────────────────
 
 /** Mutation hook for email verification via OTP code. Sets auth state on success. */
-export function useVerifyEmailMutation() {
+export function useVerifyEmailMutation(next?: string | null) {
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
 
@@ -114,7 +124,9 @@ export function useVerifyEmailMutation() {
       const orgId = initialOrgId(data.accessToken, data.organizations);
       if (orgId) useAuthStore.getState().setCurrentOrg(orgId);
       toast.success("Email verified successfully!");
-      navigate(resolvePostAuthRoute(data.nextStep));
+      // Without a workspace yet, AuthGuard sends them through onboarding and
+      // opens this page after it.
+      navigate(safeNext(next) ?? resolvePostAuthRoute(data.nextStep));
     },
     onError: (error) => handleMutationError(error),
   });
@@ -171,8 +183,11 @@ export function useAcceptInviteMutation() {
     mutationFn: (data: AcceptInviteRequest) =>
       authService.acceptInvite(data),
     onSuccess: (data) => {
+      // The session now belongs to the invitee. Another account's profile and
+      // workspaces (left signed in on this browser) must not carry over.
+      const sameUser = existingUser?.id === data.user.id;
       // Build user from response (use existing user data if available for richer profile)
-      const user = existingUser
+      const user = sameUser && existingUser
         ? { ...existingUser, ...data.user }
         : {
             id: data.user.id,
@@ -187,13 +202,18 @@ export function useAcceptInviteMutation() {
             updatedAt: new Date().toISOString(),
           };
 
-      // Build org membership from the invite response
+      // Build org membership from the invite response.
+      //
+      // The role comes from the response, not a guess. It was hardcoded to
+      // AGENT, so an accepted invitation to any other role put the wrong one in
+      // the store and every role check downstream — the navigation, the
+      // channels page, the route guards — read it until the next full reload.
       const invitedOrgMembership = {
         id: crypto.randomUUID(),
         organizationId: data.organization.id,
-        role: data.organization.role ?? ("AGENT" as const),
+        role: data.role,
         vendorScope: data.organization.vendorScope ?? null,
-        permissions: data.organization.permissions ?? [],
+        permissions: data.organization.permissions ?? defaultGrantsForRole(data.role),
         isActive: true,
         organization: {
           id: data.organization.id,
@@ -213,18 +233,24 @@ export function useAcceptInviteMutation() {
         },
       };
 
-      // Merge with existing orgs (don't replace — user may already belong to other orgs)
-      const alreadyHasOrg = existingOrgs.some(
+      // Merge with the same user's orgs (don't replace — they may already
+      // belong to others).
+      const ownOrgs = sameUser ? existingOrgs : [];
+      const alreadyHasOrg = ownOrgs.some(
         (o) => o.organization.id === data.organization.id,
       );
       const mergedOrgs = alreadyHasOrg
-        ? existingOrgs
-        : [...existingOrgs, invitedOrgMembership];
+        ? ownOrgs
+        : [...ownOrgs, invitedOrgMembership];
 
       setAuth(user, data.accessToken, data.refreshToken, mergedOrgs);
+      if (!sameUser) useAuthStore.getState().setImpersonation(null);
       useAuthStore.getState().setCurrentOrg(data.organization.id);
       toast.success(`Joined ${data.organization.name} successfully!`);
-      navigate(getLandingPath());
+      // An influencer has no dashboard: it is one of the sections their role
+      // cannot reach, so landing there would bounce them straight out again.
+      // Send them where their work actually starts.
+      navigate(data.role === "INFLUENCER" ? "/settings/channels" : getLandingPath());
     },
     onError: (error) => handleMutationError(error),
   });

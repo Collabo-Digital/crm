@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -31,7 +31,33 @@ import {
   parseStoreProfileSettings,
   StoreProfileSettingsSchema,
 } from './schemas/store-profile-settings.schema';
+import {
+  InvoiceSettings,
+  UpdateInvoiceSettingsInput,
+  parseInvoiceSettings,
+  InvoiceSettingsSchema,
+} from './schemas/invoice-settings.schema';
 import { generatedBarcodeProductsOutOfSyncStampSql } from '../channel/product-sync-stamp.util';
+import { detectCatalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util';
+import {
+  IMAGE_STORAGE,
+  type IImageStorage,
+  type UploadedImageMeta,
+} from '../product/image-storage/image-storage.interface';
+import { imageTypeOf } from '../product/image-storage/image-type.util';
+
+/** The parts of a Multer upload the logo and signature routes read. */
+export interface SettingsImageUpload {
+  buffer: Buffer;
+  originalname: string;
+  size: number;
+}
+
+/** A logo prints on every document; a signature fills one corner of one. */
+const IMAGE_UPLOADS = {
+  logo: { name: 'The logo', maxBytes: 1024 * 1024, max: '1 MB' },
+  signature: { name: 'The signature', maxBytes: 300 * 1024, max: '300 KB' },
+} as const;
 
 /**
  * Resolves and persists per-org settings. Each domain (product, order, …)
@@ -44,7 +70,10 @@ import { generatedBarcodeProductsOutOfSyncStampSql } from '../channel/product-sy
 export class OrganizationSettingsService {
   private readonly logger = new Logger(OrganizationSettingsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(IMAGE_STORAGE) private readonly imageStorage: IImageStorage,
+  ) {}
 
   /**
    * Return the org's full settings, applying schema defaults to any missing
@@ -57,17 +86,31 @@ export class OrganizationSettingsService {
     inventorySettings: InventorySettings;
     taxSettings: TaxSettings;
     storeProfileSettings: StoreProfileSettings;
+    invoiceSettings: InvoiceSettings;
+    /**
+     * How orders and drafts read a catalogue or typed price: `effective` is
+     * `taxSettings.pricesIncludeTax` once chosen, else `detected` — what the
+     * store's Shopify orders say, null with none — else false.
+     */
+    pricesIncludeTax: { effective: boolean; detected: boolean | null };
   }> {
     this.assertOrgId(orgId);
     const row = await this.prisma.organizationSettings.findUnique({
       where: { organizationId: orgId },
     });
+    const taxSettings = parseTaxSettings(row?.taxSettings ?? null);
+    const detected = await detectCatalogPricesIncludeTax(this.prisma, orgId);
     return {
       productSettings: parseProductSettings(row?.productSettings ?? null),
       orderSettings: parseOrderSettings(row?.orderSettings ?? null),
       inventorySettings: parseInventorySettings(row?.inventorySettings ?? null),
-      taxSettings: parseTaxSettings(row?.taxSettings ?? null),
+      taxSettings,
       storeProfileSettings: parseStoreProfileSettings(row?.storeProfileSettings ?? null),
+      invoiceSettings: parseInvoiceSettings(row?.invoiceSettings ?? null),
+      pricesIncludeTax: {
+        effective: taxSettings.pricesIncludeTax ?? detected ?? false,
+        detected,
+      },
     };
   }
 
@@ -92,8 +135,104 @@ export class OrganizationSettingsService {
     this.assertOrgId(orgId);
     const current = await this.getStoreProfileSettings(orgId);
     const next = StoreProfileSettingsSchema.parse({ ...current, ...patch });
+    // A typed URL replaces an uploaded logo. The stored file no longer backs
+    // `logoUrl`, so PDFs, which embed only uploaded files, print the name.
+    if (next.logoUrl !== current.logoUrl) next.logoStorageKey = '';
     await this.upsert(orgId, {
       storeProfileSettings: next as Prisma.InputJsonValue,
+    });
+    return next;
+  }
+
+  /**
+   * Store an uploaded logo and point the store profile at it. The file it
+   * replaces is kept: invoices issued with it go on printing it.
+   */
+  async uploadLogo(
+    orgId: string,
+    file: SettingsImageUpload | undefined,
+  ): Promise<StoreProfileSettings> {
+    this.assertOrgId(orgId);
+    const stored = await this.storeImage(orgId, file, IMAGE_UPLOADS.logo);
+    const current = await this.getStoreProfileSettings(orgId);
+    const next = StoreProfileSettingsSchema.parse({
+      ...current,
+      logoUrl: stored.url,
+      logoStorageKey: stored.storageKey,
+    });
+    await this.upsert(orgId, {
+      storeProfileSettings: next as Prisma.InputJsonValue,
+    });
+    return next;
+  }
+
+  /** Clear the logo. The file is kept: issued invoices may print it. */
+  async removeLogo(orgId: string): Promise<StoreProfileSettings> {
+    this.assertOrgId(orgId);
+    const current = await this.getStoreProfileSettings(orgId);
+    const next = StoreProfileSettingsSchema.parse({
+      ...current,
+      logoUrl: '',
+      logoStorageKey: '',
+    });
+    await this.upsert(orgId, {
+      storeProfileSettings: next as Prisma.InputJsonValue,
+    });
+    return next;
+  }
+
+  /** Read just the invoice design. Convenience for the settings page and PDFs. */
+  async getInvoiceSettings(orgId: string): Promise<InvoiceSettings> {
+    this.assertOrgId(orgId);
+    const row = await this.prisma.organizationSettings.findUnique({
+      where: { organizationId: orgId },
+      select: { invoiceSettings: true },
+    });
+    return parseInvoiceSettings(row?.invoiceSettings ?? null);
+  }
+
+  /**
+   * Merge-patch the invoice design; validate via Zod before write. The patch
+   * schema has no `signature`: only its upload and delete routes change it.
+   */
+  async updateInvoiceSettings(
+    orgId: string,
+    patch: UpdateInvoiceSettingsInput,
+  ): Promise<InvoiceSettings> {
+    this.assertOrgId(orgId);
+    const current = await this.getInvoiceSettings(orgId);
+    const next = InvoiceSettingsSchema.parse({ ...current, ...patch });
+    await this.upsert(orgId, {
+      invoiceSettings: next as Prisma.InputJsonValue,
+    });
+    return next;
+  }
+
+  /** Store an uploaded signature image. The file it replaces is kept, like the logo's. */
+  async uploadSignature(
+    orgId: string,
+    file: SettingsImageUpload | undefined,
+  ): Promise<InvoiceSettings> {
+    this.assertOrgId(orgId);
+    const stored = await this.storeImage(orgId, file, IMAGE_UPLOADS.signature);
+    const current = await this.getInvoiceSettings(orgId);
+    const next = InvoiceSettingsSchema.parse({
+      ...current,
+      signature: { storageKey: stored.storageKey, url: stored.url },
+    });
+    await this.upsert(orgId, {
+      invoiceSettings: next as Prisma.InputJsonValue,
+    });
+    return next;
+  }
+
+  /** Clear the signature image. The file is kept: issued documents may print it. */
+  async removeSignature(orgId: string): Promise<InvoiceSettings> {
+    this.assertOrgId(orgId);
+    const current = await this.getInvoiceSettings(orgId);
+    const next = InvoiceSettingsSchema.parse({ ...current, signature: null });
+    await this.upsert(orgId, {
+      invoiceSettings: next as Prisma.InputJsonValue,
     });
     return next;
   }
@@ -173,11 +312,16 @@ export class OrganizationSettingsService {
    * flow, at the very end of the seed job (so legacy and bucket paths never
    * overlap for an org).
    */
-  async setWarehousingEnabled(orgId: string, enabled: boolean): Promise<InventorySettings> {
+  async setWarehousingEnabled(
+    orgId: string,
+    enabled: boolean,
+    extra: Partial<Pick<InventorySettings, 'linkShopifyLocations'>> = {},
+  ): Promise<InventorySettings> {
     this.assertOrgId(orgId);
     const current = await this.getInventorySettings(orgId);
     const next = InventorySettingsSchema.parse({
       ...current,
+      ...extra,
       warehousingEnabled: enabled,
     });
     await this.upsert(orgId, {
@@ -204,11 +348,19 @@ export class OrganizationSettingsService {
    *
    * Shallow spread, like its siblings — TaxSettings is deliberately flat so a
    * partial patch cannot drop sibling keys.
+   *
+   * Checked on the merged result, so turning one of composition and
+   * e-invoicing on while the other is saved on is refused too.
    */
   async updateTaxSettings(orgId: string, patch: UpdateTaxSettingsInput): Promise<TaxSettings> {
     this.assertOrgId(orgId);
     const current = await this.getTaxSettings(orgId);
     const next = TaxSettingsSchema.parse({ ...current, ...patch });
+    if (next.composition && next.eInvoicing) {
+      throw new BadRequestException(
+        "Composition and e-invoicing can't both be on: the composition scheme ends far below the e-invoicing limit.",
+      );
+    }
     await this.upsert(orgId, {
       taxSettings: next as Prisma.InputJsonValue,
     });
@@ -256,6 +408,35 @@ export class OrganizationSettingsService {
     if (!orgId) {
       throw new BadRequestException('Organization context required to read or write settings.');
     }
+  }
+
+  /**
+   * Check an uploaded image and store it. The type comes from the file's
+   * first bytes, never the client's MIME type or name, and is what the
+   * stored file's extension follows.
+   */
+  private async storeImage(
+    orgId: string,
+    file: SettingsImageUpload | undefined,
+    rule: (typeof IMAGE_UPLOADS)[keyof typeof IMAGE_UPLOADS],
+  ): Promise<UploadedImageMeta> {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Choose an image to upload.');
+    }
+    const mimeType = imageTypeOf(file.buffer);
+    if (!mimeType) {
+      throw new BadRequestException(`${rule.name} must be a PNG or JPEG image.`);
+    }
+    if (file.size > rule.maxBytes) {
+      throw new BadRequestException(`${rule.name} can be at most ${rule.max}.`);
+    }
+    return this.imageStorage.upload({
+      orgId,
+      buffer: file.buffer,
+      originalName: file.originalname,
+      mimeType,
+      size: file.size,
+    });
   }
 
   private async upsert(
