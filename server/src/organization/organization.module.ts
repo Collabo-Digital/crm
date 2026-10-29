@@ -19,8 +19,9 @@ import { InvitesController } from './invites.controller';
 // inside a transaction to gate org creation behind a paid subscription.
 //
 // WHY import ChannelModule and MessagingModule?
-// Deleting a workspace disconnects its channels; removing a member tells open
-// inboxes about the conversations released. Neither imports this module.
+// Deleting a workspace disconnects its channels, and removing an influencer
+// theirs; removing a member tells open inboxes about the conversations
+// released. Neither imports this module.
 @Module({
   imports: [UserModule, BillingModule, ChannelModule, MessagingModule],
   controllers: [OrganizationController, MembersController, InvitesController, InfluencersController],

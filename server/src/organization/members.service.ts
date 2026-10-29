@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { extractGrants, sectionGrants, SECTION_SCOPED_ROLES } from '../auth/permissions';
+import { ChannelService } from '../channel/channel.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -16,6 +17,7 @@ export class MembersService {
         private readonly prisma: PrismaService,
         private readonly redis: RedisService,
         private readonly inboxEvents: InboxEventsService,
+        private readonly channels: ChannelService,
     ) { }
 
     // ─── LIST MEMBERS ───
@@ -145,6 +147,11 @@ export class MembersService {
         if (!member) throw new NotFoundException('Member not found');
         if (member.role === UserRole.OWNER) {
             throw new ForbiddenException('Cannot remove the organization owner');
+        }
+        // An influencer's Instagram leaves with them. Done first, so a failure
+        // leaves them a member and the removal can simply be tried again.
+        if (member.role === UserRole.INFLUENCER) {
+            await this.channels.disconnectOwnedBy([orgId], member.userId);
         }
 
         const { removed, released } = await this.prisma.$transaction(async (tx) => ({

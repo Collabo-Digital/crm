@@ -4,13 +4,11 @@ import { ChannelPlatform, UserRole } from '@prisma/client';
 
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { INVITE_MANAGERS } from '../auth/decorators/roles.decorator';
 import { OrganizationService } from './organization.service';
 import { InvitesService } from './invites.service';
 import { SendInviteDto } from './dto/send-invite.dto';
 import { InviteInfluencerDto } from './dto/invite-influencer.dto';
-
-/** Who may invite anyone, including influencers. */
-const INVITE_MANAGERS: UserRole[] = [UserRole.OWNER, UserRole.ADMIN];
 
 // Route: /api/v1/organizations/:orgId/invites
 // All endpoints require JWT + OWNER/ADMIN role

@@ -8,6 +8,7 @@ import {
     readTokenExpiry,
     classifyMetaCallbackError,
     isActive,
+    pickRoutingChannel,
     CONNECTION_POLICY,
     type ChannelRowLite,
 } from './channel-connection.util';
@@ -229,6 +230,42 @@ describe('resolveConnectTarget', () => {
         expect(
             resolveConnectTarget(rows, ChannelPlatform.INSTAGRAM, 'ig_b', 'ch_a'),
         ).toEqual({ kind: 'create' });
+    });
+});
+
+describe('pickRoutingChannel', () => {
+    const claim = (id: string, status: ChannelStatus, connectedAt: string | null) => ({
+        id,
+        status,
+        connectedAt: connectedAt ? new Date(connectedAt) : null,
+    });
+
+    it('sends a webhook to the connected row, never an errored or disconnected one claiming the same account', () => {
+        const rows = [
+            claim('ch_err', ChannelStatus.ERROR, '2026-01-01T00:00:00Z'),
+            claim('ch_gone', ChannelStatus.DISCONNECTED, '2025-01-01T00:00:00Z'),
+            claim('ch_live', ChannelStatus.CONNECTED, '2026-06-01T00:00:00Z'),
+        ];
+        expect(pickRoutingChannel(rows)?.id).toBe('ch_live');
+    });
+
+    it('picks the longest-connected of several connected rows, whatever order they come in', () => {
+        const older = claim('ch_b', ChannelStatus.CONNECTED, '2026-02-01T00:00:00Z');
+        const newer = claim('ch_a', ChannelStatus.CONNECTED, '2026-09-01T00:00:00Z');
+        const unknown = claim('ch_0', ChannelStatus.CONNECTED, null);
+        expect(pickRoutingChannel([newer, unknown, older])?.id).toBe('ch_b');
+        expect(pickRoutingChannel([older, newer, unknown])?.id).toBe('ch_b');
+    });
+
+    it('breaks a tie on the row id', () => {
+        const at = '2026-02-01T00:00:00Z';
+        expect(pickRoutingChannel([claim('ch_z', ChannelStatus.CONNECTED, at), claim('ch_m', ChannelStatus.CONNECTED, at)])?.id).toBe('ch_m');
+    });
+
+    it('still routes to an errored row when it is the only claim, and to nothing when every claim is disconnected', () => {
+        expect(pickRoutingChannel([claim('ch_err', ChannelStatus.ERROR, null)])?.id).toBe('ch_err');
+        expect(pickRoutingChannel([claim('ch_gone', ChannelStatus.DISCONNECTED, '2026-01-01T00:00:00Z')])).toBeNull();
+        expect(pickRoutingChannel([])).toBeNull();
     });
 });
 

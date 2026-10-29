@@ -4,11 +4,14 @@ import {
     NotFoundException,
     ConflictException,
     BadRequestException,
+    HttpException,
+    HttpStatus,
     Logger,
 } from '@nestjs/common';
 import { OrganizationType, InviteStatus, UserRole, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 import { SendInviteDto } from './dto/send-invite.dto';
 import { EmailService } from '../email/email.service';
 import { UserService } from '../user/user.service';
@@ -49,6 +52,7 @@ export class InvitesService {
         private readonly prisma: PrismaService,
         private readonly emailService: EmailService,
         private readonly users: UserService,
+        private readonly redis: RedisService,
     ) { }
 
     // ─── SEND INVITE ───
@@ -122,6 +126,8 @@ export class InvitesService {
             }
         }
 
+        await this.assertMayEmail(userId, email);
+
         // 5. Create the invite
         const invite = await this.createInviteRow({
             organizationId: orgId,
@@ -177,6 +183,27 @@ export class InvitesService {
                 );
             }
             throw error;
+        }
+    }
+
+    /**
+     * Invitation emails are limited per recipient, like every other account
+     * email, and per sender, so a free account cannot use the shared SMTP
+     * account to flood an inbox or anyone at all. Checked before the
+     * invitation is created or re-issued, so a refused one leaves no live link.
+     */
+    private async assertMayEmail(senderId: string, email: string) {
+        if (!(await this.redis.allowInviteFromSender(senderId))) {
+            throw new HttpException(
+                'You have sent as many invitations as one person can today. Try again tomorrow.',
+                HttpStatus.TOO_MANY_REQUESTS,
+            );
+        }
+        if (!(await this.redis.allowEmailSend('invite', email))) {
+            throw new HttpException(
+                'An invitation was emailed to this address very recently. Please wait before sending another.',
+                HttpStatus.TOO_MANY_REQUESTS,
+            );
         }
     }
 
@@ -264,6 +291,7 @@ export class InvitesService {
         if (invite.status === InviteStatus.ACCEPTED) {
             throw new ConflictException('This invitation has already been accepted.');
         }
+        await this.assertMayEmail(userId, invite.email);
 
         const updated = await this.prisma.teamInvite.update({
             where: { id: invite.id },
@@ -274,6 +302,9 @@ export class InvitesService {
                 // forcing the admin to delete and retype it.
                 status: InviteStatus.PENDING,
                 revokedAt: null,
+                // It now stands on this admin's authority: acceptance checks
+                // that the sender may still invite.
+                invitedBy: userId,
             },
         });
 

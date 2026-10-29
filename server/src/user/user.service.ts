@@ -4,12 +4,16 @@ import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ACTIVE_MEMBERSHIP } from '../auth/active-membership';
+import { ChannelService } from '../channel/channel.service';
 import { normalizeEmail } from '../common/utils/email.util';
 import { releaseMemberWork } from '../organization/member-release';
 
 @Injectable()
 export class UserService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly channels: ChannelService,
+  ) { }
 
   async create(data: { email: string; password: string; firstName: string; lastName: string; avatarUrl?: string }) {
     const email = normalizeEmail(data.email);
@@ -129,6 +133,14 @@ export class UserService {
         `You own the workspace "${owned.organization.name}". Delete that workspace in Settings first, then delete your account.`,
       );
     }
+
+    // An influencer's Instagram leaves with them. Done first, so a failure
+    // leaves the account open and closing it can simply be tried again.
+    const influencing = await this.prisma.organizationMember.findMany({
+      where: { userId: id, isActive: true, role: UserRole.INFLUENCER },
+      select: { organizationId: true },
+    });
+    await this.channels.disconnectOwnedBy(influencing.map((m) => m.organizationId), id);
 
     return this.prisma.$transaction(async (tx) => {
       const memberships = await tx.organizationMember.findMany({

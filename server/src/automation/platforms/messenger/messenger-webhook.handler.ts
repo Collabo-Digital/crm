@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ChannelPlatform, MessageKind, MessageSource, MessageStatus } from '@prisma/client';
+import { ChannelPlatform, ChannelStatus, MessageKind, MessageSource, MessageStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { pickRoutingChannel } from '../../../channel/channel-connection.util';
 import { IngestChannel, MessageIngestService } from '../../../messaging/message-ingest.service';
 import { messengerContent } from '../../../messaging/message-content';
 import { MsEvent, parseMessengerDelivery } from './messenger-webhook.parser';
@@ -180,10 +181,14 @@ export class MessengerWebhookHandler {
     }
 
     private async findChannel(platform: ChannelPlatform, accountId: string): Promise<IngestChannel | null> {
-        const row = await this.prisma.channel.findFirst({
-            where: { platform, externalStoreId: accountId },
-            select: { id: true, organizationId: true, platform: true, externalStoreId: true },
+        const claims = await this.prisma.channel.findMany({
+            where: { platform, externalStoreId: accountId, status: { not: ChannelStatus.DISCONNECTED } },
+            select: { id: true, organizationId: true, platform: true, status: true, connectedAt: true },
         });
+        const row = pickRoutingChannel(claims);
+        if (row && claims.length > 1) {
+            this.logger.warn(`${platform} webhook for account ${accountId}: ${claims.length} channels claim it; routed to ${row.id} (org ${row.organizationId})`);
+        }
         return row ? { id: row.id, organizationId: row.organizationId, platform: row.platform, address: accountId } : null;
     }
 }

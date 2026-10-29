@@ -46,12 +46,17 @@ describe('AuthService — accounts', () => {
           vendorScope: null,
           permissions: null,
           organizationId: 'org',
+          invitedBy: 'u-owner',
           expiresAt: new Date(Date.now() + 3600_000),
           organization: { id: 'org', name: 'Shop', slug: 'shop', type: 'ORGANIZATION' },
         }),
         update: jest.fn().mockResolvedValue(undefined),
       },
-      organizationMember: { upsert: jest.fn().mockResolvedValue(undefined) },
+      organizationMember: {
+        upsert: jest.fn().mockResolvedValue(undefined),
+        // The sender of the invitation, still the owner.
+        findUnique: jest.fn().mockResolvedValue({ role: 'OWNER', isActive: true, user: { deletedAt: null } }),
+      },
     };
     const users = {
       findIdByEmail: jest.fn().mockResolvedValue('u1'),
@@ -69,7 +74,8 @@ describe('AuthService — accounts', () => {
       setAuthSession: jest.fn().mockResolvedValue(undefined),
       setRefreshToken: jest.fn().mockResolvedValue(undefined),
       trackUserToken: jest.fn().mockResolvedValue(undefined),
-      setSession: jest.fn().mockResolvedValue(undefined),
+      sessionRevision: jest.fn().mockResolvedValue('rev-1'),
+      setSession: jest.fn().mockResolvedValue(true),
       deleteSession: jest.fn().mockResolvedValue(undefined),
     };
     const service = new AuthService(

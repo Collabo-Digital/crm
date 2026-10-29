@@ -23,7 +23,8 @@ describe('MembersService', () => {
     prisma.$transaction.mockImplementation((fn: (tx: typeof prisma) => unknown) => fn(prisma));
     const redis = { deleteSession: jest.fn().mockResolvedValue(undefined) };
     const events = { publish: jest.fn() };
-    return { service: new MembersService(prisma as never, redis as never, events as never), prisma, redis, events };
+    const channels = { disconnectOwnedBy: jest.fn().mockResolvedValue(undefined) };
+    return { service: new MembersService(prisma as never, redis as never, events as never, channels as never), prisma, redis, events, channels };
   }
 
   describe('updateRole', () => {
@@ -80,6 +81,31 @@ describe('MembersService', () => {
       expect(prisma.inboxTeamMember.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u2', team: { organizationId: { in: ['org'] } } } });
       expect(redis.deleteSession).toHaveBeenCalledWith('u2');
       expect(events.publish.mock.calls.map((c) => c[1].conversationId)).toEqual(['c1', 'c2']);
+    });
+
+    it("disconnects a removed influencer's own Instagram before ending the membership", async () => {
+      const { service, prisma, channels } = build(UserRole.INFLUENCER);
+
+      await service.remove('org', 'm1');
+
+      expect(channels.disconnectOwnedBy).toHaveBeenCalledWith(['org'], 'u2');
+      expect(channels.disconnectOwnedBy.mock.invocationCallOrder[0]).toBeLessThan(prisma.organizationMember.update.mock.invocationCallOrder[0]);
+    });
+
+    it('leaves the channels a removed team member connected with the workspace', async () => {
+      const { service, channels } = build(UserRole.ADMIN);
+
+      await service.remove('org', 'm1');
+
+      expect(channels.disconnectOwnedBy).not.toHaveBeenCalled();
+    });
+
+    it('keeps the influencer a member when their channels could not be disconnected, so removal can be retried', async () => {
+      const { service, prisma, channels } = build(UserRole.INFLUENCER);
+      channels.disconnectOwnedBy.mockRejectedValue(new Error('database busy'));
+
+      await expect(service.remove('org', 'm1')).rejects.toThrow('database busy');
+      expect(prisma.organizationMember.update).not.toHaveBeenCalled();
     });
   });
 });

@@ -23,7 +23,7 @@ function build() {
       ),
     },
   };
-  const service = new MembersService(prisma as never, {} as never, {} as never);
+  const service = new MembersService(prisma as never, {} as never, {} as never, {} as never);
   return { service };
 }
 

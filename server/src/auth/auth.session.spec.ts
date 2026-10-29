@@ -15,7 +15,8 @@ describe('JwtStrategy.validate — session must be live', () => {
     const redis = {
       isAuthSessionActive,
       getSession: jest.fn().mockResolvedValue(cached),
-      setSession: jest.fn().mockResolvedValue(undefined),
+      sessionRevision: jest.fn().mockResolvedValue('rev-1'),
+      setSession: jest.fn().mockResolvedValue(true),
     };
     const config = { get: jest.fn().mockReturnValue('test-secret') };
     const prisma = { user: { findFirst: jest.fn() } };
@@ -161,7 +162,8 @@ describe('AuthService — session lifecycle', () => {
       deleteRefreshToken: jest.fn().mockResolvedValue(undefined),
       setRefreshToken: jest.fn().mockResolvedValue(undefined),
       trackUserToken: jest.fn().mockResolvedValue(undefined),
-      setSession: jest.fn().mockResolvedValue(undefined),
+      sessionRevision: jest.fn().mockResolvedValue('rev-1'),
+      setSession: jest.fn().mockResolvedValue(true),
       deleteSession: jest.fn().mockResolvedValue(undefined),
       setAuthSession: jest.fn<Promise<void>, [string, string]>().mockResolvedValue(undefined),
       touchAuthSession: jest.fn().mockResolvedValue(touch),

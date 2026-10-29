@@ -12,6 +12,7 @@ describe('MetaPagesOAuthService.handleCallback', () => {
         const prisma = {
             channel: {
                 findMany: jest.fn().mockResolvedValue([]),
+                findFirst: jest.fn().mockResolvedValue(null),
                 create: jest.fn().mockImplementation(({ data }) => {
                     created.push(data);
                     return Promise.resolve({ id: `ch_${created.length}` });
@@ -48,7 +49,7 @@ describe('MetaPagesOAuthService.handleCallback', () => {
             redis as never,
             metaGraph as never,
         );
-        return { service, created, metaGraph };
+        return { service, created, metaGraph, prisma };
     }
 
     const page = {
@@ -100,6 +101,23 @@ describe('MetaPagesOAuthService.handleCallback', () => {
         expect(result.connected[0].webhooks).toBe('failed');
         expect(created[0].lastError).toMatch(/could not subscribe/);
         expect(created[0].metadata.webhookSubscription.ok).toBe(false);
+    });
+
+    it('skips a Page or Instagram account another organization holds, whether or not the database has the unique index', async () => {
+        const { service, created, prisma } = build({ pages: [page] });
+        prisma.channel.findFirst.mockImplementation(({ where }: { where: { externalStoreId: string } }) =>
+            Promise.resolve(where.externalStoreId === 'ig1' ? { id: 'ch_elsewhere' } : null),
+        );
+
+        const result = await service.handleCallback('code', 'st', 'org1', 'u1');
+
+        expect(prisma.channel.findFirst).toHaveBeenCalledWith({
+            where: { platform: ChannelPlatform.INSTAGRAM, externalStoreId: 'ig1', organizationId: { not: 'org1' } },
+            select: { id: true },
+        });
+        expect(result.connected.map((c) => c.platform)).toEqual([ChannelPlatform.FACEBOOK]);
+        expect(result.skipped).toEqual([{ name: 'acme', reason: expect.stringMatching(/another organization/) }]);
+        expect(created.map((c) => c.platform)).toEqual([ChannelPlatform.FACEBOOK]);
     });
 
     it('refuses when no Page was shared', async () => {

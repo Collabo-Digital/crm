@@ -62,6 +62,9 @@ export interface WhatsAppSignupSession {
     businessId?: string;
 }
 
+const TAKEN_ELSEWHERE =
+    'This WhatsApp Business account is already connected to another organization. Disconnect it there first.';
+
 export interface WhatsAppSetupOutcome {
     webhooks: 'ok' | 'failed';
     webhooksError?: string;
@@ -124,6 +127,15 @@ export class WhatsAppOAuthService {
                 error: err instanceof Error ? err.message : String(err),
             };
         }
+    }
+
+    /** Whether a channel of another organization holds this WABA. */
+    private async heldByAnotherOrg(wabaId: string, orgId: string): Promise<boolean> {
+        const holder = await this.prisma.channel.findFirst({
+            where: { platform: ChannelPlatform.WHATSAPP, externalStoreId: wabaId, organizationId: { not: orgId } },
+            select: { id: true },
+        });
+        return !!holder;
     }
 
     /** The org's WhatsApp rows, in the shape the decision helpers want. */
@@ -226,32 +238,53 @@ export class WhatsAppOAuthService {
             ? new Date(Date.now() + tokenRes.data.expires_in * 1000)
             : null;
 
-        // 3. Which account. Session info names it (v4 `waba_id`, v5
-        // `messaging_account_ids`); older flows only reveal it in the token.
-        let wabaId = session.wabaId;
-        if (!wabaId) {
-            const debugRes = await this.graphGet<MetaDebugTokenResponse>(
-                '/debug_token',
-                { input_token: token },
-                `${this.appId}|${this.appSecret}`,
-            );
-            if (!debugRes.ok) {
-                this.logger.error(`WhatsApp debug_token failed: ${debugRes.error}`);
-                throw new BadRequestException('Failed to inspect access token');
-            }
-            wabaId = this.extractWabaId(debugRes.data);
+        // 3. Which account. Session info names the one the business picked
+        // (v4 `waba_id`, v5 `messaging_account_ids`), but it comes from the
+        // browser, and webhooks are routed by WABA id: only an account the
+        // token was granted may be connected.
+        const debugRes = await this.graphGet<MetaDebugTokenResponse>(
+            '/debug_token',
+            { input_token: token },
+            `${this.appId}|${this.appSecret}`,
+        );
+        if (!debugRes.ok) {
+            this.logger.error(`WhatsApp debug_token failed: ${debugRes.error}`);
+            throw new BadRequestException('Failed to inspect access token');
         }
+        const granted = this.grantedWabaIds(debugRes.data);
+        const wabaId = session.wabaId ?? granted[0];
         if (!wabaId) {
             throw new BadRequestException(
                 'No WhatsApp Business Account granted. Please retry and select a WABA in the popup.',
             );
         }
+        if (!granted.includes(wabaId)) {
+            this.logger.warn(`WhatsApp signup for org ${stateData.orgId} named WABA ${wabaId}, which its token was not granted`);
+            throw new BadRequestException(
+                'Meta did not give Collabo access to that WhatsApp Business account. Please connect again and select it in the popup.',
+            );
+        }
 
-        // 4. Which number, and what it is.
-        const phoneNumberId = session.phoneNumberId ?? (await this.account.firstNumberId(wabaId, token));
+        // 4. Which number, and what it is. It must be on that account: the
+        // number read below would succeed for any number the token can see.
+        let numberIds: string[];
+        try {
+            numberIds = await this.account.numberIds(wabaId, token);
+        } catch (err) {
+            if (isRateLimitedError(err)) throw err;
+            this.logger.error(`WhatsApp numbers of WABA ${wabaId} read failed: ${err instanceof Error ? err.message : err}`);
+            throw new BadRequestException('Failed to read the WhatsApp phone numbers from Meta');
+        }
+        const phoneNumberId = session.phoneNumberId ?? numberIds[0];
         if (!phoneNumberId) {
             throw new BadRequestException(
                 'No phone number found on this WhatsApp Business Account. Please add one in WhatsApp Manager first.',
+            );
+        }
+        if (!numberIds.includes(phoneNumberId)) {
+            this.logger.warn(`WhatsApp signup for org ${stateData.orgId} named number ${phoneNumberId}, which is not on WABA ${wabaId}`);
+            throw new BadRequestException(
+                'That phone number is not on the WhatsApp Business account Meta granted. Please connect again and select it in the popup.',
             );
         }
         let number: PhoneNumberDetails;
@@ -274,7 +307,8 @@ export class WhatsAppOAuthService {
         }>(`/${wabaId}`, { fields: 'id,name,owner_business_info' }, token);
         if (wabaRes.ok) {
             wabaName = wabaRes.data.name;
-            businessId = businessId ?? wabaRes.data.owner_business_info?.id;
+            // Meta's answer for the granted account before the browser's.
+            businessId = wabaRes.data.owner_business_info?.id ?? businessId;
         } else {
             this.logger.warn(`Non-fatal: could not fetch WABA metadata for ${wabaId}`);
         }
@@ -293,6 +327,12 @@ export class WhatsAppOAuthService {
         );
         if (decision.kind === 'blocked') {
             throw new ConflictException(decision.message);
+        }
+        // Webhooks are routed by WABA id alone, so it may belong to one
+        // organization only. Checked here rather than left to the unique
+        // index, which a database with older duplicates does not have.
+        if (await this.heldByAnotherOrg(wabaId, stateData.orgId)) {
+            throw new ConflictException(TAKEN_ELSEWHERE);
         }
 
         // Reconnect UPDATES an existing row, so merge into its metadata rather
@@ -372,9 +412,7 @@ export class WhatsAppOAuthService {
                 // (platform, external_store_id) is unique table-wide, so this
                 // WABA belongs to another organization. The per-org partial
                 // unique should already have been caught by resolveConnectTarget.
-                throw new ConflictException(
-                    'This WhatsApp Business account is already connected to another organization. Disconnect it there first.',
-                );
+                throw new ConflictException(TAKEN_ELSEWHERE);
             }
             throw error;
         }
@@ -506,12 +544,11 @@ export class WhatsAppOAuthService {
         }
     }
 
-    // Pull the first WABA ID out of debug_token's granular_scopes.
-    private extractWabaId(debug: MetaDebugTokenResponse): string | undefined {
-        const scopes = debug.data.granular_scopes ?? [];
-        const wabaScope = scopes.find((s) =>
-            ['whatsapp_business_management', 'whatsapp_business_messaging'].includes(s.scope),
-        );
-        return wabaScope?.target_ids?.[0];
+    /** The WABA ids debug_token's granular_scopes say the token was granted, first one first. */
+    private grantedWabaIds(debug: MetaDebugTokenResponse): string[] {
+        const ids = (debug.data.granular_scopes ?? [])
+            .filter((s) => ['whatsapp_business_management', 'whatsapp_business_messaging'].includes(s.scope))
+            .flatMap((s) => s.target_ids ?? []);
+        return [...new Set(ids)];
     }
 }

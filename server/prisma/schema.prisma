@@ -659,8 +659,14 @@ model Channel {
   /// tenant. Disconnect therefore NULLs external_store_id to release the claim
   /// and copies it to metadata.externalAccountId so the row can be revived.
   ///
-  /// See migrations 20260731140000_channel_store_url_unique and
-  /// 20260910090000_channel_connected_accounts.
+  /// The external_store_id index is built only where no account was already
+  /// claimed twice (20261031010000 says how to finish it by hand), so the
+  /// connect flows also refuse another organization's account themselves and
+  /// the webhook routers pick one row deterministically.
+  ///
+  /// See migrations 20260731140000_channel_store_url_unique,
+  /// 20260910090000_channel_connected_accounts and
+  /// 20261031010000_channel_external_account_unique.
   ///
   /// There is deliberately NO @@unique([organizationId, platform]) — it is what
   /// made multiple Instagram accounts impossible.
