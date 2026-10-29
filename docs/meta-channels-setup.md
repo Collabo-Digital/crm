@@ -140,6 +140,10 @@ ANTHROPIC_API_KEY=                  # Collabo's own key, for the AI template wri
                                     # unset, the writer is hidden
 ANTHROPIC_BASE_URL=                 # leave unset in production; local tests point it
                                     # at the Anthropic stand-in
+AI_DRAFTS_PER_USER_PER_DAY=         # AI drafts one member may ask for in a UTC day,
+                                    # across workspaces (default 100)
+AI_DRAFTS_PER_DAY_TOTAL=            # AI drafts all stores together may ask for in a
+                                    # UTC day: the spend ceiling (default 1000)
 JUDGEME_API_BASE=                   # leave unset in production (https://api.judge.me/api/v1);
                                     # local tests point it at the Judge.me stand-in
 GOOGLE_CLIENT_ID=                   # Collabo's Google OAuth client (web application),
@@ -336,8 +340,10 @@ Per-account subscription happens at connect time and is undone at disconnect:
   currency, with the organization identified only by a hash. Requests opt
   into server-side refusal fallbacks (`fallbacks: "default"`, beta
   `server-side-fallback-2026-07-01`). Each organization gets 50 drafts a UTC
-  day. The key is Collabo's own (`ANTHROPIC_API_KEY`); without it the option
-  is not shown.
+  day; since workspaces are free to create, each member also gets 100 across
+  all of theirs (`AI_DRAFTS_PER_USER_PER_DAY`), and the whole server 1,000
+  (`AI_DRAFTS_PER_DAY_TOTAL`, a warning is logged when they run out). The key
+  is Collabo's own (`ANTHROPIC_API_KEY`); without it the option is not shown.
 
 ### Automations and inbox rules
 
@@ -682,7 +688,10 @@ the customer's number, which is what Collabo matches.
   earlier STOP; each code works once. With confirming off, the typed number
   is opted in at once the same way, unless it opted out. Either way the
   contact gets the pop-up's tag and starts "Someone signs up on your website"
-  automations, which must send a template. CORS for
+  automations, which must send a template. One visitor address (an IPv4
+  address, or an IPv6 /64) may sign up 5 numbers an hour at a store, so a few
+  scripts cannot fill the store's own hourly limit (1,000 waiting sign-ups,
+  or 200 with confirming off) and turn real visitors away. CORS for
   `/api/v1/widget/*` accepts any origin without credentials (like the
   storefront pixel); the rest of the API stays locked to the CRM.
 

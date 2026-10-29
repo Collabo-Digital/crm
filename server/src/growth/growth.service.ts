@@ -5,11 +5,13 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ChannelContact, ChannelPlatform, ChannelStatus, ConsentType, Prisma } from '@prisma/client';
 import * as QRCode from 'qrcode';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 import { AutomationEventService } from '../messaging/automation-event.service';
 import { AutomationJobs } from '../messaging/automation-jobs';
 import { ConsentService } from '../messaging/consent.service';
 import { ContactIdentityService } from '../messaging/contact-identity.service';
 import { normalizePhone } from '../common/phone.util';
+import { visitorAddress } from '../common/utils/visitor-address.util';
 import {
     WidgetSettings,
     chatTarget,
@@ -28,9 +30,19 @@ import { widgetScript } from './widget-script';
 const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 const CHAT_PLATFORMS: ChannelPlatform[] = [ChannelPlatform.WHATSAPP, ChannelPlatform.FACEBOOK, ChannelPlatform.INSTAGRAM];
 const BUTTON_LINK_NAME = 'Website chat button';
-/// Sign-ups one store accepts in an hour. The form can be posted by scripts that
-/// fake the Origin header, and every sign-up can start a template send.
+/// Sign-ups one visitor's address (an IPv6 /64) may make at one store in an
+/// hour. The form can be posted by scripts that fake the Origin header; held
+/// to this, a few addresses cannot fill the store's limit below and turn its
+/// real visitors away.
+const SIGNUPS_PER_SOURCE_PER_HOUR = 5;
+/// Sign-ups one store accepts in an hour, a safety net under the limit per
+/// visitor: without confirming on WhatsApp every one can start a template send;
+/// a sign-up waiting to be confirmed sends nothing.
 const SIGNUPS_PER_HOUR = 200;
+const UNCONFIRMED_SIGNUPS_PER_HOUR = 1_000;
+const COUNT_LUA = `local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+return n`;
 const SIGNUP_CODE_LENGTH = 6;
 const CONFIRM_WITHIN_MS = 24 * 3600_000;
 
@@ -52,6 +64,7 @@ export class GrowthService {
         private readonly consent: ConsentService,
         private readonly automationEvents: AutomationEventService,
         private readonly jobs: AutomationJobs,
+        private readonly redis: RedisService,
         config: ConfigService,
     ) {
         this.api = `${(config.get<string>('appUrl') ?? 'http://localhost:3000').replace(/\/+$/, '')}/api/v1`;
@@ -248,6 +261,7 @@ export class GrowthService {
         key: string,
         input: { phone?: string; name?: string; consent?: string; page?: string; website?: string },
         origin: string | undefined,
+        ip: string | undefined,
     ): Promise<{ ok: true; confirmUrl?: string; code?: string }> {
         const widget = await this.prisma.siteWidget.findUnique({ where: { key }, include: { channel: { select: { id: true, organizationId: true, platform: true, status: true, credentials: true } } } });
         if (!widget?.enabled) throw new NotFoundException();
@@ -266,11 +280,17 @@ export class GrowthService {
         const digits = e164?.replace(/\D/g, '') ?? '';
         if (!e164 || digits.length < 8 || digits.length > 15) throw new BadRequestException('Enter your WhatsApp number with its country code.');
         if (widget.channel.status !== ChannelStatus.CONNECTED) throw new BadRequestException('Sign-ups are paused right now. Please try again later.');
+        const fromSource = Number(await this.redis.runScript(
+            'widgetSignupCount', COUNT_LUA, 1, [`widget_signups:${widget.organizationId}:${visitorAddress(ip)}`], [3600],
+        ));
+        if (fromSource > SIGNUPS_PER_SOURCE_PER_HOUR) {
+            throw new HttpException('Too many sign-ups from this connection. Please try again in a little while.', HttpStatus.TOO_MANY_REQUESTS);
+        }
         const hourAgo = new Date(Date.now() - 3600_000);
         const lastHour = confirm
             ? await this.prisma.widgetSignup.count({ where: { organizationId: widget.organizationId, createdAt: { gt: hourAgo } } })
             : await this.prisma.consentEvent.count({ where: { organizationId: widget.organizationId, source: 'widget', occurredAt: { gt: hourAgo } } });
-        if (lastHour >= SIGNUPS_PER_HOUR) {
+        if (lastHour >= (confirm ? UNCONFIRMED_SIGNUPS_PER_HOUR : SIGNUPS_PER_HOUR)) {
             this.logger.warn(`Widget ${widget.id}: sign-up refused, ${lastHour} in the last hour`);
             throw new HttpException('Too many sign-ups right now. Please try again in a little while.', HttpStatus.TOO_MANY_REQUESTS);
         }

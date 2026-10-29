@@ -1,9 +1,21 @@
 import { HttpException } from '@nestjs/common';
 import { ConsentType } from '@prisma/client';
+import RedisMock from 'ioredis-mock';
+import { RedisService } from '../redis/redis.service';
 import { GrowthService } from './growth.service';
 
 const CONSENT = 'I agree to receive offers from Chai Point on WhatsApp.';
 const HOUR = 3600_000;
+const VISITOR_IP = '203.0.113.7';
+
+/** RedisService over ioredis-mock, which runs the real commands and Lua. */
+function realRedis() {
+    const redis = new RedisService({ get: () => 'redis://localhost:6379' } as never);
+    const client = new RedisMock();
+    (redis as unknown as { client: unknown }).client = client;
+    return { redis, client };
+}
+beforeEach(() => realRedis().client.flushall());
 
 function setup(contact: { optedOutAt: Date | null; waId?: string | null } = { optedOutAt: null }, signupsLastHour = 0, confirmOnWhatsApp = false) {
     const widget = {
@@ -16,6 +28,7 @@ function setup(contact: { optedOutAt: Date | null; waId?: string | null } = { op
         channel: { id: 'ch_1', organizationId: 'org_1', platform: 'WHATSAPP', status: 'CONNECTED', credentials: { displayPhoneNumber: '+91 80 4718 0000' } },
     };
     const resolved = { id: 'c_1', organizationId: 'org_1', channelId: 'ch_1', externalId: '919800000000', waId: '919800000000', customerId: null, tags: [], ...contact };
+    const saved: Array<{ code: string }> = [];
     const tx = {
         consentEvent: { findFirst: jest.fn(async () => null) },
         channelContact: { update: jest.fn(), findUniqueOrThrow: jest.fn(async () => resolved) },
@@ -26,8 +39,11 @@ function setup(contact: { optedOutAt: Date | null; waId?: string | null } = { op
         siteWidget: { findUnique: jest.fn(async () => widget) },
         consentEvent: { count: jest.fn(async () => signupsLastHour) },
         widgetSignup: {
-            count: jest.fn(async () => signupsLastHour),
-            create: jest.fn(async ({ data }: { data: { code: string } }) => ({ code: data.code })),
+            count: jest.fn(async () => signupsLastHour + saved.length),
+            create: jest.fn(async ({ data }: { data: { code: string } }) => {
+                saved.push(data);
+                return { code: data.code };
+            }),
             findUnique: jest.fn(async (): Promise<unknown> => null),
         },
         conversation: { findUnique: jest.fn(async () => ({ contactId: 'c_1' })) },
@@ -38,8 +54,8 @@ function setup(contact: { optedOutAt: Date | null; waId?: string | null } = { op
     const identity = { resolve: jest.fn(async () => resolved), linkCustomerByPhone: jest.fn(async () => null) };
     const automationEvents = { recordTagsAdded: jest.fn(async () => ['ev_tag']) };
     const jobs = { event: jest.fn() };
-    const service = new GrowthService(prisma as any, identity as any, consent as any, automationEvents as any, jobs as any, { get: () => undefined } as any);
-    return { service, consent, jobs, prisma, identity, tx };
+    const service = new GrowthService(prisma as any, identity as any, consent as any, automationEvents as any, jobs as any, realRedis().redis, { get: () => undefined } as any);
+    return { service, consent, jobs, prisma, identity, tx, saved };
 }
 
 const form = { phone: '+919800000000', consent: 'yes', consentText: 'I agree to anything', page: 'https://shop.example.com/' };
@@ -47,21 +63,21 @@ const form = { phone: '+919800000000', consent: 'yes', consentText: 'I agree to 
 describe('website pop-up sign-ups without confirming on WhatsApp', () => {
     it('record the pop-up’s own consent wording, not text the request brings', async () => {
         const { service, consent, jobs } = setup();
-        await service.signup('key_1234567890', form, 'https://shop.example.com');
+        await service.signup('key_1234567890', form, 'https://shop.example.com', VISITOR_IP);
         expect(consent.record).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'c_1' }), ConsentType.OPT_IN, 'widget', expect.objectContaining({ consentText: CONSENT }));
         expect(jobs.event).toHaveBeenCalledWith('ev_1');
     });
 
     it('do not opt back in someone who opted out, or start automations for them', async () => {
         const { service, consent, jobs } = setup({ optedOutAt: new Date('2026-09-01') });
-        await expect(service.signup('key_1234567890', form, 'https://shop.example.com')).resolves.toEqual({ ok: true });
+        await expect(service.signup('key_1234567890', form, 'https://shop.example.com', VISITOR_IP)).resolves.toEqual({ ok: true });
         expect(consent.record).not.toHaveBeenCalled();
         expect(jobs.event).not.toHaveBeenCalled();
     });
 
     it('are refused past the hourly limit for the store', async () => {
         const { service, consent } = setup({ optedOutAt: null }, 200);
-        await expect(service.signup('key_1234567890', form, 'https://shop.example.com')).rejects.toThrow(HttpException);
+        await expect(service.signup('key_1234567890', form, 'https://shop.example.com', VISITOR_IP)).rejects.toThrow(HttpException);
         expect(consent.record).not.toHaveBeenCalled();
     });
 });
@@ -85,7 +101,7 @@ describe('website pop-up sign-ups confirmed on WhatsApp', () => {
 
     it('save only a pending sign-up, and answer with a wa.me link carrying its code', async () => {
         const { service, prisma, consent, identity, jobs } = setup({ optedOutAt: null }, 0, true);
-        const res = await service.signup('key_1234567890', form, 'https://shop.example.com');
+        const res = await service.signup('key_1234567890', form, 'https://shop.example.com', VISITOR_IP);
         const saved = (prisma.widgetSignup.create.mock.calls[0] as unknown as [{ data: Record<string, unknown> }])[0].data;
         expect(saved).toMatchObject({ organizationId: 'org_1', widgetId: 'w_1', phone: '919800000000', consentText: CONSENT, page: form.page });
         expect(saved.code).toMatch(/^[2-9A-HJ-NP-Z]{6}$/);
@@ -99,8 +115,8 @@ describe('website pop-up sign-ups confirmed on WhatsApp', () => {
     });
 
     it('count pending sign-ups towards the store’s hourly limit', async () => {
-        const { service, prisma } = setup({ optedOutAt: null }, 200, true);
-        await expect(service.signup('key_1234567890', form, 'https://shop.example.com')).rejects.toThrow(HttpException);
+        const { service, prisma } = setup({ optedOutAt: null }, 1000, true);
+        await expect(service.signup('key_1234567890', form, 'https://shop.example.com', VISITOR_IP)).rejects.toThrow(HttpException);
         expect(prisma.widgetSignup.create).not.toHaveBeenCalled();
     });
 
@@ -182,5 +198,49 @@ describe('website pop-up sign-ups confirmed on WhatsApp', () => {
         const { service, prisma } = setup();
         prisma.widgetSignup.findUnique.mockRejectedValue(new Error('connection lost'));
         await expect(service.confirmSignup('org_1', 'conv_1', 'wamid.X', confirmation)).resolves.toBeUndefined();
+    });
+});
+
+/**
+ * Scripts can post the pop-up's form with a forged Origin. Each address may
+ * sign up only a few numbers an hour, so a few addresses cannot fill the
+ * store's hourly limit and turn its real visitors away.
+ */
+describe('website pop-up sign-ups from one address', () => {
+    const post = (service: GrowthService, ip: string, phone = '+919800000000') =>
+        service.signup('key_1234567890', { ...form, phone }, 'https://shop.example.com', ip).then(
+            () => 'ok',
+            (e: HttpException) => e.getStatus(),
+        );
+
+    it('cannot fill the store’s limit and lock out a real visitor', async () => {
+        const { service, saved } = setup({ optedOutAt: null }, 0, true);
+        // Four addresses, each posting as often as the route’s throttle allows in an hour.
+        for (const ip of ['198.51.100.1', '198.51.100.2', '198.51.100.3', '198.51.100.4']) {
+            const answers: Array<string | number> = [];
+            for (let i = 0; i < 60; i++) answers.push(await post(service, ip));
+            expect(answers.filter((a) => a === 'ok')).toHaveLength(5);
+            expect(answers.slice(5).every((a) => a === 429)).toBe(true);
+        }
+        expect(saved).toHaveLength(20);
+
+        await expect(post(service, VISITOR_IP, '+919811122233')).resolves.toBe('ok');
+    });
+
+    it('holds a sign-up script to the limit when confirming is off, so it opts in only a few numbers', async () => {
+        const { service, consent } = setup({ optedOutAt: null }, 0, false);
+        const answers: Array<string | number> = [];
+        for (let i = 0; i < 8; i++) answers.push(await post(service, '198.51.100.9', `+9198000000${10 + i}`));
+
+        expect(answers).toEqual(['ok', 'ok', 'ok', 'ok', 'ok', 429, 429, 429]);
+        expect(consent.record).toHaveBeenCalledTimes(5);
+    });
+
+    it('treats one IPv6 /64 as one address', async () => {
+        const { service } = setup({ optedOutAt: null }, 0, true);
+        for (let i = 1; i <= 5; i++) await expect(post(service, `2001:db8:1:2::${i}`)).resolves.toBe('ok');
+
+        await expect(post(service, '2001:db8:1:2:ffff:ffff:ffff:ffff')).resolves.toBe(429);
+        await expect(post(service, '2001:db8:1:3::1')).resolves.toBe('ok');
     });
 });

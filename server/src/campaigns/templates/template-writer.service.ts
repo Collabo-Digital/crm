@@ -29,11 +29,26 @@ import {
 const MODEL = 'claude-opus-5-5';
 /// Drafts an organization may ask for in a UTC day: a guard on API spend.
 export const DRAFTS_PER_DAY = 50;
+/// Drafts one member may ask for in a UTC day, across organizations, which
+/// anyone may create for free (AI_DRAFTS_PER_USER_PER_DAY).
+export const DRAFTS_PER_USER_PER_DAY = 100;
+/// Drafts every store together may ask for in a UTC day: the ceiling on
+/// what Collabo's key spends, however many accounts ask (AI_DRAFTS_PER_DAY_TOTAL).
+export const DRAFTS_PER_DAY_TOTAL = 1_000;
 /// The first draft, and one rewrite when it breaks one of Meta's rules.
 const ATTEMPTS = 2;
-const COUNT_LUA = `local n = redis.call('INCR', KEYS[1])
-if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
-return n`;
+/**
+ * KEYS: today's drafts of the organization, the member and the server;
+ * ARGV[1] their TTL, ARGV[2..4] their limits. Counts the draft in all three
+ * only when none is used up; else answers which one is (1-3).
+ */
+const COUNT_LUA = `for i = 1, 3 do
+  if tonumber(redis.call('GET', KEYS[i]) or '0') >= tonumber(ARGV[i + 1]) then return i end
+end
+for i = 1, 3 do
+  if redis.call('INCR', KEYS[i]) == 1 then redis.call('EXPIRE', KEYS[i], ARGV[1]) end
+end
+return 0`;
 
 export interface WriteTemplateInput {
     brief: string;
@@ -58,6 +73,8 @@ export interface WrittenTemplate {
 export class TemplateWriterService {
     private readonly logger = new Logger(TemplateWriterService.name);
     private readonly client: Anthropic | null;
+    private readonly perUser: number;
+    private readonly total: number;
 
     constructor(
         private readonly prisma: PrismaService,
@@ -68,19 +85,17 @@ export class TemplateWriterService {
         this.client = apiKey
             ? new Anthropic({ apiKey, baseURL: config.get<string>('ai.anthropicBaseUrl'), timeout: 60_000, maxRetries: 1 })
             : null;
+        this.perUser = config.get<number>('ai.draftsPerUserPerDay') ?? DRAFTS_PER_USER_PER_DAY;
+        this.total = config.get<number>('ai.draftsPerDayTotal') ?? DRAFTS_PER_DAY_TOTAL;
     }
 
     status() {
         return { available: !!this.client, draftsPerDay: DRAFTS_PER_DAY };
     }
 
-    async write(orgId: string, input: WriteTemplateInput): Promise<WrittenTemplate> {
+    async write(orgId: string, userId: string, input: WriteTemplateInput): Promise<WrittenTemplate> {
         if (!this.client) throw new ServiceUnavailableException('AI writing is not set up on this Collabo server.');
-        const day = new Date().toISOString().slice(0, 10);
-        const used = Number(await this.redis.runScript('aiTemplateDraftCount', COUNT_LUA, 1, [`ai:template_drafts:${orgId}:${day}`], [2 * 86_400]));
-        if (used > DRAFTS_PER_DAY) {
-            throw new HttpException(`Your team has used today’s ${DRAFTS_PER_DAY} AI drafts. You can write more tomorrow.`, HttpStatus.TOO_MANY_REQUESTS);
-        }
+        await this.countDraft(orgId, userId);
 
         const org = await this.prisma.organization.findUniqueOrThrow({
             where: { id: orgId },
@@ -123,6 +138,30 @@ export class TemplateWriterService {
                 messages.push({ role: 'assistant', content: response.content }, { role: 'user', content: writerRetryMessage(err.message) });
             }
         }
+    }
+
+    /**
+     * Counts a draft against the organization's, the member's and the
+     * server's allowance for today, before Claude is asked. Organizations are
+     * free to create, so the organization's alone does not bound the spend.
+     */
+    private async countDraft(orgId: string, userId: string): Promise<void> {
+        const day = new Date().toISOString().slice(0, 10);
+        const usedUp = Number(await this.redis.runScript(
+            'aiTemplateDraftCount',
+            COUNT_LUA,
+            3,
+            [`ai:template_drafts:${orgId}:${day}`, `ai:template_drafts_user:${userId}:${day}`, `ai:template_drafts_total:${day}`],
+            [2 * 86_400, DRAFTS_PER_DAY, this.perUser, this.total],
+        ));
+        if (usedUp === 0) return;
+        if (usedUp === 3) this.logger.warn(`AI template drafts: today's ${this.total} for the whole server are used up`);
+        const message = [
+            `Your team has used today’s ${DRAFTS_PER_DAY} AI drafts. You can write more tomorrow.`,
+            `You have used today’s ${this.perUser} AI drafts. You can write more tomorrow.`,
+            'Collabo has used today’s AI drafts for every store. You can write more tomorrow.',
+        ][usedUp - 1];
+        throw new HttpException(message, HttpStatus.TOO_MANY_REQUESTS);
     }
 
     private async ask(orgId: string, messages: Anthropic.Beta.BetaMessageParam[]): Promise<Anthropic.Beta.BetaMessage> {

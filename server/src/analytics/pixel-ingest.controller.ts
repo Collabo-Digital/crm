@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Ip, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../auth/decorators/public.decorator';
 import { PixelIngestDto } from './dto/pixel-ingest.dto';
@@ -12,7 +12,7 @@ export class PixelIngestController {
     @Throttle({ default: { ttl: 60_000, limit: 120 } })
     @Post()
     @HttpCode(200)
-    async ingest(@Body() dto: PixelIngestDto) {
-        return this.service.ingest(dto);
+    async ingest(@Body() dto: PixelIngestDto, @Ip() ip: string) {
+        return this.service.ingest(dto, ip);
     }
 }

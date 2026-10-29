@@ -4,7 +4,7 @@ import https from 'node:https';
 import net from 'node:net';
 
 /** The eight 16-bit groups of an IPv6 address, or null when it is not one. */
-function ipv6Groups(address: string): number[] | null {
+export function ipv6Groups(address: string): number[] | null {
     let a = address.toLowerCase().replace(/%.*$/, '');
     if (!net.isIPv6(a)) return null;
     const tail: number[] = [];

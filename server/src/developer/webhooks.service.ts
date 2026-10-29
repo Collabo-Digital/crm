@@ -66,8 +66,9 @@ export class WebhooksService implements OnModuleInit {
 
     // ─── Endpoints ─────────────────────────────────────────────────────
 
-    async list(orgId: string) {
-        const rows = await this.prisma.webhookEndpoint.findMany({ where: { organizationId: orgId }, orderBy: { createdAt: 'desc' } });
+    /** The organization's webhooks, or only those one API key made. */
+    async list(orgId: string, apiKeyId?: string) {
+        const rows = await this.prisma.webhookEndpoint.findMany({ where: { organizationId: orgId, ...(apiKeyId !== undefined ? { apiKeyId } : {}) }, orderBy: { createdAt: 'desc' } });
         return rows.map((r) => this.view(r));
     }
 

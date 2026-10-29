@@ -337,6 +337,29 @@ const numOrUndef = (v: string | undefined): number | undefined => {
   return Number.isFinite(n) ? n : undefined;
 };
 
+/// One of our own uploads by path alone: /uploads/products/<orgId>/<file>.
+const OWN_UPLOAD_PATH = /^\/uploads\/products\/[\w-]+\/[\w-]+(\.[\w-]+)?$/;
+/// A path segment of only dots, plain or percent-encoded.
+const DOT_SEGMENT = /(^|[/\\])(\.|%2e){1,2}([/\\?#]|$)/i;
+
+/**
+ * An Image Src an import may keep: an http(s) address, or the path of one of
+ * our own uploads. Anything else is left out, '..' in a path above all:
+ * removing the image later deletes the file its address names.
+ */
+export function importableImageSrc(raw: string): string | null {
+  const src = raw.trim();
+  if (src.startsWith('/')) return OWN_UPLOAD_PATH.test(src) ? src : null;
+  // URL parsing drops tabs and line breaks, which could hide a '..' from the check.
+  if (/[\t\n\r]/.test(src) || DOT_SEGMENT.test(src)) return null;
+  try {
+    const { protocol } = new URL(src);
+    return protocol === 'http:' || protocol === 'https:' ? src : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Group raw header-mapped rows by `Handle` and assemble each handle's
  * variants + images + product-level fields into a single create-ready
@@ -452,11 +475,16 @@ export function groupRowsIntoProducts(
 
     // Image row (any row with Image Src adds an image to the product)
     if (r['Image Src']) {
-      p.images.push({
-        src: r['Image Src'],
-        alt: r['Image Alt Text'] || undefined,
-        position: numOrUndef(r['Image Position']) ?? p.images.length + 1,
-      });
+      const src = importableImageSrc(r['Image Src']);
+      if (src) {
+        p.images.push({
+          src,
+          alt: r['Image Alt Text'] || undefined,
+          position: numOrUndef(r['Image Position']) ?? p.images.length + 1,
+        });
+      } else {
+        errors.push({ row: idx + 2, handle, message: 'Image Src is not a web address (http:// or https://), so that image was left out.' });
+      }
     }
   });
 

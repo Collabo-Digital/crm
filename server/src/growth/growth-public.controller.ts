@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, Headers, HttpCode, NotFoundException, Param, Post, Res } from '@nestjs/common';
+import { Body, Controller, Get, Header, Headers, HttpCode, Ip, NotFoundException, Param, Post, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { Public } from '../auth/decorators/public.decorator';
@@ -61,7 +61,7 @@ export class GrowthPublicController {
     @Post('widget/:key/signup')
     @HttpCode(200)
     @Header('Cross-Origin-Resource-Policy', 'cross-origin')
-    signup(@Param('key') key: string, @Body() dto: WidgetSignupDto, @Headers('origin') origin?: string, @Headers('referer') referer?: string) {
-        return this.growth.signup(key, dto, origin || referer);
+    signup(@Param('key') key: string, @Body() dto: WidgetSignupDto, @Ip() ip: string, @Headers('origin') origin?: string, @Headers('referer') referer?: string) {
+        return this.growth.signup(key, dto, origin || referer, ip);
     }
 }

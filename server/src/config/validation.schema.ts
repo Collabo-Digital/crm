@@ -97,4 +97,6 @@ export const validationSchema = Joi.object({
     META_ADS_CONFIG_ID: Joi.string().optional(),
     ANTHROPIC_API_KEY: Joi.string().optional(),
     ANTHROPIC_BASE_URL: Joi.string().uri().optional(),
+    AI_DRAFTS_PER_USER_PER_DAY: Joi.number().integer().min(1).optional(),
+    AI_DRAFTS_PER_DAY_TOTAL: Joi.number().integer().min(1).optional(),
 });

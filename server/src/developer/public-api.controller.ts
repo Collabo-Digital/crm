@@ -66,11 +66,11 @@ export class PublicApiController {
         return WEBHOOK_EVENTS;
     }
 
-    /** Subscriptions this key made. */
+    /** Subscriptions this key made: other keys' are other integrations', with their own receiving URLs. */
     @Get('webhooks')
     @RequireApiScope('webhooks:manage')
-    async subscriptions(@Caller() caller: ApiCaller) {
-        return (await this.webhooks.list(caller.organizationId)).filter((w) => w.createdByApi);
+    subscriptions(@Caller() caller: ApiCaller) {
+        return this.webhooks.list(caller.organizationId, caller.keyId);
     }
 
     @Post('webhooks')

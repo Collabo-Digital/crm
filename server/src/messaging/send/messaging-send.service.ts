@@ -3,6 +3,8 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { ChannelPlatform, MessageDirection, MessageKind, MessageSource, MessageStatus, Prisma, WhatsAppGroupStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { Priority } from '../../rate-limit/rate-limit.types';
+import { RedisService } from '../../redis/redis.service';
 import { ChannelAccessService } from '../channel-access.service';
 import { InboxEventsService } from '../inbox-events.service';
 import { previewOf } from '../message-content';
@@ -14,7 +16,7 @@ import {
     outboundText,
     replyWindow,
 } from '../outbound';
-import { MESSAGING_OUTBOUND_QUEUE, ORIGIN_PRIORITY, OUTBOUND_JOB_OPTS, OutboundJobData } from './outbound.queue';
+import { MESSAGING_OUTBOUND_QUEUE, ORIGIN_PRIORITY, OUTBOUND_JOB_OPTS, OutboundJobData, normalPriority } from './outbound.queue';
 
 export interface SendInput {
     organizationId: string;
@@ -36,6 +38,10 @@ export interface SendInput {
 export type SendOutcome =
     | { ok: true; messageId: string; duplicate?: boolean }
     | { ok: false; code: SendRefusal; message: string };
+
+const COUNT_LUA = `local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+return n`;
 
 const SOURCE_BY_ORIGIN: Record<SendOrigin, MessageSource> = {
     agent: MessageSource.AGENT,
@@ -100,6 +106,7 @@ export class MessagingSendService {
         private readonly access: ChannelAccessService,
         private readonly events: InboxEventsService,
         @InjectQueue(MESSAGING_OUTBOUND_QUEUE) private readonly queue: Queue<OutboundJobData>,
+        private readonly redis: RedisService,
     ) { }
 
     async send(input: SendInput): Promise<SendOutcome> {
@@ -242,7 +249,7 @@ export class MessagingSendService {
             throw err;
         }
 
-        await this.enqueue(messageId, gate.humanAgentTag, priority);
+        await this.enqueue(messageId, gate.humanAgentTag, await this.fairPriority(input.organizationId, priority));
         this.events.publish(input.organizationId, { type: 'message.created', conversationId: conversation.id, messageId });
         this.events.publish(input.organizationId, { type: 'conversation.updated', conversationId: conversation.id });
         return { ok: true, messageId };
@@ -255,6 +262,18 @@ export class MessagingSendService {
             { kind: 'deliver', messageId, humanAgentTag },
             { ...OUTBOUND_JOB_OPTS, jobId: `deliver-${messageId}`, priority },
         );
+    }
+
+    /**
+     * Every workspace shares the outbound queue: a NORMAL send goes as far
+     * down it as its workspace's other NORMAL sends this minute put it (see
+     * normalPriority). Other priorities are kept as they are.
+     */
+    private async fairPriority(organizationId: string, priority: number): Promise<number> {
+        if (priority !== (Priority.NORMAL as number)) return priority;
+        const minute = Math.floor(Date.now() / 60_000);
+        const queued = await this.redis.runScript('outboundNormalCount', COUNT_LUA, 1, [`outbound:normal:${organizationId}:${minute}`], [120]);
+        return normalPriority(Number(queued));
     }
 
     /**

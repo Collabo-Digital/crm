@@ -32,6 +32,9 @@ export default () => ({
     ai: {
         anthropicApiKey: process.env.ANTHROPIC_API_KEY,
         anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL,
+        // Daily draft caps beside each organization's own; unset, the writer's defaults.
+        draftsPerUserPerDay: process.env.AI_DRAFTS_PER_USER_PER_DAY ? Number.parseInt(process.env.AI_DRAFTS_PER_USER_PER_DAY, 10) : undefined,
+        draftsPerDayTotal: process.env.AI_DRAFTS_PER_DAY_TOTAL ? Number.parseInt(process.env.AI_DRAFTS_PER_DAY_TOTAL, 10) : undefined,
     },
     // Collabo's subscription billing, with Collabo's own Razorpay keys
     // (RAZORPAY_KEY_*). The API base is for local tests of usage billing.
