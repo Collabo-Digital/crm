@@ -139,12 +139,12 @@ describe('UserService — account lookup and deletion', () => {
     });
 
     it("disconnects the Instagram an influencer connected in the workspaces they leave, before closing the account", async () => {
-      const { service, prisma, channels } = build();
+      const { service, prisma, channels } = withPassword();
       prisma.organizationMember.findMany.mockImplementation(({ where }: { where: { role?: UserRole } }) =>
         Promise.resolve(where.role === UserRole.INFLUENCER ? [{ organizationId: 'org-brand' }] : [{ organizationId: 'org-a' }, { organizationId: 'org-brand' }]),
       );
 
-      await service.softDelete('u1');
+      await service.softDelete('u1', 'account-password');
 
       expect(prisma.organizationMember.findMany).toHaveBeenCalledWith({
         where: { userId: 'u1', isActive: true, role: UserRole.INFLUENCER },
@@ -155,10 +155,10 @@ describe('UserService — account lookup and deletion', () => {
     });
 
     it('leaves the account open when those channels could not be disconnected', async () => {
-      const { service, prisma, channels } = build();
+      const { service, prisma, channels } = withPassword();
       channels.disconnectOwnedBy.mockRejectedValue(new Error('database busy'));
 
-      await expect(service.softDelete('u1')).rejects.toThrow('database busy');
+      await expect(service.softDelete('u1', 'account-password')).rejects.toThrow('database busy');
       expect(prisma.user.update).not.toHaveBeenCalled();
     });
   });
