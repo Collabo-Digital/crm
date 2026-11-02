@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
-import { extractGrants, sectionGrants, SECTION_SCOPED_ROLES } from '../auth/permissions';
+import { extractGrants, namesAccess, SECTION_SCOPED_ROLES } from '../auth/permissions';
 import { ChannelService } from '../channel/channel.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -116,9 +116,9 @@ export class MembersService {
         if (member.role === UserRole.OWNER) {
             throw new ForbiddenException('The organization owner already has full access');
         }
-        // No section at all would read as "not configured" = full access —
-        // never what an admin clearing the last checkbox meant.
-        if (SECTION_SCOPED_ROLES.includes(member.role) && sectionGrants(grants).length === 0) {
+        // No section (and no section-less job) would read as "not configured"
+        // = full access — never what an admin clearing the last checkbox meant.
+        if (SECTION_SCOPED_ROLES.includes(member.role) && !namesAccess(grants)) {
             throw new BadRequestException('Select at least one section this member can access.');
         }
 

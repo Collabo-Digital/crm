@@ -113,10 +113,10 @@ export interface PermissionPreset {
  * sections and abilities, which stay editable; nothing references the template
  * afterwards.
  *
- * Every template names a section: a member with none is unrestricted (see
- * `resolveSections`). The Packer, Warehouse and Cashier stay within the grants
- * billed as an ops seat. The Accountant has no Orders section, because Agents
- * can change orders.
+ * Every template names a section, or a section-less job: a member with
+ * neither is unrestricted (see `resolveSections`). The Packer, Warehouse and
+ * Cashier stay within the grants billed as an ops seat. The Accountant has no
+ * Orders section, because Agents can change orders.
  */
 export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
   {
@@ -143,7 +143,7 @@ export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
     id: 'warehouse',
     label: 'Warehouse',
     description:
-      'Receives stock, prints labels and packs orders, from Products and the Packing list. Cannot adjust stock counts. No orders, customers or sales figures.',
+      'Receives stock, prints labels and packs orders, from Products and the Packing list. No orders, customers or sales figures.',
     // No inventory.adjust: it is not an ops-seat grant. Ticking "Adjust stock
     // counts" on the member adds it, and makes theirs a full seat.
     grants: [
@@ -165,8 +165,10 @@ export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
   {
     id: 'cashier',
     label: 'Cashier',
-    description: 'Sells at the till in Point of sale, and can look products up. No orders, store reports or till settings.',
-    grants: ['section.products', 'pos.sell'],
+    description: 'Sells at the till in Point of sale, finding products and customers there. Nothing else: no orders, products, store reports or till settings.',
+    // No section: the till is the whole job (see SECTIONLESS_JOBS). Products
+    // would let an Agent change catalogue prices, which the till sells at.
+    grants: ['pos.sell'],
   },
 ];
 
@@ -226,6 +228,18 @@ export function canBrowseCustomers(role: UserRole, grants: readonly string[]): b
 /** Roles whose section access is chosen per member (the invite checkboxes). */
 export const SECTION_SCOPED_ROLES: UserRole[] = [UserRole.AGENT, UserRole.VIEWER];
 
+/**
+ * Grants that are a whole job without any section. A member holding one and
+ * no section has chosen access, not "not configured": a Cashier holding
+ * `pos.sell` alone opens the till and no section at all.
+ */
+export const SECTIONLESS_JOBS: PermissionKey[] = ['pos.sell'];
+
+/** Does this grant list say what the member opens: a section, or a section-less job? */
+export function namesAccess(grants: readonly string[]): boolean {
+  return sectionGrants(grants).length > 0 || SECTIONLESS_JOBS.some((key) => grants.includes(key));
+}
+
 export function sectionGrants(grants: readonly string[]): SectionKey[] {
   const known = new Set<string>(SECTION_KEYS);
   return grants.filter((g): g is SectionKey => known.has(g));
@@ -234,11 +248,12 @@ export function sectionGrants(grants: readonly string[]): SectionKey[] {
 /**
  * Which sections a member may open: `'all'`, or the granted set.
  *
- * An AGENT / VIEWER with no `section.*` key at all is unrestricted. That is
- * the state of every member who joined before section access existed, so
- * nobody is locked out by a deploy and no backfill is needed. New data cannot
- * drift back into it by accident: the invite and the member PATCH both refuse
- * a grant list that names no section.
+ * An AGENT / VIEWER with no `section.*` key at all is unrestricted, unless
+ * they hold a section-less job (SECTIONLESS_JOBS). That is the state of every
+ * member who joined before section access existed, so nobody is locked out
+ * by a deploy and no backfill is needed. New data cannot drift back into it
+ * by accident: the invite and the member PATCH both refuse a grant list that
+ * names neither a section nor such a job.
  *
  * VENDOR resolves to `'all'` here on purpose — VendorAccessGuard and the
  * vendor scope already decide what a vendor reaches.
@@ -249,7 +264,7 @@ export function resolveSections(
 ): 'all' | Set<SectionKey> {
   if (!SECTION_SCOPED_ROLES.includes(role)) return 'all';
   const sections = sectionGrants(grants);
-  return sections.length === 0 ? 'all' : new Set(sections);
+  return namesAccess(grants) ? new Set(sections) : 'all';
 }
 
 /**

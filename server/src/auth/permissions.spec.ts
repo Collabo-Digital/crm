@@ -3,6 +3,8 @@ import {
     defaultGrantsForRole,
     hasPermission,
     extractGrants,
+    namesAccess,
+    resolveSections,
     DEFAULT_ROLE_GRANTS,
     PERMISSION_KEYS,
 } from './permissions';
@@ -94,5 +96,22 @@ describe('extractGrants', () => {
         expect(extractGrants({ grants: ['campaigns.view', 'campaigns.destroy', 42] })).toEqual([
             'campaigns.view',
         ]);
+    });
+});
+
+describe('a section-less job', () => {
+    it('makes a member with the till and no section open no section at all', () => {
+        expect(resolveSections(UserRole.AGENT, ['pos.sell'])).toEqual(new Set());
+        expect(namesAccess(['pos.sell'])).toBe(true);
+    });
+
+    it('leaves a member with no section and no such job unrestricted, as before', () => {
+        expect(resolveSections(UserRole.AGENT, [])).toBe('all');
+        expect(resolveSections(UserRole.AGENT, ['inventory.pack', 'chat.view_all'])).toBe('all');
+        expect(namesAccess(['chat.view_all'])).toBe(false);
+    });
+
+    it('changes nothing for a member with sections', () => {
+        expect(resolveSections(UserRole.AGENT, ['section.orders', 'pos.sell'])).toEqual(new Set(['section.orders']));
     });
 });

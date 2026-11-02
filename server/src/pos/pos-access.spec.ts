@@ -12,6 +12,9 @@ import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { PosController } from './pos.controller';
 import { PosPublicController } from './pos-public.controller';
 import { PosReportsController } from './reports/pos-reports.controller';
+import { OrderController } from '../order/order.controller';
+import { ProductController } from '../product/product.controller';
+import { CustomerController } from '../customer/customer.controller';
 
 /**
  * Who may use the till, read off the real decorators and run through the
@@ -103,7 +106,7 @@ describe('point-of-sale access', () => {
 });
 
 describe('a Cashier (pos.sell without the Orders section)', () => {
-    const CASHIER = { role: UserRole.AGENT, permissions: ['section.products', 'pos.sell'] };
+    const CASHIER = { role: UserRole.AGENT, permissions: ['pos.sell'] };
 
     it.each(handlers.filter(([name]) => !MANAGER_ONLY.includes(name)))('%s lets them sell', (_name, fn) => {
         expect(passes(fn, CASHIER)).toBe(true);
@@ -130,6 +133,28 @@ describe('a Cashier (pos.sell without the Orders section)', () => {
         };
         expect(run(reports.getSummary)).toBe(false);
         expect(run(reports.getActivity)).toBe(false);
+    });
+
+    it('opens no order, product or customer outside the till', () => {
+        const run = (controller: { prototype: object }, name: string) => {
+            const handler = (controller.prototype as Record<string, (...a: unknown[]) => unknown>)[name];
+            const context = {
+                getHandler: () => handler,
+                getClass: () => controller,
+                switchToHttp: () => ({ getRequest: () => ({ user: CASHIER }) }),
+            } as unknown as ExecutionContext;
+            try {
+                return new SectionAccessGuard(reflector).canActivate(context);
+            } catch (err) {
+                if (err instanceof ForbiddenException) return false;
+                throw err;
+            }
+        };
+        expect(run(OrderController, 'findOne')).toBe(false);
+        expect(run(OrderController, 'findAll')).toBe(false);
+        expect(run(ProductController, 'findAll')).toBe(false);
+        expect(run(ProductController, 'updateVariant')).toBe(false);
+        expect(run(CustomerController, 'findAll')).toBe(false);
     });
 
     it('needs the permission itself: products alone opens nothing here', () => {

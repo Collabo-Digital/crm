@@ -1,6 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
-import { PERMISSION_KEYS, PERMISSION_PRESETS, resolveSections, SECTION_KEYS } from './permissions';
+import { namesAccess, PERMISSION_KEYS, PERMISSION_PRESETS, resolveSections } from './permissions';
 import { MembersController } from '../organization/members.controller';
 
 /**
@@ -42,8 +42,8 @@ describe('job templates', () => {
         expect(preset.description.length).toBeGreaterThan(20);
     });
 
-    it.each(PERMISSION_PRESETS.map((p) => [p.label, p] as const))('%s names a section, so it is never full access', (_label, preset) => {
-        expect(preset.grants.some((key) => (SECTION_KEYS as readonly string[]).includes(key))).toBe(true);
+    it.each(PERMISSION_PRESETS.map((p) => [p.label, p] as const))('%s names a section or a section-less job, so it is never full access', (_label, preset) => {
+        expect(namesAccess(preset.grants)).toBe(true);
         expect(resolveSections(UserRole.AGENT, preset.grants)).not.toBe('all');
     });
 
@@ -71,9 +71,9 @@ describe('job templates', () => {
         expect(byId('warehouse').grants).not.toContain('inventory.adjust');
     });
 
-    it('a Cashier gets the till and no Orders section', () => {
-        expect(byId('cashier').grants).toContain('pos.sell');
-        expect(byId('cashier').grants).not.toContain('section.orders');
+    it('a Cashier gets the till and no section at all, so not Products, where an Agent can change prices', () => {
+        expect(byId('cashier').grants).toEqual(['pos.sell']);
+        expect(resolveSections(UserRole.AGENT, byId('cashier').grants)).toEqual(new Set());
     });
 });
 
