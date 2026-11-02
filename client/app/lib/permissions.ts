@@ -74,6 +74,18 @@ export function canEditAutomations(role: UserRole | undefined, grants: readonly 
 }
 
 /**
+ * May change the catalogue: add and edit products, their prices, photos and
+ * variants, and the stock counts in the product form. The server's product
+ * writes take an operator role with products.edit, which owners, admins and
+ * managers hold implicitly; a viewer is refused them whatever it holds. A
+ * vendor edits its own products, confined by its vendor scope.
+ */
+export function canEditProducts(role: UserRole | undefined, grants: readonly string[] | undefined): boolean {
+  if (role === "VENDOR") return true;
+  return role !== "VIEWER" && role !== "INFLUENCER" && hasPermission(role, grants, "products.edit");
+}
+
+/**
  * Roles that are OUTSIDE parties rather than staff.
  *
  * Both are deny-by-default on the server and get a reduced navigation here.

@@ -50,6 +50,8 @@ const TOOLBAR_MODULES = {
     ["clean"],
   ],
 };
+// Read-only shows the text alone: Quill's pickers are not buttons a fieldset can disable.
+const READ_ONLY_MODULES = { toolbar: false };
 
 export function RichTextEditor({
   value,
@@ -138,7 +140,7 @@ export function RichTextEditor({
       onChange={handleChange}
       placeholder={placeholder}
       readOnly={readOnly}
-      modules={TOOLBAR_MODULES}
+      modules={readOnly ? READ_ONLY_MODULES : TOOLBAR_MODULES}
       className={className}
     />
   );
