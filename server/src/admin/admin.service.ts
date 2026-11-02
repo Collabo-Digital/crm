@@ -1,8 +1,20 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BillingProvider, Prisma, SubscriptionStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { QueryUsersDto } from './dto/query-users.dto';
+import { SetOrganizationBillingDto } from './dto/set-organization-billing.dto';
+
+/** What the "Set plan / extend trial" action shows and changes. */
+const ORG_BILLING_SELECT = {
+    id: true,
+    billingPlan: true,
+    billingInterval: true,
+    billingProvider: true,
+    subscriptionStatus: true,
+    trialEndsAt: true,
+    currentPeriodEnd: true,
+} satisfies Prisma.OrganizationSelect;
 
 /**
  * Super-admin operations. Every method assumes the caller has already passed
@@ -98,8 +110,44 @@ export class AdminService {
                 orgType: m.organization.type,
                 role: m.role,
                 isActive: m.isActive,
+                billing: {
+                    billingPlan: m.organization.billingPlan,
+                    billingInterval: m.organization.billingInterval,
+                    billingProvider: m.organization.billingProvider,
+                    subscriptionStatus: m.organization.subscriptionStatus,
+                    trialEndsAt: m.organization.trialEndsAt,
+                    currentPeriodEnd: m.organization.currentPeriodEnd,
+                },
             })),
         };
+    }
+
+    /**
+     * "Set plan / extend trial": a plan the Collabo team invoices (Scale,
+     * Enterprise, or any plan billed by hand), or a trial's new end. A
+     * workspace paying through Razorpay keeps the plan its subscription is
+     * on, so that is not changed here. Logged with who did it and what it was.
+     */
+    async setOrganizationBilling(orgId: string, dto: SetOrganizationBillingDto, adminId: string) {
+        const org = await this.prisma.organization.findFirst({ where: { id: orgId, deletedAt: null }, select: ORG_BILLING_SELECT });
+        if (!org) throw new NotFoundException('Organization not found');
+        const paying = org.billingProvider === BillingProvider.RAZORPAY
+            && (org.subscriptionStatus === SubscriptionStatus.ACTIVE || org.subscriptionStatus === SubscriptionStatus.AUTHENTICATED);
+        if (paying && (dto.billingPlan || dto.billingInterval || dto.manual)) {
+            throw new BadRequestException('This workspace pays through a Razorpay subscription, which sets its plan. Cancel the subscription in Razorpay first.');
+        }
+
+        const data: Prisma.OrganizationUpdateInput = {
+            ...(dto.billingPlan ? { billingPlan: dto.billingPlan } : {}),
+            ...(dto.billingInterval ? { billingInterval: dto.billingInterval } : {}),
+            ...(dto.manual === true ? { billingProvider: BillingProvider.MANUAL } : {}),
+            ...(dto.manual === false && org.billingProvider === BillingProvider.MANUAL ? { billingProvider: null } : {}),
+            ...(dto.trialEndsAt !== undefined ? { trialEndsAt: dto.trialEndsAt ? new Date(dto.trialEndsAt) : null } : {}),
+        };
+        const updated = await this.prisma.organization.update({ where: { id: orgId }, data, select: ORG_BILLING_SELECT });
+        const changes = (Object.keys(data) as Array<keyof typeof org>).map((k) => `${k} ${JSON.stringify(org[k])} → ${JSON.stringify(updated[k])}`);
+        this.logger.log(`Billing of org ${orgId} set by super admin ${adminId}: ${changes.join(', ') || 'no change'}`);
+        return updated;
     }
 
     async softDeleteUser(userId: string) {

@@ -8,6 +8,7 @@ import { AuthService } from '../auth/auth.service';
 import { AdminService } from './admin.service';
 import { ImpersonateDto } from './dto/impersonate.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
+import { SetOrganizationBillingDto } from './dto/set-organization-billing.dto';
 
 /**
  * Collabo-team-only endpoints. Every route is gated by `SuperAdminGuard`,
@@ -93,5 +94,15 @@ export class AdminController {
     @Post('users/:userId/force-logout')
     forceLogout(@Param('userId') userId: string) {
         return this.admin.forceLogout(userId);
+    }
+
+    /** Set plan / extend trial, for a plan the Collabo team invoices or a longer trial. */
+    @Patch('organizations/:orgId/billing')
+    setOrganizationBilling(
+        @Param('orgId') orgId: string,
+        @Body() dto: SetOrganizationBillingDto,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.admin.setOrganizationBilling(orgId, dto, user.sub);
     }
 }
