@@ -1,7 +1,8 @@
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
-import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
+import type { JwtPayload, SessionPayload } from '../auth/interfaces/jwt-payload.interface';
+import { resolveSections } from '../auth/permissions';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { RequireSection } from '../auth/decorators/require-section.decorator';
+import { RequireSection, SectionOrPermission } from '../auth/decorators/require-section.decorator';
 import { ORG_MANAGERS, ORG_OPERATORS, Roles } from '../auth/decorators/roles.decorator';
 import { PosCatalogService } from './pos-catalog.service';
 import { PosStaffService } from './pos-staff.service';
@@ -21,9 +22,22 @@ import {
 } from './pos-requests.schema';
 
 /**
+ * Reached the till through `pos.sell` alone, without the Orders section: a
+ * Cashier, whose receipts are those of counter sales and never another order's.
+ */
+function tillOnly(user: SessionPayload): boolean {
+    const sections = resolveSections(user.role!, user.permissions ?? []);
+    return sections !== 'all' && !sections.has('section.orders');
+}
+
+/**
  * The point of sale: billing at the counter on top of the offline order. Part
  * of the Orders section; reads and selling for anyone who handles orders,
  * settings and staff for managers. Vendors never reach it.
+ *
+ * The till's own routes also open to `pos.sell` without the Orders section,
+ * so a Cashier sells without seeing the order book. Everything else here
+ * (settings, staff) does not.
  */
 @RequireSection('orders')
 @Controller('pos')
@@ -39,6 +53,7 @@ export class PosController {
     // GET /api/v1/pos/setup?storeId= — everything the billing screen loads first.
     @Get('setup')
     @Roles(...ORG_OPERATORS)
+    @SectionOrPermission('pos.sell')
     async setup(@CurrentUser() user: JwtPayload, @Query('storeId') storeId?: string) {
         const [setup, billDelivery] = await Promise.all([this.catalog.setup(user.orgId!, storeId), this.bills.setup(user.orgId!)]);
         return { ...setup, billDelivery };
@@ -72,6 +87,7 @@ export class PosController {
     @Post('unlock')
     @HttpCode(200)
     @Roles(...ORG_OPERATORS)
+    @SectionOrPermission('pos.sell')
     unlock(@CurrentUser() user: JwtPayload, @Body() body: unknown) {
         return this.staff.unlock(user.orgId!, user.sub, parsePosBody(UnlockSchema, body, 'PIN').pin);
     }
@@ -79,6 +95,7 @@ export class PosController {
     @Post('approve')
     @HttpCode(200)
     @Roles(...ORG_OPERATORS)
+    @SectionOrPermission('pos.sell')
     approve(@CurrentUser() user: JwtPayload, @Body() body: unknown) {
         return this.staff.approve(user.orgId!, user.sub, parsePosBody(ApproveSchema, body, 'approval'));
     }
@@ -86,6 +103,7 @@ export class PosController {
     // GET /api/v1/pos/products?search=&storeId=&limit=20
     @Get('products')
     @Roles(...ORG_OPERATORS)
+    @SectionOrPermission('pos.sell')
     products(
         @CurrentUser() user: JwtPayload,
         @Query('search') search?: string,
@@ -97,24 +115,28 @@ export class PosController {
 
     @Get('scan')
     @Roles(...ORG_OPERATORS)
+    @SectionOrPermission('pos.sell')
     scan(@CurrentUser() user: JwtPayload, @Query('code') code?: string, @Query('storeId') storeId?: string) {
         return this.catalog.scan(user.orgId!, code, storeId);
     }
 
     @Get('customers')
     @Roles(...ORG_OPERATORS)
+    @SectionOrPermission('pos.sell')
     customers(@CurrentUser() user: JwtPayload, @Query('search') search?: string) {
         return this.catalog.customers(user.orgId!, search);
     }
 
     @Post('sales')
     @Roles(...ORG_OPERATORS)
+    @SectionOrPermission('pos.sell')
     createSale(@CurrentUser() user: JwtPayload, @Body() body: unknown) {
         return this.sales.createSale(user.orgId!, user.sub, parsePosBody(SaleSchema, body, 'sale'));
     }
 
     @Post('sales/:orderId/payments')
     @Roles(...ORG_OPERATORS)
+    @SectionOrPermission('pos.sell')
     collectPayment(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string, @Body() body: unknown) {
         return this.sales.collectPayment(user.orgId!, user.sub, orderId, parsePosBody(CollectPaymentSchema, body, 'payment'));
     }
@@ -122,6 +144,7 @@ export class PosController {
     // Where the bill's sending stands, for the screen after a sale to follow.
     @Get('sales/:orderId/delivery')
     @Roles(...ORG_OPERATORS)
+    @SectionOrPermission('pos.sell')
     delivery(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
         return this.bills.view(user.orgId!, orderId);
     }
@@ -129,21 +152,24 @@ export class PosController {
     @Post('sales/:orderId/send-bill')
     @HttpCode(200)
     @Roles(...ORG_OPERATORS)
+    @SectionOrPermission('pos.sell')
     sendBill(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string, @Body() body: unknown) {
         return this.bills.sendAgain(user.orgId!, user.sub, orderId, parsePosBody(SendBillSchema, body, 'bill to send'));
     }
 
     @Get('receipts/:orderId')
     @Roles(...ORG_OPERATORS)
-    receipt(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
-        return this.receipts.receipt(user.orgId!, orderId);
+    @SectionOrPermission('pos.sell')
+    receipt(@CurrentUser() user: SessionPayload, @Param('orderId') orderId: string) {
+        return this.receipts.receipt(user.orgId!, orderId, { posSaleOnly: tillOnly(user) });
     }
 
     // After the receipt prints: the first print is recorded, so a reprint says DUPLICATE.
     @Post('receipts/:orderId/printed')
     @HttpCode(200)
     @Roles(...ORG_OPERATORS)
-    receiptPrinted(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
-        return this.receipts.markPrinted(user.orgId!, orderId);
+    @SectionOrPermission('pos.sell')
+    receiptPrinted(@CurrentUser() user: SessionPayload, @Param('orderId') orderId: string) {
+        return this.receipts.markPrinted(user.orgId!, orderId, { posSaleOnly: tillOnly(user) });
     }
 }

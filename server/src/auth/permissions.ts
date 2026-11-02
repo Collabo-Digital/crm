@@ -48,6 +48,12 @@ export const PERMISSION_KEYS = [
   'inventory.reports',
   'reports.finance',
   /**
+   * The point-of-sale till, opened without the Orders section: a Cashier holds
+   * it and no `section.orders`, the way a Packer holds `inventory.pack`. The
+   * till's settings, staff and store reports stay with ORG_MANAGERS.
+   */
+  'pos.sell',
+  /**
    * Campaign access, split read/write from the start.
    *
    * Influencers currently get `campaigns.view` and nothing else (see

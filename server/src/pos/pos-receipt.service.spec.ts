@@ -293,4 +293,19 @@ describe('PosReceiptService.markPrinted', () => {
         prisma.$executeRaw.mockResolvedValue(0);
         await expect(service.markPrinted(ORG, 'order_x')).rejects.toThrow(new NotFoundException('That bill was not found.'));
     });
+
+    it('for a till-only caller, an order that is not a counter sale is not found and stays unmarked', async () => {
+        const { service, prisma } = build(null);
+        await expect(service.markPrinted(ORG, 'order_web', { posSaleOnly: true })).rejects.toThrow(new NotFoundException('That bill was not found.'));
+        expect(prisma.order.findFirst).toHaveBeenCalledWith({ where: { id: 'order_web', organizationId: ORG, deletedAt: null, posSale: true }, select: { id: true } });
+        expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    });
+});
+
+describe('PosReceiptService.receipt for a till-only caller', () => {
+    it('looks among counter sales only', async () => {
+        const { service, prisma } = build(null);
+        await expect(service.receipt(ORG, 'order_web', { posSaleOnly: true })).rejects.toThrow(new NotFoundException('That bill was not found.'));
+        expect(prisma.order.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'order_web', organizationId: ORG, deletedAt: null, posSale: true } }));
+    });
 });
