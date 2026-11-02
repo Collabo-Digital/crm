@@ -157,6 +157,12 @@ export class InventoryService {
       throw new Error(`enable-seed: org ${orgId} has no default warehouse`);
     }
 
+    // Tracked as sales count it: the variant's own switch, or every variant
+    // while trackQuantityGlobally is on. A tracked variant left without a row
+    // here has its first sale taken from an empty one, below zero.
+    const trackGlobally =
+      (await this.settings.getProductSettings(orgId)).trackQuantityGlobally === true;
+
     // Set-based batches: 3 statements per 500 variants. The per-variant
     // find/create loop this replaces made ~1500 round trips per batch, which
     // blew Prisma's 5s interactive-transaction default against a remote DB.
@@ -167,7 +173,7 @@ export class InventoryService {
       const variants = await this.prisma.productVariant.findMany({
         where: {
           organizationId: orgId,
-          trackQuantity: true,
+          ...(trackGlobally ? {} : { trackQuantity: true }),
           product: { deletedAt: null },
         },
         orderBy: { id: 'asc' },

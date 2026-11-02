@@ -830,7 +830,8 @@ export class ProductService {
    * The opening stock lines each new variant is created with, by payload
    * index, or null for a variant that gets the old seed instead (one row at
    * the default location, via `ensureStockRows`). Lines apply only where
-   * stock is tracked per location and the variant tracks quantity.
+   * stock is tracked per location and the variant's quantity is tracked: by
+   * its own switch, or by trackQuantityGlobally, as sales count it.
    *
    * Every location must be one of the org's active locations, listed once per
    * variant; anything else is refused before a row is written.
@@ -840,8 +841,13 @@ export class ProductService {
     orgId: string,
     variants: CreateVariantDto[],
   ): Promise<Array<Array<{ warehouseId: string; quantity: number }> | null>> {
+    const trackGlobally =
+      variants.some((v) => v.trackQuantity === false) &&
+      (await this.settings.getProductSettings(orgId)).trackQuantityGlobally === true;
     const lines = variants.map((v) =>
-      v.stock && v.stock.length > 0 && v.trackQuantity !== false ? v.stock : null,
+      v.stock && v.stock.length > 0 && (trackGlobally || v.trackQuantity !== false)
+        ? v.stock
+        : null,
     );
     if (!lines.some(Boolean)) return lines;
     if (!(await this.inventoryLedger.isWarehousingEnabled(orgId))) {

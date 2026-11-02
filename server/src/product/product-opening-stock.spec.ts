@@ -23,7 +23,7 @@ const CLOSED = 'wh_closed';
 
 type Row = Record<string, any>;
 
-function fakeDb(opts: { warehousing?: boolean } = {}) {
+function fakeDb(opts: { warehousing?: boolean; trackGlobally?: boolean } = {}) {
   const warehouses: Row[] = [
     { id: MAIN, organizationId: ORG, name: 'Main warehouse', isActive: true, isDefault: true },
     { id: KOCHI, organizationId: ORG, name: 'Kochi store', isActive: true, isDefault: false },
@@ -150,7 +150,9 @@ function fakeDb(opts: { warehousing?: boolean } = {}) {
     getInventorySettings: jest
       .fn()
       .mockResolvedValue({ warehousingEnabled: opts.warehousing ?? true }),
-    getProductSettings: jest.fn().mockResolvedValue({ autoSyncToShopify: false }),
+    getProductSettings: jest
+      .fn()
+      .mockResolvedValue({ autoSyncToShopify: false, trackQuantityGlobally: opts.trackGlobally ?? false }),
   };
   const ledger = new InventoryLedgerService(db, settings as never);
   const skuGenerator = {
@@ -281,6 +283,26 @@ describe('ProductService.create — opening stock per location', () => {
 
     expect(stockLevels).toEqual([]);
     expect(events).toEqual([]);
+  });
+
+  it('stocks an untracked variant at its chosen locations when the workspace tracks every variant', async () => {
+    const { service, rowsOf, cacheOf } = fakeDb({ trackGlobally: true });
+    const product = await service.create(ORG, USER, shirt({
+      trackQuantity: false,
+      stock: [{ warehouseId: KOCHI, quantity: 5 }],
+    }));
+
+    expect(rowsOf(product.variants[0].id)).toEqual([{ warehouseId: KOCHI, available: 5 }]);
+    expect(cacheOf(product.variants[0].id)).toBe(5);
+  });
+
+  it('seeds an untracked variant at the default location when the workspace tracks every variant', async () => {
+    const { service, rowsOf } = fakeDb({ trackGlobally: true });
+    const product = await service.create(ORG, USER, shirt({ trackQuantity: false, inventoryQuantity: 4 }));
+
+    // Sales count it as tracked, so without a row its first sale is taken
+    // from an empty one below zero.
+    expect(rowsOf(product.variants[0].id)).toEqual([{ warehouseId: MAIN, available: 4 }]);
   });
 
   it('ignores stock lines in a workspace without locations and keeps its single quantity', async () => {

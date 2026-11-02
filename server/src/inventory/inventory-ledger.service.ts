@@ -139,11 +139,16 @@ export class InventoryLedgerService {
     if (variants.length === 0) return;
     if (!(await this.isWarehousingEnabled(orgId))) return;
 
-    // Matches `runEnableSeed`: an untracked variant deliberately has no stock
-    // row, because its quantity is not managed. `trackQuantity` is optional
-    // here so callers that did not select it are not silently skipped —
-    // undefined means "not told", which the schema default treats as tracked.
-    const tracked = variants.filter((v) => v.trackQuantity !== false);
+    // Matches `runEnableSeed` and the sale path: a variant is tracked by its
+    // own switch, or by trackQuantityGlobally. An untracked variant
+    // deliberately has no stock row, because its quantity is not managed.
+    // `trackQuantity` is optional here so callers that did not select it are
+    // not silently skipped — undefined means "not told", which the schema
+    // default treats as tracked.
+    const trackGlobally =
+      variants.some((v) => v.trackQuantity === false) &&
+      (await this.settings.getProductSettings(orgId)).trackQuantityGlobally === true;
+    const tracked = variants.filter((v) => trackGlobally || v.trackQuantity !== false);
     if (tracked.length === 0) return;
 
     const warehouse = await db.warehouse.findFirst({
