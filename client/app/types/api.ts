@@ -3102,7 +3102,7 @@ export interface InwardSuppliesResponse {
   summary: InwardSupplySummary;
 }
 
-/** Payload for PUT /inward-supplies. Idempotent on (year, period, supplier). */
+/** Payload for PUT /payment-fees. Idempotent on (year, period, supplier). */
 export interface UpsertInwardSupplyRequest {
   financialYear: string;
   period: string;
