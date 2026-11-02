@@ -46,6 +46,11 @@ export const PERMISSION_KEYS = [
   'inventory.dispatch',
   'inventory.labels',
   'inventory.reports',
+  /**
+   * Reading the money: invoices, GST returns and payment fees. Checked on top
+   * of the Invoices section, so an Accountant (an AGENT holding it) reads them
+   * while issuing, cancelling and filing stay with ORG_MANAGERS.
+   */
   'reports.finance',
   /**
    * The point-of-sale till, opened without the Orders section: a Cashier holds

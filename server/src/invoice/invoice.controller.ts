@@ -24,12 +24,17 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { ORG_MANAGERS, Roles } from '../auth/decorators/roles.decorator';
 import { RequireSection } from '../auth/decorators/require-section.decorator';
+import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { Throttle } from '@nestjs/throttler';
 import { attachmentDisposition } from '../common/utils/content-disposition.util';
 import { neutraliseCsvFormula } from '../common/utils/csv-formula.util';
 import { renderCsvSections } from './gst-return-rows';
 
+// Reading invoices and GST returns needs reports.finance on top of the
+// section, so an Accountant (an AGENT holding it) reads them. Every write is
+// ORG_MANAGERS, who hold the key implicitly.
 @RequireSection('invoices')
+@RequirePermissions('reports.finance')
 @Controller('invoices')
 export class InvoiceController {
   constructor(private readonly invoiceService: InvoiceService) {}
