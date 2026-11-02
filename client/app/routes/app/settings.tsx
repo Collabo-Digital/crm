@@ -69,6 +69,8 @@ import {
   accessGrants,
 } from "~/components/app/settings/section-access-picker";
 import { AVAILABLE_SECTIONS, isSectionScopedRole, sectionKey, sectionsInGrants, type SectionId } from "~/lib/sections";
+import { LocationScopePicker, MemberLocationScope } from "~/components/app/settings/location-scope-picker";
+import { isLocationScopedRole } from "~/lib/location-scope";
 import { formatCurrency } from "~/lib/utils";
 import type { UpdateOrganizationRequest, UserRole, OrgMember, OrganizationGstin, CreateGstinRequest, StateTaxRate, ProductTypeTaxRate, CollectionTaxOverride, ShopifyCollection, LoyaltyMetric, OrgResponse, Warehouse } from "~/types/api";
 import { readAddress } from "~/lib/address";
@@ -265,6 +267,8 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
   // Sections an Agent / Viewer starts with — everything, until unticked.
   const [sections, setSections] = useState<SectionId[]>(() => AVAILABLE_SECTIONS.map((s) => s.id));
   const [capabilities, setCapabilities] = useState<string[]>(DEFAULT_CAPABILITIES);
+  // Stores a Manager / Agent will work at; empty = every location.
+  const [locationScope, setLocationScope] = useState<string[]>([]);
   const sendInvite = useSendInviteMutation(orgId);
 
   const needsVendor = role === "VENDOR";
@@ -280,8 +284,9 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
         role,
         vendorScope: needsVendor ? vendorScope : undefined,
         grants: needsSections ? accessGrants(role, sections, capabilities) : undefined,
+        locationScope: isLocationScopedRole(role) && locationScope.length > 0 ? locationScope : undefined,
       },
-      { onSuccess: () => { setEmail(""); setVendorScope(""); onDone(); } },
+      { onSuccess: () => { setEmail(""); setVendorScope(""); setLocationScope([]); onDone(); } },
     );
   }
 
@@ -340,6 +345,8 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
           <CapabilityPicker role={role} sections={sections} value={capabilities} onChange={setCapabilities} />
         </div>
       )}
+
+      <LocationScopePicker role={role} value={locationScope} onChange={setLocationScope} />
     </div>
   );
 }
@@ -2144,6 +2151,8 @@ export default function SettingsPage() {
                               <Lock className="size-3" /> {sectionAccessLabel(member.permissions)}
                             </button>
                           )}
+
+                          {canManageAccess && currentOrgId && <MemberLocationScope orgId={currentOrgId} member={member} />}
 
                           {isOwner ? (
                             <span className="shrink-0 rounded-full bg-brand/30 px-2 py-0.5 text-caption font-semibold text-brand-strong">

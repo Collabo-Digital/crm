@@ -67,6 +67,14 @@ export const orgService = {
       .patch<OrgMember>(`/organizations/${orgId}/members/${memberId}/permissions`, data)
       .then((response) => response.data),
 
+  /** Replaces the stock locations a Manager or Agent works at; an empty list means every location. */
+  updateMemberLocations: (orgId: string, memberId: string, locationScope: string[]) =>
+    apiClient
+      .patch<Pick<OrgMember, "id" | "role" | "locationScope">>(`/organizations/${orgId}/members/${memberId}/locations`, {
+        locationScope,
+      })
+      .then((response) => response.data),
+
   removeMember: (orgId: string, memberId: string) =>
     apiClient
       .delete<OrgMember>(`/organizations/${orgId}/members/${memberId}`)

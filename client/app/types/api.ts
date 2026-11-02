@@ -549,6 +549,8 @@ export interface OrgMember {
   role: UserRole;
   /** The member's full grant list; no `section.*` entry means full section access. */
   permissions?: string[];
+  /** Managers and Agents: the stock locations they work at. Empty means every location. */
+  locationScope?: string[];
   joinedAt: string;
   user: {
     id: string;
@@ -581,6 +583,8 @@ export interface SendInviteRequest {
   vendorScope?: string;
   /** For AGENT / VIEWER: the `section.*` grants the member starts with. */
   grants?: string[];
+  /** For MANAGER / AGENT: the stock locations they will work at. Omitted or empty means every location. */
+  locationScope?: string[];
 }
 
 /** Payload for replacing a member's grant list (PATCH …/members/:id/permissions). */
@@ -609,6 +613,8 @@ export interface OrgInvite {
   name: string | null;
   role: UserRole;
   permissions?: string[];
+  /** As on the membership it becomes. */
+  locationScope?: string[];
   status: InviteState;
   token?: string;
   invitedBy: string;
