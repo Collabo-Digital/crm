@@ -729,7 +729,8 @@ export class MessageIngestService {
                 ...(customerId && !existing.customerId ? { customerId } : {}),
                 ...(isNewest ? { lastMessageAt: opts.at, lastMessagePreview: opts.preview } : {}),
                 ...(opts.inbound && opts.live ? { unreadCount: { increment: 1 } } : {}),
-                ...(opts.opensWindow ? { lastInboundAt: opts.at } : {}),
+                // An older message delivered late must not close the window early.
+                ...(opts.opensWindow && (!existing.lastInboundAt || opts.at > existing.lastInboundAt) ? { lastInboundAt: opts.at } : {}),
                 ...(opts.inbound && opts.live && !existing.awaitingReplySince ? { awaitingReplySince: opts.at } : {}),
                 ...(!opts.inbound && opts.live ? { lastOutboundAt: opts.at } : {}),
                 ...(opts.businessReply
