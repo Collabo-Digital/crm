@@ -921,7 +921,7 @@ function AdjustStockDialog({ line, receiveOnly = false, onClose }: { line: Stock
               value={note}
               onChange={(e) => setNote(e.target.value)}
               className="h-8 text-xs"
-              placeholder="e.g. cycle count Aug"
+              placeholder={receiveOnly ? "e.g. supplier bill number" : "e.g. cycle count Aug"}
             />
           </label>
         </div>
