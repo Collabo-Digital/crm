@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { deriveLocationCode } from '../inventory/location-links.service';
 import { findStateGstin } from '../inventory/warehouse-gstin.util';
+import { removeFromLocationScopes } from '../auth/location-scope.util';
 import {
   InventorySettingsSchema,
   parseInventorySettings,
@@ -189,6 +190,7 @@ export class ShopifyLocationSyncService {
           code: true,
           shopifyLocationId: true,
           isDefault: true,
+          isActive: true,
           address: true,
           gstinId: true,
         },
@@ -263,6 +265,8 @@ export class ShopifyLocationSyncService {
           // default pre-linked from the cached primary would otherwise keep
           // the placeholder "Main warehouse" (see adoptLocationName).
           const takesShopifyName = createdFromShopify || (autoLink && record.action === null);
+          // Closed in Shopify: out of the stores members work at, as a location switched off here is.
+          const closes = !match.isDefault && match.isActive && !node.isActive;
           await this.prisma.warehouse.update({
             where: { id: match.id },
             data: {
@@ -271,6 +275,7 @@ export class ShopifyLocationSyncService {
               ...(await enrichment(node, match)),
             },
           });
+          if (closes) await removeFromLocationScopes(this.prisma, orgId, [match.id]);
           // Linked before decisions were recorded, or relinked by hand since:
           // the link IS the decision.
           if (!createdFromShopify && (record.action !== ShopifyLocationAction.LINK || record.warehouseId !== match.id)) {
@@ -305,6 +310,7 @@ export class ShopifyLocationSyncService {
           where: { id: { in: stale.map((w) => w.id) } },
           data: { isActive: false },
         });
+        await removeFromLocationScopes(this.prisma, orgId, stale.map((w) => w.id));
       }
       await this.prisma.shopifyLocationLink.deleteMany({
         where: { channelId, shopifyLocationId: { notIn: [...seenLocationIds] } },

@@ -54,10 +54,11 @@ export class OrderController {
   // optional auto-invoice and inventory decrement.
   @Post('offline')
   @Roles(...ORG_OPERATORS)
-  createOffline(
+  async createOffline(
     @CurrentUser() user: JwtPayload,
     @Body() dto: CreateOfflineOrderDto,
   ) {
+    await this.orderService.assertSaleLocation(user, dto.warehouseId);
     return this.orderService.createOfflineOrder(user.orgId!, user.sub, dto);
   }
 

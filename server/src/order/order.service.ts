@@ -22,6 +22,7 @@ import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
 import { catalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util';
 import { compositionInterStateError, isCompositionSeller } from '../gst/composition.util';
 import { ensureManualChannel } from '../channel/ensure-manual-channel';
+import { assertInLocationScope, locationScopeFor } from '../auth/location-scope.util';
 import { singleDistinct } from '../channel/single-distinct.util';
 import {
   sellerStateForSupply,
@@ -1269,6 +1270,16 @@ export class OrderService {
       const rate = rates.get(source) ?? 1;
       return this.calculator.round2(this.calculator.toNumber(v.price) * rate);
     });
+  }
+
+  /**
+   * The order form sells from one of a store-limited member's own locations
+   * (auth/location-scope.util). Omitted, a sale would take the default
+   * location's stock, which need not be theirs, so they must name one.
+   */
+  async assertSaleLocation(user: Parameters<typeof locationScopeFor>[1], warehouseId?: string) {
+    const scope = await locationScopeFor(this.prisma, user);
+    assertInLocationScope(scope, warehouseId, 'You can only sell from the locations you work at. Pick one of yours.');
   }
 
   // ─── OFFLINE / IN-STORE ORDER CREATION ───

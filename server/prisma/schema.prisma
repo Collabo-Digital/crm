@@ -465,6 +465,10 @@ model OrganizationMember {
   role                UserRole          @default(AGENT)
   permissions         Json?             @db.JsonB // Fine-grained overrides
   vendorScope         String?           @map("vendor_scope") // For VENDOR role: the Product.vendor value this member is limited to
+  /// The stock locations (Warehouse ids, stores or warehouses) a MANAGER or
+  /// AGENT works at; empty = every location. Ignored for every other role.
+  /// See src/auth/location-scope.util.ts.
+  locationScope       String[]          @default([]) @map("location_scope")
   isActive            Boolean           @default(true) @map("is_active")
   /// What the member chose in the inbox. Whether they are actually there is
   /// inboxSeenAt, refreshed while an inbox is open.
@@ -529,6 +533,7 @@ model TeamInvite {
   role           UserRole     @default(AGENT)
   vendorScope    String?      @map("vendor_scope") // For VENDOR invites: the Product.vendor value to scope the member to
   permissions    Json?        @db.JsonB // Grants chosen on the invite form; copied to OrganizationMember.permissions on accept
+  locationScope  String[]     @default([]) @map("location_scope") // Copied to OrganizationMember.locationScope on accept
   token          String       @unique
   status         InviteStatus @default(PENDING)
   invitedBy      String       @map("invited_by")

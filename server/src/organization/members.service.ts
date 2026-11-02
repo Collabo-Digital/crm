@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { extractGrants, sectionGrants, SECTION_SCOPED_ROLES } from '../auth/permissions';
+import { resolveLocationScope, storeScopingAllowed } from '../auth/location-scope.util';
 import { ChannelService } from '../channel/channel.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -51,6 +52,7 @@ export class MembersService {
                     id: m.id,
                     role: m.role,
                     permissions: extractGrants(m.permissions),
+                    locationScope: m.locationScope,
                     joinedAt: m.joinedAt,
                     user: m.user,
                 }
@@ -131,6 +133,27 @@ export class MembersService {
         await this.redis.deleteSession(member.userId);
 
         return updated;
+    }
+
+    // ─── UPDATE LOCATIONS ───
+    // The stock locations a Manager or Agent works at (see
+    // auth/location-scope.util.ts). Wholesale replace; empty = every location.
+    // Read from the membership on every request, so no session to evict.
+    async updateLocationScope(orgId: string, memberId: string, locationIds: string[]) {
+        const member = await this.prisma.organizationMember.findFirst({
+            where: { id: memberId, organizationId: orgId, isActive: true },
+            select: { id: true, role: true },
+        });
+        if (!member) throw new NotFoundException('Member not found');
+        const org = await this.prisma.organization.findUnique({ where: { id: orgId }, select: { billingPlan: true } });
+        const locationScope = await resolveLocationScope(
+            this.prisma, orgId, member.role, locationIds, !!org && storeScopingAllowed(org),
+        );
+        return this.prisma.organizationMember.update({
+            where: { id: memberId },
+            data: { locationScope },
+            select: { id: true, role: true, locationScope: true },
+        });
     }
 
     // ─── REMOVE MEMBER ───

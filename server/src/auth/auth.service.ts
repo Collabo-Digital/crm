@@ -546,7 +546,8 @@ export class AuthService {
     // false`, so a returning member already has a row and `create` threw P2002
     // — which made re-inviting anyone who had ever been removed impossible.
     // The role's default grants are seeded alongside the section access chosen
-    // on the invite form, and re-joining re-seeds both.
+    // on the invite form, and re-joining re-seeds both, as it does the stores
+    // the member works at.
     const grants = [...new Set([...defaultGrantsForRole(invite.role), ...extractGrants(invite.permissions)])];
     await this.prisma.organizationMember.upsert({
       where: {
@@ -558,12 +559,14 @@ export class AuthService {
         role: invite.role,
         vendorScope: invite.vendorScope,
         permissions: { grants },
+        locationScope: invite.locationScope,
       },
       update: {
         role: invite.role,
         vendorScope: invite.vendorScope,
         isActive: true,
         permissions: { grants },
+        locationScope: invite.locationScope,
       },
     });
 

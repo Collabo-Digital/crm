@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ServiceUnavailableException, Controller, Post, Get, Patch, Delete, Body, Param, Query, Res, Logger, HttpCode } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, ServiceUnavailableException, Controller, Post, Get, Patch, Delete, Body, Param, Query, Res, Logger, HttpCode } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { requireMessagingChannel } from './messaging-channels';
 import type { Response, Request } from 'express';
@@ -14,6 +14,7 @@ import { Public } from '../auth/decorators/public.decorator';
 import { Roles, ORG_MANAGERS, ORG_OPERATORS, CHANNEL_MANAGERS } from '../auth/decorators/roles.decorator';
 import { AllowInfluencer } from '../auth/decorators/allow-influencer.decorator';
 import { PrismaService } from '../prisma/prisma.service';
+import { locationScopeFor } from '../auth/location-scope.util';
 import { ChannelService } from './channel.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { ConnectShopifyDto } from './dto/connect-shopify.dto';
@@ -572,15 +573,19 @@ export class ChannelController {
   }
 
   // POST /channels/:id/shopify/locations — apply the merchant's decisions.
-  // Managers: this decides what stock crosses into the live store.
+  // Managers: this decides what stock crosses into the live store. Not a
+  // store-limited one: the decisions make and link locations across the org.
   @Post(':id/shopify/locations')
   @HttpCode(200)
   @Roles(...ORG_MANAGERS)
-  decideShopifyLocations(
+  async decideShopifyLocations(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
     @Body() dto: ApplyShopifyLocationDecisionsDto,
   ) {
+    if (await locationScopeFor(this.prisma, user)) {
+      throw new ForbiddenException('Only an owner, an admin or a manager who works at every location can link Shopify locations.');
+    }
     return this.locationDecisions.apply(id, user.orgId!, dto);
   }
 

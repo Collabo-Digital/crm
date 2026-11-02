@@ -7,6 +7,7 @@ import { OrganizationService } from './organization.service';
 import { MembersService } from './members.service';
 import { UpdateMemberRoleDto } from './dto/update-member-role.dto';
 import { UpdateMemberPermissionsDto } from './dto/update-member-permissions.dto';
+import { UpdateMemberLocationsDto } from './dto/update-member-locations.dto';
 
 // Route: /api/v1/organizations/:orgId/members
 // All endpoints require JWT (no @Public())
@@ -49,6 +50,18 @@ export class MembersController {
     ) {
         await this.orgService.requireRole(orgId, user.sub, [UserRole.OWNER, UserRole.ADMIN]);
         return this.membersService.updatePermissions(orgId, memberId, dto.grants, dto.preset);
+    }
+
+    // PATCH locations — only OWNER and ADMIN choose the stores a member works at
+    @Patch(':memberId/locations')
+    async updateLocations(
+        @Param('orgId') orgId: string,
+        @Param('memberId') memberId: string,
+        @CurrentUser() user: JwtPayload,
+        @Body() dto: UpdateMemberLocationsDto,
+    ) {
+        await this.orgService.requireRole(orgId, user.sub, [UserRole.OWNER, UserRole.ADMIN]);
+        return this.membersService.updateLocationScope(orgId, memberId, dto.locationScope);
     }
 
     // DELETE — only OWNER and ADMIN can remove members

@@ -227,6 +227,21 @@ export function useUpdateMemberPermissionsMutation(orgId: string) {
   });
 }
 
+/** Mutation hook for replacing the stores a Manager or Agent works at. */
+export function useUpdateMemberLocationsMutation(orgId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ memberId, locationScope }: { memberId: string; locationScope: string[] }) =>
+      orgService.updateMemberLocations(orgId, memberId, locationScope),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: orgKeys.members(orgId) });
+      toast.success("Stores updated.");
+    },
+    onError: (error) => handleMutationError(error, "Failed to update stores."),
+  });
+}
+
 /** Mutation hook for removing a member from an organization. */
 export function useRemoveMemberMutation(orgId: string) {
   const queryClient = useQueryClient();
