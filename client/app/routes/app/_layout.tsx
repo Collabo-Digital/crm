@@ -5,6 +5,7 @@ import { CallDock } from "~/components/app/calls/call-dock";
 import { EmptyState } from "~/components/app/empty-state";
 import { Navbar } from "~/components/app/navbar";
 import { ImpersonationBanner } from "~/components/app/impersonation-banner";
+import { BillingBanner } from "~/components/app/billing-banner";
 import { Button } from "~/components/ui/button";
 import { AuthGuard } from "~/components/guards/auth-guard";
 import { useMembershipSync, useSectionAccess } from "~/hooks/use-section-access";
@@ -101,6 +102,8 @@ export default function AppLayout() {
         <SkipToContent targetId="main-content" />
         <ImpersonationBanner />
         <Navbar immersive={immersive} />
+        {/* Trial and payment state. Off the phone screens that drop the app bar. */}
+        <BillingBanner className={cn("flex-none", immersive && "max-md:hidden")} />
         {/* Same container on every route except a full-width one — otherwise
             only the vertical behaviour differs. */}
         <main
