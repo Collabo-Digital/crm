@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { BroadcastRecipientStatus as R, BroadcastStatus, MessageStatus } from '@prisma/client';
+import { UNCONFIRMED_SEND } from '../../messaging/send/platform-sender.service';
 import { assertOwnHeaderFile, parseVariables } from './broadcast-variables';
 import { BroadcastsService } from './broadcasts.service';
 
@@ -89,6 +90,16 @@ describe('broadcasts', () => {
         ] as any);
         (prisma as any).channel = { findUnique: jest.fn(async () => ({ credentials: {} })) };
         await expect(service.retryFailed('org_1', 'b_1')).resolves.toEqual({ retrying: 1, notRetryable: 1 });
+    });
+
+    it('retry leaves out a message whose hand-over to WhatsApp was never confirmed: it may have arrived', async () => {
+        const { service, prisma, recipientUpdates } = setup({ broadcast: { status: BroadcastStatus.COMPLETED } });
+        prisma.broadcastRecipient.findMany.mockResolvedValueOnce([
+            { id: 'r_unconfirmed', errorCode: null, errorMessage: UNCONFIRMED_SEND },
+            { id: 'r_paused', errorCode: null, errorMessage: 'Not sent: the template is paused.' },
+        ] as never);
+        await expect(service.retryFailed('org_1', 'b_1')).resolves.toEqual({ retrying: 1, notRetryable: 1 });
+        expect(recipientUpdates[0]).toMatchObject({ where: { id: { in: ['r_paused'] } }, data: { status: R.PENDING } });
     });
 
     describe('finishing', () => {
@@ -195,6 +206,28 @@ describe('starting a broadcast', () => {
         expect(h.rows.size).toBe(1500);
         expect(h.queuedIds()).toHaveLength(1500);
         expect(new Set(h.queuedIds()).size).toBe(1500);
+    });
+});
+
+describe('handing a batch to the send pipeline', () => {
+    const pending = { id: 'r_1', contactId: 'c_1', attempts: 0, status: R.PENDING, contact: member('919800000001') };
+    const sending = (send: () => Promise<unknown>) => {
+        const h = setup({ sender: { conversationFor: jest.fn(() => Promise.resolve('cv_1')), send: jest.fn(send) } });
+        h.prisma.broadcastRecipient.findMany.mockResolvedValueOnce([pending] as never);
+        return h;
+    };
+
+    it('keeps the message a send wrote before queueing its delivery failed: the outbound sweeper still sends it', async () => {
+        const { service, prisma, recipientUpdates } = sending(() => Promise.reject(new Error('Connection is closed.')));
+        prisma.message.findUnique.mockResolvedValueOnce({ id: 'm_9' });
+        await service.sendBatch('b_1', ['r_1']);
+        expect(recipientUpdates[0]).toMatchObject({ where: { id: 'r_1', status: R.PENDING }, data: { status: R.QUEUED, messageId: 'm_9' } });
+        expect(prisma.message.findUnique).toHaveBeenCalledWith({ where: { idempotencyKey: 'broadcast:r_1:0' }, select: { id: true } });
+
+        // Nothing written: failed, and Retry failed can send it.
+        const unsent = sending(() => Promise.reject(new Error('Conversation not found')));
+        await unsent.service.sendBatch('b_1', ['r_1']);
+        expect(unsent.recipientUpdates[0]).toMatchObject({ data: { status: R.FAILED, errorMessage: 'Conversation not found' } });
     });
 });
 
