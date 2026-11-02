@@ -146,6 +146,9 @@ export function ChannelSyncOptions({ channel }: { channel: Channel }) {
             <DropdownMenuLabel className="text-[11px]">
               Pull from Shopify
             </DropdownMenuLabel>
+            <p className="px-2 pb-1 text-caption leading-snug text-muted-foreground">
+              For full syncs and Sync now. New orders and changes keep arriving live.
+            </p>
             {settings.pull.map((row) => (
               <DropdownMenuCheckboxItem
                 key={`pull-${row.entityType}`}
