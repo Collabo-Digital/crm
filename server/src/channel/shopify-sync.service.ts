@@ -2302,7 +2302,8 @@ export class ShopifySyncService {
                         ...channelTaxPatch,
                         ...sourcePatch,
                     },
-                    update: patch,
+                    // The delivery that loses the race writes below, compare-and-set.
+                    update: {},
                     select: { id: true },
                 });
                 orderId = created.id;
@@ -2349,6 +2350,30 @@ export class ShopifySyncService {
                             createdAt: so.created_at ? new Date(so.created_at) : new Date(),
                         },
                     });
+                } else {
+                    // What the other delivery stored may be newer than this
+                    // payload (an orders/create landing after its own
+                    // orders/cancelled would un-cancel the order).
+                    const applied = await tx.order.updateMany({
+                        where: {
+                            id: orderId,
+                            ...(incomingUpdatedAt
+                                ? {
+                                    OR: [
+                                        { externalUpdatedAt: null },
+                                        { externalUpdatedAt: { lte: incomingUpdatedAt } },
+                                    ],
+                                }
+                                : {}),
+                        },
+                        data: patch,
+                    });
+                    if (applied.count === 0) {
+                        this.logger.debug(
+                            `Stale Shopify payload for order ${externalId} (updated_at=${incomingUpdatedAt?.toISOString()}) — newer state already stored, skipping.`,
+                        );
+                        return;
+                    }
                 }
             } else {
                 // Compare-and-set on `externalUpdatedAt`. It was written on

@@ -14,7 +14,7 @@ const NO_NEWS = { newlyDelivered: false, newlyOutForDelivery: false, refunds: []
 
 function build() {
   const tx = {
-    order: { upsert: jest.fn().mockResolvedValue({ id: 'o1' }) },
+    order: { upsert: jest.fn().mockResolvedValue({ id: 'o1' }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     orderTimelineEvent: {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({}),
@@ -94,6 +94,47 @@ describe('ShopifySyncService.upsertOrder — first sighting on a live webhook', 
     });
 
     expect(commerceEvents.order.mock.calls[0][1]).toContain('delivered');
+  });
+});
+
+describe('ShopifySyncService.upsertOrder — two deliveries of a new order racing', () => {
+  // `existing` is read outside the transaction, so the slower of two
+  // deliveries finds the order the faster one inserted a moment ago.
+  function race(storedIsNewer: boolean) {
+    const built = build();
+    built.tx.orderTimelineEvent.findFirst.mockResolvedValue({ id: 'ev_created' });
+    built.tx.order.updateMany.mockResolvedValue({ count: storedIsNewer ? 0 : 1 });
+    const children = jest.spyOn(
+      built.service as unknown as { writeOrderChildren: () => Promise<unknown> },
+      'writeOrderChildren',
+    );
+    return { ...built, children };
+  }
+
+  it('does not let an older delivery overwrite what a newer one stored', async () => {
+    const { service, tx, children } = race(true);
+
+    await service.upsertOrder(CHANNEL, ORG, paidFulfilledOrder(new Date(Date.now() - HOUR)), { live: true });
+
+    const [[upsert]] = tx.order.upsert.mock.calls as Array<[{ update: unknown }]>;
+    expect(upsert.update).toEqual({});
+    expect(children).not.toHaveBeenCalled();
+  });
+
+  it('still writes a newer delivery over an older one', async () => {
+    const { service, tx, children } = race(false);
+    const cancelled = { ...paidFulfilledOrder(new Date(Date.now() - HOUR)), cancelled_at: new Date().toISOString() };
+
+    await service.upsertOrder(CHANNEL, ORG, cancelled, { live: true });
+
+    expect(tx.order.updateMany).toHaveBeenCalledTimes(1);
+    const [[write]] = tx.order.updateMany.mock.calls as Array<[{ where: unknown; data: Record<string, unknown> }]>;
+    expect(write.where).toEqual({
+      id: 'o1',
+      OR: [{ externalUpdatedAt: null }, { externalUpdatedAt: { lte: new Date(cancelled.updated_at) } }],
+    });
+    expect(write.data).toMatchObject({ cancelledAt: new Date(cancelled.cancelled_at) });
+    expect(children).toHaveBeenCalledTimes(1);
   });
 });
 
