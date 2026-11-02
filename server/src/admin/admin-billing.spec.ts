@@ -59,7 +59,7 @@ describe('AdminController set plan', () => {
     it('is for super admins only', () => {
         const guard = new SuperAdminGuard(new Reflector());
         const as = (user: object) => ({
-            getHandler: () => AdminController.prototype.setOrganizationBilling,
+            getHandler: (): unknown => Reflect.get(AdminController.prototype, 'setOrganizationBilling'),
             getClass: () => AdminController,
             switchToHttp: () => ({ getRequest: () => ({ user }) }),
         }) as unknown as ExecutionContext;

@@ -17,10 +17,10 @@ describe('ApiKeyGuard plan limits', () => {
         const keys = { authenticate: jest.fn(() => Promise.resolve({ keyId: 'key_1', organizationId: 'org_1', scopes: ['contacts:read', 'templates:read'], plan })) };
         const guard = new ApiKeyGuard(keys as never, new Reflector(), storage);
         const headers: Record<string, string> = {};
-        const call = (handler: (...args: never[]) => unknown) =>
+        const call = (name: string) =>
             guard.canActivate({
                 getClass: () => PublicApiController,
-                getHandler: () => handler,
+                getHandler: (): unknown => Reflect.get(PublicApiController.prototype, name),
                 switchToHttp: () => ({
                     getRequest: () => ({ headers: { authorization: 'Bearer ck_live_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } }),
                     getResponse: () => ({ header: (name: string, value: string) => (headers[name] = value) }),
@@ -34,19 +34,19 @@ describe('ApiKeyGuard plan limits', () => {
 
     it('holds a key on Starter, Growth or Pro to 600 calls a minute on each endpoint', async () => {
         const { call, headers } = build(BillingPlan.GROWTH);
-        await many(600, () => call(PublicApiController.prototype.contacts));
+        await many(600, () => call('contacts'));
         expect(headers['X-RateLimit-Limit']).toBe('600');
         expect(headers['X-RateLimit-Remaining']).toBe('0');
-        await expect(call(PublicApiController.prototype.contacts)).rejects.toBeInstanceOf(ThrottlerException);
+        await expect(call('contacts')).rejects.toBeInstanceOf(ThrottlerException);
         expect(Number(headers['Retry-After'])).toBeGreaterThan(0);
         // Another endpoint has its own count.
-        await expect(call(PublicApiController.prototype.templates)).resolves.toBe(true);
+        await expect(call('templates')).resolves.toBe(true);
     });
 
     it('leaves a key on Scale or Enterprise to the controller\'s 2,000 a minute', async () => {
         for (const plan of [BillingPlan.SCALE, BillingPlan.ADVANCE]) {
             const { call, headers } = build(plan);
-            await many(700, () => call(PublicApiController.prototype.contacts));
+            await many(700, () => call('contacts'));
             expect(headers['X-RateLimit-Limit']).toBeUndefined();
         }
     });

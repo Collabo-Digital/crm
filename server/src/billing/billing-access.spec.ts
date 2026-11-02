@@ -88,53 +88,53 @@ describe('BillingAccessGuard', () => {
         const access = { enforced: readOnly !== 'off', isReadOnly: jest.fn(() => Promise.resolve(readOnly === true)) };
         return { access, guard: new BillingAccessGuard(new Reflector(), access as never) };
     }
-    const context = (cls: object, handler: (...args: never[]) => unknown, method: string, user: object | null = { sub: 'u_1', orgId: 'org_1' }) =>
+    const context = (cls: { prototype: object }, handler: string, method: string, user: object | null = { sub: 'u_1', orgId: 'org_1' }) =>
         ({
             getClass: () => cls,
-            getHandler: () => handler,
+            getHandler: (): unknown => Reflect.get(cls.prototype, handler),
             switchToHttp: () => ({ getRequest: () => ({ method, user: user ?? undefined }) }),
         }) as unknown as ExecutionContext;
 
     it('refuses a write in a read-only workspace with 402 and a plain message', async () => {
         const { guard: g, access } = guard(true);
-        const refused = await g.canActivate(context(Probe, Probe.prototype.write, 'POST')).catch((e: unknown) => e);
+        const refused = await g.canActivate(context(Probe, 'write', 'POST')).catch((e: unknown) => e);
         expect(refused).toBeInstanceOf(HttpException);
         expect((refused as HttpException).getStatus()).toBe(402);
         expect((refused as HttpException).getResponse()).toEqual({ message: READ_ONLY_MESSAGE, code: 'WORKSPACE_READ_ONLY' });
         expect(access.isReadOnly).toHaveBeenCalledWith('org_1');
         for (const method of ['PATCH', 'PUT', 'DELETE']) {
-            await expect(g.canActivate(context(Probe, Probe.prototype.write, method))).rejects.toBeInstanceOf(HttpException);
+            await expect(g.canActivate(context(Probe, 'write', method))).rejects.toBeInstanceOf(HttpException);
         }
     });
 
     it('lets reads through, exports included', async () => {
         const { guard: g, access } = guard(true);
-        for (const method of ['GET', 'HEAD', 'OPTIONS']) await expect(g.canActivate(context(Probe, Probe.prototype.write, method))).resolves.toBe(true);
+        for (const method of ['GET', 'HEAD', 'OPTIONS']) await expect(g.canActivate(context(Probe, 'write', method))).resolves.toBe(true);
         expect(access.isReadOnly).not.toHaveBeenCalled();
     });
 
     it('lets writes through in a workspace that is not read-only, and does nothing at all with enforcement off', async () => {
-        await expect(guard(false).guard.canActivate(context(Probe, Probe.prototype.write, 'POST'))).resolves.toBe(true);
+        await expect(guard(false).guard.canActivate(context(Probe, 'write', 'POST'))).resolves.toBe(true);
         const off = guard('off');
-        await expect(off.guard.canActivate(context(Probe, Probe.prototype.write, 'POST'))).resolves.toBe(true);
+        await expect(off.guard.canActivate(context(Probe, 'write', 'POST'))).resolves.toBe(true);
         expect(off.access.isReadOnly).not.toHaveBeenCalled();
     });
 
     it('keeps inbound webhooks, public routes, the super-admin area, sign-in, the profile and billing working', async () => {
         const { guard: g, access } = guard(true);
-        const open: Array<[object, (...args: never[]) => unknown]> = [
-            [Probe, Probe.prototype.hook],
-            [RazorpayWebhookController, RazorpayWebhookController.prototype.handleWebhook],
-            [AdminController, AdminController.prototype.softDelete],
-            [AdminController, AdminController.prototype.stop],
-            [AuthController, AuthController.prototype.logout],
-            [AuthController, AuthController.prototype.switchOrg],
-            [UserController, UserController.prototype.updateProfile],
-            [UserController, UserController.prototype.signOutOtherDevices],
-            [BillingController, BillingController.prototype.startOnboardingCheckout],
-            [BillingUsageController, BillingUsageController.prototype.subscribe],
-            [OrganizationController, OrganizationController.prototype.create],
-            [OrganizationController, OrganizationController.prototype.delete],
+        const open: Array<[{ prototype: object }, string]> = [
+            [Probe, 'hook'],
+            [RazorpayWebhookController, 'handleWebhook'],
+            [AdminController, 'softDelete'],
+            [AdminController, 'stop'],
+            [AuthController, 'logout'],
+            [AuthController, 'switchOrg'],
+            [UserController, 'updateProfile'],
+            [UserController, 'signOutOtherDevices'],
+            [BillingController, 'startOnboardingCheckout'],
+            [BillingUsageController, 'subscribe'],
+            [OrganizationController, 'create'],
+            [OrganizationController, 'delete'],
         ];
         for (const [cls, handler] of open) await expect(g.canActivate(context(cls, handler, 'POST'))).resolves.toBe(true);
         expect(access.isReadOnly).not.toHaveBeenCalled();
@@ -142,13 +142,13 @@ describe('BillingAccessGuard', () => {
 
     it('still refuses editing the workspace itself', async () => {
         const { guard: g } = guard(true);
-        await expect(g.canActivate(context(OrganizationController, OrganizationController.prototype.update, 'PATCH'))).rejects.toBeInstanceOf(HttpException);
+        await expect(g.canActivate(context(OrganizationController, 'update', 'PATCH'))).rejects.toBeInstanceOf(HttpException);
     });
 
     it('has nothing to check for a session without a workspace', async () => {
         const { guard: g, access } = guard(true);
-        await expect(g.canActivate(context(Probe, Probe.prototype.write, 'POST', { sub: 'u_1' }))).resolves.toBe(true);
-        await expect(g.canActivate(context(Probe, Probe.prototype.write, 'POST', null))).resolves.toBe(true);
+        await expect(g.canActivate(context(Probe, 'write', 'POST', { sub: 'u_1' }))).resolves.toBe(true);
+        await expect(g.canActivate(context(Probe, 'write', 'POST', null))).resolves.toBe(true);
         expect(access.isReadOnly).not.toHaveBeenCalled();
     });
 });

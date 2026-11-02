@@ -7,13 +7,14 @@ import { BillingUsageController } from './billing-usage.controller';
 
 describe('BillingUsageController roles', () => {
     const guard = new RolesGuard(new Reflector());
-    const allowed = (handler: (...args: never[]) => unknown, role: UserRole) =>
+    const allowed = (handler: unknown, role: UserRole) =>
         guard.canActivate({
             getHandler: () => handler,
             getClass: () => BillingUsageController,
             switchToHttp: () => ({ getRequest: () => ({ user: { sub: 'u_1', orgId: 'org_1', role } }) }),
         } as unknown as ExecutionContext);
-    const { summary, subscribe } = BillingUsageController.prototype;
+    const summary: unknown = Reflect.get(BillingUsageController.prototype, 'summary');
+    const subscribe: unknown = Reflect.get(BillingUsageController.prototype, 'subscribe');
 
     it('lets owners and admins see billing, and nobody else', () => {
         expect([UserRole.OWNER, UserRole.ADMIN].map((r) => allowed(summary, r))).toEqual([true, true]);

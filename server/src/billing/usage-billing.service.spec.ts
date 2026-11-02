@@ -28,6 +28,7 @@ describe('UsageBillingService', () => {
     const subscription = (extra: Record<string, unknown>) =>
         razorpay.fetchSubscription.mockResolvedValue({ id: 'sub_1', status: 'active', plan_id: 'plan_basicINR', payment_method: 'card', ...extra });
     const finalUpdate = () => prisma.usageBill.update.mock.calls.at(-1)![0].data;
+    const firstCall = (fn: jest.Mock) => (fn.mock.calls[0] as [{ where: unknown; data: unknown }])[0];
 
     beforeEach(() => {
         prisma = {
@@ -80,7 +81,7 @@ describe('UsageBillingService', () => {
     it('looks only at active Razorpay subscriptions on plans with Razorpay plans: the Collabo team invoices manual ones', async () => {
         subscription({});
         await service.tick(NOW);
-        expect(prisma.organization.findMany.mock.calls[0][0].where).toMatchObject({
+        expect(firstCall(prisma.organization.findMany).where).toMatchObject({
             deletedAt: null,
             billingProvider: 'RAZORPAY',
             subscriptionStatus: 'ACTIVE',
@@ -147,7 +148,7 @@ describe('UsageBillingService', () => {
         prisma.usageBill.findUnique.mockResolvedValue({ ...newBill, attempts: 2, usage: { conversations: 2_100, callingMinutes: 0, members: 1, instagramAccounts: 0 } });
         subscription({});
         await service.tick(NOW);
-        expect(prisma.usageBill.update.mock.calls[0][0].data).toMatchObject({ subtotal: 2_500, total: 2_950 });
+        expect(firstCall(prisma.usageBill.update).data).toMatchObject({ subtotal: 2_500, total: 2_950 });
     });
 
     it('takes up a failed bill again without charging twice: an add-on the last try made is found', async () => {

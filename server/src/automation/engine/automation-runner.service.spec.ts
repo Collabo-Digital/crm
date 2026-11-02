@@ -44,10 +44,10 @@ describe('AutomationRunner', () => {
         const { r, prisma } = runner({ ...broken, organizationId: 'org1' }, true);
         if (how === 'run') await r.run('run1');
         else await r.resume('run1', 'timer');
-        expect(prisma.automationRun.update).toHaveBeenLastCalledWith({
-            where: { id: 'run1' },
-            data: { status: 'SKIPPED', skipReason: 'read_only', completedAt: expect.any(Date), waitingForReply: false },
-        });
+        const [skipped] = prisma.automationRun.update.mock.calls.at(-1) as unknown as [{ where: unknown; data: { completedAt: unknown } }];
+        expect(skipped.where).toEqual({ id: 'run1' });
+        expect(skipped.data).toMatchObject({ status: 'SKIPPED', skipReason: 'read_only', waitingForReply: false });
+        expect(skipped.data.completedAt).toBeInstanceOf(Date);
         // The stored version is never read, so nothing about the flow ran.
         expect(prisma.automation.update).not.toHaveBeenCalled();
         expect(prisma.automationRunStep.updateMany).not.toHaveBeenCalled();

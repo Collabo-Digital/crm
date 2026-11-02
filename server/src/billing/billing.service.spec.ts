@@ -3,6 +3,9 @@ import { SubscriptionStatus } from '@prisma/client';
 
 import { BillingService } from './billing.service';
 
+/** What a mocked Prisma call was handed. */
+const dataOf = (fn: jest.Mock, call = 0) => (fn.mock.calls[call] as [{ data: Record<string, unknown> }])[0].data;
+
 describe('BillingService.applyPendingSubscriptionToOrg', () => {
     const service = new BillingService({} as never, {} as never, new ConfigService({}), {} as never);
     const enforcing = new BillingService({} as never, {} as never, new ConfigService({ billing: { enforcement: true, enforceFrom: '2026-12-01T00:00:00Z', trialDays: 14, graceDays: 7 } }), {} as never);
@@ -48,10 +51,11 @@ describe('BillingService.applyPendingSubscriptionToOrg', () => {
         const t = tx({ pendingSubscriptionStatus: null }, 'ADVANCE');
         const before = Date.now();
         await enforcing.applyPendingSubscriptionToOrg(t as never, 'u_1', 'org_1');
-        const data = t.organization.update.mock.calls[0][0].data;
+        const data = dataOf(t.organization.update);
+        const trialMs = (data.trialEndsAt as Date).getTime() - before;
         expect(data.billingPlan).toBe('GROWTH');
-        expect(data.trialEndsAt.getTime() - before).toBeGreaterThanOrEqual(14 * 24 * 3600_000);
-        expect(data.trialEndsAt.getTime() - before).toBeLessThan(14 * 24 * 3600_000 + 60_000);
+        expect(trialMs).toBeGreaterThanOrEqual(14 * 24 * 3600_000);
+        expect(trialMs).toBeLessThan(14 * 24 * 3600_000 + 60_000);
     });
 
     it('keeps a checkout left unpaid on the trial workspace, so paying it later counts there', async () => {
@@ -65,14 +69,15 @@ describe('BillingService.applyPendingSubscriptionToOrg', () => {
             pendingCurrentPeriodEnd: null,
         });
         await enforcing.applyPendingSubscriptionToOrg(t as never, 'u_1', 'org_1');
-        expect(t.organization.update.mock.calls[0][0].data).toMatchObject({
+        const data = dataOf(t.organization.update);
+        expect(data).toMatchObject({
             billingPlan: 'GROWTH',
             externalSubscriptionId: 'sub_unpaid',
             subscriptionStatus: 'CREATED',
             billingProvider: 'RAZORPAY',
         });
-        expect(t.organization.update.mock.calls[0][0].data.billingInterval).toBeUndefined();
-        expect(t.user.update.mock.calls[0][0].data).toMatchObject({ pendingExternalSubscriptionId: null, pendingSubscriptionStatus: null });
+        expect(data.billingInterval).toBeUndefined();
+        expect(dataOf(t.user.update)).toMatchObject({ pendingExternalSubscriptionId: null, pendingSubscriptionStatus: null });
     });
 
     it('says where a workspace stands, and whether trials and the payment step are on', () => {
@@ -160,7 +165,7 @@ describe('BillingService checkout', () => {
         const { service, prisma, razorpay } = build();
         await expect(service.startOnboardingCheckout('u_1', 'BASIC', 'YEARLY', 'INR')).resolves.toEqual({ subscriptionId: 'sub_new', razorpayKeyId: 'rzp_test_1', currency: 'INR' });
         expect(razorpay.createSubscription).toHaveBeenCalledWith(expect.objectContaining({ planId: 'plan_basicINRyearly', totalCount: 10 }));
-        expect(prisma.user.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ pendingBillingPlan: 'BASIC', pendingBillingInterval: 'YEARLY' }) }));
+        expect(dataOf(prisma.user.update)).toMatchObject({ pendingBillingPlan: 'BASIC', pendingBillingInterval: 'YEARLY' });
         await service.startOnboardingCheckout('u_1', 'BASIC', 'MONTHLY', 'USD');
         expect(razorpay.createSubscription).toHaveBeenLastCalledWith(expect.objectContaining({ planId: 'plan_basicUSD', totalCount: 120 }));
     });

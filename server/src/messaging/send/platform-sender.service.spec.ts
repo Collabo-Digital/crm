@@ -107,9 +107,9 @@ describe('PlatformSenderService.deliver', () => {
 
         expect(await sender.deliver('m1', false)).toBe('failed');
         expect(metaGraph.request).not.toHaveBeenCalled();
-        expect(prisma.message.updateMany).toHaveBeenCalledWith(
-            expect.objectContaining({ where: { id: 'm1', status: MessageStatus.QUEUED }, data: expect.objectContaining({ status: MessageStatus.FAILED, errorMessage: NOT_SENT_READ_ONLY }) }),
-        );
+        const [failed] = prisma.message.updateMany.mock.calls[0] as [{ where: unknown; data: unknown }];
+        expect(failed.where).toEqual({ id: 'm1', status: MessageStatus.QUEUED });
+        expect(failed.data).toMatchObject({ status: MessageStatus.FAILED, errorMessage: NOT_SENT_READ_ONLY });
         expect(broadcasts.onStatus).toHaveBeenCalledWith('m1', MessageStatus.FAILED, expect.any(Date), { code: null, message: NOT_SENT_READ_ONLY });
     });
 

@@ -40,7 +40,7 @@ function setup(over: { broadcast?: Record<string, unknown>; template?: Record<st
     };
     const queue = { add: jest.fn(async (...args: unknown[]) => queued.push(args)), remove: jest.fn(), addBulk: jest.fn() };
     const templates = { view: (t: unknown) => t, load: jest.fn(), channelFor: jest.fn() };
-    const billingAccess = { isReadOnly: jest.fn(async () => over.readOnly ?? false) };
+    const billingAccess = { isReadOnly: jest.fn(() => Promise.resolve(over.readOnly ?? false)) };
     const service = new BroadcastsService(prisma as any, templates as any, {} as any, {} as any, {} as any, queue as any, billingAccess as any);
     return { service, prisma, broadcast, recipientUpdates, messageUpdates, queued };
 }
