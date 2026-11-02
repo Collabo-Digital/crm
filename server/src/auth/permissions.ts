@@ -152,7 +152,9 @@ export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
     id: 'catalogue',
     label: 'Catalogue',
     description:
-      'Adds and edits products, their prices and photos, and the stock counts in the product form. Sees stock at each location. No orders, customers or sales figures.',
+      'Adds and edits products, their prices and photos, and sees stock at each location. No orders, customers or sales figures.',
+    // No inventory.adjust: changing the stock at a location stays a stock
+    // correction. Ticking "Adjust stock counts" on the member adds it.
     grants: ['section.products', 'products.edit', 'inventory.view'],
   },
   {
