@@ -31,8 +31,8 @@ const byId = (id: string) => {
 };
 
 describe('job templates', () => {
-    it('are the six jobs the team screen offers', () => {
-        expect(PERMISSION_PRESETS.map((p) => p.id)).toEqual(['support', 'marketing', 'accountant', 'warehouse', 'packer', 'cashier']);
+    it('are the seven jobs the team screen offers', () => {
+        expect(PERMISSION_PRESETS.map((p) => p.id)).toEqual(['support', 'marketing', 'accountant', 'catalogue', 'warehouse', 'packer', 'cashier']);
     });
 
     it.each(PERMISSION_PRESETS.map((p) => [p.label, p] as const))('%s grants known keys, once each, and says what it is', (_label, preset) => {
@@ -49,6 +49,15 @@ describe('job templates', () => {
 
     it.each(['packer', 'warehouse', 'cashier'])('the %s stays within an ops seat', (id) => {
         expect(byId(id).grants.filter((key) => !OPS_SEAT_GRANTS.has(key))).toEqual([]);
+    });
+
+    it.each(['packer', 'warehouse', 'cashier'])('the %s cannot change products or their prices', (id) => {
+        expect(byId(id).grants).not.toContain('products.edit');
+    });
+
+    it('a Catalogue member changes products and sees stock, which is not an ops seat', () => {
+        expect(byId('catalogue').grants).toEqual(['section.products', 'products.edit', 'inventory.view']);
+        expect(OPS_SEAT_GRANTS.has('products.edit')).toBe(false);
     });
 
     it('an Accountant reads the money and nothing that changes orders', () => {

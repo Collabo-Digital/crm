@@ -8,6 +8,7 @@ import type { UserRole } from "~/types/api";
  * not offer actions that would be refused.
  */
 export type PermissionKey =
+  | "products.edit"
   | "inventory.view"
   | "inventory.receive"
   | "inventory.adjust"
@@ -70,6 +71,18 @@ export function hasPermission(
  */
 export function canEditAutomations(role: UserRole | undefined, grants: readonly string[] | undefined): boolean {
   return role !== "AGENT" && role !== "VIEWER" && hasPermission(role, grants, "campaigns.manage");
+}
+
+/**
+ * May change the catalogue: add and edit products, their prices, photos and
+ * variants, and the stock counts in the product form. The server's product
+ * writes take an operator role with products.edit, which owners, admins and
+ * managers hold implicitly; a viewer is refused them whatever it holds. A
+ * vendor edits its own products, confined by its vendor scope.
+ */
+export function canEditProducts(role: UserRole | undefined, grants: readonly string[] | undefined): boolean {
+  if (role === "VENDOR") return true;
+  return role !== "VIEWER" && role !== "INFLUENCER" && hasPermission(role, grants, "products.edit");
 }
 
 /**

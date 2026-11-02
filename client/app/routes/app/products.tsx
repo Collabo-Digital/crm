@@ -33,6 +33,7 @@ import {
 import { productService } from "~/services/product.service";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
+import { canEditProducts } from "~/lib/permissions";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import {
   describeProductShopifySync,
@@ -88,13 +89,17 @@ const STOCK_OPTIONS: ReadonlyArray<{ value: StockStatus; label: string }> = [
 
 export default function ProductsPage() {
   const navigate = useNavigate();
-  const { role, isVendor } = useCurrentRole();
-  // Mirror the server's role groups on the product write routes
-  // (server/src/auth/decorators/roles.decorator.ts): editing is ORG_OPERATORS,
-  // permanent delete and CSV import are ORG_MANAGERS. A Viewer sees the
-  // catalogue without buttons the API would refuse.
+  const { role, isVendor, permissions, can } = useCurrentRole();
+  // Mirror the server's product write routes: every change takes products.edit
+  // (owners, admins and managers hold it), and permanent delete and CSV import
+  // are ORG_MANAGERS. A vendor edits and pushes only its own products, and adds
+  // none. A Viewer, or an Agent with the section alone, sees the catalogue
+  // without buttons the API would refuse.
   const canManage = role === "OWNER" || role === "ADMIN" || role === "MANAGER";
-  const canEdit = canManage || role === "AGENT";
+  const canChange = canEditProducts(role, permissions);
+  const canEdit = canChange && !isVendor;
+  // Product codes are inventory.labels, as on the Inventory page.
+  const canLabel = can("inventory.labels");
   // The whole view — page, search, filters, sort, page size — lives in the
   // URL so Back from a product (and the product page's breadcrumb) return to
   // the exact list the row was opened from, while the navbar's bare link
@@ -117,7 +122,7 @@ export default function ProductsPage() {
 
   // Org-wide, so the badge is honest about what the dialog will change. Hidden
   // from vendors along with the rest of the catalogue-wide actions.
-  const codeStatus = useCodeStatus(!isVendor);
+  const codeStatus = useCodeStatus(canLabel);
   const pendingCodes = codeStatus.data
     ? codeStatus.data.missingSku +
       codeStatus.data.missingBarcode +
@@ -399,14 +404,16 @@ export default function ProductsPage() {
                 their home. The Inventory page carries the same dialog, but it
                 is gated on warehousing — without this trigger an org that has
                 not enabled it cannot reach the flow at all. */}
-            <Button
-              variant="outline"
-              size="action"
-              onClick={() => setCodesOpen(true)}
-            >
-              <Barcode className="size-3.5" />
-              {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}
-            </Button>
+            {canLabel && (
+              <Button
+                variant="outline"
+                size="action"
+                onClick={() => setCodesOpen(true)}
+              >
+                <Barcode className="size-3.5" />
+                {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}
+              </Button>
+            )}
             </div>
             {canEdit && (
               <Button
@@ -436,7 +443,9 @@ export default function ProductsPage() {
               {canManage && (
                 <DropdownMenuItem onSelect={() => setImportOpen(true)}><Upload /> Import products</DropdownMenuItem>
               )}
-              <DropdownMenuItem onSelect={() => setCodesOpen(true)}><Barcode /> {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}</DropdownMenuItem>
+              {canLabel && (
+                <DropdownMenuItem onSelect={() => setCodesOpen(true)}><Barcode /> {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}</DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
           {canEdit && (
@@ -448,7 +457,7 @@ export default function ProductsPage() {
         </AppBarActions>
       )}
 
-      <ProductCodesDialog open={codesOpen} onOpenChange={setCodesOpen} />
+      {canLabel && <ProductCodesDialog open={codesOpen} onOpenChange={setCodesOpen} />}
 
       {/* Floating bulk-action dock — only up while a product is selected */}
       {showDock && (
@@ -501,24 +510,26 @@ export default function ProductsPage() {
         searchPlaceholder="Search by name, vendor or SKU…"
         onRowClick={(product) => navigate(`/products/${product.id}`)}
         mobileRow={(product) => <ProductMobileSummary product={product} currency={orgCurrency} lowStockThreshold={lowStockThreshold} />}
-        selection={{
+        // Selecting only feeds the bulk-action dock.
+        selection={canEdit ? {
           isSelected: (product) => selected.has(product.id),
           onToggle: toggleSelect,
           onToggleAll: toggleSelectAllOnPage,
           label: (product) => `Select ${product.title}`,
-        }}
-        rowActions={(product) => (
+        } : undefined}
+        rowActions={canChange ? (product) => (
           <ProductRowActions
             product={product}
             syncAction={describeProductShopifySync(product).action}
             onEdit={() => setEditingFullProductId(product.id)}
-            onArchive={() => {
+            // Archiving here is DELETE /products/:id, which is ORG_MANAGERS.
+            onArchive={canManage ? () => {
               if (confirm(`Archive "${product.title}"? Existing orders will keep their record.`)) {
                 deleteProduct.mutate(product.id);
               }
-            }}
+            } : undefined}
           />
-        )}
+        ) : undefined}
         actionsWidth={150}
         emptyState={{
           title: "No products yet",
@@ -579,11 +590,11 @@ function ProductMobileSummary({ product, currency, lowStockThreshold }: { produc
 }
 
 // ── Product Row Actions ─────────────────────────────────────────────────────
-// Right-most cell of each product row. Edit / Archive are always available
-// (synced products are now editable too — local edits push back via the Sync
-// button). The sync STATE is the Shopify column's job; this cell only holds
-// the matching action, labelled so the row reads "Out of sync → Push",
-// "Sync failed → Retry", "Not on Shopify → Publish".
+// Right-most cell of each product row, for whoever may change products. Edit
+// works on synced products too (local edits push back via the Sync button);
+// Archive is for managers. The sync STATE is the Shopify column's job; this
+// cell only holds the matching action, labelled so the row reads "Out of sync
+// → Push", "Sync failed → Retry", "Not on Shopify → Publish".
 
 const SYNC_ACTION_LABEL: Record<NonNullable<ProductSyncAction>, string> = {
   push: "Push",
@@ -602,7 +613,8 @@ function ProductRowActions({
       there is nothing to push, so the one rule decides both pill and button. */
   syncAction: ProductSyncAction;
   onEdit: () => void;
-  onArchive: () => void;
+  /** Absent for members the server would refuse. */
+  onArchive?: () => void;
 }) {
   const sync = product.shopifySync;
   const syncMutation = useSyncProductMutation();
@@ -632,16 +644,18 @@ function ProductRowActions({
       <Button variant="ghost" size="icon-sm" title="Edit product" aria-label="Edit product" onClick={onEdit}>
         <Pencil className="size-3.5 text-muted-foreground" />
       </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        title="Archive product"
-        aria-label="Archive product"
-        onClick={onArchive}
-        className="hover:text-danger"
-      >
-        <Trash2 className="size-3.5" />
-      </Button>
+      {onArchive && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title="Archive product"
+          aria-label="Archive product"
+          onClick={onArchive}
+          className="hover:text-danger"
+        >
+          <Trash2 className="size-3.5" />
+        </Button>
+      )}
     </div>
     {/* Phones: one menu in the card's corner instead of a row of buttons. */}
     <DropdownMenu>
@@ -657,7 +671,7 @@ function ProductRowActions({
           </DropdownMenuItem>
         )}
         <DropdownMenuItem onSelect={onEdit}><Pencil /> Edit product</DropdownMenuItem>
-        <DropdownMenuItem variant="destructive" onSelect={onArchive}><Trash2 /> Archive product</DropdownMenuItem>
+        {onArchive && <DropdownMenuItem variant="destructive" onSelect={onArchive}><Trash2 /> Archive product</DropdownMenuItem>}
       </DropdownMenuContent>
     </DropdownMenu>
     </>

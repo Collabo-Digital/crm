@@ -70,6 +70,10 @@ import {
   BulkTagsDto,
 } from './dto/bulk.dto';
 
+// The section alone only reads: every write also needs products.edit, so a
+// Packer or Warehouse member looks products up without changing prices or
+// counts. Declared per route beside its role group (product-edit-access.spec
+// checks each one); vendors pass on their own products (PermissionsGuard).
 @RequireSection('products')
 @Controller('products')
 export class ProductController {
@@ -102,6 +106,7 @@ export class ProductController {
 
   @Post()
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   async create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProductDto) {
     await this.assertStockLocations(user, dto.variants);
     return this.productService.create(user.orgId!, user.sub, dto);
@@ -139,6 +144,7 @@ export class ProductController {
   @Patch('variants/:variantId')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
+  @RequirePermissions('products.edit')
   async updateVariant(
     @Param('variantId') variantId: string,
     @CurrentUser() user: JwtPayload,
@@ -166,6 +172,7 @@ export class ProductController {
   @Delete('variants/:variantId')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
+  @RequirePermissions('products.edit')
   deleteVariant(
     @Param('variantId') variantId: string,
     @CurrentUser() user: JwtPayload,
@@ -175,6 +182,7 @@ export class ProductController {
 
   @Post('variants/:variantId/image')
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   setVariantImage(
     @Param('variantId') variantId: string,
     @CurrentUser() user: JwtPayload,
@@ -187,6 +195,7 @@ export class ProductController {
 
   @Patch('images/:imageId')
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   updateImage(
     @Param('imageId') imageId: string,
     @CurrentUser() user: JwtPayload,
@@ -197,6 +206,7 @@ export class ProductController {
 
   @Delete('images/:imageId')
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   removeImage(
     @Param('imageId') imageId: string,
     @CurrentUser() user: JwtPayload,
@@ -209,6 +219,7 @@ export class ProductController {
   @Post(':id/variants')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
+  @RequirePermissions('products.edit')
   async createVariant(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -220,6 +231,7 @@ export class ProductController {
 
   @Post(':id/variants/reorder')
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   reorderVariants(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -231,6 +243,7 @@ export class ProductController {
   @Patch(':id/variants/bulk')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
+  @RequirePermissions('products.edit')
   async bulkUpdateVariants(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -248,6 +261,7 @@ export class ProductController {
   @Post(':id/variants/generate')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
+  @RequirePermissions('products.edit')
   generateVariants(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -258,6 +272,7 @@ export class ProductController {
   @Patch(':id/options')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
+  @RequirePermissions('products.edit')
   updateOptions(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -269,6 +284,7 @@ export class ProductController {
   @Post(':id/images')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: IMAGE_UPLOAD_LIMIT } }))
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   addImage(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -279,6 +295,7 @@ export class ProductController {
 
   @Post(':id/images/reorder')
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   reorderImages(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -292,30 +309,35 @@ export class ProductController {
 
   @Post('bulk/status')
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   bulkSetStatus(@CurrentUser() user: JwtPayload, @Body() dto: BulkSetStatusDto) {
     return this.productService.bulkSetStatus(user.orgId!, dto.productIds, dto.status);
   }
 
   @Post('bulk/archive')
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   bulkArchive(@CurrentUser() user: JwtPayload, @Body() dto: BulkProductIdsDto) {
     return this.productService.bulkArchive(user.orgId!, dto.productIds);
   }
 
   @Delete('bulk')
   @Roles(...ORG_MANAGERS)
+  @RequirePermissions('products.edit')
   bulkDelete(@CurrentUser() user: JwtPayload, @Body() dto: BulkProductIdsDto) {
     return this.productService.bulkDelete(user.orgId!, dto.productIds);
   }
 
   @Post('bulk/tags/add')
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   bulkAddTags(@CurrentUser() user: JwtPayload, @Body() dto: BulkTagsDto) {
     return this.productService.bulkAddTags(user.orgId!, dto.productIds, dto.tags);
   }
 
   @Post('bulk/tags/remove')
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   bulkRemoveTags(@CurrentUser() user: JwtPayload, @Body() dto: BulkTagsDto) {
     return this.productService.bulkRemoveTags(user.orgId!, dto.productIds, dto.tags);
   }
@@ -323,6 +345,7 @@ export class ProductController {
   @Post('bulk/sync')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
+  @RequirePermissions('products.edit')
   bulkSync(@CurrentUser() user: JwtPayload, @Body() dto: BulkProductIdsDto) {
     return this.productService.bulkSync(user.orgId!, dto.productIds, vendorScopeFor(user));
   }
@@ -345,6 +368,7 @@ export class ProductController {
   @Post('import')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: CSV_UPLOAD_LIMIT } }))
   @Roles(...ORG_MANAGERS)
+  @RequirePermissions('products.edit')
   startImport(
     @CurrentUser() user: JwtPayload,
     @UploadedFile() file: MulterFile & { originalname: string },
@@ -356,6 +380,7 @@ export class ProductController {
   @Post('import/:jobId/confirm')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: CSV_UPLOAD_LIMIT } }))
   @Roles(...ORG_MANAGERS)
+  @RequirePermissions('products.edit')
   confirmImport(
     @Param('jobId') jobId: string,
     @CurrentUser() user: JwtPayload,
@@ -378,6 +403,7 @@ export class ProductController {
 
   @Post(':id/duplicate')
   @Roles(...ORG_OPERATORS)
+  @RequirePermissions('products.edit')
   duplicate(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productService.duplicate(id, user.orgId!);
   }
@@ -396,6 +422,7 @@ export class ProductController {
   @Patch(':id')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
+  @RequirePermissions('products.edit')
   async update(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -407,6 +434,7 @@ export class ProductController {
 
   @Delete(':id')
   @Roles(...ORG_MANAGERS)
+  @RequirePermissions('products.edit')
   softDelete(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productService.softDelete(id, user.orgId!);
   }
@@ -414,6 +442,7 @@ export class ProductController {
   @Post(':id/sync')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
+  @RequirePermissions('products.edit')
   syncToShopify(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productService.syncToShopify(id, user.orgId!, vendorScopeFor(user));
   }

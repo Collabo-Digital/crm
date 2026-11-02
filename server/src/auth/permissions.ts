@@ -4,7 +4,7 @@ import { UserRole } from '@prisma/client';
  * Fine-grained capability keys stored in `OrganizationMember.permissions`
  * (JSONB, shape: `{ grants: PermissionKey[], preset?: string }`).
  *
- * Design: jobs (Packer, Warehouse, Cashier, Accountant, Marketing) are NOT
+ * Design: jobs (Packer, Warehouse, Cashier, Catalogue, Accountant, Marketing) are NOT
  * UserRole enum values — they are capability sets granted to existing roles,
  * surfaced in the team UI as job templates (PERMISSION_PRESETS). A Cashier is
  * an AGENT holding `pos.sell`. This avoids a Postgres enum migration,
@@ -38,6 +38,14 @@ export type SectionKey = (typeof SECTION_KEYS)[number];
 
 export const PERMISSION_KEYS = [
   ...SECTION_KEYS,
+  /**
+   * Changing the catalogue: adding, editing and deleting products and
+   * variants, their prices and photos, the stock counts set in the product
+   * form, bulk actions and CSV import. Checked on top of the Products section,
+   * which on its own only reads, so a Packer or a Warehouse member looks
+   * products up without being able to rewrite the prices the till sells at.
+   */
+  'products.edit',
   'inventory.view',
   'inventory.receive',
   'inventory.adjust',
@@ -115,8 +123,9 @@ export interface PermissionPreset {
  *
  * Every template names a section, or a section-less job: a member with
  * neither is unrestricted (see `resolveSections`). The Packer, Warehouse and
- * Cashier stay within the grants billed as an ops seat. The Accountant has no
- * Orders section, because Agents can change orders.
+ * Cashier stay within the grants billed as an ops seat, so none of them holds
+ * products.edit; changing the catalogue is the Catalogue's job. The Accountant
+ * has no Orders section, because Agents can change orders.
  */
 export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
   {
@@ -138,6 +147,15 @@ export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
     description:
       'Sees and downloads invoices, GST returns and payment fees, and opens Analytics. Cannot issue, cancel or change anything. No orders, chats or customers.',
     grants: ['section.invoices', 'section.analytics', 'reports.finance'],
+  },
+  {
+    id: 'catalogue',
+    label: 'Catalogue',
+    description:
+      'Adds and edits products, their prices and photos, and sees stock at each location. No orders, customers or sales figures.',
+    // No inventory.adjust: changing the stock at a location stays a stock
+    // correction. Ticking "Adjust stock counts" on the member adds it.
+    grants: ['section.products', 'products.edit', 'inventory.view'],
   },
   {
     id: 'warehouse',

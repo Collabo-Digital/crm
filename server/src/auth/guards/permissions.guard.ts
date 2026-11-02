@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserRole } from '@prisma/client';
+import { ALLOW_VENDOR_KEY } from '../decorators/allow-vendor.decorator';
 import {
   REQUIRE_ANY_PERMISSION_KEY,
   REQUIRE_PERMISSIONS_KEY,
@@ -23,7 +24,10 @@ import { SessionPayload } from '../interfaces/jwt-payload.interface';
  *   - AGENT / VIEWER pass when the session's `permissions` (loaded from
  *     OrganizationMember.permissions by JwtStrategy, Redis-cached alongside
  *     role) contain ALL required keys, and at least one of the any-of keys.
- *   - VENDOR is always refused — floor access for vendors is a V2 question.
+ *   - VENDOR holds no keys: it passes only a route opened to it with
+ *     `@AllowVendor()`, where its vendor scope is what confines it (a vendor
+ *     edits its own products without `products.edit`). Everywhere else it is
+ *     refused — floor access for vendors is a V2 question.
  *
  * Freshness: permission edits go through the member PATCH endpoint, which
  * already calls `redis.deleteSession(userId)` — the same staleness story as
@@ -45,6 +49,7 @@ export class PermissionsGuard implements CanActivate {
     if (!user?.role) return false;
 
     if (user.role === UserRole.VENDOR) {
+      if (this.reflector.getAllAndOverride<boolean>(ALLOW_VENDOR_KEY, targets)) return true;
       throw new ForbiddenException('Vendors cannot access inventory operations.');
     }
     if (IMPLICIT_ALL_ROLES.includes(user.role)) return true;

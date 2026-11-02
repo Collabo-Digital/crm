@@ -13,6 +13,7 @@ const TEMPLATES: JobTemplate[] = [
     grants: ["section.campaigns", "campaigns.view", "campaigns.manage", "broadcasts.send", "templates.manage"],
   },
   { id: "accountant", label: "Accountant", description: "", grants: ["section.invoices", "section.analytics", "reports.finance"] },
+  { id: "catalogue", label: "Catalogue", description: "", grants: ["section.products", "products.edit", "inventory.view"] },
   {
     id: "warehouse",
     label: "Warehouse",
@@ -35,12 +36,12 @@ describe("job templates in the access editor", () => {
   }
 
   it("keeps a key with no checkbox (inventory.pick) through a save", () => {
-    const { sections, capabilities } = editorAccess(TEMPLATES[3].grants);
+    const { sections, capabilities } = editorAccess(TEMPLATES[4].grants);
     assert.ok(accessGrants("AGENT", sections, capabilities).includes("inventory.pick"));
   });
 
   it("stops matching once an ability is unticked", () => {
-    const { sections, capabilities } = editorAccess(TEMPLATES[3].grants);
+    const { sections, capabilities } = editorAccess(TEMPLATES[4].grants);
     const without = capabilities.filter((key) => key !== "inventory.labels");
     assert.equal(matchingTemplate(TEMPLATES, "AGENT", sections, without), undefined);
   });
@@ -91,6 +92,41 @@ describe("capabilitiesFor", () => {
     const after: string[] = capabilitiesFor("AGENT", ["products"], ["inventory.view"]).map((c) => c.key);
     assert.ok(!before.includes("inventory.receive"));
     assert.ok(["inventory.receive", "inventory.adjust", "inventory.labels"].every((key) => after.includes(key)));
+  });
+});
+
+describe("the product editing checkbox", () => {
+  const label = (role: "AGENT" | "VIEWER", sections: Parameters<typeof capabilitiesFor>[1], held: string[] = []) =>
+    capabilitiesFor(role, sections, held).find((c) => c.key === "products.edit")?.label;
+
+  it("sits under Products for an Agent, first of its abilities", () => {
+    assert.equal(label("AGENT", ["products"]), "Add and change products and prices");
+    assert.equal(capabilitiesFor("AGENT", ["products"], []).filter((c) => c.section === "products")[0]?.key, "products.edit");
+  });
+
+  it("is not offered without Products, nor to a Viewer, who cannot change products", () => {
+    assert.equal(label("AGENT", ["orders", "chat"]), undefined);
+    assert.equal(label("VIEWER", ["products"]), undefined);
+  });
+
+  it("is not ticked by ticking Products: the section alone only reads", () => {
+    assert.deepEqual(accessGrants("AGENT", ["products"], []), ["section.products"]);
+  });
+
+  it("saves when ticked, and goes with the section", () => {
+    assert.deepEqual(sorted(accessGrants("AGENT", ["products"], ["products.edit"])), sorted(["section.products", "products.edit"]));
+    assert.deepEqual(accessGrants("AGENT", ["orders"], ["products.edit"]), ["section.orders"]);
+    assert.deepEqual(accessGrants("VIEWER", ["products"], ["products.edit"]), ["section.products"]);
+  });
+
+  it("shows ticked for a member who holds it, and unticked for a Packer", () => {
+    assert.ok(editorAccess(["section.products", "products.edit"]).capabilities.includes("products.edit"));
+    assert.ok(!editorAccess(TEMPLATES.find((t) => t.id === "packer")!.grants).capabilities.includes("products.edit"));
+  });
+
+  it("makes a Packer who is given it no longer the Packer template", () => {
+    const { sections, capabilities } = editorAccess(TEMPLATES.find((t) => t.id === "packer")!.grants);
+    assert.equal(matchingTemplate(TEMPLATES, "AGENT", sections, [...capabilities, "products.edit"]), undefined);
   });
 });
 

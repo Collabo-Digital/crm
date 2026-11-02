@@ -12,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "~/components/ui/table";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import { useDebounced } from "~/hooks/use-debounced";
 import { useGenerateSkusMutation } from "~/hooks/use-inventory-mutations";
 import { cn, formatCurrency } from "~/lib/utils";
@@ -56,6 +57,7 @@ export function VariantPriceStockCard({
   onLevelsLoaded,
   onRevertVariant,
   disabled,
+  readOnly,
   warehousingEnabled,
   trackForced,
   oversellForced,
@@ -78,6 +80,8 @@ export function VariantPriceStockCard({
   onRevertVariant: (variantId: string) => void;
   /** The page is saving. */
   disabled: boolean;
+  /** The member may not change products (no products.edit). */
+  readOnly: boolean;
   warehousingEnabled: boolean;
   trackForced: boolean;
   oversellForced: boolean;
@@ -145,6 +149,7 @@ export function VariantPriceStockCard({
         oversellForced={oversellForced}
         isVendor={isVendor}
         disabled={disabled}
+        readOnly={readOnly}
         onChange={(patch) => onDraftChange(editingVariant, patch)}
         onWarehouseChange={(warehouseId, value) =>
           onWarehouseChange(v.id, warehouseId, value)
@@ -386,6 +391,8 @@ function VariantChildRow({
   onToggle: () => void;
 }) {
   const generateSkus = useGenerateSkusMutation();
+  // Minting codes is inventory.labels, whatever else the member may change.
+  const canLabel = useCurrentRole().can("inventory.labels");
   const tracked = v.trackQuantity !== false;
   const sku = draft?.sku ?? v.sku ?? "";
   const price = Number(draft?.price ?? v.price ?? 0);
@@ -444,6 +451,8 @@ function VariantChildRow({
       <TableCell className="px-4 py-3">
         {sku.trim() ? (
           <span className="font-mono text-caption text-muted-foreground">{sku}</span>
+        ) : !canLabel ? (
+          <span className="text-caption text-muted-foreground">No SKU</span>
         ) : (
           // The badge IS the fix. It used to only state the problem, while the
           // only way to act on it lived on the Inventory screen — the most

@@ -2,6 +2,7 @@ import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserRole } from '@prisma/client';
 import { PermissionsGuard } from './permissions.guard';
+import { AllowVendor, ALLOW_VENDOR_KEY } from '../decorators/allow-vendor.decorator';
 import { RequireAnyPermission, RequirePermissions } from '../decorators/require-permissions.decorator';
 import type { PermissionKey } from '../permissions';
 
@@ -20,7 +21,7 @@ describe('PermissionsGuard', () => {
 
   beforeEach(() => {
     reflector = {
-      getAllAndOverride: jest.fn(() => required),
+      getAllAndOverride: jest.fn((key: string) => (key === ALLOW_VENDOR_KEY ? undefined : required)),
     } as unknown as Reflector;
     guard = new PermissionsGuard(reflector);
   });
@@ -128,5 +129,38 @@ describe('PermissionsGuard with @RequireAnyPermission', () => {
   it('lets managers through and keeps vendors out', () => {
     expect(run(stock.adjust, { role: UserRole.MANAGER, permissions: [] })).toBe(true);
     expect(() => run(stock.adjust, { role: UserRole.VENDOR, permissions: ['inventory.receive'] })).toThrow(ForbiddenException);
+  });
+});
+
+describe('PermissionsGuard on a route opened to vendors', () => {
+  class Catalogue {
+    @AllowVendor()
+    @RequirePermissions('products.edit')
+    editOwn() {}
+    @RequirePermissions('products.edit')
+    create() {}
+  }
+  const catalogue = Catalogue.prototype as unknown as Record<'editOwn' | 'create', () => void>;
+  const guard = new PermissionsGuard(new Reflector());
+  const run = (handler: () => void, user: Record<string, unknown>) =>
+    guard.canActivate({
+      getHandler: () => handler,
+      getClass: () => Catalogue,
+      switchToHttp: () => ({ getRequest: () => ({ user }) }),
+    } as unknown as ExecutionContext);
+
+  it('lets a vendor through without the key: its vendor scope confines it', () => {
+    expect(run(catalogue.editOwn, { role: UserRole.VENDOR, vendorScope: 'Acme', permissions: [] })).toBe(true);
+  });
+
+  it('still refuses a vendor where the route was not opened to it', () => {
+    expect(() => run(catalogue.create, { role: UserRole.VENDOR, vendorScope: 'Acme', permissions: [] })).toThrow(ForbiddenException);
+  });
+
+  it('asks an agent for the key either way', () => {
+    expect(() => run(catalogue.editOwn, { role: UserRole.AGENT, permissions: ['section.products'] })).toThrow(
+      new ForbiddenException('Missing permission: products.edit'),
+    );
+    expect(run(catalogue.editOwn, { role: UserRole.AGENT, permissions: ['section.products', 'products.edit'] })).toBe(true);
   });
 });

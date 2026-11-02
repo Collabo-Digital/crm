@@ -22,6 +22,7 @@ import {
   Plus,
   Calendar,
   UploadCloud,
+  Lock,
 } from "lucide-react";
 import {
   useProduct,
@@ -38,6 +39,7 @@ import {
 } from "~/hooks/use-product-mutations";
 import { useCreateAdjustmentMutation } from "~/hooks/use-inventory-mutations";
 import { useCurrentRole } from "~/hooks/use-current-role";
+import { canEditProducts } from "~/lib/permissions";
 import { useOrganizationSettings } from "~/hooks/use-settings-queries";
 import { useInventoryStatus } from "~/hooks/use-inventory-queries";
 import { STOCK_TERMS } from "~/lib/inventory-vocabulary";
@@ -114,6 +116,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "~/components/ui/breadcrumb";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Tip } from "~/components/ui/tooltip";
 import {
@@ -228,7 +231,11 @@ export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
   // Back to the list as it was left: same page, search and filters.
   const productsPath = useListReturnPath("products", "/products");
-  const { isVendor } = useCurrentRole();
+  const { isVendor, role, permissions } = useCurrentRole();
+  // Without products.edit the page is for looking up: every product field is
+  // disabled, with the reason written out above them. The stock at each
+  // location still follows inventory.adjust.
+  const readOnly = !canEditProducts(role, permissions);
   const { data: product, isLoading, isError, refetch } = useProduct(id);
   const { data: org } = useCurrentOrg();
   // Org-wide "(all products)" overrides from Settings → Sync. While ON they
@@ -805,7 +812,10 @@ export default function ProductDetailPage() {
     savingRef.current = true;
     setIsSavingAll(true);
     try {
-      const data = buildProductPatch();
+      // A member without products.edit saves stock at locations only. Any
+      // product difference is the editor's own markup (Quill rewrites the
+      // description's spaces), which the API would refuse from them.
+      const data = readOnly ? {} : buildProductPatch();
       if (Object.keys(data).length > 0) {
         await updateMutation.mutateAsync({ id: product.id, data });
       }
@@ -813,7 +823,7 @@ export default function ProductDetailPage() {
       // The default variant of a simple product is included: Overview edits
       // the same draft the variant panel does.
       const variantUpdates: Array<UpdateVariantRequest & { variantId: string }> = [];
-      for (const variant of product.variants ?? []) {
+      for (const variant of readOnly ? [] : product.variants ?? []) {
         const was = base.variantDrafts[variant.id];
         const draft = variantDrafts[variant.id];
         if (!was || !draft) continue;
@@ -883,7 +893,8 @@ export default function ProductDetailPage() {
 
   /** Saving never pushes on its own; the pill's toggle opts in. */
   function afterSuccessfulSave() {
-    if (!product || !isOnShopify) return;
+    // Pushing is a product change: a member without products.edit saved stock only.
+    if (!product || !isOnShopify || readOnly) return;
     if (!syncOnSave) {
       setAfterSave(true);
       return;
@@ -1154,15 +1165,30 @@ export default function ProductDetailPage() {
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           {/* Independent of Save on purpose: saving never pushes, so a
               merchant can keep an edit CRM-only for as long as they want. */}
-          <ProductSyncHeaderAction
-            product={product}
-            sync={sync}
-            hasUnsavedChanges={isProductDirty || isSaving}
-          />
+          {!readOnly && (
+            <ProductSyncHeaderAction
+              product={product}
+              sync={sync}
+              hasUnsavedChanges={isProductDirty || isSaving}
+            />
+          )}
           {/* Save and Discard live in the floating Save pill at the bottom,
               which every tab reports into. */}
         </div>
       </div>
+
+      {readOnly && (
+        <Alert variant="info">
+          <Lock />
+          <div className="space-y-0.5">
+            <AlertTitle>You can look this product up, not change it</AlertTitle>
+            <AlertDescription>
+              Changing products and their prices needs "Add and change products and prices". An owner or admin can
+              turn it on for you in Settings › Team members.
+            </AlertDescription>
+          </div>
+        </Alert>
+      )}
 
       <nav
         role="tablist"
@@ -1287,7 +1313,7 @@ export default function ProductDetailPage() {
                 </div>
               </div>
 
-              <Section title="Basic Information">
+              <Section title="Basic Information" readOnly={readOnly}>
                 <div className="space-y-4">
                   <div className="space-y-1.5">
                     <Label
@@ -1309,11 +1335,13 @@ export default function ProductDetailPage() {
                       Description
                     </Label>
                     <RichTextEditor
-                      key={product.id}
+                      // Quill reads its toolbar once, at mount.
+                      key={`${product.id}:${readOnly}`}
                       value={bodyHtml}
                       onChange={setBodyHtml}
                       onEditorReady={handleEditorReady}
                       placeholder="Describe this product…"
+                      readOnly={readOnly}
                     />
                   </div>
 
@@ -1321,7 +1349,7 @@ export default function ProductDetailPage() {
               </Section>
 
               {isSimpleProduct && (
-                <Section title="Pricing">
+                <Section title="Pricing" readOnly={readOnly}>
                   <div className="space-y-4">
                     <div className="space-y-3">
                       <div className="flex flex-row items-center gap-2">
@@ -1430,7 +1458,7 @@ export default function ProductDetailPage() {
               )}
 
               {isSimpleProduct && (
-                <Section title="Inventory">
+                <Section title="Inventory" readOnly={readOnly}>
                   <div className="space-y-4">
                     <div className="space-y-3">
                       <div className="flex flex-row justify-between gap-2">
@@ -1565,7 +1593,7 @@ export default function ProductDetailPage() {
               )}
 
               {isSimpleProduct && (
-                <Section title="Shipping">
+                <Section title="Shipping" readOnly={readOnly}>
                   <div className="space-y-4">
                     <Field orientation="horizontal">
                       <FieldContent>
@@ -1617,7 +1645,7 @@ export default function ProductDetailPage() {
                             value={dv?.weightUnit ?? "kg"}
                             onChange={(e) => setDv({ weightUnit: e.target.value })}
                             disabled={!defaultVariant}
-                            className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
+                            className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <option value="g">g</option>
                             <option value="kg">kg</option>
@@ -1632,7 +1660,7 @@ export default function ProductDetailPage() {
               )}
 
               {isSimpleProduct && (
-                <Section title="Customs">
+                <Section title="Customs" readOnly={readOnly}>
                   <div className="flex flex-row gap-2">
                     <div className="flex flex-col flex-1 gap-1">
                       <Label
@@ -1681,7 +1709,7 @@ export default function ProductDetailPage() {
 
           {activeTab === "variants" && (
             <>
-              <VariantOptionsCard
+              {!readOnly && <VariantOptionsCard
                 options={options}
                 valueDrafts={optionValueDrafts}
                 committedOptionNames={(product.options ?? []).map((o) => o.name)}
@@ -1703,7 +1731,7 @@ export default function ProductDetailPage() {
                 onAddValue={handleAddOptionValue}
                 onRemoveValue={handleRemoveOptionValue}
                 onSaveAndGenerate={handleSaveAndGenerate}
-              />
+              />}
 
               <VariantPriceStockCard
                 productTitle={product.title}
@@ -1728,6 +1756,7 @@ export default function ProductDetailPage() {
                 onLevelsLoaded={seedWarehouses}
                 onRevertVariant={revertVariant}
                 disabled={isSaving}
+                readOnly={readOnly}
                 warehousingEnabled={warehousingEnabled}
                 trackForced={trackForced}
                 oversellForced={oversellForced}
@@ -1815,7 +1844,7 @@ export default function ProductDetailPage() {
         <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
           {/* Stock summary */}
 
-          <Section title="Status">
+          <Section title="Status" readOnly={readOnly}>
             <div className="space-y-3">
               <div className="flex flex-col gap-5 items-start  justify-between">
                 <Combobox
@@ -1860,7 +1889,7 @@ export default function ProductDetailPage() {
           </Section>
 
 
-          <Section title="Tax (GST)">
+          <Section title="Tax (GST)" readOnly={readOnly}>
             <div className="space-y-3 text-xs">
               <div className="flex flex-col gap-1">
                 <Label
@@ -1890,7 +1919,7 @@ export default function ProductDetailPage() {
                   value={gstRate}
                   onChange={(e) => setGstRate(e.target.value)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <option value="">Not set</option>
                   {GST_RATE_OPTIONS.map((rate) => (
@@ -1912,7 +1941,7 @@ export default function ProductDetailPage() {
                   value={unitOfMeasure}
                   onChange={(e) => setUnitOfMeasure(e.target.value)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <option value="">Default (NOS)</option>
                   {COMMON_UQC.map((u) => (
@@ -1934,7 +1963,7 @@ export default function ProductDetailPage() {
                   value={supplyType}
                   onChange={(e) => setSupplyType(e.target.value as GstSupplyType)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {GST_SUPPLY_TYPES.map((t) => (
                     <option key={t.value} value={t.value}>
@@ -1955,7 +1984,7 @@ export default function ProductDetailPage() {
             </div>
           </Section>
 
-          <Section title="Product Organization">
+          <Section title="Product Organization" readOnly={readOnly}>
             <div className="space-y-3 text-xs">
               <ComboboxField
                 label="Product Type"
@@ -1963,6 +1992,7 @@ export default function ProductDetailPage() {
                 value={productType}
                 onChange={setProductType}
                 placeholder="Select product type"
+                disabled={readOnly}
               />
               <ComboboxField
                 label="Vendor"
@@ -1970,13 +2000,14 @@ export default function ProductDetailPage() {
                 value={vendor}
                 onChange={setVendor}
                 placeholder="Select vendor"
-                disabled={isVendor}
+                disabled={isVendor || readOnly}
               />
               <TagsComboboxField
                 label="Tags"
                 items={tagItems}
                 value={tags}
                 onChange={setTags}
+                disabled={readOnly}
               />
 
             </div>
@@ -2043,10 +2074,12 @@ export default function ProductDetailPage() {
         }}
       />
 
+      {/* Shown to a member without products.edit too: the stock at each
+          location is theirs to change with inventory.adjust. */}
       <ProductSavePill
         changes={pendingChanges}
         isSaving={isSaving}
-        canSync={isOnShopify}
+        canSync={isOnShopify && !readOnly}
         syncOnSave={syncOnSave}
         onToggleSync={toggleSyncOnSave}
         onSave={requestSave}
@@ -2257,13 +2290,18 @@ function ShopifySyncCard({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, readOnly = false, children }: { title: string; readOnly?: boolean; children: React.ReactNode }) {
   return (
     <section className="rounded-[6px] bg-white dark:bg-gray-900 shadow-sm ring-1 ring-border">
       <h2 className="border-b px-5 py-3 text-[14px] font-semibold  tracking-wider text-muted-foreground">
         {title}
       </h2>
-      <div className="px-5 py-4">{children}</div>
+      {readOnly ? (
+        // A disabled fieldset turns off every input, switch and picker inside.
+        <fieldset disabled className="min-w-0 px-5 py-4">{children}</fieldset>
+      ) : (
+        <div className="px-5 py-4">{children}</div>
+      )}
     </section>
   );
 }
@@ -2274,12 +2312,14 @@ function TagsComboboxField({
   value,
   onChange,
   placeholder = "Add tags…",
+  disabled = false,
 }: {
   label: string;
   items: string[];
   value: string[];
   onChange: (value: string[]) => void;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   const anchor = useComboboxAnchor();
   const labelId = useId();
@@ -2327,37 +2367,39 @@ function TagsComboboxField({
     <div className="space-y-1">
       <div className="flex items-center justify-between">
         <span id={labelId} className="text-muted-foreground text-[12px]">{label}</span>
-        <button
-          type="button"
-          onMouseDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onClick={handleAddClick}
-          aria-label={`Add ${label.toLowerCase()}`}
-          className="rounded-full p-0.5 text-muted-foreground hover:bg-muted"
-        >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            aria-hidden="true"
+        {!disabled && (
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={handleAddClick}
+            aria-label={`Add ${label.toLowerCase()}`}
+            className="rounded-full p-0.5 text-muted-foreground hover:bg-muted"
           >
-            <g strokeWidth="0" />
-            <g strokeLinecap="round" strokeLinejoin="round" />
-            <g
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
             >
-              <path d="M7 12h5m0 0h5m-5 0V7m0 5v5" />
-              <circle cx="12" cy="12" r="9" />
-            </g>
-          </svg>
-        </button>
+              <g strokeWidth="0" />
+              <g strokeLinecap="round" strokeLinejoin="round" />
+              <g
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M7 12h5m0 0h5m-5 0V7m0 5v5" />
+                <circle cx="12" cy="12" r="9" />
+              </g>
+            </svg>
+          </button>
+        )}
       </div>
       <div>
         <Combobox
@@ -2368,6 +2410,7 @@ function TagsComboboxField({
           onValueChange={(next) => onChange(next ?? [])}
           open={open}
           onOpenChange={handleOpenChange}
+          disabled={disabled}
         >
           <ComboboxChips ref={anchor} className="w-full">
             <ComboboxValue>
