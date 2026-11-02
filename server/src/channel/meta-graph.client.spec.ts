@@ -106,6 +106,47 @@ describe('MetaGraphClient', () => {
     expect(limiter.openBreaker.mock.calls[0][1]).toMatchObject({ hintMs: 7 * 60_000 });
   });
 
+  it('131056 (one customer’s pair limit) delays only this call: no breaker on the number', async () => {
+    const { client, limiter, fetchMock, scopes } = build();
+    fetchMock.mockResolvedValueOnce(json({ error: { message: 'Pair rate limit hit', code: 131056 } }, { status: 400 }));
+    const err: unknown = await client
+      .request({ method: 'POST', path: '/919/messages', accessToken: 't', scopes, body: {} })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RateLimitedError);
+    expect(err).toMatchObject({ scope: metaScope.phone('919'), metaCode: 131056 });
+    expect(limiter.openBreaker).not.toHaveBeenCalled();
+  });
+
+  it('131048 still opens the breaker on the number, and carries the code', async () => {
+    const { client, limiter, fetchMock, scopes } = build();
+    fetchMock.mockResolvedValueOnce(json({ error: { message: 'Spam rate limit hit', code: 131048 } }, { status: 400 }));
+    const err: unknown = await client
+      .request({ method: 'POST', path: '/919/messages', accessToken: 't', scopes, body: {} })
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({ metaCode: 131048 });
+    expect(limiter.openBreaker.mock.calls[0][0]).toEqual(metaScope.phone('919'));
+  });
+
+  it('a send is not POSTed again after a 5xx Meta did not explain', async () => {
+    const { client, fetchMock, scopes } = build();
+    fetchMock.mockResolvedValue(new Response('<html>Bad Gateway</html>', { status: 502 }));
+    const err: unknown = await client
+      .request({ method: 'POST', path: '/919/messages', accessToken: 't', scopes, body: {}, idempotent: false })
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'HTTP_ERROR', httpStatus: 502 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a send is retried when Meta answered with its own temporary error', async () => {
+    const { client, fetchMock, scopes } = build();
+    fetchMock
+      .mockResolvedValueOnce(json({ error: { message: 'Temporary', code: 2 } }, { status: 503 }))
+      .mockResolvedValueOnce(json({ messages: [{ id: 'wamid.1' }] }));
+    const res = await client.request({ method: 'POST', path: '/919/messages', accessToken: 't', scopes, body: {}, idempotent: false });
+    expect(res.data).toEqual({ messages: [{ id: 'wamid.1' }] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('190 is a dead token, not a rate limit', async () => {
     const { client, limiter, fetchMock, scopes } = build();
     fetchMock.mockResolvedValueOnce(json({ error: { message: 'Invalid OAuth access token', code: 190 } }, { status: 401 }));

@@ -22,8 +22,8 @@ html.dark { color-scheme: dark; }
   --font-family-heading: var(--font-family-sans);
   --font-family-mono:    ui-monospace, 'Courier New', Courier, monospace;
 
-  /* ── Type scale ─────────────────────────────────────────────────────────── */
-  --font-size-2xs:  10px;   --line-height-2xs:  14px;
+  /* ── Type scale ─ 12px is the floor for anything people read. ───────────── */
+  --font-size-2xs:  12px;   --line-height-2xs:  16px;
   --font-size-xs:   12px;   --line-height-xs:   16px;
   --font-size-sm:   13px;   --line-height-sm:   18px;
   --font-size-md:   14px;   --line-height-md:   20px;
@@ -49,17 +49,29 @@ html.dark { color-scheme: dark; }
   /* Fixed white, to pair with the fixed-black `ink` in both themes. */
   --ink-foreground: #ffffff;
 
-  /* ── Status ─────────────────────────────────────────────────────────────── */
+  /* ── Status ─ the plain colour is for dots, icons and fills; it is too pale
+        for text. Text uses the -text shade, which passes 4.5:1 on the -subtle
+        tint and on every page surface. ── */
   --success:               oklch(0.627 0.194 149.214);  /* green-600  */
   --success-subtle:        oklch(0.962 0.044 156.743);  /* green-100  */
+  --success-text:          oklch(0.448 0.119 151.328);  /* green-800  */
   --warning:               oklch(0.666 0.179 58.318);   /* amber-600  */
   --warning-subtle:        oklch(0.987 0.022 95.277);   /* amber-50   */
+  --warning-text:          oklch(0.555 0.163 48.998);   /* amber-700  */
   --warning-strong:        oklch(0.646 0.222 41.116);   /* orange-600 */
   --warning-strong-subtle: oklch(0.98 0.016 73.684);    /* orange-50  */
+  --warning-strong-text:   oklch(0.553 0.195 38.402);   /* orange-700 */
   --danger:                oklch(0.577 0.245 27.325);   /* red-600    */
   --danger-subtle:         oklch(0.936 0.032 17.717);   /* red-100    */
+  --danger-text:           oklch(0.505 0.213 27.518);   /* red-700    */
   --info:                  oklch(0.546 0.245 262.881);  /* blue-600   */
   --info-subtle:           oklch(0.97 0.014 254.604);   /* blue-50    */
+  --info-text:             oklch(0.488 0.243 264.376);  /* blue-700   */
+
+  /* The unread-count badge, desktop and phone. Fixed in both themes: white on
+     red-600 is 4.8:1, and red stands out on the black bar and the white tab bar. */
+  --unread:            oklch(0.577 0.245 27.325);       /* red-600 */
+  --unread-foreground: #ffffff;
 
   /* ── shadcn base (unchanged) ────────────────────────────────────────────── */
   --background: oklch(1 0 0);
@@ -73,18 +85,23 @@ html.dark { color-scheme: dark; }
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  /* 5.5:1 on muted and on surface-sunken. */
+  --muted-foreground: oklch(0.5 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: var(--danger);
   --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  /* Edges of fields, checkboxes, radios and the off switch: 3:1 or better
+     against every surface. --border stays the soft line for cards. */
+  --input: oklch(0.62 0 0);
+  /* The keyboard focus ring: forest here, lime in dark. */
+  --ring: var(--brand-strong);
+  /* Series colours, all 3:1 or better against the card. */
+  --chart-1: var(--brand-strong);              /* the main series */
+  --chart-2: oklch(0.62 0 0);                  /* a comparison series */
+  --chart-3: oklch(0.546 0.245 262.881);       /* blue-600   */
+  --chart-4: oklch(0.555 0.163 48.998);        /* amber-700  */
+  --chart-5: oklch(0.558 0.288 302.321);       /* purple-600 */
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -94,6 +111,31 @@ html.dark { color-scheme: dark; }
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* ── Inbox chat ─ the thread is styled after a phone's WhatsApp, so the
+        conversation reads the way the customer sees it. ── */
+  --chat-wallpaper:         #efeae2;
+  --chat-doodle:            rgb(84 70 50 / 9%);
+  --chat-bar:               #f0f2f5;
+  --chat-input:             #ffffff;
+  --chat-divider:           rgb(11 20 26 / 10%);
+  --chat-bubble-in:         #ffffff;
+  --chat-bubble-out:        #d9fdd3;
+  --chat-bubble-foreground: #111b21;
+  --chat-quote:             rgb(11 20 26 / 5%);
+  --chat-meta:              #667781;
+  --chat-icon:              #54656f;
+  --chat-pill:              #ffffff;
+  --chat-pill-foreground:   #54656f;
+  --chat-system:            #fff3c4;
+  --chat-system-foreground: #54656f;
+  --chat-accent:            #027eb5;
+  --chat-read:              #53bdeb;
+  --chat-send:              #00a884;
+  --chat-send-hover:        #008f6f;
+  --chat-send-foreground:   #ffffff;
+  --chat-recording:         #ea0038;
+  --chat-shadow:            0 1px 0.5px rgb(11 20 26 / 13%);
 }
 
 .dark {
@@ -107,14 +149,19 @@ html.dark { color-scheme: dark; }
   /* ── Status ─ /30% alpha reproduces today's dark:bg-*-950/30 exactly ────── */
   --success:               oklch(0.792 0.209 151.711);        /* green-400     */
   --success-subtle:        oklch(0.266 0.065 152.934 / 30%);  /* green-950/30  */
+  --success-text:          oklch(0.792 0.209 151.711);        /* green-400     */
   --warning:               oklch(0.828 0.189 84.429);         /* amber-400     */
   --warning-subtle:        oklch(0.279 0.077 45.635 / 30%);   /* amber-950/30  */
+  --warning-text:          oklch(0.828 0.189 84.429);         /* amber-400     */
   --warning-strong:        oklch(0.75 0.183 55.934);          /* orange-400    */
   --warning-strong-subtle: oklch(0.266 0.079 36.259 / 30%);   /* orange-950/30 */
+  --warning-strong-text:   oklch(0.75 0.183 55.934);          /* orange-400    */
   --danger:                oklch(0.704 0.191 22.216);         /* red-400       */
   --danger-subtle:         oklch(0.258 0.092 26.042 / 30%);   /* red-950/30    */
+  --danger-text:           oklch(0.704 0.191 22.216);         /* red-400       */
   --info:                  oklch(0.707 0.165 254.624);        /* blue-400      */
   --info-subtle:           oklch(0.282 0.091 267.935 / 30%);  /* blue-950/30   */
+  --info-text:             oklch(0.707 0.165 254.624);        /* blue-400      */
 
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
@@ -134,13 +181,14 @@ html.dark { color-scheme: dark; }
   --accent-foreground: oklch(0.985 0 0);
   --destructive: var(--danger);
   --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  /* 3.8:1 on the card. Field fills use bg-input/10 (4% white). */
+  --input: oklch(1 0 0 / 40%);
+  --ring: var(--brand-strong);
+  --chart-1: var(--brand-strong);              /* lime       */
+  --chart-2: oklch(0.6 0 0);
+  --chart-3: oklch(0.707 0.165 254.624);       /* blue-400   */
+  --chart-4: oklch(0.828 0.189 84.429);        /* amber-400  */
+  --chart-5: oklch(0.714 0.203 305.504);       /* purple-400 */
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
@@ -149,6 +197,29 @@ html.dark { color-scheme: dark; }
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  --chat-wallpaper:         #0b141a;
+  --chat-doodle:            rgb(255 255 255 / 5%);
+  --chat-bar:               #202c33;
+  --chat-input:             #2a3942;
+  --chat-divider:           rgb(233 237 239 / 12%);
+  --chat-bubble-in:         #202c33;
+  --chat-bubble-out:        #005c4b;
+  --chat-bubble-foreground: #e9edef;
+  --chat-quote:             rgb(0 0 0 / 18%);
+  --chat-meta:              rgb(233 237 239 / 60%);
+  --chat-icon:              #aebac1;
+  --chat-pill:              #182229;
+  --chat-pill-foreground:   #8696a0;
+  --chat-system:            #182229;
+  --chat-system-foreground: #ffd279;
+  --chat-accent:            #53bdeb;
+  --chat-read:              #53bdeb;
+  --chat-send:              #00a884;
+  --chat-send-hover:        #06cf9c;
+  --chat-send-foreground:   #111b21;
+  --chat-recording:         #f15c6d;
+  --chat-shadow:            0 1px 0.5px rgb(11 20 26 / 40%);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -165,7 +236,7 @@ html.dark { color-scheme: dark; }
         font-weight isn't reachable either. Tailwind's own xs/sm/base/lg/xl/2xl
         are deliberately NOT overridden — they still render 12/14/16/18/20/24
         for the ~70 files not yet migrated. ── */
-  --text-micro:      var(--font-size-2xs);    /* 10px — badge / dot labels */
+  --text-micro:      var(--font-size-2xs);    /* 12px — badge / pill labels */
   --text-micro--line-height: var(--line-height-2xs);
 
   --text-caption:    var(--font-size-xs);     /* 12px — helper / meta text */
@@ -213,14 +284,45 @@ html.dark { color-scheme: dark; }
   /* ── Status ── */
   --color-success:               var(--success);
   --color-success-subtle:        var(--success-subtle);
+  --color-success-text:          var(--success-text);
   --color-warning:               var(--warning);
   --color-warning-subtle:        var(--warning-subtle);
+  --color-warning-text:          var(--warning-text);
   --color-warning-strong:        var(--warning-strong);
   --color-warning-strong-subtle: var(--warning-strong-subtle);
+  --color-warning-strong-text:   var(--warning-strong-text);
   --color-danger:                var(--danger);
   --color-danger-subtle:         var(--danger-subtle);
+  --color-danger-text:           var(--danger-text);
   --color-info:                  var(--info);
   --color-info-subtle:           var(--info-subtle);
+  --color-info-text:             var(--info-text);
+  --color-unread:                var(--unread);
+  --color-unread-foreground:     var(--unread-foreground);
+
+  /* ── Inbox chat ── */
+  --color-chat-wallpaper:         var(--chat-wallpaper);
+  --color-chat-bar:               var(--chat-bar);
+  --color-chat-input:             var(--chat-input);
+  --color-chat-divider:           var(--chat-divider);
+  --color-chat-bubble-in:         var(--chat-bubble-in);
+  --color-chat-bubble-out:        var(--chat-bubble-out);
+  --color-chat-bubble-foreground: var(--chat-bubble-foreground);
+  --color-chat-quote:             var(--chat-quote);
+  --color-chat-meta:              var(--chat-meta);
+  --color-chat-icon:              var(--chat-icon);
+  --color-chat-pill:              var(--chat-pill);
+  --color-chat-pill-foreground:   var(--chat-pill-foreground);
+  --color-chat-system:            var(--chat-system);
+  --color-chat-system-foreground: var(--chat-system-foreground);
+  --color-chat-accent:            var(--chat-accent);
+  --color-chat-read:              var(--chat-read);
+  --color-chat-send:              var(--chat-send);
+  --color-chat-send-hover:        var(--chat-send-hover);
+  --color-chat-send-foreground:   var(--chat-send-foreground);
+  --color-chat-recording:         var(--chat-recording);
+  --shadow-chat:                  var(--chat-shadow);
+  --drop-shadow-chat:             var(--chat-shadow);
 
   /* ── shadcn mappings (unchanged) ── */
   --color-sidebar-ring: var(--sidebar-ring);
@@ -267,7 +369,14 @@ html.dark { color-scheme: dark; }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring;
+  }
+  /* The keyboard focus ring for anything that does not draw its own: 2px of
+     solid --ring with a 2px gap, 3:1 or better on every surface. */
+  :focus-visible {
+    outline-style: solid;
+    outline-width: 2px;
+    outline-offset: 2px;
   }
   body {
     @apply bg-background text-foreground;
@@ -334,4 +443,200 @@ html.dark { color-scheme: dark; }
 .brand-logo-mask {
   -webkit-mask: url(/brand/collabo-wordmark.webp?v=2) center / contain no-repeat;
   mask: url(/brand/collabo-wordmark.webp?v=2) center / contain no-repeat;
+}
+
+/* ── Chat wallpaper (components/app/inbox/conversation-thread) ─ a doodle tile
+      drawn for Collabo, used as a mask so its colour is a theme token. It sits
+      on a non-scrolling wrapper so the pattern stays put while messages move. */
+.chat-wallpaper { position: relative; isolation: isolate; background-color: var(--chat-wallpaper); }
+.chat-wallpaper::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--chat-doodle);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300' viewBox='0 0 300 300' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 22h26a6 6 0 0 1 6 6v13a6 6 0 0 1-6 6H35l-8 7v-7h-5a6 6 0 0 1-6-6V28a6 6 0 0 1 6-6z'/%3E%3Cpath d='M25 32h20M25 38h12'/%3E%3Cpath d='M124 46c-7-5-13-9-13-16a6.5 6.5 0 0 1 13-1.5 6.5 6.5 0 0 1 13 1.5c0 7-6 11-13 16z'/%3E%3Cpath d='M214 18l3.5 8.5 9 .7-6.9 5.9 2.1 8.9-7.7-4.8-7.7 4.8 2.1-8.9-6.9-5.9 9-.7z'/%3E%3Cpath d='M252 78h24l-2.5 24h-19zM258 78v-4a6 6 0 0 1 12 0v4'/%3E%3Crect x='40' y='92' width='22' height='36' rx='4'/%3E%3Cpath d='M48 123h6'/%3E%3Cpath d='M146 132v-24l16-4v22'/%3E%3Ccircle cx='142' cy='132' r='4'/%3E%3Ccircle cx='158' cy='126' r='4'/%3E%3Ccircle cx='226' cy='128' r='13'/%3E%3Cpath d='M221 124v1M231 124v1M220 132c3 4 9 4 12 0'/%3E%3Cpath d='M68 186l36-15-13 33-6-12zM85 192l19-21'/%3E%3Crect x='160' y='182' width='26' height='20' rx='2'/%3E%3Cpath d='M157 176h32v6h-32zM173 176v26M173 176c-4-8-12-6-9-1M173 176c4-8 12-6 9-1'/%3E%3Cpath d='M246 196h20v12a8 8 0 0 1-8 8h-4a8 8 0 0 1-8-8zM266 200h3a4 4 0 0 1 0 8h-3M252 190c0-3 3-3 3-6M259 190c0-3 3-3 3-6'/%3E%3Cpath d='M24 272c0-18 12-28 30-28 0 18-12 28-30 28zM24 272l18-18'/%3E%3Cpath d='M128 238a14 14 0 1 0 14 20 11 11 0 0 1-14-20z'/%3E%3Crect x='196' y='248' width='30' height='21' rx='3'/%3E%3Cpath d='M197 250l14 10 14-10'/%3E%3Cpath d='M262 254l14-4 10 10-4 14-14 4-10-10z'/%3E%3Ccircle cx='272' cy='264' r='2'/%3E%3Ccircle cx='92' cy='60' r='2.5'/%3E%3Ccircle cx='186' cy='82' r='2'/%3E%3Ccircle cx='112' cy='290' r='2'/%3E%3Ccircle cx='20' cy='160' r='2.5'/%3E%3Ccircle cx='286' cy='150' r='2'/%3E%3Cpath d='M96 106l4 4 8-8'/%3E%3Cpath d='M188 132h8M192 128v8'/%3E%3Cpath d='M60 228h8M64 224v8'/%3E%3Cpath d='M280 26h6M283 23v6'/%3E%3C/svg%3E") 0 0 / 300px repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300' viewBox='0 0 300 300' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 22h26a6 6 0 0 1 6 6v13a6 6 0 0 1-6 6H35l-8 7v-7h-5a6 6 0 0 1-6-6V28a6 6 0 0 1 6-6z'/%3E%3Cpath d='M25 32h20M25 38h12'/%3E%3Cpath d='M124 46c-7-5-13-9-13-16a6.5 6.5 0 0 1 13-1.5 6.5 6.5 0 0 1 13 1.5c0 7-6 11-13 16z'/%3E%3Cpath d='M214 18l3.5 8.5 9 .7-6.9 5.9 2.1 8.9-7.7-4.8-7.7 4.8 2.1-8.9-6.9-5.9 9-.7z'/%3E%3Cpath d='M252 78h24l-2.5 24h-19zM258 78v-4a6 6 0 0 1 12 0v4'/%3E%3Crect x='40' y='92' width='22' height='36' rx='4'/%3E%3Cpath d='M48 123h6'/%3E%3Cpath d='M146 132v-24l16-4v22'/%3E%3Ccircle cx='142' cy='132' r='4'/%3E%3Ccircle cx='158' cy='126' r='4'/%3E%3Ccircle cx='226' cy='128' r='13'/%3E%3Cpath d='M221 124v1M231 124v1M220 132c3 4 9 4 12 0'/%3E%3Cpath d='M68 186l36-15-13 33-6-12zM85 192l19-21'/%3E%3Crect x='160' y='182' width='26' height='20' rx='2'/%3E%3Cpath d='M157 176h32v6h-32zM173 176v26M173 176c-4-8-12-6-9-1M173 176c4-8 12-6 9-1'/%3E%3Cpath d='M246 196h20v12a8 8 0 0 1-8 8h-4a8 8 0 0 1-8-8zM266 200h3a4 4 0 0 1 0 8h-3M252 190c0-3 3-3 3-6M259 190c0-3 3-3 3-6'/%3E%3Cpath d='M24 272c0-18 12-28 30-28 0 18-12 28-30 28zM24 272l18-18'/%3E%3Cpath d='M128 238a14 14 0 1 0 14 20 11 11 0 0 1-14-20z'/%3E%3Crect x='196' y='248' width='30' height='21' rx='3'/%3E%3Cpath d='M197 250l14 10 14-10'/%3E%3Cpath d='M262 254l14-4 10 10-4 14-14 4-10-10z'/%3E%3Ccircle cx='272' cy='264' r='2'/%3E%3Ccircle cx='92' cy='60' r='2.5'/%3E%3Ccircle cx='186' cy='82' r='2'/%3E%3Ccircle cx='112' cy='290' r='2'/%3E%3Ccircle cx='20' cy='160' r='2.5'/%3E%3Ccircle cx='286' cy='150' r='2'/%3E%3Cpath d='M96 106l4 4 8-8'/%3E%3Cpath d='M188 132h8M192 128v8'/%3E%3Cpath d='M60 228h8M64 224v8'/%3E%3Cpath d='M280 26h6M283 23v6'/%3E%3C/svg%3E") 0 0 / 300px repeat;
+}
+
+/* ── Voice note seek bar (components/app/inbox/voice-note-player) ─ the fill
+      colour and the played share come in as --voice-fill and --voice-progress. */
+.voice-seek { appearance: none; background: transparent; cursor: pointer; }
+.voice-seek:disabled { cursor: default; }
+.voice-seek::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--voice-fill) var(--voice-progress, 0%), var(--chat-divider) var(--voice-progress, 0%));
+}
+.voice-seek::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--voice-fill) var(--voice-progress, 0%), var(--chat-divider) var(--voice-progress, 0%));
+}
+.voice-seek::-webkit-slider-thumb { appearance: none; width: 13px; height: 13px; margin-top: -4.5px; border-radius: 50%; background: var(--voice-fill); }
+.voice-seek::-moz-range-thumb { width: 13px; height: 13px; border: 0; border-radius: 50%; background: var(--voice-fill); }
+
+/* Phone layouts share one touch and safe-area contract. */
+:root { --mobile-nav-height: calc(76px + env(safe-area-inset-bottom, 0px)); }
+
+@media (max-width: 767px) {
+  :root {
+    --font-size-md: 15px;
+    --line-height-md: 22px;
+    --font-size-sm: 14px;
+    --line-height-sm: 20px;
+    --radius: .875rem;
+    --surface-sunken: #f3f5f4;
+  }
+  html.dark { --surface-sunken: oklch(0.13 0.028 261.692); }
+  html { scroll-padding-top: 80px; -webkit-text-size-adjust: 100%; }
+  body { overflow-x: clip; }
+  button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+  button, a { touch-action: manipulation; }
+  .app-shell { min-height: 100dvh; }
+  .app-header { padding-top: env(safe-area-inset-top, 0px); }
+  .app-main { padding-bottom: calc(var(--mobile-nav-height) + 24px); }
+  .app-main-contained { margin-bottom: var(--mobile-nav-height); padding-bottom: 12px; }
+  .app-shell-immersive .app-main { padding-bottom: 0; }
+  .mobile-section-nav { scrollbar-width: none; }
+  .mobile-section-nav::-webkit-scrollbar { display: none; }
+  .mobile-section-nav nav { box-shadow: none; }
+  .mobile-bottom-nav {
+    position: fixed;
+    z-index: 40;
+    inset: auto 0 0;
+    display: flex;
+    height: var(--mobile-nav-height);
+    align-items: flex-start;
+    padding: 7px max(8px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(8px, env(safe-area-inset-left, 0px));
+    border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-radius: 24px 24px 0 0;
+    background: color-mix(in srgb, var(--card) 95%, transparent);
+    backdrop-filter: blur(20px);
+    box-shadow: 0 -4px 24px rgb(0 0 0 / 3%);
+  }
+  .mobile-nav-item {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 60px;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    border-radius: 14px;
+    color: var(--muted-foreground);
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .mobile-nav-icon { position: relative; display: grid; place-items: center; width: 48px; height: 34px; border-radius: 14px; transition: background-color .18s; }
+  .mobile-nav-item[aria-current="page"], .mobile-nav-item.is-active { color: var(--foreground); font-weight: 650; }
+  .mobile-nav-item[aria-current="page"] .mobile-nav-icon, .mobile-nav-item.is-active .mobile-nav-icon { background: var(--brand); color: var(--brand-foreground); }
+  .mobile-nav-item:focus-visible { outline: 2px solid var(--brand-strong); outline-offset: -2px; }
+  .mobile-nav-item:active .mobile-nav-icon { transform: scale(.94); }
+  /* Same badge as the desktop bar's (navbar.tsx): red, white, 12px semibold. */
+  .mobile-unread { position: absolute; right: 0; top: -2px; min-width: 18px; height: 18px; border-radius: 10px; background: var(--unread); color: var(--unread-foreground); font-size: 12px; font-weight: 600; line-height: 1; display: grid; place-items: center; padding-inline: 4px; box-shadow: 0 0 0 1.5px var(--card); }
+  .mobile-action-dock { bottom: var(--mobile-nav-height); }
+  /* A full-screen page has no tab bar, so its dock sits on the screen's edge. */
+  .app-shell-immersive .mobile-action-dock { bottom: 0; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .mobile-action-dock [role="group"] { border-radius: 18px; }
+  .mobile-action-dock button { min-height: 44px; min-width: 44px; }
+  [data-slot="page-header"] { gap: 16px; }
+  [data-slot="page-header-title"] { font-size: 27px; line-height: 1.2; letter-spacing: -.8px; }
+  [data-slot="page-header-description"] { line-height: 1.5; }
+  [data-slot="page-header-actions"] { row-gap: 8px; }
+  /* The app bar names the screen, so a section page's own heading and blurb
+     would only repeat it. Detail pages keep theirs with data-mobile-title. */
+  .app-main [data-slot="page-header"]:not([data-mobile-title]) [data-slot="page-header-title"] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .app-main [data-slot="page-header"]:not([data-mobile-title]) [data-slot="page-header-description"] { display: none; }
+  .app-main [data-slot="page-header"]:not([data-mobile-title]):not(:has([data-slot="page-header-actions"] > *)) { display: none; }
+  /* Every dialog is a bottom sheet. Its bottom and height follow the visible
+     area (--sheet-keyboard, --sheet-viewport from hooks/use-bottom-sheet), so
+     the iOS keyboard never covers it; the button row stays pinned to it. */
+  [data-slot="dialog-content"] {
+    top: auto;
+    bottom: var(--sheet-keyboard, 0px);
+    left: 0;
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(var(--sheet-viewport, 100dvh) - env(safe-area-inset-top, 0px) - 24px);
+    transform: none;
+    translate: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 26px 26px 0 0;
+    padding: 28px 20px calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+  [data-slot="dialog-handle"] { position: absolute; z-index: 1; top: 0; left: 25%; width: 50%; height: 28px; touch-action: none; cursor: grab; }
+  [data-slot="dialog-handle"]::before { content: ""; position: absolute; top: 9px; left: calc(50% - 18px); width: 36px; height: 4px; border-radius: 5px; background: var(--border); }
+  [data-slot="dialog-header"] { padding-right: 40px; }
+  [data-slot="dialog-title"] { font-size: 20px; line-height: 1.3; }
+  [data-slot="dialog-footer"] {
+    position: sticky;
+    z-index: 1;
+    bottom: calc(-20px - env(safe-area-inset-bottom, 0px));
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin: 0 -20px calc(-20px - env(safe-area-inset-bottom, 0px));
+    padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px));
+    border-radius: 0;
+    border-top: 1px solid var(--border);
+    background: var(--popover);
+  }
+  [data-slot="dialog-footer"] > * { flex: 1 1 auto; }
+  [data-slot="dialog-content"] > [data-slot="dialog-close"] { top: 19px; right: 10px; }
+  [data-slot="sheet-content"] { max-width: 100%; max-height: 100dvh; }
+  [data-slot="sheet-header"] { padding-top: calc(24px + env(safe-area-inset-top, 0px)); padding-right: 60px; }
+  [data-slot="sheet-footer"] { flex-wrap: wrap; padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+  [data-slot="sheet-body"] { min-height: 0; overscroll-behavior: contain; }
+  [data-slot="popover-content"] { max-width: calc(100vw - 24px); }
+  .mobile-menu { max-height: 88dvh; display: flex; flex-direction: column; }
+  .settings-page input:not([type="checkbox"]):not([type="radio"]), .settings-page select { min-width: 0; }
+}
+
+/* Finger-sized controls on phones, and on any touch screen by its pointer, so
+   a tablet at the counter gets them too. A Radix trigger or close that wraps a
+   Button renames the Button's data-slot, so a Button is also known by the
+   data-size it always carries; menu and popover triggers count even when
+   hand-built. */
+@media (max-width: 767px), (pointer: coarse) {
+  [data-slot="button"], [data-slot="select-trigger"],
+  [data-slot="dropdown-menu-trigger"], [data-slot="popover-trigger"],
+  [data-slot$="-trigger"][data-size], [data-slot$="-close"][data-size] { min-height: 44px; }
+  :is([data-slot="button"], [data-slot$="-trigger"], [data-slot$="-close"])[data-size^="icon"] { min-width: 44px; }
+  [data-slot="dropdown-menu-item"], [data-slot="select-item"] { min-height: 44px; }
+  [data-slot="input"], [data-slot="textarea"], .app-main input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]), .app-main select, .app-main textarea {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  [data-slot="dialog-content"] input, [data-slot="sheet-content"] input,
+  [data-slot="dialog-content"] textarea, [data-slot="sheet-content"] textarea { font-size: 16px; }
+  .settings-page button:not([role="switch"]):not([role="checkbox"]) { min-height: 44px; }
+  /* The rich-text toolbar (Quill's snow theme) draws 28x24 buttons. */
+  html .ql-snow.ql-toolbar button { width: 44px; height: 44px; }
+  html .ql-snow.ql-toolbar .ql-picker { height: 44px; }
+  html .ql-snow.ql-toolbar .ql-picker-label { display: flex; align-items: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+@media (max-width: 767px) {
+  .mobile-account-table table, .mobile-account-table tbody { display: block; width: 100%; }
+  .mobile-account-table thead { display: none; }
+  .mobile-account-table tr { display: block; padding: 20px; }
+  .mobile-account-table td { display: block; max-width: 100%; padding: 0; white-space: normal; }
+  .mobile-account-table td + td { margin-top: 12px; }
+  .mobile-account-table td:last-child > div { justify-content: flex-start; padding-top: 8px; }
+}
+
+@media (max-width: 767px) {
+  [data-slot="stat-card"] .text-stat,
+  [data-slot="stat-card"] .text-subhead { min-width: 0; max-width: 100%; font-size: clamp(17px, 5vw, 22px); line-height: 1.3; overflow-wrap: anywhere; letter-spacing: -.5px; }
+}
+
+@media (max-width: 767px) {
+  .auth-shell input:not([type="checkbox"]):not([type="radio"]), .auth-shell select { min-height: 48px; font-size: 16px; }
+  .auth-shell button[type="submit"] { min-height: 48px; border-radius: 16px; }
 }

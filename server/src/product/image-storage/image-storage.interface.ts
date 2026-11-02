@@ -25,6 +25,11 @@ export interface UploadInput {
 export interface IImageStorage {
   upload(input: UploadInput): Promise<UploadedImageMeta>;
   delete(storageKey: string): Promise<void>;
+  /**
+   * The bytes of a stored file, for PDFs that embed it. Takes a storage key,
+   * never a URL: documents print only files that were uploaded here.
+   */
+  read(storageKey: string): Promise<Buffer>;
 }
 
 export const IMAGE_STORAGE = Symbol('IMAGE_STORAGE');

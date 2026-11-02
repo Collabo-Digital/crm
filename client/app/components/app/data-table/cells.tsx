@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { Package } from "lucide-react";
 
 import { ChannelBadge } from "~/components/app/channel-badge";
+import { StatusBadge } from "~/components/ui/status-badge";
 import { formatDate, formatDateTime } from "~/lib/format-date";
 import { cn, formatCurrency } from "~/lib/utils";
 import type { ChannelPlatform } from "~/types/api";
@@ -46,7 +47,12 @@ export function TextCell({
   className?: string;
 }) {
   return (
-    <span title={title} className={cn(TRUNCATE, muted && "text-muted-foreground", className)}>
+    <span
+      title={title}
+      // A bare dash is an empty value; the phone card leaves those fields off.
+      data-empty={children === "—" || undefined}
+      className={cn(TRUNCATE, muted && "text-muted-foreground", className)}
+    >
       {children}
     </span>
   );
@@ -119,7 +125,7 @@ export function SignedCell({ value }: { value: number }) {
 }
 
 export function DashCell() {
-  return <span className="text-muted-foreground/60">—</span>;
+  return <span data-empty className="text-muted-foreground">—</span>;
 }
 
 /** Name on top, a muted detail line under it; optional initials avatar. */
@@ -194,32 +200,11 @@ export function ProductCell({
 }
 
 /**
- * The one pill shape for every status. Colour comes from the page's own class
- * map (`lib/order-status.ts` and friends), so the tones stay where they are
- * already defined.
+ * The status pill in table cells — the shared StatusBadge. Colour comes from a
+ * `tone`, or from a feature's class map (`lib/order-status.ts` and friends),
+ * which resolve to the same palette.
  */
-export function StatusPill({
-  className,
-  children,
-  dot,
-}: {
-  className?: string;
-  children: ReactNode;
-  /** Optional leading dot class, e.g. `bg-success`. */
-  dot?: string;
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex h-5 w-fit max-w-full items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-micro font-medium",
-        className,
-      )}
-    >
-      {dot && <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dot)} />}
-      <span className="truncate">{children}</span>
-    </span>
-  );
-}
+export const StatusPill = StatusBadge;
 
 export function ChannelCell({
   platform,
@@ -252,7 +237,7 @@ export function StockCell({
         aria-hidden
         className={cn(
           "size-1.5 rounded-full",
-          out ? "bg-danger" : low ? "bg-warning-strong" : "bg-muted-foreground/40",
+          out ? "bg-danger" : low ? "bg-warning" : "bg-muted-foreground/40",
         )}
       />
       {value.toLocaleString("en-IN")}

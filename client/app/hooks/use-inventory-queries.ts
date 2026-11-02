@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { inventoryService } from "~/services/inventory.service";
-import type { LedgerParams, StockListParams } from "~/types/api";
+import { pollWhile } from "~/lib/poll-while";
+import type { InventoryStatus, LedgerParams, StockListParams } from "~/types/api";
 
 /** React Query key factory for all inventory-related queries. */
 export const inventoryKeys = {
@@ -19,15 +20,18 @@ export const inventoryKeys = {
     [...inventoryKeys.all, "locations", warehouseId] as const,
 };
 
-/**
- * Warehousing status for the current org. Polls every 3s while the enable
- * seed is running (self-terminating, same pattern as the product sync poll).
- */
+// The server switches a workspace over to locations by itself and copies its
+// stock across; nothing tells the page when that is done.
+const pollWhileSettingUp = pollWhile<InventoryStatus>(
+  (data) => !!data && !data.warehousingEnabled,
+);
+
+/** Locations status for the current org. Polls while the server is still setting them up. */
 export function useInventoryStatus() {
   return useQuery({
     queryKey: inventoryKeys.status(),
     queryFn: () => inventoryService.status(),
-    refetchInterval: (query) => (query.state.data?.seeding ? 3000 : false),
+    refetchInterval: pollWhileSettingUp,
   });
 }
 

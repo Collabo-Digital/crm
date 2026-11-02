@@ -13,6 +13,7 @@ function build() {
     pushOrder: jest.fn<Promise<void>, [string, string, Priority]>().mockResolvedValue(undefined),
     pushProduct: jest.fn<Promise<void>, [string, string, Priority]>().mockResolvedValue(undefined),
     pushAvailability: jest.fn<Promise<void>, [string, string[], Priority]>().mockResolvedValue(undefined),
+    pushWarehouseStock: jest.fn<Promise<void>, [string, string, Priority]>().mockResolvedValue(undefined),
     planBulkProductPush: jest.fn<Promise<string[]>, [string]>().mockResolvedValue(['p1', 'p2']),
     planBulkOrderPush: jest.fn<Promise<string[]>, [string]>().mockResolvedValue(['o1']),
     recordFailure: jest.fn<Promise<void>, [string, string, string, boolean?]>().mockResolvedValue(undefined),
@@ -40,7 +41,7 @@ function build() {
     } as unknown as Job<ShopifyPushJobData>;
     return { job, moveToDelayed };
   };
-  return { processor, pushService, enqueuer, mkJob };
+  return { processor, pushService, enqueuer, mkJob, locationSync };
 }
 
 describe('ShopifyPushProcessor', () => {
@@ -93,5 +94,30 @@ describe('ShopifyPushProcessor', () => {
     pushService.pushOrder.mockRejectedValueOnce(err);
     await expect(processor.process(mkJob({ type: 'order', orderId: 'o1', organizationId: 'org' }).job)).rejects.toBe(err);
     expect(pushService.recordFailure).not.toHaveBeenCalled();
+  });
+});
+
+describe('ShopifyPushProcessor — linking locations', () => {
+  it('sends the counts the merchant kept before pulling, so the pull cannot overwrite them', async () => {
+    const { processor, pushService, mkJob, locationSync } = build();
+    const order: string[] = [];
+    pushService.pushWarehouseStock.mockImplementation(async (_org, id) => void order.push(`push:${id}`));
+    locationSync.runForOrganization.mockImplementation(async () => void order.push('pull'));
+    const { job } = mkJob({ type: 'sync-locations', organizationId: 'org', pushWarehouseIds: ['wh_a', 'wh_b'], priority: Priority.NORMAL });
+
+    await processor.process(job, 'tok');
+
+    expect(order).toEqual(['push:wh_a', 'push:wh_b', 'pull']);
+    expect(locationSync.runForOrganization).toHaveBeenCalledWith('org', { autoLink: false });
+  });
+
+  it('passes the enable flow’s auto-link through', async () => {
+    const { processor, pushService, mkJob, locationSync } = build();
+    const { job } = mkJob({ type: 'sync-locations', organizationId: 'org', autoLink: true });
+
+    await processor.process(job, 'tok');
+
+    expect(pushService.pushWarehouseStock).not.toHaveBeenCalled();
+    expect(locationSync.runForOrganization).toHaveBeenCalledWith('org', { autoLink: true });
   });
 });

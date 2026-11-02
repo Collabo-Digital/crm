@@ -1,3 +1,4 @@
+import "~/lib/zod-jitless";
 import {
   isRouteErrorResponse,
   Links,
@@ -5,6 +6,7 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLocation,
   useNavigate,
 } from "react-router";
 
@@ -16,6 +18,9 @@ import { useThemeStore } from "~/stores/theme.store";
 import { useAuthStore } from "~/stores/auth.store";
 import { useEffect, useRef } from "react";
 import "./app.css";
+import { loginPath } from "~/lib/return-path";
+import { RouteAnnouncer } from "~/components/app/route-announcer";
+import { MotionConfig } from "framer-motion";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", sizes: "32x32" },
@@ -24,12 +29,18 @@ export const links: Route.LinksFunction = () => [
   { rel: "apple-touch-icon", href: "/brand/apple-touch-icon.png", sizes: "180x180" },
 ];
 
+/** Applies the saved theme (stores/theme.store.ts, key "crm-theme") before the first paint. */
+const THEME_SCRIPT = `try{var t=(JSON.parse(localStorage.getItem("crm-theme")||"{}").state||{}).theme||"light";if(t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches))document.documentElement.classList.add("dark")}catch(e){}`;
+
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // The theme class is set before React hydrates (no light flash), so the
+    // attributes of <html> differ from the prerendered page on purpose.
+    <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
         <Meta />
         <Links />
       </head>
@@ -41,52 +52,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </body>
     </html>
   );
-}
-
-/**
- * Loads and initializes the Meta JS SDK for WhatsApp Embedded Signup.
- * Runs once on app mount. Idempotent — if the script tag is already present
- * (e.g., after hot reload) it reuses it.
- */
-function MetaSdkInit() {
-  useEffect(() => {
-    const appId = import.meta.env.VITE_META_APP_ID;
-    if (!appId) {
-      console.warn(
-        "[Meta SDK] VITE_META_APP_ID is not set — WhatsApp Embedded Signup will not work.",
-      );
-      return;
-    }
-
-    // Tell the SDK what to do once it finishes loading.
-    window.fbAsyncInit = () => {
-      window.FB?.init({
-        appId,
-        cookie: true,
-        xfbml: false,
-        version: "v21.0",
-      });
-    };
-
-    // If it's already loaded (hot reload), re-init with the current appId.
-    if (window.FB) {
-      window.fbAsyncInit();
-      return;
-    }
-
-    // Skip if the script tag already exists (avoid duplicates on HMR).
-    if (document.getElementById("facebook-jssdk")) return;
-
-    const script = document.createElement("script");
-    script.id = "facebook-jssdk";
-    script.src = "https://connect.facebook.net/en_US/sdk.js";
-    script.async = true;
-    script.defer = true;
-    script.crossOrigin = "anonymous";
-    document.body.appendChild(script);
-  }, []);
-
-  return null;
 }
 
 /** Syncs the theme store state to the document root class on mount and theme changes. */
@@ -105,19 +70,23 @@ function ThemeInit() {
 /**
  * Watches for auth state transitions: authenticated → unauthenticated.
  * Redirects to /auth/login when logout occurs (covers API interceptor logout,
- * manual sign-out, and token refresh failure).
+ * manual sign-out, and token refresh failure). A session that ended on its own
+ * comes back to the page it was on after signing in again.
  */
 function LogoutRedirect() {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const prevAuth = useRef(isAuthenticated);
 
   useEffect(() => {
-    if (prevAuth.current && !isAuthenticated) {
-      navigate("/auth/login", { replace: true });
+    // Auth pages are already for signed-out visitors: signing out on the
+    // invite page keeps it open, to accept as the invitee.
+    if (prevAuth.current && !isAuthenticated && !pathname.startsWith("/auth/")) {
+      navigate(loginPath(useAuthStore.getState().returnTo), { replace: true });
     }
     prevAuth.current = isAuthenticated;
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, navigate, pathname]);
 
   return null;
 }
@@ -126,10 +95,14 @@ export default function App() {
   return (
     <QueryProvider>
       <TooltipProvider>
-        <ThemeInit />
-        <LogoutRedirect />
-        <MetaSdkInit />
-        <Outlet />
+        {/* Framer Motion ignores the device's reduce-motion setting unless
+            told: with it on, nothing slides, shakes or grows. */}
+        <MotionConfig reducedMotion="user">
+          <ThemeInit />
+          <LogoutRedirect />
+          <Outlet />
+          <RouteAnnouncer />
+        </MotionConfig>
       </TooltipProvider>
     </QueryProvider>
   );
@@ -151,10 +124,17 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
     stack = error.stack;
   }
 
+  // Outside every provider, so plain links: a full load starts the app afresh.
   return (
     <main className="pt-16 p-4 container mx-auto">
       <h1>{message}</h1>
       <p>{details}</p>
+      <p className="mt-4 flex gap-4 text-sm">
+        <a href="/" className="font-semibold underline">Go to your workspace</a>
+        <button type="button" className="font-semibold underline" onClick={() => window.location.reload()}>
+          Reload page
+        </button>
+      </p>
       {stack && (
         <pre className="w-full p-4 overflow-x-auto">
           <code>{stack}</code>

@@ -1,0 +1,121 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "field": "calls",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Riya Menon"
+                },
+                "wa_id": "919811100160"
+              }
+            ],
+            "calls": [
+              {
+                "id": "wacid.USER1",
+                "from": "919811100160",
+                "to": "15550783881",
+                "event": "connect",
+                "timestamp": "1761300000",
+                "direction": "USER_INITIATED",
+                "session": {
+                  "sdp_type": "offer",
+                  "sdp": "v=0\r\no=- 7669997803033704573 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE audio\r\na=ice-lite\r\nm=audio 3480 UDP/TLS/RTP/SAVPF 111 126\r\nc=IN IP4 157.240.19.130\r\na=rtpmap:111 opus/48000/2\r\na=setup:actpass\r\n"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "field": "calls",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "calls": [
+              {
+                "id": "wacid.USER1",
+                "from": "919811100160",
+                "to": "15550783881",
+                "event": "terminate",
+                "timestamp": "1761300200",
+                "direction": "USER_INITIATED",
+                "status": "COMPLETED",
+                "start_time": "1761300010",
+                "end_time": "1761300190",
+                "duration": 180
+              }
+            ]
+          }
+        },
+        {
+          "field": "calls",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "calls": [
+              {
+                "id": "wacid.BIZ1",
+                "from": "15550783881",
+                "to": "919811100160",
+                "event": "connect",
+                "timestamp": "1761301000",
+                "direction": "BUSINESS_INITIATED",
+                "session": {
+                  "sdp_type": "answer",
+                  "sdp": "v=0\r\no=- 4867693 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=ice-lite\r\nm=audio 3480 UDP/TLS/RTP/SAVPF 111\r\na=setup:active\r\na=rtpmap:111 opus/48000/2\r\n"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "field": "calls",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "calls": [
+              {
+                "id": "wacid.BIZ2",
+                "from": "15550783881",
+                "to": "919811100160",
+                "event": "terminate",
+                "timestamp": "1761302000",
+                "direction": "BUSINESS_INITIATED",
+                "status": "FAILED",
+                "errors": [
+                  {
+                    "code": 138001,
+                    "message": "Receiver unavailable",
+                    "href": "https://developers.facebook.com",
+                    "error_data": {
+                      "details": "The person is not reachable."
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

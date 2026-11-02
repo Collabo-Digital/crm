@@ -1,5 +1,7 @@
+import { Type } from 'class-transformer';
 import {
   IsBoolean,
+  IsIn,
   IsInt,
   IsObject,
   IsOptional,
@@ -8,7 +10,46 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
+  ValidateNested,
 } from 'class-validator';
+
+/**
+ * "Does this location have its own GST number?" — asked only while GST is on
+ * for the workspace, and ignored otherwise.
+ *
+ *  - `existing`: a GSTIN already among the workspace's registrations, for the
+ *    location's state.
+ *  - `new`: its own GSTIN, added to the workspace's registrations and linked.
+ *  - `none`: no GSTIN of its own; it operates under the workspace's GSTIN for
+ *    its state, when there is one.
+ *
+ * Which fields a mode needs is checked by WarehouseService, so the merchant
+ * gets a sentence rather than a field list.
+ */
+export class LocationGstChoiceDto {
+  @IsIn(['existing', 'new', 'none'])
+  mode: 'existing' | 'new' | 'none';
+
+  @IsOptional()
+  @IsString()
+  gstinId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  gstin?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  legalName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  tradeName?: string;
+}
 
 export class CreateWarehouseDto {
   // Sized to hold any Shopify location name verbatim — the sync stores what
@@ -26,13 +67,25 @@ export class CreateWarehouseDto {
   })
   code: string;
 
+  /** A Warehouse when not given. Only a Store has a till. */
+  @IsOptional()
+  @IsIn(['STORE', 'WAREHOUSE'])
+  kind?: 'STORE' | 'WAREHOUSE';
+
+  // { address1, address2, city, zip, stateCode } — free-form beyond that, as
+  // an address seeded from Shopify carries more keys. The state is required
+  // while GST is on; WarehouseService checks it.
   @IsOptional()
   @IsObject()
   address?: Record<string, unknown>;
 
-  // GST registration this warehouse operates under — it becomes an ADDITIONAL
-  // PLACE OF BUSINESS of that GSTIN. The address must resolve to the same
-  // state; WarehouseService enforces it.
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => LocationGstChoiceDto)
+  gst?: LocationGstChoiceDto;
+
+  // Earlier form of `gst: { mode: 'existing' }`, still accepted. The address
+  // must resolve to the same state; WarehouseService enforces it.
   @IsOptional()
   @IsString()
   gstinId?: string;
@@ -44,6 +97,16 @@ export class CreateWarehouseDto {
   @IsOptional()
   @IsBoolean()
   isDefault?: boolean;
+
+  /** Share stock with this Shopify location of the connected store. */
+  @IsOptional()
+  @IsString()
+  shopifyLocationId?: string;
+
+  /** With `shopifyLocationId`: whose counts to keep. Shopify's when not given. */
+  @IsOptional()
+  @IsIn(['shopify', 'collabo'])
+  stockSource?: 'shopify' | 'collabo';
 }
 
 export class UpdateWarehouseDto {
@@ -53,8 +116,23 @@ export class UpdateWarehouseDto {
   name?: string;
 
   @IsOptional()
+  @Matches(/^[A-Z0-9]{1,8}$/, {
+    message: 'code must be 1-8 uppercase letters/digits (e.g. WH1)',
+  })
+  code?: string;
+
+  @IsOptional()
+  @IsIn(['STORE', 'WAREHOUSE'])
+  kind?: 'STORE' | 'WAREHOUSE';
+
+  @IsOptional()
   @IsObject()
   address?: Record<string, unknown>;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => LocationGstChoiceDto)
+  gst?: LocationGstChoiceDto;
 
   // Null unlinks. `@IsOptional()` skips validation for null as well as
   // undefined, so the two stay distinguishable: undefined = leave alone.
@@ -73,6 +151,15 @@ export class UpdateWarehouseDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  /** A Shopify location id to share stock with; null stops sharing. */
+  @ValidateIf((_, value) => value !== undefined && value !== null)
+  @IsString()
+  shopifyLocationId?: string | null;
+
+  @IsOptional()
+  @IsIn(['shopify', 'collabo'])
+  stockSource?: 'shopify' | 'collabo';
 }
 
 /**

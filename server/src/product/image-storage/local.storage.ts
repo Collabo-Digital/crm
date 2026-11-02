@@ -1,6 +1,6 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { promises as fs } from 'fs';
-import { join } from 'path';
+import { dirname, join, resolve, sep } from 'path';
 import { randomUUID } from 'crypto';
 import {
   IImageStorage,
@@ -51,12 +51,43 @@ export class LocalImageStorage implements IImageStorage {
   }
 
   async delete(storageKey: string): Promise<void> {
-    const fullPath = join(this.rootDir, storageKey);
+    const fullPath = await this.pathInside(storageKey);
+    if (!fullPath) {
+      this.logger.warn(`Refused to delete ${JSON.stringify(storageKey)}: it is not a file in the uploads folder`);
+      return;
+    }
     try {
       await fs.unlink(fullPath);
     } catch (err) {
       // Missing files aren't fatal — DB row removal is the source of truth.
       this.logger.warn(`Failed to delete image ${storageKey}: ${err}`);
     }
+  }
+
+  /**
+   * The file a key names, or null when it lies outside the uploads folder.
+   * Delete keys are rebuilt from image URLs, which an import can set to
+   * anything. The folder is resolved through links too, so a link inside the
+   * uploads folder cannot lead the unlink back out of it.
+   */
+  private async pathInside(storageKey: string): Promise<string | null> {
+    const fullPath = resolve(this.rootDir, storageKey);
+    if (!fullPath.startsWith(this.rootDir + sep)) return null;
+    try {
+      const [root, dir] = await Promise.all([fs.realpath(this.rootDir), fs.realpath(dirname(fullPath))]);
+      return dir === root || dir.startsWith(root + sep) ? fullPath : null;
+    } catch {
+      return null; // no such folder, so nothing to delete
+    }
+  }
+
+  async read(storageKey: string): Promise<Buffer> {
+    const fullPath = resolve(this.rootDir, storageKey);
+    // Keys are ours, written by `upload`, but this reads whatever path it is
+    // handed: one must never reach outside the uploads folder.
+    if (!fullPath.startsWith(this.rootDir + sep)) {
+      throw new NotFoundException('Image not found');
+    }
+    return fs.readFile(fullPath);
   }
 }

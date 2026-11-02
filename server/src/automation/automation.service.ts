@@ -9,16 +9,34 @@ import { UserRole, Prisma, AutomationStatus, ChannelPlatform } from "@prisma/cli
 import { PrismaService } from '../prisma/prisma.service';
 import { QueryAutomationsDto } from "./dto/query-automations.dto";
 import { CreateAutomationDto } from "./dto/create-automation.dto";
-import { collectIssues, defaultTriggerStep, keywordsFor, parseDefinition, reidSteps, triggerMatchFor, triggerPostFor, triggerTypeFor, type Issue } from './blocks/definition.schema';
+import { randomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { collectIssues, defaultTriggerStep, keywordsFor, parseDefinition, reidSteps, triggerConfigFor, triggerPostFor, triggerTypeFor, type Issue, type IssueContext, type StepDef } from './blocks/definition.schema';
+import { Flow } from './engine/flow';
+import { templateParams } from '../campaigns/templates/template-components';
 import { UpdateAutomationDto } from './dto/update-automation.dto';
 import { SaveDefinitionDto } from './dto/save-definition.dto';
 import { DuplicateAutomationDto } from './dto/duplicate-automation.dto';
+import { WhatsAppPayService } from '../payments/whatsapp-pay.service';
 
 
 /** Who is asking. Same shape ChannelService uses for its visibility scope. */
 export interface AutomationViewer {
     userId: string;
     role?: UserRole;
+    /** May edit automations. Everyone else reads them without the webhook URL's secret. */
+    canManage?: boolean;
+}
+
+/** The webhook URL is a credential: blank its token for people who only read the automation. */
+function withoutWebhookToken<T extends { definition: Prisma.JsonValue; triggers: Array<{ triggerType: string; subjectId: string | null }> }>(row: T): T {
+    const definition = row.definition as { steps?: Array<{ config?: Record<string, unknown> }> } | null;
+    const [first, ...rest] = definition?.steps ?? [];
+    return {
+        ...row,
+        definition: first?.config?.token ? { ...definition, steps: [{ ...first, config: { ...first.config, token: '' } }, ...rest] } : row.definition,
+        triggers: row.triggers.map((t) => (t.triggerType === 'crm.webhook' ? { ...t, subjectId: null } : t)),
+    } as T;
 }
 
 const DEFAULT_SETTINGS = { oncePerContact: 'ever' } as const;
@@ -34,16 +52,18 @@ const LIST_SELECT = {
     triggeredCount: true,
     lastTriggeredAt: true,
     lastError: true,
+    packKey: true,
     createdAt: true,
     updatedAt: true,
     channel: { select: { id: true, name: true, platform: true } },
     ownerUser: { select: { id: true, firstName: true, lastName: true, email: true } },
 } satisfies Prisma.AutomationSelect;
+export type AutomationListRow = Prisma.AutomationGetPayload<{ select: typeof LIST_SELECT }>;
 
 const DETAIL_INCLUDE = {
     channel: { select: { id: true, name: true, platform: true, externalStoreId: true } },
     ownerUser: { select: { id: true, firstName: true, lastName: true, email: true } },
-    publishedVersion: { select: { id: true, version: true, publishedAt: true } },
+    publishedVersion: { select: { id: true, version: true, publishedAt: true, definition: true, settings: true } },
     triggers: {
         orderBy: { position: 'asc' },
         select: {
@@ -52,10 +72,16 @@ const DETAIL_INCLUDE = {
         },
     },
 } satisfies Prisma.AutomationInclude;
+type DetailRow = Prisma.AutomationGetPayload<{ include: typeof DETAIL_INCLUDE }>;
+
+const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 
 @Injectable()
 export class AutomationService {
-    constructor(private readonly prisma: PrismaService) { }
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly whatsAppPay: WhatsAppPayService,
+    ) { }
 
     // ─── Scoping ────────────────────────────────────────────────────────────
 
@@ -68,7 +94,7 @@ export class AutomationService {
     }
 
     /** By-id read with tenant + visibility in the WHERE. 404 for both "missing" and "not yours". */
-    private async getVisible(id: string, orgId: string, viewer: AutomationViewer) {
+    async getVisible(id: string, orgId: string, viewer: AutomationViewer) {
         const row = await this.prisma.automation.findFirst({
             where: { id, organizationId: orgId, ...this.scope(viewer) },
             include: DETAIL_INCLUDE,
@@ -77,20 +103,36 @@ export class AutomationService {
         return row;
     }
 
-    private async withIssues<T extends { definition: Prisma.JsonValue; platform: ChannelPlatform | null; channelId: string | null }>(row: T) {
+    private async withIssues<
+        T extends {
+            organizationId: string;
+            definition: Prisma.JsonValue;
+            settings: Prisma.JsonValue;
+            platform: ChannelPlatform | null;
+            channelId: string | null;
+            publishedVersion: { definition: Prisma.JsonValue; settings: Prisma.JsonValue; id: string; version: number; publishedAt: Date } | null;
+        },
+    >(row: T) {
         let issues: Issue[] = [];
         try {
             const steps = parseDefinition(row.definition);
-            issues = collectIssues(steps, await this.issueContext(row));
+            issues = collectIssues(steps, await this.issueContext(row, steps));
         } catch {
             // A stored draft that no longer parses (schema tightened later) is
             // reported as one issue rather than a 500 on every detail read.
             issues = [{ stepId: '', code: 'invalid_definition', title: 'Definition needs attention', body: 'Re-save this automation in the editor.' }];
         }
-        return { ...row, issues };
+        // The draft differs from what runs: edited since the last publish.
+        const published = row.publishedVersion;
+        const unpublishedChanges =
+            !!published &&
+            (JSON.stringify(published.definition) !== JSON.stringify(row.definition) ||
+                JSON.stringify(published.settings ?? DEFAULT_SETTINGS) !== JSON.stringify(row.settings ?? DEFAULT_SETTINGS));
+        const publishedVersion = published ? { id: published.id, version: published.version, publishedAt: published.publishedAt } : null;
+        return { ...row, publishedVersion, unpublishedChanges, issues };
     }
 
-    private async issueContext(row: { platform: ChannelPlatform | null; channelId: string | null }) {
+    private async issueContext(row: { organizationId: string; platform: ChannelPlatform | null; channelId: string | null }, steps: StepDef[]): Promise<IssueContext> {
         let knownMediaIds: Set<string> | null = null;
         if (row.channelId) {
             const media = await this.prisma.channelMedia.findMany({
@@ -99,7 +141,28 @@ export class AutomationService {
             });
             if (media.length > 0) knownMediaIds = new Set(media.map((m) => m.externalId));
         }
-        return { platform: row.platform, knownMediaIds };
+        const templateIds = [...new Set(new Flow(steps).all().map(({ step }) => step.config.templateId).filter((v): v is string => typeof v === 'string' && !!v))];
+        const rows = templateIds.length
+            ? await this.prisma.messageTemplate.findMany({
+                where: { id: { in: templateIds }, organizationId: row.organizationId },
+                select: { id: true, name: true, components: true, parameterFormat: true },
+            })
+            : [];
+        const templates = new Map(rows.map((r) => [r.id, {
+            name: r.name,
+            params: templateParams(r.components as Record<string, unknown>[], r.parameterFormat === 'NAMED' ? 'NAMED' : 'POSITIONAL')
+                .map((p) => ({ key: p.key, name: p.name, kind: p.kind })),
+        }]));
+        const paySteps = new Flow(steps).all().filter(({ step }) => step.type === 'send_payment_link');
+        const paymentsConnected = paySteps.some(({ step }) => step.config.method !== 'whatsapp_pay')
+            ? !!(await this.prisma.paymentAccount.findFirst({ where: { organizationId: row.organizationId, disconnectedAt: null, credentials: { not: null } }, select: { id: true } }))
+            : undefined;
+        const whatsAppPayReady = paySteps.some(({ step }) => step.config.method === 'whatsapp_pay') ? await this.whatsAppPay.available(row.channelId) : undefined;
+        const usesSheets = new Flow(steps).all().some(({ step }) => step.type === 'sheet_add_row' || (step.type === 'trigger' && step.config.event === 'sheet_row'));
+        const sheets = usesSheets
+            ? new Set((await this.prisma.googleSheet.findMany({ where: { organizationId: row.organizationId }, select: { id: true } })).map((s) => s.id))
+            : undefined;
+        return { platform: row.platform, knownMediaIds, templates, paymentsConnected, whatsAppPayReady, sheets };
     }
 
 
@@ -132,14 +195,23 @@ export class AutomationService {
         return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
     }
 
+    /** The organization's recommended-pack automations, as list rows; archived ones are gone for good. */
+    packList(orgId: string): Promise<AutomationListRow[]> {
+        return this.prisma.automation.findMany({
+            where: { organizationId: orgId, packKey: { not: null }, status: { not: AutomationStatus.ARCHIVED } },
+            select: LIST_SELECT,
+        });
+    }
+
     async findOne(id: string, orgId: string, viewer: AutomationViewer) {
-        return this.withIssues(await this.getVisible(id, orgId, viewer));
+        const row = await this.withIssues(await this.getVisible(id, orgId, viewer));
+        return viewer.canManage ? row : withoutWebhookToken(row);
     }
 
     async issues(id: string, orgId: string, viewer: AutomationViewer): Promise<Issue[]> {
         const row = await this.getVisible(id, orgId, viewer);
         const steps = parseDefinition(row.definition);
-        return collectIssues(steps, await this.issueContext(row));
+        return collectIssues(steps, await this.issueContext(row, steps));
     }
 
 
@@ -201,15 +273,87 @@ export class AutomationService {
         const steps = parseDefinition(dto.definition);
         const settings = { ...DEFAULT_SETTINGS, ...(row.settings as object ?? {}), ...(dto.settings ?? {}) };
 
-        const updated = await this.prisma.automation.update({
-            where: { id: row.id },
-            data: {
-                definition: { steps } as unknown as Prisma.InputJsonValue,
-                settings: settings as Prisma.InputJsonValue,
-            },
-            include: DETAIL_INCLUDE,
+        const updated = await this.prisma.$transaction(async (tx) => {
+            // Only publish issues the webhook URL's token. One sent by the client is ignored, so nobody can pick a
+            // guessable token or another automation's. It is read under the row lock publish also takes, so a save
+            // that races the first publish keeps the URL that publish issued.
+            const [current] = await tx.$queryRaw<Array<{ token: string | null }>>`
+                SELECT "definition" #>> '{steps,0,config,token}' AS "token" FROM "automations" WHERE "id" = ${row.id} FOR UPDATE
+            `;
+            steps[0].config = { ...steps[0].config, token: current?.token ?? '' };
+            return tx.automation.update({
+                where: { id: row.id },
+                data: {
+                    definition: { steps } as unknown as Prisma.InputJsonValue,
+                    settings: settings as Prisma.InputJsonValue,
+                },
+                include: DETAIL_INCLUDE,
+            });
         });
         return this.withIssues(updated);
+    }
+
+    // ─── System paths: Collabo's recommended pack ───────────────────────────
+
+    /**
+     * An automation Collabo makes for the organization: no creator, a draft
+     * until it is published, its definition checked like a saved draft's.
+     * Null when it exists already (another sync made it first).
+     */
+    async createSystem(
+        orgId: string,
+        input: { packKey: string; name: string; description: string; channelId: string; steps: StepDef[]; activateWhenReady: boolean },
+    ): Promise<{ id: string } | null> {
+        const steps = parseDefinition({ steps: input.steps });
+        try {
+            return await this.prisma.automation.create({
+                data: {
+                    organizationId: orgId,
+                    platform: ChannelPlatform.WHATSAPP,
+                    channelId: input.channelId,
+                    ownerUserId: null,
+                    name: input.name,
+                    description: input.description,
+                    status: AutomationStatus.DRAFT,
+                    definition: { steps } as unknown as Prisma.InputJsonValue,
+                    settings: DEFAULT_SETTINGS as Prisma.InputJsonValue,
+                    packKey: input.packKey,
+                    activateWhenReady: input.activateWhenReady,
+                },
+                select: { id: true },
+            });
+        } catch (err) {
+            if (isUniqueViolation(err)) return null;
+            throw err;
+        }
+    }
+
+    /**
+     * Replace a system automation's draft, if it is still the one the caller
+     * read: a merchant's edit saved meanwhile is kept. A live one keeps running
+     * its published version until it is published again. Returns the draft
+     * saved, or null.
+     */
+    async saveSystemDefinition(id: string, orgId: string, input: StepDef[], current: Prisma.JsonValue): Promise<{ steps: StepDef[] } | null> {
+        const definition = { steps: parseDefinition({ steps: input }) };
+        const { count } = await this.prisma.automation.updateMany({
+            where: { id, organizationId: orgId, status: { not: AutomationStatus.ARCHIVED }, definition: { equals: current as Prisma.InputJsonValue } },
+            data: { definition: definition as unknown as Prisma.InputJsonValue },
+        });
+        return count ? definition : null;
+    }
+
+    /**
+     * Publish with nobody behind it: the draft the caller decided on, and only
+     * that (a merchant's edit saved meanwhile stays a draft, and null comes
+     * back). Returns the issues that kept it from going live; none when it did.
+     */
+    async publishSystem(id: string, orgId: string, draft: unknown): Promise<Issue[] | null> {
+        const row = await this.prisma.automation.findFirst({ where: { id, organizationId: orgId }, include: DETAIL_INCLUDE });
+        if (!row) throw new NotFoundException('Automation not found');
+        // As stored: JSON drops undefined keys, and Postgres reorders the others.
+        if (!isDeepStrictEqual(row.definition, JSON.parse(JSON.stringify(draft)))) return null;
+        return this.publishRow(row, null);
     }
 
     // ─── Lifecycle ──────────────────────────────────────────────────────────
@@ -220,18 +364,33 @@ export class AutomationService {
      */
     async publish(id: string, orgId: string, viewer: AutomationViewer) {
         const row = await this.getVisible(id, orgId, viewer);
-        this.assertNotArchived(row.status);
-
-        const steps = parseDefinition(row.definition);
-        const issues = collectIssues(steps, await this.issueContext(row));
+        const issues = await this.publishRow(row, viewer.userId);
         if (issues.length > 0) {
             throw new UnprocessableEntityException({
                 message: `Automation has ${issues.length} issue${issues.length === 1 ? '' : 's'}`,
                 issues,
             });
         }
+        return this.findOne(row.id, orgId, viewer);
+    }
+
+    /** Publish unless the draft has issues; then nothing is written and they are returned. */
+    private async publishRow(row: DetailRow, publishedByUserId: string | null): Promise<Issue[]> {
+        const orgId = row.organizationId;
+        this.assertNotArchived(row.status);
+
+        const steps = parseDefinition(row.definition);
+        const issues = collectIssues(steps, await this.issueContext(row, steps));
+        if (issues.length > 0) return issues;
 
         const trigger = steps[0];
+        // A webhook trigger gets its secret URL on first publish and keeps it: a draft that lost its
+        // token takes back the one already live rather than changing a URL other systems call.
+        const issueToken = trigger.config.event === 'webhook' && !trigger.config.token;
+        if (issueToken) {
+            const live = row.triggers.find((t) => t.triggerType === 'crm.webhook')?.subjectId;
+            trigger.config = { ...trigger.config, token: live || randomBytes(18).toString('base64url') };
+        }
         const post = triggerPostFor(trigger);
         const media = post && row.channelId
             ? await this.prisma.channelMedia.findUnique({
@@ -243,6 +402,7 @@ export class AutomationService {
         const nextVersion = row.version + 1;
 
         await this.prisma.$transaction(async (tx) => {
+            if (trigger.config.event === 'sheet_row' && post) await this.watchSheetFromNow(tx, orgId, post);
             const version = await tx.automationVersion.create({
                 data: {
                     organizationId: orgId,
@@ -250,10 +410,17 @@ export class AutomationService {
                     version: nextVersion,
                     definition: { steps } as unknown as Prisma.InputJsonValue,
                     settings: (row.settings ?? DEFAULT_SETTINGS) as Prisma.InputJsonValue,
-                    publishedByUserId: viewer.userId,
+                    publishedByUserId,
                 },
             });
 
+            // Only the token goes into the draft, so an edit saved since this publish read it is kept.
+            if (issueToken) {
+                await tx.$executeRaw`
+                    UPDATE "automations" SET "definition" = jsonb_set("definition", '{steps,0,config,token}', to_jsonb(${String(trigger.config.token)}::text))
+                    WHERE "id" = ${row.id}
+                `;
+            }
             await tx.automation.update({
                 where: { id: row.id },
                 data: {
@@ -263,18 +430,19 @@ export class AutomationService {
                     status: AutomationStatus.ACTIVE,
                     lastError: null,
                     lastErrorAt: null,
+                    // Live now, by whoever published it: nothing left to wait for.
+                    activateWhenReady: false,
                 },
             });
 
-            // One trigger row per automation in this build (position 0). The id
-            // equals the trigger step's id so run.triggerId and step keys agree.
+            // One trigger row per automation in this build (position 0). Step ids
+            // are only unique within an automation, so the row has its own id.
             await tx.automationTrigger.deleteMany({
-                where: { automationId: row.id, NOT: { id: trigger.id } },
+                where: { automationId: row.id, NOT: { position: 0 } },
             });
             await tx.automationTrigger.upsert({
                 where: { automationId_position: { automationId: row.id, position: 0 } },
                 create: {
-                    id: trigger.id,
                     organizationId: orgId,
                     automationId: row.id,
                     position: 0,
@@ -283,7 +451,7 @@ export class AutomationService {
                     mediaId: media?.id ?? null,
                     subjectId: post,
                     keywords: keywordsFor(trigger),
-                    config: { match: triggerMatchFor(trigger) } as Prisma.InputJsonValue,
+                    config: triggerConfigFor(trigger) as Prisma.InputJsonValue,
                     isActive: true,
                 },
                 update: {
@@ -292,13 +460,12 @@ export class AutomationService {
                     mediaId: media?.id ?? null,
                     subjectId: post,
                     keywords: keywordsFor(trigger),
-                    config: { match: triggerMatchFor(trigger) } as Prisma.InputJsonValue,
+                    config: triggerConfigFor(trigger) as Prisma.InputJsonValue,
                     isActive: true,
                 },
             });
         });
-
-        return this.findOne(row.id, orgId, viewer);
+        return [];
     }
 
     async pause(id: string, orgId: string, viewer: AutomationViewer) {
@@ -315,6 +482,8 @@ export class AutomationService {
         if (row.status !== AutomationStatus.PAUSED || !row.publishedVersionId) {
             throw new ConflictException('Only a paused, published automation can be resumed');
         }
+        const sheetId = row.triggers.find((t) => t.triggerType === 'crm.sheet.row')?.subjectId;
+        if (sheetId) await this.watchSheetFromNow(this.prisma, orgId, sheetId);
         await this.setActive(row.id, true, AutomationStatus.ACTIVE);
         return this.findOne(row.id, orgId, viewer);
     }
@@ -359,6 +528,19 @@ export class AutomationService {
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
+
+    /**
+     * Called before a sheet trigger goes live. A sheet no live automation
+     * watches kept filling unread; its read position is cleared so the next
+     * read starts from its end and those rows never start anything. A sheet
+     * still being watched is read up to date already, and keeps its place.
+     */
+    private async watchSheetFromNow(db: Prisma.TransactionClient, orgId: string, sheetId: string) {
+        const watched = await db.automationTrigger.count({
+            where: { organizationId: orgId, triggerType: 'crm.sheet.row', subjectId: sheetId, isActive: true, automation: { status: AutomationStatus.ACTIVE } },
+        });
+        if (!watched) await db.googleSheet.updateMany({ where: { id: sheetId, organizationId: orgId }, data: { seenRows: null } });
+    }
 
     /** Status and trigger.isActive always move together so the matcher never joins. */
     private setActive(automationId: string, isActive: boolean, status: AutomationStatus) {

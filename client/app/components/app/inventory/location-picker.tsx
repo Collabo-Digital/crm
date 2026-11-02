@@ -7,6 +7,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "~/components/ui/popover";
+import { LocationKindBadge } from "~/components/app/inventory/location-kind-badge";
 import { cn } from "~/lib/utils";
 import type { Warehouse } from "~/types/api";
 
@@ -71,6 +72,7 @@ export function LocationPicker({
         <span className="truncate text-label text-foreground" title={selected?.name}>
           {selected?.name ?? "No location yet"}
         </span>
+        {selected && <LocationKindBadge kind={selected.kind} />}
       </div>
     );
   }
@@ -86,7 +88,7 @@ export function LocationPicker({
       <PopoverTrigger
         className={cn(
           "flex h-9 max-w-[22rem] items-center gap-2 rounded-lg border border-border bg-card px-3 text-left shadow-sm",
-          "hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40",
+          "hover:border-brand focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
           className,
         )}
         aria-label={`Location: ${selected?.name ?? "choose"}`}
@@ -98,6 +100,7 @@ export function LocationPicker({
         <span className="min-w-0 flex-1 truncate text-label text-foreground">
           {selected?.name ?? "Choose a location"}
         </span>
+        {selected && <LocationKindBadge kind={selected.kind} />}
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
       </PopoverTrigger>
 
@@ -148,8 +151,9 @@ export function LocationPicker({
                   <span className="min-w-0 flex-1">
                     {/* Wraps rather than clips: the whole point is that the
                         merchant reads the Shopify name in full. */}
-                    <span className="block text-label text-foreground">
+                    <span className="flex flex-wrap items-center gap-1.5 text-label text-foreground">
                       {location.name}
+                      <LocationKindBadge kind={location.kind} />
                     </span>
                     <span className="block text-micro text-muted-foreground">
                       {city ?? location.code}
@@ -169,7 +173,7 @@ export function LocationPicker({
         </div>
 
         <p className="border-t border-border bg-muted/50 px-3 py-2 text-micro text-muted-foreground">
-          Active locations, synced from Shopify. Your choice is remembered.
+          Active stores and warehouses. Your choice is remembered.
         </p>
       </PopoverContent>
     </Popover>

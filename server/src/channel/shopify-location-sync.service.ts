@@ -1,7 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma, StockBucket, SyncStatus } from '@prisma/client';
+import {
+  Prisma,
+  ShopifyLocationAction,
+  ShopifyLocationLink,
+  StockBucket,
+  StockLocationKind,
+  SyncStatus,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
+import { deriveLocationCode } from '../inventory/location-links.service';
+import { findStateGstin } from '../inventory/warehouse-gstin.util';
+import {
+  InventorySettingsSchema,
+  parseInventorySettings,
+} from '../organization-settings/schemas/inventory-settings.schema';
 import { ShopifyGraphqlClient , ShopifyAuthResolver } from './shopify-graphql.client';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { extractStateFromAddress } from '../gst/place-of-supply.util';
@@ -28,9 +41,19 @@ const VARIANT_PAGE_SIZE = 25;
 /** Inventory levels per variant. A variant is stocked at ≤ this many locations. */
 const LEVELS_PER_VARIANT = 50;
 
+export interface LocationSyncOptions {
+  /**
+   * Link every undecided Shopify location as the sync did before decisions
+   * existed — the primary to the default location, each other one to a new
+   * warehouse — and record those links as decided. The enable flow only.
+   */
+  autoLink?: boolean;
+}
+
 /**
- * Mirrors Shopify locations as CRM warehouses, and reconciles per-location
- * stock into each mapped warehouse's AVAILABLE bucket.
+ * Keeps a store's Shopify locations recorded (ShopifyLocationLink) and the
+ * stock locations linked to them up to date, and reconciles per-location stock
+ * into each linked location's AVAILABLE bucket.
  *
  * Why this exists: every location-aware path in the app used to collapse the
  * shop's locations to a single cached primary id. Shopify's
@@ -39,11 +62,15 @@ const LEVELS_PER_VARIANT = 50;
  * it never read and assigned one location's quantity as the variant's whole
  * stock, making the number flip to whichever location changed last.
  *
- * The mapping is `Warehouse.shopifyLocationId`, re-resolved on every run and
- * protected by a partial unique on (organization_id, shopify_location_id).
+ * WHICH location shares stock with which is the merchant's decision
+ * (`Warehouse.shopifyLocationId`, protected by a partial unique on
+ * (organization_id, shopify_location_id)). A sync never makes one on its own:
+ * a Shopify location it has not seen before is recorded with no decision and
+ * waits for the merchant. The one exception is the enable flow
+ * (`autoLink`), which links an existing store as it always was.
  *
  * Direction of truth (a locked product decision): **Shopify wins on pull.**
- * Per-location quantities overwrite the mapped warehouse's AVAILABLE, with a
+ * Per-location quantities overwrite the linked location's AVAILABLE, with a
  * ledger row per delta. CRM-origin adjustments still push back out.
  *
  * Warehousing-only: legacy orgs keep one number per variant and physically
@@ -72,7 +99,7 @@ export class ShopifyLocationSyncService {
    * enabled warehousing: both are ordinary states, and the job fires
    * unconditionally after every enable.
    */
-  async runForOrganization(orgId: string): Promise<void> {
+  async runForOrganization(orgId: string, options: LocationSyncOptions = {}): Promise<void> {
     if (!(await this.ledger.isWarehousingEnabled(orgId))) {
       this.logger.debug(`Location sync skipped: warehousing off for org ${orgId}`);
       return;
@@ -89,46 +116,50 @@ export class ShopifyLocationSyncService {
 
     // A resolver, not a captured token: `pullLocationInventory` pages every
     // variant and can easily outlive the one-hour access token.
-    const getAuth: ShopifyAuthResolver = async () => {
-      const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(channel.id);
-      return { shopDomain, accessToken: token };
-    };
-    await this.syncLocations(channel.id, orgId, getAuth);
+    const getAuth = this.authFor(channel.id);
+    await this.syncLocations(channel.id, orgId, getAuth, options);
     await this.pullLocationInventory(channel.id, orgId, getAuth);
   }
 
-  // ─────────────────────────── locations → warehouses ───────────────────────────
+  /** A per-request token resolver for one channel. */
+  authFor(channelId: string): ShopifyAuthResolver {
+    return async () => {
+      const { token, shopDomain } = await this.shopifyOAuth.getAccessToken(channelId);
+      return { shopDomain, accessToken: token };
+    };
+  }
+
+  // ─────────────────────────── Shopify locations ───────────────────────────
 
   /**
-   * Create/refresh one warehouse per Shopify location.
+   * Record the store's Shopify locations and bring the stock locations linked
+   * to them up to date.
    *
-   * Deliberately conservative about existing rows: only `isActive` and the
-   * default flag are ever written back. Names are authored once, on create —
-   * an org that enabled warehousing before multi-location has a hand-named
-   * "Main Warehouse" already mapped to the primary location, and silently
-   * renaming it out from under them would be a surprise, not a sync.
+   *  - A linked location mirrors its Shopify location's active flag (never
+   *    switching off the default, which every adjustment needs), and takes its
+   *    name only when it was created from Shopify — a location the merchant
+   *    named and then linked keeps their name.
+   *  - A Shopify location seen for the first time is recorded with no decision:
+   *    it "needs linking", and nothing syncs for it until the merchant decides.
+   *  - A Shopify location that disappeared deactivates the location linked to
+   *    it (not the default) and its record goes.
+   *  - The default location is never moved: it is the merchant's choice.
    *
-   * The address and the GSTIN link follow the same rule with one relaxation:
-   * they are FILLED WHEN ABSENT and never overwritten. Fill-if-null rather
-   * than fill-on-create because `InventoryService.enable()` creates "Main
-   * Warehouse" with no address at all — it is matched or adopted here, never
-   * created, so create-only would permanently strand the single warehouse most
-   * merchants actually have.
+   * The address and the GSTIN link are FILLED WHEN ABSENT and never
+   * overwritten, so the "Main warehouse" a workspace starts with picks up its
+   * Shopify location's address once linked.
    */
   async syncLocations(
     channelId: string,
     orgId: string,
     getAuth: ShopifyAuthResolver,
+    options: LocationSyncOptions = {},
   ): Promise<void> {
     // Authoritative guard, deliberately here and not only in
     // runForOrganization: `runSync` reaches this directly through the
     // 'locations' entity type (it is first in PULL_ENTITY_TYPES), for EVERY
-    // org. Without it a legacy org's sync invents a warehouse per Shopify
-    // location — warehouses the merchant never asked for, and whose mere
-    // existence used to flip the availability push into per-warehouse mode.
-    // A legacy org has no stock_levels at all, so that push then found zero
-    // rows and sent nothing: stock sync would stop, silently, with no
-    // mutation and therefore no error to notice.
+    // org. A legacy org holds one quantity per variant and has nowhere to put
+    // a per-location split.
     //
     // Above openSyncLog so a legacy org does not accrue empty log rows either.
     if (!(await this.ledger.isWarehousingEnabled(orgId))) {
@@ -138,6 +169,8 @@ export class ShopifyLocationSyncService {
 
     const syncLog = await this.openSyncLog(channelId, orgId, 'locations');
     let processed = 0;
+    const linkPending = await this.autoLinkPending(orgId);
+    const autoLink = options.autoLink === true || linkPending;
 
     try {
       const nodes = await this.fetchAllLocations(getAuth);
@@ -147,6 +180,7 @@ export class ShopifyLocationSyncService {
         return;
       }
 
+      const records = await this.recordLocations(channelId, orgId, nodes);
       const existing = await this.prisma.warehouse.findMany({
         where: { organizationId: orgId },
         select: {
@@ -159,34 +193,33 @@ export class ShopifyLocationSyncService {
           gstinId: true,
         },
       });
+      const gstEnabled =
+        (
+          await this.prisma.organization.findUnique({
+            where: { id: orgId },
+            select: { gstEnabled: true },
+          })
+        )?.gstEnabled === true;
 
-      // Auto-link only when there is exactly ONE active registration and the
-      // location's state matches it. With several registrations the choice is
-      // the merchant's — a wrong guess would put the wrong GSTIN on a dispatch
-      // block, which is worse than leaving it unlinked.
-      const activeGstins = await this.prisma.organizationGstin.findMany({
-        where: { organizationId: orgId, isActive: true },
-        select: { id: true, stateCode: true },
-      });
-      const soleGstin = activeGstins.length === 1 ? activeGstins[0] : null;
-
-      /** Fields to fill on a warehouse that is missing them; never overwrites. */
-      const enrichment = (
+      /** Fields to fill on a location that is missing them; never overwrites. */
+      const enrichment = async (
         node: ShopifyLocationNode,
         current?: { address: unknown; gstinId: string | null },
-      ): { address?: Prisma.InputJsonValue; gstinId?: string } => {
+      ): Promise<{ address?: Prisma.InputJsonValue; gstinId?: string }> => {
         const patch: { address?: Prisma.InputJsonValue; gstinId?: string } = {};
         const address = toWarehouseAddress(node.address);
         if (address && current?.address == null) {
           patch.address = address as Prisma.InputJsonValue;
         }
-        const effectiveAddress = current?.address ?? address;
-        if (
-          soleGstin &&
-          current?.gstinId == null &&
-          extractStateFromAddress(effectiveAddress) === soleGstin.stateCode
-        ) {
-          patch.gstinId = soleGstin.id;
+        if (gstEnabled && current?.gstinId == null) {
+          // The workspace's registration for the location's state, as a
+          // location with no GSTIN of its own gets when created by hand.
+          const gstin = await findStateGstin(
+            this.prisma,
+            orgId,
+            extractStateFromAddress(current?.address ?? address),
+          );
+          if (gstin) patch.gstinId = gstin.id;
         }
         return patch;
       };
@@ -197,116 +230,92 @@ export class ShopifyLocationSyncService {
       );
       const usedCodes = new Set(existing.map((w) => w.code));
 
-      // Resolve the intended default before writing anything: the demote and
-      // the promote have to land in one transaction, and `update` refuses to
-      // un-default the incumbent, so we drive both flags ourselves.
       const primary =
         nodes.find((n) => n.isPrimary && n.isActive) ??
         nodes.find((n) => n.isActive) ??
         nodes[0];
       const primaryLocationId = this.numericId(primary.id);
 
-      // `enable()` reads shopifyLocationId from Channel.metadata, which is only
-      // populated once resolveLocationId has run during some push. An org that
-      // enabled warehousing BEFORE ever pushing to Shopify (or before
-      // connecting it) therefore has a default warehouse with a NULL mapping.
-      //
-      // byLocation only contains warehouses that already carry a location id,
-      // so that one never matches — the primary location would create a SECOND
-      // warehouse beside it. The new one becomes default and receives
-      // Shopify's quantities while the original keeps all the real stock,
-      // unmapped and unsynced; and because the variant cache is SUM(available)
-      // across ALL warehouses, the reported total roughly doubles.
-      //
-      // Claim it instead. Only the DEFAULT unmapped warehouse is adoptable and
-      // only by the PRIMARY location — claiming a hand-created "Overflow
-      // Store" for a Shopify location would be silently wrong.
-      const adoptable = existing.find((w) => !w.shopifyLocationId && w.isDefault);
+      // The enable flow only. `enable()` maps the default warehouse from the
+      // primary id cached in Channel.metadata, which is only populated once a
+      // push has run — so an org that enabled before ever pushing has a
+      // default with no link, and the primary location must claim it rather
+      // than create a second warehouse beside it (which would then receive
+      // Shopify's quantities while the original kept the real stock, roughly
+      // doubling the reported total). Only the DEFAULT unlinked location is
+      // claimable, and only by the PRIMARY Shopify location.
+      const adoptable = autoLink
+        ? existing.find((w) => !w.shopifyLocationId && w.isDefault)
+        : undefined;
 
       const seenLocationIds = new Set<string>();
 
       for (const node of nodes) {
         const locationId = this.numericId(node.id);
         seenLocationIds.add(locationId);
+        const record = records.get(locationId)!;
         const match = byLocation.get(locationId);
 
         if (match) {
+          const createdFromShopify =
+            record.action === ShopifyLocationAction.CREATE && record.warehouseId === match.id;
+          // The enable flow names a location it links as it always did: a
+          // default pre-linked from the cached primary would otherwise keep
+          // the placeholder "Main warehouse" (see adoptLocationName).
+          const takesShopifyName = createdFromShopify || (autoLink && record.action === null);
           await this.prisma.warehouse.update({
             where: { id: match.id },
             data: {
-              isActive: node.isActive,
-              ...this.adoptLocationName(node, match),
-              ...enrichment(node, match),
+              ...(match.isDefault ? {} : { isActive: node.isActive }),
+              ...(takesShopifyName ? this.adoptLocationName(node, match) : {}),
+              ...(await enrichment(node, match)),
             },
           });
-        } else if (locationId === primaryLocationId && adoptable) {
-          // Link the org's pre-existing warehouse to the primary location
-          // rather than stranding it. Name and stock are untouched; it simply
-          // gains the mapping it should have had at enable time.
-          await this.prisma.warehouse.update({
-            where: { id: adoptable.id },
-            data: {
-              shopifyLocationId: locationId,
-              isActive: node.isActive,
-              ...this.adoptLocationName(node, adoptable),
-              ...enrichment(node, adoptable),
-            },
-          });
-          // Seed the lookup so the default-settle pass below resolves it.
-          byLocation.set(locationId, { ...adoptable, shopifyLocationId: locationId });
-          this.logger.log(
-            `Adopted existing warehouse ${adoptable.code} for Shopify location ${locationId} (org ${orgId})`,
-          );
-        } else {
-          const code = this.deriveCode(node.name, usedCodes);
-          usedCodes.add(code);
-          try {
-            await this.prisma.warehouse.create({
-              data: {
-                organizationId: orgId,
-                name: node.name.trim(),
-                code,
-                shopifyLocationId: locationId,
-                isActive: node.isActive,
-                ...enrichment(node),
-                // Default is settled in one pass below — creating with false
-                // keeps the one-default partial unique satisfied throughout.
-                isDefault: false,
-              },
-            });
-          } catch (e) {
-            // Lost a create race against the (org, shopify_location_id)
-            // partial unique — a concurrent sync already mapped it. Same
-            // recovery shape as InventoryLedgerService.ensureLevel.
-            if (
-              e instanceof Prisma.PrismaClientKnownRequestError &&
-              e.code === 'P2002'
-            ) {
-              this.logger.debug(
-                `Warehouse for location ${locationId} was created concurrently; adopting it.`,
-              );
-            } else {
-              throw e;
-            }
+          // Linked before decisions were recorded, or relinked by hand since:
+          // the link IS the decision.
+          if (!createdFromShopify && (record.action !== ShopifyLocationAction.LINK || record.warehouseId !== match.id)) {
+            await this.recordDecision(record.id, ShopifyLocationAction.LINK, match.id);
           }
+        } else if (autoLink && record.action !== ShopifyLocationAction.IGNORE) {
+          await this.autoLink(orgId, node, locationId, {
+            adopt: locationId === primaryLocationId ? adoptable : undefined,
+            usedCodes,
+            recordId: record.id,
+            enrichment,
+          });
+        } else if (record.action === ShopifyLocationAction.LINK || record.action === ShopifyLocationAction.CREATE) {
+          // Its location was unlinked since: it waits for a decision again.
+          await this.prisma.shopifyLocationLink.update({
+            where: { id: record.id },
+            data: { action: null, warehouseId: null, decidedAt: null },
+          });
         }
         processed++;
       }
 
       // A location that vanished from Shopify: deactivate, never delete —
       // stock_levels and inventory_events reference warehouses with
-      // ON DELETE RESTRICT, and the ledger has to outlive the mapping.
+      // ON DELETE RESTRICT, and the ledger has to outlive the link. The
+      // default is left alone: every adjustment needs it active.
       const stale = existing.filter(
-        (w) => w.shopifyLocationId && !seenLocationIds.has(w.shopifyLocationId),
+        (w) => w.shopifyLocationId && !seenLocationIds.has(w.shopifyLocationId) && !w.isDefault,
       );
-
-      await this.settleDefaultAndDeactivate(orgId, primaryLocationId, stale.map((w) => w.id));
+      if (stale.length > 0) {
+        await this.prisma.warehouse.updateMany({
+          where: { id: { in: stale.map((w) => w.id) } },
+          data: { isActive: false },
+        });
+      }
+      await this.prisma.shopifyLocationLink.deleteMany({
+        where: { channelId, shopifyLocationId: { notIn: [...seenLocationIds] } },
+      });
 
       // Order fulfillment still resolves a single location from here, and the
       // channel UI wants the count. Refreshing it also un-sticks the previous
       // behaviour, where this id was cached once and never revisited even if
       // the merchant changed their primary location.
       await this.refreshChannelMetadata(channelId, primaryLocationId, nodes.length);
+      if (linkPending) await this.clearAutoLink(orgId);
 
       this.logger.log(
         `Locations synced for org ${orgId}: ${nodes.length} location(s), ${stale.length} deactivated`,
@@ -318,58 +327,132 @@ export class ShopifyLocationSyncService {
     }
   }
 
-  /**
-   * Promote the primary location's warehouse to default and deactivate stale
-   * ones, in a single transaction.
-   *
-   * Order matters and is the reason this is not two `WarehouseService.update`
-   * calls: the incumbent default must be demoted before the new one is
-   * promoted (one-default partial unique), and a stale warehouse that still
-   * holds the default flag cannot be deactivated until it has been demoted.
-   */
-  private async settleDefaultAndDeactivate(
-    orgId: string,
-    primaryLocationId: string,
-    staleWarehouseIds: string[],
-  ): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      const target = await tx.warehouse.findFirst({
-        where: { organizationId: orgId, shopifyLocationId: primaryLocationId },
-        select: { id: true, isDefault: true },
-      });
-
-      if (target) {
-        if (!target.isDefault) {
-          await tx.warehouse.updateMany({
-            where: { organizationId: orgId, isDefault: true },
-            data: { isDefault: false },
-          });
-        }
-        // `isActive: true` is re-asserted even when this warehouse was already
-        // the default. The loop above mirrors each location's active state,
-        // so a primary location deactivated in Shopify would otherwise leave
-        // the org's default warehouse inactive — and WarehouseService.getDefault
-        // requires isActive, so every adjustment would start throwing
-        // "No default warehouse".
-        await tx.warehouse.update({
-          where: { id: target.id },
-          data: { isDefault: true, isActive: true },
-        });
-      }
-
-      if (staleWarehouseIds.length > 0) {
-        // The `isDefault: false` guard is what stops the org being stranded
-        // without a default. By this point the promote above has already
-        // demoted the incumbent whenever a replacement exists, so a stale
-        // warehouse still holding the flag means nothing replaced it — and
-        // deactivating that one would leave WarehouseService.getDefault()
-        // throwing on every adjustment.
-        await tx.warehouse.updateMany({
-          where: { id: { in: staleWarehouseIds }, isDefault: false },
-          data: { isActive: false },
-        });
-      }
+  /** Whether the enable flow's linking of this org's store is still to be done. */
+  async autoLinkPending(orgId: string): Promise<boolean> {
+    const row = await this.prisma.organizationSettings.findUnique({
+      where: { organizationId: orgId },
+      select: { inventorySettings: true },
     });
+    return parseInventorySettings(row?.inventorySettings ?? null).linkShopifyLocations;
+  }
+
+  private async clearAutoLink(orgId: string): Promise<void> {
+    const row = await this.prisma.organizationSettings.findUnique({
+      where: { organizationId: orgId },
+      select: { inventorySettings: true },
+    });
+    const inventorySettings = InventorySettingsSchema.parse({
+      ...parseInventorySettings(row?.inventorySettings ?? null),
+      linkShopifyLocations: false,
+    }) as Prisma.InputJsonValue;
+    await this.prisma.organizationSettings.update({
+      where: { organizationId: orgId },
+      data: { inventorySettings },
+    });
+  }
+
+  /**
+   * Upsert one record per Shopify location with what Shopify says about it.
+   * The decision columns are never written here: a location seen for the
+   * first time starts undecided.
+   */
+  private async recordLocations(
+    channelId: string,
+    orgId: string,
+    nodes: ShopifyLocationNode[],
+  ): Promise<Map<string, ShopifyLocationLink>> {
+    const records = new Map<string, ShopifyLocationLink>();
+    for (const node of nodes) {
+      const shopifyLocationId = this.numericId(node.id);
+      const fields = {
+        name: node.name?.trim() || `Location ${shopifyLocationId}`,
+        isPrimary: node.isPrimary === true,
+        isActive: node.isActive !== false,
+        address: (toWarehouseAddress(node.address) ?? Prisma.DbNull) as Prisma.InputJsonValue,
+      };
+      const record = await this.prisma.shopifyLocationLink.upsert({
+        where: { channelId_shopifyLocationId: { channelId, shopifyLocationId } },
+        create: { organizationId: orgId, channelId, shopifyLocationId, ...fields },
+        update: fields,
+      });
+      records.set(shopifyLocationId, record);
+    }
+    return records;
+  }
+
+  private async recordDecision(
+    recordId: string,
+    action: ShopifyLocationAction,
+    warehouseId: string | null,
+  ): Promise<void> {
+    await this.prisma.shopifyLocationLink.update({
+      where: { id: recordId },
+      data: { action, warehouseId, decidedAt: new Date() },
+    });
+  }
+
+  /**
+   * The enable flow's link for one undecided Shopify location: claim the
+   * default location for the primary, otherwise a new warehouse of its own.
+   */
+  private async autoLink(
+    orgId: string,
+    node: ShopifyLocationNode,
+    locationId: string,
+    ctx: {
+      adopt?: { id: string; name: string; address: unknown; gstinId: string | null };
+      usedCodes: Set<string>;
+      recordId: string;
+      enrichment: (
+        node: ShopifyLocationNode,
+        current?: { address: unknown; gstinId: string | null },
+      ) => Promise<{ address?: Prisma.InputJsonValue; gstinId?: string }>;
+    },
+  ): Promise<void> {
+    if (ctx.adopt) {
+      // Name and stock are untouched apart from the Shopify name; it simply
+      // gains the link it should have had at enable time.
+      await this.prisma.warehouse.update({
+        where: { id: ctx.adopt.id },
+        data: {
+          shopifyLocationId: locationId,
+          ...this.adoptLocationName(node, ctx.adopt),
+          ...(await ctx.enrichment(node, ctx.adopt)),
+        },
+      });
+      await this.recordDecision(ctx.recordId, ShopifyLocationAction.LINK, ctx.adopt.id);
+      this.logger.log(
+        `Linked the default location ${ctx.adopt.id} to Shopify location ${locationId} (org ${orgId})`,
+      );
+      return;
+    }
+
+    const code = deriveLocationCode(node.name, ctx.usedCodes);
+    ctx.usedCodes.add(code);
+    try {
+      const created = await this.prisma.warehouse.create({
+        data: {
+          organizationId: orgId,
+          name: node.name.trim(),
+          code,
+          kind: StockLocationKind.WAREHOUSE,
+          shopifyLocationId: locationId,
+          isActive: node.isActive,
+          ...(await ctx.enrichment(node)),
+          isDefault: false,
+        },
+        select: { id: true },
+      });
+      await this.recordDecision(ctx.recordId, ShopifyLocationAction.CREATE, created.id);
+    } catch (e) {
+      // Lost a create race against the (org, shopify_location_id) partial
+      // unique — a concurrent sync already linked it, and recorded it.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        this.logger.debug(`Location for Shopify location ${locationId} was created concurrently.`);
+      } else {
+        throw e;
+      }
+    }
   }
 
   private async refreshChannelMetadata(
@@ -450,19 +533,20 @@ export class ShopifyLocationSyncService {
     try {
       let warehouses = await this.loadMappedWarehouses(orgId);
       if (warehouses.length === 0) {
-        // Nothing mapped yet — a sync triggered for `inventory` alone, or the
-        // first run after enabling warehousing. Build the mapping rather than
-        // making this a dead end, then re-read. syncLocations never calls
-        // back into here, so there is no recursion.
+        // Nothing linked yet — a sync triggered for `inventory` alone, or the
+        // store's locations never recorded. Record them (each then waits for
+        // the merchant's decision) rather than making this a dead end, then
+        // re-read. syncLocations never calls back into here, so there is no
+        // recursion.
         this.logger.log(
-          `No Shopify-mapped warehouses for org ${orgId}; running the locations pass first.`,
+          `No Shopify-linked locations for org ${orgId}; running the locations pass first.`,
         );
         await this.syncLocations(channelId, orgId, getAuth);
         warehouses = await this.loadMappedWarehouses(orgId);
       }
       if (warehouses.length === 0) {
-        this.logger.warn(
-          `Org ${orgId} still has no Shopify-mapped warehouses; skipping the per-location reconcile.`,
+        this.logger.log(
+          `Org ${orgId} has no location linked to Shopify; skipping the per-location reconcile.`,
         );
         await this.completeSyncLog(syncLog.id, 0, 0);
         return;
@@ -659,8 +743,8 @@ export class ShopifyLocationSyncService {
       } while (cursor);
 
       if (unmappedLevels > 0) {
-        this.logger.warn(
-          `${unmappedLevels} inventory level(s) sat at locations with no mapped warehouse for org ${orgId} — re-run the locations sync.`,
+        this.logger.log(
+          `${unmappedLevels} inventory level(s) sat at Shopify locations not linked to a location for org ${orgId}.`,
         );
       }
       if (truncatedVariants > 0) {
@@ -729,11 +813,13 @@ export class ShopifyLocationSyncService {
   // ─────────────────────────── helpers ───────────────────────────
 
   /**
-   * Mirror Shopify's location name onto the warehouse, verbatim.
+   * Mirror Shopify's location name onto a location created from Shopify (or
+   * claimed by the enable flow), verbatim.
    *
-   * Shopify owns location names the same way it owns per-location quantities —
+   * Shopify owns those names the same way it owns per-location quantities —
    * the module’s "Shopify wins on pull" rule — so a rename upstream lands here
-   * on the next sync. Before this, `syncLocations` wrote only isActive and the
+   * on the next sync. A location the merchant named themselves and then linked
+   * keeps their name. Before this, `syncLocations` wrote only isActive and the
    * address/GSTIN enrichment onto an existing warehouse, so the name set at
    * create time was permanent. Shrishti Jewels on 2026-09-04: the primary
    * location "Shrishti Jewels 12 Stadium Bypass Road Selvapalayam" had been
@@ -762,26 +848,6 @@ export class ShopifyLocationSyncService {
   /** `gid://shopify/Location/123` → `"123"`. Stored as text on Warehouse. */
   private numericId(gid: string): string {
     return ShopifyGraphqlClient.extractId(gid);
-  }
-
-  /**
-   * A scanner-safe warehouse code from a location name, unique within the org.
-   * "Kochi Store" → "KOCHIS"; on collision "KOCHIS2", "KOCHIS3"…
-   *
-   * Must satisfy CreateWarehouseDto's ^[A-Z0-9]{1,8}$ so a code minted here is
-   * still valid if a merchant later edits that warehouse through the API.
-   */
-  private deriveCode(name: string, used: Set<string>): string {
-    const base = name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) || 'WH';
-    if (!used.has(base)) return base;
-    for (let n = 2; n < 1000; n++) {
-      const suffix = String(n);
-      const candidate = base.slice(0, 8 - suffix.length) + suffix;
-      if (!used.has(candidate)) return candidate;
-    }
-    // 999 warehouses sharing a six-character stem is not a real shop, but a
-    // silent duplicate would trip the (org, code) unique — fail loudly.
-    throw new Error(`Could not derive a unique warehouse code from "${name}"`);
   }
 
   // Sync-log lifecycle. Intentionally thinner than ShopifySyncService's

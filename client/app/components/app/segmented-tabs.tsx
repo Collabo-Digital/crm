@@ -82,7 +82,8 @@ export function SegmentedTabs<T extends string>({
             aria-pressed={isTabs ? undefined : isActive}
             onClick={() => onChange(item.value)}
             className={cn(
-              "inline-flex items-center transition-colors",
+              // Finger-sized on phones and touch screens (the phone contract in app.css).
+              "inline-flex items-center transition-colors max-md:min-h-11 pointer-coarse:min-h-11",
               isTable
                 ? "h-[30px] gap-2 whitespace-nowrap rounded-lg px-3 text-label font-medium"
                 : "gap-1.5 rounded-full px-3 py-1 text-caption font-medium",

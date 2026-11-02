@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Param, Req } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, Req, Headers } from '@nestjs/common';
 import type { Request } from 'express';
 
 import { AuthService } from './auth.service';
@@ -53,7 +53,10 @@ export class AuthController {
     return this.authService.refresh(dto.refreshToken, req.headers['user-agent'], req.ip);
   }
 
+  // Every role must be able to end its own session, whatever it may reach.
   @Post('logout')
+  @AllowVendor()
+  @AllowInfluencer()
   logout(@CurrentUser() user: JwtPayload, @Body() dto: RefreshTokenDto) {
     return this.authService.logout(user.sub, user.sid, dto.refreshToken);
   }
@@ -90,11 +93,17 @@ export class AuthController {
     return this.authService.getInviteByToken(token);
   }
 
-  // Public because someone with no account yet must be able to accept. An
-  // existing account proves it is theirs with its password, inside the DTO.
+  // Public because someone with no account yet must be able to accept. The
+  // Authorization header is read by hand rather than by a guard for the same
+  // reason: when a caller IS signed in, acceptance must verify they are the
+  // person the invitation names.
   @Public()
   @Post('invite/accept')
-  acceptInvite(@Body() dto: AcceptInviteDto) {
-    return this.authService.acceptInvite(dto);
+  acceptInvite(
+    @Body() dto: AcceptInviteDto,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const callerUserId = this.authService.verifyAccessTokenSubject(authorization);
+    return this.authService.acceptInvite(dto, callerUserId);
   }
 }

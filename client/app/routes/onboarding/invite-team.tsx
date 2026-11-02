@@ -13,8 +13,11 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { useSendInviteMutation } from "~/hooks/use-org-mutations";
-import { AVAILABLE_SECTIONS, isSectionScopedRole, sectionKey } from "~/lib/sections";
+import { AVAILABLE_SECTIONS, isSectionScopedRole } from "~/lib/sections";
+import { accessGrants, DEFAULT_CAPABILITIES } from "~/components/app/settings/section-access-picker";
+import { takeAfterOnboarding } from "~/lib/return-path";
 import type { UserRole } from "~/types/api";
+import { OnboardingSteps } from "~/components/app/onboarding/onboarding-steps";
 
 export function meta() {
   return [{ title: "Invite Your Team | Collabo CRM" }];
@@ -35,10 +38,7 @@ const ROLES: { value: UserRole; label: string; description: string }[] = [
   { value: "VIEWER", label: "Viewer", description: "Read-only access" },
 ];
 
-/** Delay (in ms) before checking if all invites were sent and redirecting. */
-const REDIRECT_CHECK_DELAY = 300;
-
-/** Delay (in ms) after success toast before navigating to the dashboard. */
+/** Delay (in ms) after the success toast before leaving onboarding. */
 const REDIRECT_NAVIGATE_DELAY = 1200;
 
 /**
@@ -90,11 +90,12 @@ export default function InviteTeamPage() {
     );
 
     if (pendingRows.length === 0) {
-      navigate("/dashboard");
+      finish();
       return;
     }
 
     setIsSendingAll(true);
+    let failed = false;
 
     for (const inviteRow of pendingRows) {
       // Mark as sending
@@ -106,16 +107,18 @@ export default function InviteTeamPage() {
         await sendInvite.mutateAsync({
           email: inviteRow.email.trim(),
           role: inviteRow.role,
-          // No per-section picker during onboarding: start with every section,
-          // narrowed later from Settings → Team Members.
+          // No per-section picker during onboarding: start with every section
+          // and the same defaults as the Settings invite, narrowed later from
+          // Settings → Team Members.
           grants: isSectionScopedRole(inviteRow.role)
-            ? AVAILABLE_SECTIONS.map((s) => sectionKey(s.id))
+            ? accessGrants(inviteRow.role, AVAILABLE_SECTIONS.map((s) => s.id), DEFAULT_CAPABILITIES)
             : undefined,
         });
         setRows((previousRows) =>
           previousRows.map((row) => (row.id === inviteRow.id ? { ...row, status: "sent" } : row))
         );
       } catch (error) {
+        failed = true;
         const errorMessage =
           isAxiosError(error)
             ? error.response?.data?.message || "Failed to send"
@@ -130,23 +133,21 @@ export default function InviteTeamPage() {
 
     setIsSendingAll(false);
 
-    // Check if all sent successfully and redirect
-    setTimeout(() => {
-      setRows((currentRows) => {
-        const allDone = currentRows.every(
-          (row) => row.status === "sent" || !row.email.trim()
-        );
-        if (allDone) {
-          toast.success("All invitations sent! Redirecting to dashboard…");
-          setTimeout(() => navigate("/dashboard"), REDIRECT_NAVIGATE_DELAY);
-        }
-        return currentRows;
-      });
-    }, REDIRECT_CHECK_DELAY);
+    // Every row was sent before or just now: move on. A failed row stays on
+    // screen with its error.
+    if (!failed) {
+      toast.success("All invitations sent!");
+      setTimeout(finish, REDIRECT_NAVIGATE_DELAY);
+    }
+  }
+
+  /** Onboarding is done: the page they were headed to, else the dashboard. */
+  function finish() {
+    navigate(takeAfterOnboarding() ?? "/dashboard");
   }
 
   function handleSkip() {
-    navigate("/dashboard");
+    finish();
   }
 
   /* ── Derived state ───────────────────────────────────── */
@@ -156,26 +157,14 @@ export default function InviteTeamPage() {
 
   return (
     <div>
-      {/* Step indicator */}
-      <div className="mb-8 flex items-center justify-center gap-2">
-        <div className="flex items-center gap-1.5">
-          <div className="size-2 rounded-full bg-gray-300" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-300" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-gray-300" />
-          <div className="h-px w-6 bg-gray-200" />
-          <div className="size-2 rounded-full bg-[#CEF17B]" />
-        </div>
-        <span className="ml-2 text-xs text-gray-400">Step 4 of 4</span>
-      </div>
+      <OnboardingSteps current={3} />
 
       {/* Heading */}
       <div className="mb-8 text-center">
         <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-[#CEF17B]/30">
           <Users className="size-5 text-[#084734]" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900">Invite your team</h2>
+        <h1 className="text-2xl font-bold text-gray-900">Invite your team</h1>
         <p className="mt-1.5 text-sm text-gray-500">
           Add team members to collaborate. You can always invite more people later.
         </p>
@@ -195,7 +184,7 @@ export default function InviteTeamPage() {
                   value={row.email}
                   onChange={(event) => handleEmailChange(row.id, event.target.value)}
                   disabled={row.status === "sent" || row.status === "sending"}
-                  className="w-full rounded-lg border border-gray-200 bg-white py-2.5 pl-9 pr-3.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition focus:border-[#CEF17B] focus:ring-2 focus:ring-[#CEF17B]/40 disabled:bg-gray-50 disabled:opacity-60"
+                  className="w-full rounded-lg border border-gray-200 bg-white py-2.5 pl-9 pr-3.5 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none transition disabled:bg-gray-50 disabled:opacity-60 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
                 {row.status === "sent" && (
                   <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-[#084734]" />
@@ -208,7 +197,7 @@ export default function InviteTeamPage() {
                 onValueChange={(selectedRole) => handleRoleChange(row.id, selectedRole as UserRole)}
                 disabled={row.status === "sent" || row.status === "sending"}
               >
-                <SelectTrigger className="w-[130px] shrink-0 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 dark:text-gray-100 shadow-sm focus:ring-[#CEF17B]/40">
+                <SelectTrigger className="w-[130px] shrink-0 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 dark:text-gray-100 shadow-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

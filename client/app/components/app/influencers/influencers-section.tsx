@@ -19,6 +19,7 @@ import { useInfluencers } from "~/hooks/use-org-queries";
 import { useResendInviteMutation } from "~/hooks/use-org-mutations";
 import { InviteInfluencerDialog } from "./invite-influencer-dialog";
 import { CancelInviteDialog } from "./cancel-invite-dialog";
+import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import { cn } from "~/lib/utils";
 import type { InfluencerRow } from "~/types/api";
 
@@ -33,11 +34,11 @@ const STATUS_META: Record<
   InfluencerRow["status"],
   { label: string; className: string }
 > = {
-  ACTIVE: { label: "Active", className: "bg-success-subtle text-success" },
-  PENDING: { label: "Pending", className: "bg-warning-subtle text-warning-strong" },
-  EXPIRED: { label: "Expired", className: "bg-muted text-muted-foreground" },
-  REVOKED: { label: "Cancelled", className: "bg-muted text-muted-foreground" },
-  ACCEPTED: { label: "Active", className: "bg-success-subtle text-success" },
+  ACTIVE: { label: "Active", className: STATUS_TONE_CLASSES.success },
+  PENDING: { label: "Pending", className: STATUS_TONE_CLASSES.attention },
+  EXPIRED: { label: "Expired", className: STATUS_TONE_CLASSES.neutral },
+  REVOKED: { label: "Cancelled", className: STATUS_TONE_CLASSES.neutral },
+  ACCEPTED: { label: "Active", className: STATUS_TONE_CLASSES.success },
 };
 
 function formatDate(value: string | null): string {

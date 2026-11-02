@@ -1,6 +1,7 @@
 import ShopifyIcon from "~/assests/icon/shopifyIcon";
 import InstagramIcon from "~/assests/icon/instagramIcon";
 import WhatsappIcon from "~/assests/icon/whatsappIcon";
+import MessengerIcon from "~/assests/icon/messengerIcon";
 import CollaboIcon from "~/assests/icon/collaboIcon";
 import { cn } from "~/lib/utils";
 import type { ChannelPlatform } from "~/types/api";
@@ -9,13 +10,14 @@ import type { ChannelPlatform } from "~/types/api";
 type IconCmp = React.ComponentType<{ width?: number; height?: number }>;
 
 /**
- * Only four of the seven platforms have artwork. WOOCOMMERCE, FACEBOOK and
- * TIKTOK fall through to a label-only badge rather than a broken import.
+ * Five of the seven platforms have artwork. WOOCOMMERCE and TIKTOK fall
+ * through to a label-only badge rather than a broken import.
  */
 export const CHANNEL_ICON: Partial<Record<ChannelPlatform, IconCmp>> = {
   SHOPIFY: ShopifyIcon,
   INSTAGRAM: InstagramIcon,
   WHATSAPP: WhatsappIcon,
+  FACEBOOK: MessengerIcon,
   // Orders created in this CRM are labelled "Collabo", so they carry its mark.
   MANUAL: CollaboIcon,
 };
@@ -24,7 +26,7 @@ export const CHANNEL_LABEL: Record<ChannelPlatform, string> = {
   SHOPIFY: "Shopify",
   WOOCOMMERCE: "WooCommerce",
   INSTAGRAM: "Instagram",
-  FACEBOOK: "Facebook",
+  FACEBOOK: "Messenger",
   WHATSAPP: "WhatsApp",
   TIKTOK: "TikTok",
   MANUAL: "Manual",

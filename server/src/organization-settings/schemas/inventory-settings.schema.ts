@@ -16,6 +16,16 @@ export const InventorySettingsSchema = z.object({
   warehousingEnabled: z.boolean().default(false),
 
   /**
+   * Set by the enable flow for an org with a connected Shopify store: its
+   * Shopify locations are still to be linked the way they always were (the
+   * primary to the default location, each other one to a warehouse of its
+   * own). Cleared by the locations sync that does it, so a sync that fails
+   * leaves the job to the next one instead of to the merchant. Never set by
+   * the settings PATCH.
+   */
+  linkShopifyLocations: z.boolean().default(false),
+
+  /**
    * When TRUE, confirmed stock receipts land in the QC bucket and need an
    * explicit "Complete QC" step (accepted → AVAILABLE, rejected → DAMAGED).
    * When FALSE (default), receipts go straight to AVAILABLE.

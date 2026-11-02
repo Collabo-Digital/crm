@@ -24,7 +24,7 @@ how they reach the markup.
 3. **Never write a numeric or arbitrary size.** Not `text-sm`, not `text-[24px]`,
    not `rounded-[13px]`. Write the *role*.
 4. **Buttons come from `<Button>`.** Panels from `<SectionCard>`, simple surfaces
-   from `<Card>`, page headers from `<PageHeader>`.
+   from `<Card>`, page headers from `<PageHeader>`, status pills from `<StatusBadge>`.
 5. **`style={{}}` is for computed values only** — chart geometry, skeleton widths.
 
 Layout is the exception to rule 3: `flex`, `grid`, `gap-4`, `justify-between` and
@@ -46,7 +46,7 @@ resume at the edge of the page: everything around the preview is tokens.
 
 | Role | px / leading / weight | Use for |
 |---|---|---|
-| `text-micro`      | 10 / 14       | badge and dot labels |
+| `text-micro`      | 12 / 16       | badge and pill labels |
 | `text-caption`    | 12 / 16       | helper text, meta, timestamps |
 | `text-label`      | 13 / 18 / 500 | form labels |
 | `text-body`       | 14 / 20       | body copy, table cells |
@@ -57,6 +57,11 @@ resume at the edge of the page: everything around the preview is tokens.
 
 Tailwind's own `text-xs`/`sm`/`base`/`lg`/`xl`/`2xl` still resolve (12/14/16/18/20/24)
 for files not yet migrated. **They are forbidden in new code.**
+
+**12px is the floor for anything people read.** The one exception is a short badge
+label in 11px semibold capitals. `app/lib/design-tokens.test.ts` fails on any new
+hand-typed size under 12px; files that still have some are listed there with a count
+that may only go down.
 
 ### ⚠️ Two traps
 
@@ -97,7 +102,41 @@ both themes — for gradients and graphics that must stay forest), `brand-deep`,
 (fixed white, for text on an `ink` fill)
 
 **Status** — `success`, `warning` (amber), `warning-strong` (orange), `danger`, `info`
-— each with a `-subtle` background companion
+— each with a `-subtle` background and a `-text` shade. The plain colour is for dots,
+icons and fills only; it is too pale for words. Any status *text*, on its tint or on
+a page, is `text-success-text` and friends.
+
+**Control** — `input` (edges of fields, checkboxes, radios and the off switch; 3:1 on
+every surface), `ring` (the focus ring: forest in light, lime in dark), `chart-1`…`5`
+(series colours, 3:1 on the card; `chart-1` is the brand series), `unread` /
+`unread-foreground` (the unread-count badge, the same on desktop and phone).
+
+`app/lib/design-tokens.test.ts` checks every text pair against 4.5:1 and every
+control, ring and chart colour against 3:1, in light, dark and the phone overrides.
+Add a pair there when you add a token.
+
+---
+
+## Status pills
+
+One palette, five tones, in `lib/status-tone.ts`: **success** (done: paid, fulfilled,
+issued, delivered, live, approved), **info** (in progress), **attention** (someone has
+to act: pending, unfulfilled, unpaid), **critical** (failed, rejected) and **neutral**
+(draft, archived). Render `<StatusBadge tone="success">` from `components/ui`; a
+feature with its own states maps them to tones with `toneClasses()` (see
+`lib/order-status.ts`). Lime is not a status: it is the brand, the selection and the
+main action.
+
+## Buttons and focus
+
+`<Button>` with no variant is **the** primary: lime fill, one per view. `accent` and
+`brand` are older names for the same style. Below it: `outline` for other actions,
+`ghost` or `link` for quiet ones, `destructive` for deleting.
+
+Focus is a 2px solid `--ring` outline with a 2px gap (text fields: a 2px ring-coloured
+edge). The base layer draws it on anything focusable, so never add
+`focus:outline-none` without a replacement, and never a lime ring on a light surface.
+On a black surface (the nav bar, the dock) use `focus-visible:outline-brand`.
 
 ---
 
@@ -121,10 +160,12 @@ it shifts every corner in the app.
 | `border-gray-100 dark:border-gray-700` | `border-border` |
 | `bg-gray-100 dark:bg-gray-800` | `bg-muted` |
 | `text-red-600 bg-red-50` | `text-danger bg-danger-subtle` |
-| `text-[10px]` / `text-[11px]` / `text-xs` | `text-micro` / `text-caption` / `text-caption` |
+| `text-[10px]` / `text-[11px]` / `text-xs` | `text-caption` |
+| `bg-success-subtle text-success` (any status pill) | `<StatusBadge tone="success">` |
+| `text-warning` (status words) | `text-warning-text` |
+| `focus-visible:ring-2 focus-visible:ring-brand/50` | nothing (the base ring), or `focus-visible:outline-brand` on black |
 | `text-sm` / `text-[24px]` | `text-body` / `text-page-title` |
-| raw `<button className="… bg-brand …">` | `<Button variant="accent">` (lime fill) |
-| raw `<button className="… bg-ink …">` | `<Button variant="brand">` (ink fill, lime text) |
+| raw `<button className="… bg-brand …">` or `… bg-ink …` | `<Button>` (the lime primary) or `<Button variant="outline">` |
 | hand-rolled panel + header + `border-b` | `<SectionCard>` |
 
 ---

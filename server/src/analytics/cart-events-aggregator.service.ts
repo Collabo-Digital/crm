@@ -56,15 +56,17 @@ export class CartEventsAggregator {
 
   /// Replay the last 24h of cart + checkout events into the day-level
   /// snapshots. Idempotent — re-running for the same window overwrites
-  /// the same `byProduct` entries.
-  async rollupRecentDay(): Promise<void> {
+  /// the same `byProduct` entries. The Refresh button names its own
+  /// workspace; only the hourly cron runs across every workspace.
+  async rollupRecentDay(organizationId: string): Promise<void> {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    await this.rollup(since);
+    await this.rollup(since, organizationId);
   }
 
-  async rollup(since: Date): Promise<void> {
+  async rollup(since: Date, organizationId?: string): Promise<void> {
     const events = await this.prisma.rawAnalyticsEvent.findMany({
       where: {
+        ...(organizationId && { organizationId }),
         occurredAt: { gte: since },
         eventName: {
           in: [

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:1.6@sha256:ac85f380a63b13dfcefa89046420e1781752bab202122f8f50032edf31be0021
 # ──────────────────────────────────────────────────────────────────────────────
 # Multi-stage Dockerfile for Collabo CRM
 #
@@ -15,7 +15,9 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ─── Stage 1: Build the client (React SPA) ───────────────────────────────────
-FROM node:20-alpine AS client-builder
+# Base images are pinned by digest (the tag is there to read); see
+# docs/deploy-hardening.md to move them to a newer image.
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS client-builder
 
 WORKDIR /app/client
 
@@ -32,7 +34,7 @@ RUN npm run build
 
 
 # ─── Stage 2: Build the server (NestJS) ──────────────────────────────────────
-FROM node:20-alpine AS server-builder
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS server-builder
 
 WORKDIR /app/server
 
@@ -54,12 +56,12 @@ RUN npm run build
 
 
 # ─── Stage 3: Runtime image (small, production only) ─────────────────────────
-FROM node:20-alpine AS runtime
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runtime
 
 WORKDIR /app/server
 
-# OpenSSL for Prisma at runtime
-RUN apk add --no-cache openssl
+# OpenSSL for Prisma at runtime; ffmpeg converts inbox voice notes
+RUN apk add --no-cache openssl ffmpeg
 
 # Install only production dependencies (smaller image)
 COPY server/package.json server/package-lock.json ./

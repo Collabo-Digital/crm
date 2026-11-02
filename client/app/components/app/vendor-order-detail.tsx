@@ -4,17 +4,10 @@ import { useOrder } from "~/hooks/use-order-queries";
 import { useListReturnPath } from "~/hooks/use-list-url-state";
 import { OrderItemsFulfillment } from "~/components/app/order-items-fulfillment";
 import { cn } from "~/lib/utils";
-import { fulfillmentStatusLabel, hasOutstandingUnits } from "~/lib/order-status";
+import { LINE_STATUS_CLASSES, fulfillmentStatusLabel, hasOutstandingUnits } from "~/lib/order-status";
+import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import type { VendorOrderDetail as VendorOrder } from "~/types/api";
 import { QueryErrorState } from "~/components/app/query-error-state";
-
-const STATUS_CLASS: Record<string, string> = {
-  fulfilled: "bg-[#CEF17B]/30 text-[#084734]",
-  delivered: "bg-emerald-100 text-emerald-700",
-  in_progress: "bg-blue-100 text-blue-700",
-  on_hold: "bg-amber-100 text-amber-700",
-  partial: "bg-blue-100 text-blue-700",
-};
 
 /** A VENDOR's view of an order — only their items, ship-to, and fulfilment actions. */
 export function VendorOrderDetail({ orderId }: { orderId: string }) {
@@ -59,8 +52,8 @@ export function VendorOrderDetail({ orderId }: { orderId: string }) {
             <span
               className={cn(
                 "rounded-full px-2 py-0.5 text-[10px] font-medium",
-                STATUS_CLASS[order.fulfillmentStatus?.toLowerCase()] ??
-                  "bg-orange-100 text-orange-600",
+                LINE_STATUS_CLASSES[order.fulfillmentStatus?.toLowerCase()] ??
+                  STATUS_TONE_CLASSES.attention,
               )}
             >
               {order.fulfillmentStatus}

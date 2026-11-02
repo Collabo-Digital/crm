@@ -1,4 +1,4 @@
-import { Controller, Post, Req, Headers, HttpCode, Logger, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Req, Headers, HttpCode, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
@@ -9,8 +9,38 @@ import { Public } from '../auth/decorators/public.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { EncryptionService } from './encryption.service';
 import { ShopifySyncService } from './shopify-sync.service';
-import { WhatsAppTriggerService } from './whatsapp-trigger.service';
+import { CheckoutService } from '../commerce/checkout.service';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
+import { describeAccount } from './channel-connection.util';
+import { isTransientWebhookError } from './webhook-retry.util';
+import { isOlderShopifyPayload } from './shopify-payload-age.util';
+
+/** The inventory_levels/update fields the handler reads. */
+interface InventoryLevelPayload {
+    inventory_item_id: number;
+    location_id: number;
+    available: number;
+    updated_at?: string;
+}
+
+/** A Shopify timestamp, or null when absent or unreadable. */
+function shopifyTime(value: unknown): Date | null {
+    const at = typeof value === 'string' ? Date.parse(value) : NaN;
+    return Number.isFinite(at) ? new Date(at) : null;
+}
+
+/** Address fields that identify a person. City, state and country stay. */
+const ADDRESS_PII_KEYS = [
+    'name', 'first_name', 'last_name', 'firstName', 'lastName', 'company',
+    'address1', 'address2', 'phone', 'zip', 'latitude', 'longitude',
+];
+
+/** Top-level keys of a stored order, checkout or cart payload that identify a person. */
+const PAYLOAD_PII_KEYS = [
+    'customer', 'email', 'contact_email', 'phone', 'sms_marketing_phone',
+    'billing_address', 'shipping_address', 'note', 'note_attributes',
+    'browser_ip', 'client_details',
+];
 
 /**
  * Exempt from the global 60 req/min throttler.
@@ -31,7 +61,7 @@ export class ShopifyWebhookController {
         private readonly prisma: PrismaService,
         private readonly encryption: EncryptionService,
         private readonly syncService: ShopifySyncService,
-        private readonly whatsappTrigger: WhatsAppTriggerService,
+        private readonly checkouts: CheckoutService,
         private readonly config: ConfigService,
         private readonly inventoryLedger: InventoryLedgerService,
     ) { }
@@ -125,17 +155,35 @@ export class ShopifyWebhookController {
                 // Merchant removed the app — the access token is already
                 // revoked. Don't call unregisterWebhooks (it would 401);
                 // Shopify removed the subscriptions with the install.
+                //
+                // The store claim is released exactly as ChannelService.disconnect
+                // does it: otherwise the store stays "linked to another
+                // organization" for ever and no other workspace can connect it.
+                // The id moves to metadata so a reinstall revives this row and
+                // later redact webhooks can still find it.
                 if (channel) {
+                    const meta =
+                        channel.metadata && typeof channel.metadata === 'object' && !Array.isArray(channel.metadata)
+                            ? (channel.metadata as Record<string, unknown>)
+                            : {};
                     await this.prisma.channel.update({
                         where: { id: channel.id },
                         data: {
                             status: ChannelStatus.DISCONNECTED,
                             credentials: Prisma.JsonNull,
                             isEnabled: false,
+                            externalStoreId: null,
+                            externalStoreUrl: null,
+                            metadata: {
+                                ...meta,
+                                externalAccountId: channel.externalStoreId,
+                                lastAccount: describeAccount(channel.platform, channel.credentials, channel.metadata),
+                                disconnectedAt: new Date().toISOString(),
+                            } as Prisma.InputJsonValue,
                         },
                     });
                     this.logger.warn(
-                        `App uninstalled from ${shopDomain} — channel ${channel.id} disconnected, credentials cleared`,
+                        `App uninstalled from ${shopDomain} — channel ${channel.id} disconnected, credentials cleared, store released`,
                     );
                 }
                 return { received: true };
@@ -150,29 +198,34 @@ export class ShopifyWebhookController {
                 );
                 return { received: true };
 
-            case 'customers/redact':
-                if (channel) {
-                    const externalId = (body as { customer?: { id?: number } }).customer?.id;
-                    if (externalId) {
-                        await this.anonymizeCustomers(channel.organizationId, {
-                            channelId: channel.id,
-                            externalId: String(externalId),
-                        });
-                    }
-                    this.logger.warn(`GDPR customer redact from ${shopDomain}: customer ${externalId}`);
+            case 'customers/redact': {
+                const redact = body as {
+                    shop_id?: number | string;
+                    customer?: { id?: number | string; email?: string | null; phone?: string | null };
+                    orders_to_redact?: Array<number | string>;
+                };
+                const externalId = redact.customer?.id != null ? String(redact.customer.id) : null;
+                for (const ch of await this.channelsForShop(shopDomain, redact.shop_id)) {
+                    await this.redactPersonalData(ch, {
+                        customerExternalId: externalId,
+                        email: redact.customer?.email ?? null,
+                        phone: redact.customer?.phone ?? null,
+                        orderExternalIds: (redact.orders_to_redact ?? []).map(String),
+                    });
                 }
+                this.logger.warn(`GDPR customer redact from ${shopDomain}: customer ${externalId}`);
                 return { received: true };
+            }
 
             case 'shop/redact':
-                // Arrives ~48h after uninstall. Credentials were already
-                // nulled by app/uninstalled; anonymize all customer PII
-                // synced from this shop. Orders/products are retained —
-                // they are non-personal business records once the customer
-                // fields are blanked.
-                if (channel) {
-                    await this.anonymizeCustomers(channel.organizationId, { channelId: channel.id });
-                    this.logger.warn(`GDPR shop redact completed for ${shopDomain}`);
+                // Arrives ~48h after uninstall, usually after the channel was
+                // disconnected — hence the lookup by shop id as well as URL.
+                // Orders and products are kept as business records with the
+                // personal fields removed.
+                for (const ch of await this.channelsForShop(shopDomain, (body as { shop_id?: number | string }).shop_id)) {
+                    await this.redactPersonalData(ch, null);
                 }
+                this.logger.warn(`GDPR shop redact completed for ${shopDomain}`);
                 return { received: true };
         }
 
@@ -211,31 +264,22 @@ export class ShopifyWebhookController {
                     // a backfill page, which is what lets `upsertOrder`
                     // auto-issue a GST invoice when the order becomes paid. The
                     // bulk sync deliberately omits it — see the flag's docblock.
+                    //
+                    // An order completes its checkout, so it is never
+                    // "recovered". Done FIRST and on every order topic: it
+                    // needs nothing from the order row, and a buyer who has
+                    // paid must not get an abandoned-cart message because the
+                    // order write below failed.
+                    await this.checkouts.markCompleted(channel, body);
                     await this.syncService.upsertOrder(
                         channel.id,
                         channel.organizationId,
                         body,
                         { live: true },
                     );
-                    // Fire WhatsApp trigger only on NEW orders. Wrapped in
-                    // try/catch so a messaging failure never bubbles up as a 5xx
-                    // (which would make Shopify retry the whole webhook and
-                    // potentially duplicate work).
+                    // Order messages now come from automations: upsertOrder
+                    // raises the store events they listen for.
                     if (topic === 'orders/create') {
-                        try {
-                            // NB: never log `body` here. It is the full Shopify
-                            // order payload — name, email, phone, both addresses —
-                            // and this runs on every single orders/create.
-                            await this.whatsappTrigger.onOrderPlaced(
-                                channel.organizationId,
-                                channel.id,
-                                body,
-                            );
-                        } catch (err) {
-                            this.logger.warn(
-                                `WhatsApp trigger failed (non-fatal): ${err instanceof Error ? err.message : err}`,
-                            );
-                        }
                         // Also record the order as an analytics event so
                         // the cart aggregator can compute
                         // checkout→order conversion using consistent
@@ -307,11 +351,21 @@ export class ShopifyWebhookController {
                 // of times for a single shopper session, so we want the
                 // aggregator to dedupe instead of doing read-modify-write
                 // on every event.
-                case 'carts/create':
-                case 'carts/update':
                 case 'checkouts/create':
                 case 'checkouts/update':
                 case 'checkouts/delete':
+                    // Also kept as a checkout for abandoned-cart recovery.
+                    if (topic === 'checkouts/delete') await this.checkouts.remove(channel.id, body);
+                    else await this.checkouts.upsertFromWebhook(channel, body);
+                    await this.recordAnalyticsEvent(
+                        channel.id,
+                        channel.organizationId,
+                        topic,
+                        body,
+                    );
+                    break;
+                case 'carts/create':
+                case 'carts/update':
                     await this.recordAnalyticsEvent(
                         channel.id,
                         channel.organizationId,
@@ -328,6 +382,14 @@ export class ShopifyWebhookController {
                 `Failed to process webhook ${topic} from ${shopDomain}`,
                 error instanceof Error ? error.stack : error,
             );
+            // A 200 here told Shopify the delivery succeeded, so an order,
+            // stock change or deletion lost to a brief database outage was
+            // gone until someone ran a manual sync. A 503 makes Shopify
+            // deliver it again later (see isTransientWebhookError for why
+            // only these).
+            if (isTransientWebhookError(error)) {
+                throw new ServiceUnavailableException('Temporary failure; please retry.');
+            }
         }
 
         return { received: true };
@@ -341,32 +403,123 @@ export class ShopifyWebhookController {
         return a.length === b.length && timingSafeEqual(a, b);
     }
 
-    // Blank every PII field on matching customers; non-personal commerce
-    // data (order counts, totals, tags, segments) is retained. Omitting
-    // externalId anonymizes every customer synced from the channel
-    // (shop/redact).
-    private async anonymizeCustomers(
-        orgId: string,
-        filter: { channelId: string; externalId?: string },
-    ) {
-        await this.prisma.customer.updateMany({
+    /**
+     * Every channel row that holds, or held, this shop. A disconnect or an
+     * uninstall clears `externalStoreUrl` and keeps the shop id in
+     * `metadata.externalAccountId`, and redact webhooks arrive after both.
+     */
+    private async channelsForShop(
+        shopDomain: string,
+        shopId: number | string | undefined,
+    ): Promise<Array<{ id: string; organizationId: string }>> {
+        return this.prisma.channel.findMany({
             where: {
-                organizationId: orgId,
-                channelId: filter.channelId,
-                ...(filter.externalId ? { externalId: filter.externalId } : {}),
+                platform: ChannelPlatform.SHOPIFY,
+                OR: [
+                    { externalStoreUrl: `https://${shopDomain}` },
+                    ...(shopId != null
+                        ? [
+                            { externalStoreId: String(shopId) },
+                            { metadata: { path: ['externalAccountId'], equals: String(shopId) } },
+                        ]
+                        : []),
+                ],
             },
-            data: {
-                email: null,
-                firstName: 'Redacted',
-                lastName: null,
-                phone: null,
-                addresses: Prisma.JsonNull,
-                defaultAddress: Prisma.JsonNull,
-                note: null,
-                gstin: null,
-                verifiedEmail: false,
-            },
+            select: { id: true, organizationId: true },
         });
+    }
+
+    /**
+     * GDPR redaction of what this shop sent us about people.
+     *
+     * `who` null is shop/redact: everyone synced from the channel. Otherwise
+     * one customer (customers/redact): their customer rows, the orders Shopify
+     * lists plus that customer's own orders, their checkouts and their stored
+     * webhook payloads.
+     *
+     * Customers keep non-personal commerce data (counts, totals, tags). Order
+     * addresses keep city, state and country, which the order's GST place of
+     * supply rests on; issued invoices are statutory records and are not
+     * touched. Stored payloads lose their personal top-level keys but keep the
+     * line items the cart analytics read.
+     */
+    private async redactPersonalData(
+        channel: { id: string; organizationId: string },
+        who: {
+            customerExternalId: string | null;
+            email: string | null;
+            phone: string | null;
+            orderExternalIds: string[];
+        } | null,
+    ) {
+        const orgId = channel.organizationId;
+
+        const customers = who
+            ? who.customerExternalId
+                ? await this.prisma.customer.findMany({
+                    where: { organizationId: orgId, channelId: channel.id, externalId: who.customerExternalId },
+                    select: { id: true },
+                })
+                : []
+            : await this.prisma.customer.findMany({
+                where: { organizationId: orgId, channelId: channel.id },
+                select: { id: true },
+            });
+        const customerIds = customers.map((c) => c.id);
+
+        if (customerIds.length > 0) {
+            await this.prisma.customer.updateMany({
+                where: { id: { in: customerIds } },
+                data: {
+                    email: null,
+                    firstName: 'Redacted',
+                    lastName: null,
+                    phone: null,
+                    addresses: Prisma.JsonNull,
+                    defaultAddress: Prisma.JsonNull,
+                    note: null,
+                    gstin: null,
+                    verifiedEmail: false,
+                },
+            });
+        }
+
+        const orderScope = who
+            ? Prisma.sql`(customer_id = ANY(${customerIds}::text[]) OR (channel_id = ${channel.id} AND external_id = ANY(${who.orderExternalIds}::text[])))`
+            : Prisma.sql`channel_id = ${channel.id}`;
+        await this.prisma.$executeRaw`
+            UPDATE orders SET
+                shipping_address = CASE WHEN jsonb_typeof(shipping_address) = 'object'
+                    THEN shipping_address - ${ADDRESS_PII_KEYS}::text[] ELSE shipping_address END,
+                billing_address = CASE WHEN jsonb_typeof(billing_address) = 'object'
+                    THEN billing_address - ${ADDRESS_PII_KEYS}::text[] ELSE billing_address END
+            WHERE organization_id = ${orgId} AND ${orderScope}
+        `;
+
+        const checkoutMatch: Prisma.CheckoutWhereInput[] = who
+            ? [
+                ...(who.customerExternalId ? [{ customerExternalId: who.customerExternalId }] : []),
+                ...(who.email ? [{ email: who.email }] : []),
+                ...(who.phone ? [{ phone: who.phone }] : []),
+            ]
+            : [];
+        if (!who || checkoutMatch.length > 0) {
+            await this.prisma.checkout.updateMany({
+                where: { channelId: channel.id, ...(who ? { OR: checkoutMatch } : {}) },
+                data: { email: null, phone: null, firstName: null, recoveryUrl: null },
+            });
+        }
+
+        if (!who || who.customerExternalId) {
+            const eventScope = who
+                ? Prisma.sql`AND external_customer_id = ${who.customerExternalId}`
+                : Prisma.empty;
+            await this.prisma.$executeRaw`
+                UPDATE raw_analytics_events
+                SET payload = payload - ${PAYLOAD_PII_KEYS}::text[]
+                WHERE channel_id = ${channel.id} AND jsonb_typeof(payload) = 'object' ${eventScope}
+            `;
+        }
     }
 
     /**
@@ -475,10 +628,16 @@ export class ShopifyWebhookController {
         return Number.isNaN(parsed.getTime()) ? null : parsed;
     }
 
+    /**
+     * Shopify does not deliver these in order: a store going 10 → 9 → 8 can
+     * send the 8 before the 9. Each level keeps the `updated_at` it was last
+     * set from, and a payload older than that is ignored. An equal one is
+     * applied, which is harmless because `available` is absolute.
+     */
     private async handleInventoryUpdate(
         channelId: string,
         orgId: string,
-        body: { inventory_item_id: number; available: number; location_id: number },
+        body: InventoryLevelPayload,
     ) {
         const variant = await this.prisma.productVariant.findFirst({
             where: {
@@ -504,28 +663,44 @@ export class ShopifyWebhookController {
         // variant and nowhere to put a per-location split, so fixing it means
         // moving them to warehousing, not patching this branch.
         const newQuantity = body.available;
-        if (variant.inventoryQuantity === newQuantity) return;
-
-        await this.prisma.$transaction([
-            this.prisma.productVariant.update({
+        const updatedAt = shopifyTime(body.updated_at);
+        // Locked and re-read so the ledger's before/after match what was
+        // actually replaced when two updates for one variant arrive together.
+        const before = await this.prisma.$transaction(async (tx) => {
+            const rows = await tx.$queryRaw<Array<{ inventory_quantity: number; shopify_inventory_updated_at: Date | null }>>`
+                SELECT "inventory_quantity", "shopify_inventory_updated_at" FROM "product_variants" WHERE "id" = ${variant.id} FOR UPDATE`;
+            if (isOlderShopifyPayload(updatedAt, rows[0]?.shopify_inventory_updated_at ?? null)) return 'stale' as const;
+            const current = rows[0]?.inventory_quantity ?? variant.inventoryQuantity;
+            // The time is stored even when the quantity is unchanged (the echo
+            // of a push), so an older payload still in flight is recognised.
+            await tx.productVariant.update({
                 where: { id: variant.id },
-                data: { inventoryQuantity: newQuantity },
-            }),
-            this.prisma.inventoryEvent.create({
+                data: { inventoryQuantity: newQuantity, shopifyInventoryUpdatedAt: updatedAt ?? undefined },
+            });
+            if (current === newQuantity) return null;
+            await tx.inventoryEvent.create({
                 data: {
                     organizationId: orgId,
                     variantId: variant.id,
-                    quantityBefore: variant.inventoryQuantity,
+                    quantityBefore: current,
                     quantityAfter: newQuantity,
-                    changeAmount: newQuantity - variant.inventoryQuantity,
+                    changeAmount: newQuantity - current,
                     reason: 'webhook',
                     referenceType: 'webhook',
                 },
-            }),
-        ]);
+            });
+            return current;
+        });
+        if (before === 'stale') {
+            this.logger.debug(
+                `Ignored an out-of-order inventory update for variant ${variant.id}: ${newQuantity} as of ${body.updated_at} is older than the stored level.`,
+            );
+            return;
+        }
+        if (before === null) return;
 
         this.logger.log(
-            `Inventory updated via webhook: variant ${variant.id}, ${variant.inventoryQuantity} → ${newQuantity}`,
+            `Inventory updated via webhook: variant ${variant.id}, ${before} → ${newQuantity}`,
         );
     }
 
@@ -540,45 +715,71 @@ export class ShopifyWebhookController {
     private async applyWarehousedInventoryUpdate(
         orgId: string,
         variantId: string,
-        body: { available: number; location_id: number },
+        body: Pick<InventoryLevelPayload, 'available' | 'location_id' | 'updated_at'>,
     ) {
         const locationId = String(body.location_id);
+        const updatedAt = shopifyTime(body.updated_at);
         const warehouse = await this.prisma.warehouse.findFirst({
             where: { organizationId: orgId, shopifyLocationId: locationId, isActive: true },
             select: { id: true },
         });
         if (!warehouse) {
-            // A location added in Shopify since the last locations sync. Doing
-            // nothing is correct: the next sync creates the warehouse and the
-            // reconcile picks up the current quantity anyway.
+            // A Shopify location no location is linked to: one the merchant
+            // has not decided on yet, or left out of stock sync. Nothing syncs
+            // for it until it is linked, when the reconcile picks up the
+            // current quantity anyway.
             this.logger.debug(
                 `inventory_levels/update for unmapped Shopify location ${locationId} (org ${orgId})`,
             );
             return;
         }
 
-        const level = await this.prisma.stockLevel.findFirst({
-            where: { variantId, warehouseId: warehouse.id, locationId: null },
-            select: { available: true },
+        // The read and the movement share one transaction behind the variant
+        // lock applyMovement itself takes. Reading outside it let two webhooks
+        // for one variant (two quick sales: available 9, then 8) both read 10
+        // and apply -1 and -2, leaving 7 against Shopify's 8 for good.
+        const delta = await this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT 1 FROM "product_variants" WHERE "id" = ${variantId} FOR UPDATE`;
+            const level = await tx.stockLevel.findFirst({
+                where: { variantId, warehouseId: warehouse.id, locationId: null },
+                select: { available: true, shopifyUpdatedAt: true },
+            });
+            if (isOlderShopifyPayload(updatedAt, level?.shopifyUpdatedAt ?? null)) return null;
+            const change = body.available - (level?.available ?? 0);
+            if (change !== 0) {
+                await this.inventoryLedger.applyMovement({
+                    orgId,
+                    variantId,
+                    warehouseId: warehouse.id,
+                    fromBucket: change < 0 ? StockBucket.AVAILABLE : null,
+                    toBucket: change > 0 ? StockBucket.AVAILABLE : null,
+                    quantity: Math.abs(change),
+                    reason: 'webhook',
+                    referenceType: 'webhook',
+                    referenceId: locationId,
+                    // Shopify is authoritative on what was sold. Refusing a decrease
+                    // that crosses zero would desync the two systems permanently;
+                    // oversold surfaces as an alert on the stock screen instead.
+                    allowNegativeAvailable: true,
+                }, tx);
+            }
+            // Stored even when nothing moved (the echo of a push), so an older
+            // payload still in flight is recognised.
+            if (updatedAt) {
+                await tx.stockLevel.updateMany({
+                    where: { variantId, warehouseId: warehouse.id, locationId: null },
+                    data: { shopifyUpdatedAt: updatedAt },
+                });
+            }
+            return change;
         });
-        const delta = body.available - (level?.available ?? 0);
+        if (delta === null) {
+            this.logger.debug(
+                `Ignored an out-of-order inventory update for variant ${variantId} at warehouse ${warehouse.id}: ${body.available} as of ${body.updated_at} is older than the stored level.`,
+            );
+            return;
+        }
         if (delta === 0) return;
-
-        await this.inventoryLedger.applyMovement({
-            orgId,
-            variantId,
-            warehouseId: warehouse.id,
-            fromBucket: delta < 0 ? StockBucket.AVAILABLE : null,
-            toBucket: delta > 0 ? StockBucket.AVAILABLE : null,
-            quantity: Math.abs(delta),
-            reason: 'webhook',
-            referenceType: 'webhook',
-            referenceId: locationId,
-            // Shopify is authoritative on what was sold. Refusing a decrease
-            // that crosses zero would desync the two systems permanently;
-            // oversold surfaces as an alert on the stock screen instead.
-            allowNegativeAvailable: true,
-        });
 
         this.logger.log(
             `Inventory updated via webhook: variant ${variantId} at warehouse ${warehouse.id}, ${delta > 0 ? '+' : ''}${delta} → ${body.available}`,

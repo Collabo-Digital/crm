@@ -58,3 +58,50 @@ describe('EmailService — SMTP transport must be encrypted in production', () =
         expect(createTransport).not.toHaveBeenCalled();
     });
 });
+
+/**
+ * Anyone can create a workspace with any name and invite any address, so a
+ * name is user input that lands in someone else's inbox from our own server.
+ */
+describe('EmailService — user-supplied names are escaped in invitation HTML', () => {
+    const orgName = '<a href="https://evil.example">Verify your account</a>';
+
+    function build() {
+        const sendMail = jest.fn().mockResolvedValue(undefined);
+        (nodemailer.createTransport as jest.Mock).mockReturnValueOnce({ verify: jest.fn(), sendMail });
+        const values: Record<string, unknown> = {
+            nodeEnv: 'production',
+            frontendUrl: 'https://app.example.test',
+            'smtp.host': 'smtp.example.test',
+            'smtp.user': 'user',
+            'smtp.pass': 'pass',
+        };
+        const service = new EmailService({ get: (key: string) => values[key] } as never);
+        const html = () => (sendMail.mock.calls as Array<[{ html: string }]>)[0][0].html;
+        return { service, html };
+    }
+
+    it('escapes the organization name in a team invite', async () => {
+        const { service, html } = build();
+
+        await service.sendTeamInvite('a@example.test', orgName, 'tok');
+
+        expect(html()).not.toContain('<a href="https://evil.example">');
+        expect(html()).toContain('&lt;a href=&quot;https://evil.example&quot;&gt;Verify your account&lt;/a&gt;');
+    });
+
+    it('escapes the organization, inviter and invitee names in an influencer invite', async () => {
+        const { service, html } = build();
+
+        await service.sendInfluencerInvite({
+            email: 'a@example.test',
+            inviteeName: '<b>Invitee</b>',
+            orgName,
+            inviterName: '<i>Inviter</i>',
+            token: 'tok',
+            expiresAt: new Date('2030-01-01'),
+        });
+
+        expect(html()).not.toMatch(/<a href="https:\/\/evil|<b>Invitee|<i>Inviter/);
+    });
+});

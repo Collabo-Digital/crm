@@ -57,7 +57,7 @@ function build(opts: { byId?: Row | null; byExternalId?: Row[] }) {
   };
   const service = new ShopifySyncService(
     prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-    {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+    {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
   );
   jest.spyOn((service as any).logger, 'log').mockImplementation(() => undefined);
   return { service, prisma };

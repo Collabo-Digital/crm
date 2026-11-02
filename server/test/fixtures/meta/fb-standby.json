@@ -1,0 +1,24 @@
+{
+  "object": "page",
+  "entry": [
+    {
+      "id": "682498302938465",
+      "time": 1458692752478,
+      "standby": [
+        {
+          "sender": {
+            "id": "6783960784969421"
+          },
+          "recipient": {
+            "id": "682498302938465"
+          },
+          "timestamp": 1458692752478,
+          "message": {
+            "mid": "m_FBSTANDBY0001",
+            "text": "answered by Meta AI"
+          }
+        }
+      ]
+    }
+  ]
+}

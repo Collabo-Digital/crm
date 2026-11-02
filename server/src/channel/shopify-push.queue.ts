@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import type { JobsOptions, Queue } from 'bullmq';
 
 export const SHOPIFY_PUSH_QUEUE = 'shopify-push';
 
@@ -57,12 +58,18 @@ export type ShopifyPushJobData =
       type: 'push-availability';
       organizationId: string;
       variantIds: string[];
+      /**
+       * Only this location's figure: a sale or restock that moved stock at
+       * one location says nothing new about the others, and re-sending theirs
+       * would overwrite any change Shopify made since.
+       */
+      warehouseId?: string;
     })
   | (PushJobBase & {
       /**
-       * Mirror the store's Shopify locations as warehouses, then reconcile
-       * per-location stock into them. Enqueued by InventoryModule at the end
-       * of the warehousing enable flow, for the same reason as
+       * Refresh the store's Shopify locations, then reconcile per-location
+       * stock into the locations linked to them. Enqueued by InventoryModule
+       * at the end of the warehousing enable flow, for the same reason as
        * `push-availability` above: the queue name is the cycle-free seam, so
        * the inventory side can reach ChannelModule without importing it.
        *
@@ -71,6 +78,18 @@ export type ShopifyPushJobData =
        */
       type: 'sync-locations';
       organizationId: string;
+      /**
+       * The enable flow only: link every undecided Shopify location as the
+       * old sync did (the primary to the default location, each other one to
+       * a warehouse of its own) and record those links as decided.
+       */
+      autoLink?: boolean;
+      /**
+       * Locations just linked with "keep Collabo's counts": their stock is
+       * sent to their Shopify location BEFORE the pull, which would otherwise
+       * overwrite it with Shopify's.
+       */
+      pushWarehouseIds?: string[];
     });
 
 /**
@@ -80,9 +99,9 @@ export type ShopifyPushJobData =
 export const pushJobId = {
   order: (orderId: string) => `push-order-${orderId}`,
   product: (productId: string) => `push-product-${productId}`,
-  availability: (orgId: string, variantIds: string[]) =>
+  availability: (orgId: string, variantIds: string[], warehouseId?: string) =>
     `push-availability-${orgId}-${createHash('sha1')
-      .update([...new Set(variantIds)].sort().join(','))
+      .update([...new Set(variantIds)].sort().join(',') + (warehouseId ? `@${warehouseId}` : ''))
       .digest('hex')
       .slice(0, 12)}`,
   locations: (orgId: string) => `sync-locations-${orgId}`,
@@ -98,3 +117,70 @@ export const PUSH_JOB_OPTS = {
   removeOnComplete: { age: 60 * 60 * 24 * 7 }, // 7 days
   removeOnFail: { age: 60 * 60 * 24 * 30 }, // 30 days for inspection
 };
+
+/**
+ * Add a push job under a stable id, replacing a finished one with that id.
+ *
+ * BullMQ silently returns the existing job for any id it still holds, and
+ * PUSH_JOB_OPTS keep finished jobs for 7 to 30 days, so a plain `add` with a
+ * stable id does nothing for that long after the first run. A live job
+ * (waiting, delayed, parked or active) is left alone and its state returned;
+ * 'added' means a new job was queued.
+ *
+ * A plain function on the queue handle so InventoryModule and OrderModule can
+ * share it without importing ChannelModule (see `push-availability`).
+ */
+export async function addDedupedPushJob(
+  queue: Pick<Queue<ShopifyPushJobData>, 'getJob' | 'add'>,
+  name: string,
+  data: ShopifyPushJobData,
+  opts: JobsOptions & { jobId: string },
+): Promise<string> {
+  const existing = await queue.getJob(opts.jobId);
+  if (existing) {
+    const state = await existing.getState();
+    if (state !== 'completed' && state !== 'failed') return state;
+    await existing.remove();
+  }
+  await queue.add(name, data, opts);
+  return 'added';
+}
+
+/**
+ * Queue an absolute availability push for these variants after a CRM-origin
+ * stock change.
+ *
+ * The job reads stock when it runs, so one still waiting already carries this
+ * change. One already running may have read the stock before it, so a single
+ * follow-up job is queued behind it; otherwise this change would sit unpushed
+ * until the next sync reverted it from Shopify. Returns 'active' only when
+ * both are running, i.e. this change is not yet covered by any job.
+ */
+export async function addAvailabilityPush(
+  queue: Pick<Queue<ShopifyPushJobData>, 'getJob' | 'add'>,
+  orgId: string,
+  variantIds: string[],
+  priority: number,
+  warehouseId?: string,
+): Promise<string> {
+  const ids = [...new Set(variantIds)];
+  const data: ShopifyPushJobData = {
+    type: 'push-availability',
+    organizationId: orgId,
+    variantIds: ids,
+    priority,
+    ...(warehouseId ? { warehouseId } : {}),
+  };
+  const jobId = pushJobId.availability(orgId, ids, warehouseId);
+  const outcome = await addDedupedPushJob(queue, 'push-availability', data, {
+    ...PUSH_JOB_OPTS,
+    jobId,
+    priority,
+  });
+  if (outcome !== 'active') return outcome;
+  return addDedupedPushJob(queue, 'push-availability', data, {
+    ...PUSH_JOB_OPTS,
+    jobId: `${jobId}-next`,
+    priority,
+  });
+}

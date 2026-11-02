@@ -1,23 +1,18 @@
-import { readTokenOrgId } from "~/lib/jwt";
 import { queryClient } from "~/lib/query-client";
+import { sessionStamp } from "~/lib/session-stamp";
 import { useAuthStore } from "~/stores/auth.store";
 
 /** localStorage key the auth store persists under — see auth.store.ts. */
 const AUTH_STORAGE_KEY = "crm-auth";
 
-type SessionState = {
-  user: { id: string } | null;
-  accessToken: string | null;
-};
-
 /**
- * Who the cached data belongs to: the user plus the org the access token was
- * minted for. The org comes from the TOKEN, not `currentOrgId`, because the
- * server resolves the tenant from the token — that is what decides whose rows
- * a response contains.
+ * The session the app is in now — whose data the cache holds, and what each
+ * request is stamped with when it is sent (see api-client.ts), so a request
+ * that outlives its session is neither replayed into the next one nor allowed
+ * to hand it the old session's data.
  */
-function sessionIdentity(state: SessionState): string {
-  return `${state.user?.id ?? ""}|${readTokenOrgId(state.accessToken) ?? ""}`;
+export function currentSessionStamp(): string {
+  return sessionStamp(useAuthStore.getState());
 }
 
 let started = false;
@@ -40,10 +35,10 @@ export function startSessionCacheGuard() {
   if (started || typeof window === "undefined") return;
   started = true;
 
-  let identity = sessionIdentity(useAuthStore.getState());
+  let identity = currentSessionStamp();
 
   useAuthStore.subscribe((state) => {
-    const next = sessionIdentity(state);
+    const next = sessionStamp(state);
     if (next === identity) return;
     identity = next;
 

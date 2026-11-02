@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { GripVertical, MoreVertical, Trash2, X } from "lucide-react";
-import type { GstSupplyType, ProductOption, ProductVariantInput } from "~/types/api";
+import type { GstSupplyType, ProductOption, ProductVariantInput, Warehouse } from "~/types/api";
 import { COMMON_UQC, GST_RATE_OPTIONS, GST_SUPPLY_TYPES } from "~/lib/gst-uqc";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { formatMargin } from "~/lib/utils";
 import { CODE_TERMS } from "~/lib/inventory-vocabulary";
+import { ModalFrame, ModalTitle } from "~/components/app/order-dialog-primitives";
+import { stockLinesFor } from "./stock-locations";
 
 /**
  * Repeating-row editor for product variants. Each row exposes the most-used
@@ -24,6 +26,7 @@ export function VariantEditor({
   variants,
   onChange,
   stockReadOnly = false,
+  stockLocations,
 }: {
   options: ProductOption[];
   variants: ProductVariantInput[];
@@ -33,6 +36,11 @@ export function VariantEditor({
    * the ledger recomputes, so typing into it here would be silently undone.
    */
   stockReadOnly?: boolean;
+  /**
+   * A new product's stock locations: one quantity column each, in place of
+   * the single Stock column. Each variant's `stock` lines up with them.
+   */
+  stockLocations?: Warehouse[];
 }) {
   const optionNames = useMemo(
     () => options.map((o) => o.name).filter(Boolean),
@@ -43,6 +51,9 @@ export function VariantEditor({
   function patchVariant(idx: number, patch: Partial<ProductVariantInput>) {
     onChange(variants.map((v, i) => (i === idx ? { ...v, ...patch } : v)));
   }
+
+  const stockColumns = stockLocations && stockLocations.length > 0 ? stockLocations : null;
+  const stockColumnIds = stockColumns?.map((location) => location.id) ?? [];
 
   function removeVariant(idx: number) {
     if (variants.length <= 1) return;
@@ -70,7 +81,7 @@ export function VariantEditor({
     <>
       <div className="overflow-x-auto rounded-lg border border-input">
         <table className="w-full text-xs">
-          <thead className="bg-gray-50/60 dark:bg-gray-800/60 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <thead className="bg-gray-50/60 dark:bg-gray-800/60 text-micro uppercase tracking-wider text-muted-foreground">
             <tr>
               <th className="w-6 px-2 py-2"></th>
               <th className="px-2 py-2 text-left font-medium">Title</th>
@@ -86,7 +97,19 @@ export function VariantEditor({
               <th className="px-2 py-2 text-left font-medium">SKU</th>
               <th className="px-2 py-2 text-right font-medium">Price</th>
               <th className="px-2 py-2 text-right font-medium">Compare-at</th>
-              <th className="px-2 py-2 text-right font-medium">Stock</th>
+              {stockColumns ? (
+                stockColumns.map((location) => (
+                  <th
+                    key={location.id}
+                    className="px-2 py-2 text-right font-medium"
+                    title={`Stock at ${location.name}`}
+                  >
+                    <span className="block max-w-[7rem] truncate">{location.name}</span>
+                  </th>
+                ))
+              ) : (
+                <th className="px-2 py-2 text-right font-medium">Stock</th>
+              )}
               <th className="w-12 px-2 py-2"></th>
             </tr>
           </thead>
@@ -116,7 +139,7 @@ export function VariantEditor({
                         value={v.option1 ?? ""}
                         onChange={(e) => patchVariant(idx, { option1: e.target.value })}
                         list={`opt-list-0`}
-                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                       />
                     </td>
                   )}
@@ -126,7 +149,7 @@ export function VariantEditor({
                         value={v.option2 ?? ""}
                         onChange={(e) => patchVariant(idx, { option2: e.target.value })}
                         list={`opt-list-1`}
-                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                       />
                     </td>
                   )}
@@ -136,7 +159,7 @@ export function VariantEditor({
                         value={v.option3 ?? ""}
                         onChange={(e) => patchVariant(idx, { option3: e.target.value })}
                         list={`opt-list-2`}
-                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                        className="h-7 w-full rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                       />
                     </td>
                   )}
@@ -145,7 +168,7 @@ export function VariantEditor({
                       value={v.sku ?? ""}
                       onChange={(e) => patchVariant(idx, { sku: e.target.value })}
                       placeholder="—"
-                      className="h-7 w-24 rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                      className="h-7 w-24 rounded border border-input bg-white dark:bg-gray-900 px-2 text-xs font-mono focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                   </td>
                   <td className="px-2 py-2 text-right">
@@ -158,7 +181,7 @@ export function VariantEditor({
                           price: e.target.value === "" ? 0 : parseFloat(e.target.value),
                         })
                       }
-                      className="h-7 w-20 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                      className="h-7 w-20 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                   </td>
                   <td className="px-2 py-2 text-right">
@@ -171,32 +194,61 @@ export function VariantEditor({
                           compareAtPrice: e.target.value === "" ? undefined : parseFloat(e.target.value),
                         })
                       }
-                      className="h-7 w-20 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B]"
+                      className="h-7 w-20 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                     />
                   </td>
-                  <td className="px-2 py-2 text-right">
-                    {stockHidden ? (
-                      <span
-                        className="text-[10px] italic text-muted-foreground"
-                        title="Inventory tracking is off for this variant"
-                      >
-                        Untracked
-                      </span>
+                  {stockColumns ? (
+                    stockHidden ? (
+                      <td colSpan={stockColumns.length} className="px-2 py-2 text-right">
+                        <span
+                          className="text-caption italic text-muted-foreground"
+                          title="Inventory tracking is off for this variant"
+                        >
+                          Untracked
+                        </span>
+                      </td>
                     ) : (
-                      <input
-                        type="number"
-                        value={v.inventoryQuantity ?? 0}
-                        onChange={(e) =>
-                          patchVariant(idx, {
-                            inventoryQuantity: e.target.value === "" ? 0 : parseInt(e.target.value, 10),
-                          })
-                        }
-                        disabled={stockReadOnly}
-                        title={stockReadOnly ? "Set per warehouse in Inventory" : undefined}
-                        className="h-7 w-16 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-[#CEF17B] disabled:opacity-50"
-                      />
-                    )}
-                  </td>
+                      stockLinesFor(v, stockColumnIds).map((line, col, lines) => (
+                        <td key={line.warehouseId} className="px-2 py-2 text-right">
+                          <StockCell
+                            label={`${title} stock at ${stockColumns[col].name}`}
+                            value={line.quantity}
+                            onChange={(quantity) =>
+                              patchVariant(idx, {
+                                stock: lines.map((current, i) =>
+                                  i === col ? { ...current, quantity } : current,
+                                ),
+                              })
+                            }
+                          />
+                        </td>
+                      ))
+                    )
+                  ) : (
+                    <td className="px-2 py-2 text-right">
+                      {stockHidden ? (
+                        <span
+                          className="text-caption italic text-muted-foreground"
+                          title="Inventory tracking is off for this variant"
+                        >
+                          Untracked
+                        </span>
+                      ) : (
+                        <input
+                          type="number"
+                          value={v.inventoryQuantity ?? 0}
+                          onChange={(e) =>
+                            patchVariant(idx, {
+                              inventoryQuantity: e.target.value === "" ? 0 : parseInt(e.target.value, 10),
+                            })
+                          }
+                          disabled={stockReadOnly}
+                          title={stockReadOnly ? "Set per warehouse in Inventory" : undefined}
+                          className="h-7 w-16 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
+                        />
+                      )}
+                    </td>
+                  )}
                   <td className="px-2 py-2">
                     <div className="flex items-center gap-0.5">
                       <button
@@ -241,9 +293,36 @@ export function VariantEditor({
           onChange={(patch) => patchVariant(expandedIdx, patch)}
           onClose={() => setExpandedIdx(null)}
           stockReadOnly={stockReadOnly}
+          stockLocations={stockColumns ?? undefined}
         />
       )}
     </>
+  );
+}
+
+/** One variant's opening stock at one location, in the variant table. */
+function StockCell({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (quantity: number) => void;
+}) {
+  return (
+    <input
+      type="number"
+      inputMode="numeric"
+      min={0}
+      step={1}
+      value={value}
+      // Number, not parseInt: "1.5" must reach validation rather than be
+      // quietly truncated to 1.
+      onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
+      aria-label={label}
+      className="h-7 w-16 rounded border border-input bg-white dark:bg-gray-900 px-2 text-right text-xs tabular-nums focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
+    />
   );
 }
 
@@ -264,11 +343,13 @@ function VariantDetailPanel({
   onChange,
   onClose,
   stockReadOnly = false,
+  stockLocations,
 }: {
   variant: ProductVariantInput;
   onChange: (patch: Partial<ProductVariantInput>) => void;
   onClose: () => void;
   stockReadOnly?: boolean;
+  stockLocations?: Warehouse[];
 }) {
   const { data: org } = useCurrentOrg();
   // Vendors cannot change the per-variant tax flag — render it read-only.
@@ -278,26 +359,25 @@ function VariantDetailPanel({
   const variantTitle = titleLabels.length > 0 ? titleLabels.join(" / ") : "Default Title";
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-stretch justify-end bg-black/30"
-      onClick={onClose}
+    <ModalFrame
+      onClose={onClose}
+      overlayClassName="fixed inset-0 z-[60] flex items-stretch justify-end bg-black/30"
+      className="flex h-full w-full max-w-md flex-col bg-white dark:bg-gray-900 shadow-2xl outline-none"
     >
-      <aside
-        onClick={(e) => e.stopPropagation()}
-        className="flex h-full w-full max-w-md flex-col bg-white dark:bg-gray-900 shadow-2xl"
-      >
         <header className="flex items-center justify-between border-b px-5 py-3">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <p className="text-micro font-semibold uppercase tracking-wider text-muted-foreground">
               Variant details
             </p>
-            <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
+            <ModalTitle className="text-sm font-bold text-gray-900 dark:text-gray-100">
+              <span className="sr-only">Variant details: </span>
               {variantTitle}
-            </h3>
+            </ModalTitle>
           </div>
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close"
             className="rounded-md p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800"
           >
             <X className="size-4" />
@@ -330,7 +410,7 @@ function VariantDetailPanel({
                 onChange={(v) => onChange({ cost: v === "" ? undefined : parseFloat(v) })}
               />
               <div className="flex flex-col">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   Profit / margin
                 </span>
                 <p className="mt-1 h-9 flex items-center text-xs font-medium text-gray-900 dark:text-gray-100">
@@ -350,9 +430,27 @@ function VariantDetailPanel({
             />
             {variant.trackQuantity !== false && (
               <>
-                {stockReadOnly ? (
+                {stockLocations ? (
+                  stockLinesFor(variant, stockLocations.map((location) => location.id)).map(
+                    (line, col, lines) => (
+                      <PanelField
+                        key={line.warehouseId}
+                        label={`Stock at ${stockLocations[col].name}`}
+                        type="number"
+                        value={line.quantity}
+                        onChange={(v) =>
+                          onChange({
+                            stock: lines.map((current, i) =>
+                              i === col ? { ...current, quantity: v === "" ? 0 : Number(v) } : current,
+                            ),
+                          })
+                        }
+                      />
+                    ),
+                  )
+                ) : stockReadOnly ? (
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                    <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                       Stock on hand
                     </span>
                     {/* See product-form-dialog: the destination is a link so
@@ -411,7 +509,7 @@ function VariantDetailPanel({
                   }
                 />
                 <label className="block">
-                  <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                  <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                     Weight unit
                   </span>
                   <select
@@ -419,7 +517,7 @@ function VariantDetailPanel({
                     onChange={(e) =>
                       onChange({ weightUnit: e.target.value as "g" | "kg" | "oz" | "lb" })
                     }
-                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                    className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                   >
                     <option value="g">g</option>
                     <option value="kg">kg</option>
@@ -465,13 +563,13 @@ function VariantDetailPanel({
               onChange={(checked) => onChange({ taxable: checked })}
               disabled={isVendor}
             />
-            <p className="text-[10px] text-gray-500 dark:text-gray-400">
+            <p className="text-caption text-gray-500 dark:text-gray-400">
               GST override — leave blank to use the product&apos;s HSN, rate, unit
               and supply type. Set only when this variant is classified differently.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <label className="block">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   HSN / SAC override
                 </span>
                 <input
@@ -479,11 +577,11 @@ function VariantDetailPanel({
                   onChange={(e) => onChange({ hsnCode: e.target.value || undefined })}
                   disabled={isVendor}
                   placeholder="Same as product"
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 font-mono text-xs disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 />
               </label>
               <label className="block">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   GST rate override
                 </span>
                 <select
@@ -494,7 +592,7 @@ function VariantDetailPanel({
                     })
                   }
                   disabled={isVendor}
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Same as product</option>
                   {GST_RATE_OPTIONS.map((rate) => (
@@ -505,14 +603,14 @@ function VariantDetailPanel({
                 </select>
               </label>
               <label className="block">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   Unit of measure override
                 </span>
                 <select
                   value={variant.unitOfMeasure ?? ""}
                   onChange={(e) => onChange({ unitOfMeasure: e.target.value || undefined })}
                   disabled={isVendor}
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Same as product</option>
                   {COMMON_UQC.map((u) => (
@@ -523,7 +621,7 @@ function VariantDetailPanel({
                 </select>
               </label>
               <label className="block">
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+                <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
                   Supply type override
                 </span>
                 <select
@@ -535,7 +633,7 @@ function VariantDetailPanel({
                     })
                   }
                   disabled={isVendor}
-                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 disabled:opacity-50"
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs disabled:opacity-50 focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Same as product</option>
                   {GST_SUPPLY_TYPES.map((t) => (
@@ -557,12 +655,11 @@ function VariantDetailPanel({
           >
             Done
           </button>
-          <p className="mt-1.5 text-[10px] text-muted-foreground text-center">
+          <p className="mt-1.5 text-caption text-muted-foreground text-center">
             Changes save when you click "Save changes" / "Create product".
           </p>
         </footer>
-      </aside>
-    </div>
+    </ModalFrame>
   );
 }
 
@@ -575,7 +672,7 @@ function PanelSection({
 }) {
   return (
     <div className="space-y-2">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <p className="text-micro font-semibold uppercase tracking-wider text-muted-foreground">
         {title}
       </p>
       <div className="space-y-2">{children}</div>
@@ -604,7 +701,7 @@ function PanelField({
 }) {
   return (
     <label className="block">
-      <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+      <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
         {label}
       </span>
       <input
@@ -613,12 +710,12 @@ function PanelField({
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className={`mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50 ${
+        className={`mt-1 h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-3 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring ${
           mono ? "font-mono" : ""
         }`}
       />
       {hint && (
-        <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground">
+        <span className="mt-1 block text-caption leading-relaxed text-muted-foreground">
           {hint}
         </span>
       )}
@@ -659,7 +756,7 @@ function PanelToggle({
           {label}
         </span>
         {hint && (
-          <p className="mt-0.5 text-[10px] text-muted-foreground">{hint}</p>
+          <p className="mt-0.5 text-caption text-muted-foreground">{hint}</p>
         )}
       </div>
     </label>

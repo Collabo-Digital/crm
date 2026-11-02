@@ -5,6 +5,7 @@ import { Package } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
 import { EmptyState } from "./empty-state";
+import { QueryErrorState } from "./query-error-state";
 import { cn, formatCurrency } from "~/lib/utils";
 import type {
     DashboardTopProduct,
@@ -21,6 +22,8 @@ interface ProductsPanelProps {
     /** The window the best sellers were counted over, e.g. "Last 7 days". */
     periodLabel?: string;
     isLoading?: boolean;
+    /** The request failed: say so, rather than "no sales" or "well stocked". */
+    onRetry?: () => void;
     currency: string;
     className?: string;
 }
@@ -53,6 +56,7 @@ export function ProductsPanel({
     lowStockVariants,
     periodLabel,
     isLoading,
+    onRetry,
     currency,
     className,
 }: ProductsPanelProps) {
@@ -104,6 +108,10 @@ export function ProductsPanel({
                                 <Skeleton className="h-4 w-16" />
                             </div>
                         ))}
+                    </div>
+                ) : onRetry ? (
+                    <div className="flex flex-1 items-center justify-center px-5 py-12">
+                        <QueryErrorState resource="your products" onRetry={onRetry} />
                     </div>
                 ) : isEmpty ? (
                     <div className="flex flex-1 items-center justify-center px-5 py-12">

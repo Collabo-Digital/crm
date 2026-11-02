@@ -7,7 +7,7 @@ import {
     Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ChannelPlatform, ChannelStatus, SyncStatus, Prisma } from '@prisma/client';
+import { Channel, ChannelPlatform, ChannelStatus, SyncStatus, Prisma } from '@prisma/client';
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -326,10 +326,7 @@ export class ShopifyOAuthService {
         try {
             channel = await this.prisma.$transaction(async (tx) => {
                 const ch = stateData.reconnectChannelId
-                    ? await tx.channel.update({
-                        where: { id: stateData.reconnectChannelId },
-                        data: channelData,
-                    })
+                    ? await this.reuseChannelRow(tx, stateData.reconnectChannelId, channelData)
                     : await tx.channel.create({
                         data: {
                             organizationId: stateData.orgId,
@@ -372,6 +369,71 @@ export class ShopifyOAuthService {
         const redirectUrl = `${frontendUrl}/settings/channels?connected=shopify&channelId=${channel.id}`;
 
         return { channelId: channel.id, organizationId: stateData.orgId, redirectUrl };
+    }
+
+    /**
+     * Point an existing SHOPIFY channel row at the store in `channelData`.
+     *
+     * The org has one SHOPIFY row, so connecting a DIFFERENT store (a test
+     * store swapped for the live one) reuses it. Its sync position then
+     * belongs to the old store: with `backfillDone` and a watermark kept, the
+     * new store's first sync only asked for records changed since the old
+     * store was last synced, and most of its catalogue, customers and orders
+     * never arrived. For a different store the pull restarts with a full
+     * backfill, saved cursors and the cached primary location are dropped, and
+     * the push toggles go back off so nothing is sent to the new store until
+     * the merchant chooses. The same store reconnecting resumes as before.
+     *
+     * The row's previous store is `externalStoreId`, or, once disconnect has
+     * released that claim, `metadata.externalAccountId`. Unknown counts as
+     * different: a needless full backfill is only slow, a skipped one loses data.
+     */
+    private async reuseChannelRow(
+        tx: Prisma.TransactionClient,
+        channelId: string,
+        channelData: Prisma.ChannelUncheckedUpdateInput & { externalStoreId: string },
+    ): Promise<Channel> {
+        const prev = await tx.channel.findUniqueOrThrow({
+            where: { id: channelId },
+            select: { externalStoreId: true, metadata: true },
+        });
+        const meta =
+            prev.metadata && typeof prev.metadata === 'object' && !Array.isArray(prev.metadata)
+                ? (prev.metadata as Record<string, unknown>)
+                : {};
+        const previousStoreId =
+            prev.externalStoreId ??
+            (typeof meta.externalAccountId === 'string' ? meta.externalAccountId : null);
+        if (previousStoreId === channelData.externalStoreId) {
+            return tx.channel.update({ where: { id: channelId }, data: channelData });
+        }
+
+        await tx.channelSyncState.updateMany({
+            where: { channelId, direction: 'pull' },
+            data: { watermark: null, backfillDone: false, windowStart: null },
+        });
+        await tx.channelSyncState.updateMany({
+            where: { channelId, direction: 'push' },
+            data: { enabled: false },
+        });
+        await tx.syncLog.updateMany({
+            where: { channelId, cursor: { not: null } },
+            data: { cursor: null },
+        });
+        // The cached primary location belongs to the old store.
+        const keptMeta = { ...meta };
+        delete keptMeta.shopifyLocationId;
+        this.logger.log(
+            `Channel ${channelId} now points at a different Shopify store (${previousStoreId ?? 'unknown'} → ${channelData.externalStoreId}); its sync restarts with a full backfill.`,
+        );
+        return tx.channel.update({
+            where: { id: channelId },
+            data: {
+                ...channelData,
+                lastSyncedAt: null,
+                metadata: keptMeta as Prisma.InputJsonValue,
+            },
+        });
     }
 
     /**
@@ -511,13 +573,10 @@ export class ShopifyOAuthService {
         // reason.
         const channel = await this.prisma.$transaction(async (tx) => {
             const ch = existing
-                ? await tx.channel.update({
-                    where: { id: existing.id },
-                    // syncStatus / lastSyncedAt are deliberately left alone: a
-                    // reconnect should resume where the sync got to rather
-                    // than re-backfill from scratch.
-                    data: channelData,
-                })
+                // syncStatus / lastSyncedAt are deliberately left alone for the
+                // same store: a reconnect should resume where the sync got to
+                // rather than re-backfill from scratch.
+                ? await this.reuseChannelRow(tx, existing.id, channelData)
                 : await tx.channel.create({
                     data: {
                         organizationId: orgId,

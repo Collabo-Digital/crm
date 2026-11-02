@@ -28,11 +28,22 @@ type MulterFile = {
   mimetype: string;
   size: number;
 };
+
+// Multer buffers the whole file in memory before the service sees it, so the
+// cap has to be enforced here. Images match ProductService's 5 MB rule; CSVs
+// match Shopify's own 15 MB product-import limit.
+const IMAGE_UPLOAD_LIMIT = 5 * 1024 * 1024;
+const CSV_UPLOAD_LIMIT = 15 * 1024 * 1024;
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AllowVendor } from '../auth/decorators/allow-vendor.decorator';
 import { RequireSection } from '../auth/decorators/require-section.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
-import { Roles, ORG_OPERATORS } from '../auth/decorators/roles.decorator';
+import {
+  Roles,
+  ORG_MANAGERS,
+  ORG_OPERATORS,
+  ORG_OPERATORS_AND_VENDORS,
+} from '../auth/decorators/roles.decorator';
 import { vendorScopeFor } from '../auth/vendor-scope.util';
 import { ProductService } from './product.service';
 import { QueryProductsDto } from './dto/query-products.dto';
@@ -73,6 +84,7 @@ export class ProductController {
   }
 
   @Post()
+  @Roles(...ORG_OPERATORS)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProductDto) {
     return this.productService.create(user.orgId!, user.sub, dto);
   }
@@ -108,6 +120,7 @@ export class ProductController {
 
   @Patch('variants/:variantId')
   @AllowVendor()
+  @Roles(...ORG_OPERATORS_AND_VENDORS)
   updateVariant(
     @Param('variantId') variantId: string,
     @CurrentUser() user: JwtPayload,
@@ -132,6 +145,7 @@ export class ProductController {
 
   @Delete('variants/:variantId')
   @AllowVendor()
+  @Roles(...ORG_OPERATORS_AND_VENDORS)
   deleteVariant(
     @Param('variantId') variantId: string,
     @CurrentUser() user: JwtPayload,
@@ -140,6 +154,7 @@ export class ProductController {
   }
 
   @Post('variants/:variantId/image')
+  @Roles(...ORG_OPERATORS)
   setVariantImage(
     @Param('variantId') variantId: string,
     @CurrentUser() user: JwtPayload,
@@ -151,6 +166,7 @@ export class ProductController {
   // ── IMAGE-LEVEL ROUTES (must register BEFORE :id wildcards) ────────────
 
   @Patch('images/:imageId')
+  @Roles(...ORG_OPERATORS)
   updateImage(
     @Param('imageId') imageId: string,
     @CurrentUser() user: JwtPayload,
@@ -160,6 +176,7 @@ export class ProductController {
   }
 
   @Delete('images/:imageId')
+  @Roles(...ORG_OPERATORS)
   removeImage(
     @Param('imageId') imageId: string,
     @CurrentUser() user: JwtPayload,
@@ -171,6 +188,7 @@ export class ProductController {
 
   @Post(':id/variants')
   @AllowVendor()
+  @Roles(...ORG_OPERATORS_AND_VENDORS)
   createVariant(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -180,6 +198,7 @@ export class ProductController {
   }
 
   @Post(':id/variants/reorder')
+  @Roles(...ORG_OPERATORS)
   reorderVariants(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -190,6 +209,7 @@ export class ProductController {
 
   @Patch(':id/variants/bulk')
   @AllowVendor()
+  @Roles(...ORG_OPERATORS_AND_VENDORS)
   bulkUpdateVariants(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -205,6 +225,7 @@ export class ProductController {
 
   @Post(':id/variants/generate')
   @AllowVendor()
+  @Roles(...ORG_OPERATORS_AND_VENDORS)
   generateVariants(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -214,6 +235,7 @@ export class ProductController {
 
   @Patch(':id/options')
   @AllowVendor()
+  @Roles(...ORG_OPERATORS_AND_VENDORS)
   updateOptions(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -223,7 +245,8 @@ export class ProductController {
   }
 
   @Post(':id/images')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: IMAGE_UPLOAD_LIMIT } }))
+  @Roles(...ORG_OPERATORS)
   addImage(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -233,6 +256,7 @@ export class ProductController {
   }
 
   @Post(':id/images/reorder')
+  @Roles(...ORG_OPERATORS)
   reorderImages(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -245,32 +269,38 @@ export class ProductController {
   // All registered BEFORE :id so they don't get swallowed by /products/:id.
 
   @Post('bulk/status')
+  @Roles(...ORG_OPERATORS)
   bulkSetStatus(@CurrentUser() user: JwtPayload, @Body() dto: BulkSetStatusDto) {
     return this.productService.bulkSetStatus(user.orgId!, dto.productIds, dto.status);
   }
 
   @Post('bulk/archive')
+  @Roles(...ORG_OPERATORS)
   bulkArchive(@CurrentUser() user: JwtPayload, @Body() dto: BulkProductIdsDto) {
     return this.productService.bulkArchive(user.orgId!, dto.productIds);
   }
 
   @Delete('bulk')
+  @Roles(...ORG_MANAGERS)
   bulkDelete(@CurrentUser() user: JwtPayload, @Body() dto: BulkProductIdsDto) {
     return this.productService.bulkDelete(user.orgId!, dto.productIds);
   }
 
   @Post('bulk/tags/add')
+  @Roles(...ORG_OPERATORS)
   bulkAddTags(@CurrentUser() user: JwtPayload, @Body() dto: BulkTagsDto) {
     return this.productService.bulkAddTags(user.orgId!, dto.productIds, dto.tags);
   }
 
   @Post('bulk/tags/remove')
+  @Roles(...ORG_OPERATORS)
   bulkRemoveTags(@CurrentUser() user: JwtPayload, @Body() dto: BulkTagsDto) {
     return this.productService.bulkRemoveTags(user.orgId!, dto.productIds, dto.tags);
   }
 
   @Post('bulk/sync')
   @AllowVendor()
+  @Roles(...ORG_OPERATORS_AND_VENDORS)
   bulkSync(@CurrentUser() user: JwtPayload, @Body() dto: BulkProductIdsDto) {
     return this.productService.bulkSync(user.orgId!, dto.productIds, vendorScopeFor(user));
   }
@@ -291,7 +321,8 @@ export class ProductController {
 
   /** Multipart CSV upload — Stage 1: returns a PREVIEW job. */
   @Post('import')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: CSV_UPLOAD_LIMIT } }))
+  @Roles(...ORG_MANAGERS)
   startImport(
     @CurrentUser() user: JwtPayload,
     @UploadedFile() file: MulterFile & { originalname: string },
@@ -301,7 +332,8 @@ export class ProductController {
 
   /** Confirm a PREVIEW job — re-uploads the original CSV, kicks off ingest. */
   @Post('import/:jobId/confirm')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: CSV_UPLOAD_LIMIT } }))
+  @Roles(...ORG_MANAGERS)
   confirmImport(
     @Param('jobId') jobId: string,
     @CurrentUser() user: JwtPayload,
@@ -323,6 +355,7 @@ export class ProductController {
   // ── ITEM-LEVEL ROUTES (existing) ───────────────────────────────────────
 
   @Post(':id/duplicate')
+  @Roles(...ORG_OPERATORS)
   duplicate(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productService.duplicate(id, user.orgId!);
   }
@@ -340,6 +373,7 @@ export class ProductController {
   // set of rules.
   @Patch(':id')
   @AllowVendor()
+  @Roles(...ORG_OPERATORS_AND_VENDORS)
   update(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -349,12 +383,14 @@ export class ProductController {
   }
 
   @Delete(':id')
+  @Roles(...ORG_MANAGERS)
   softDelete(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productService.softDelete(id, user.orgId!);
   }
 
   @Post(':id/sync')
   @AllowVendor()
+  @Roles(...ORG_OPERATORS_AND_VENDORS)
   syncToShopify(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productService.syncToShopify(id, user.orgId!, vendorScopeFor(user));
   }

@@ -1,4 +1,5 @@
 import { Controller, Post, Get, Patch, Delete, Body, Param } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -11,6 +12,7 @@ import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { CreatePersonalDto } from './dto/create-personal.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { UpgradeToOrganizationDto } from './dto/upgrade-to-organization.dto';
+import { DeleteOrganizationDto } from './dto/delete-organization.dto';
 
 // JWT required. @NoOrgRequired: create/list orgs must work before JWT has orgId.
 @Controller('organizations')
@@ -77,9 +79,12 @@ export class OrganizationController {
     return this.orgService.upgradeToOrganization(orgId, user.sub, dto);
   }
 
-  // DELETE /api/v1/organizations/:orgId — soft delete (OWNER only)
+  // DELETE /api/v1/organizations/:orgId — soft delete (OWNER only). The body
+  // carries the owner's password and the workspace's name; a few tries a
+  // minute, so the password cannot be guessed here.
   @Delete(':orgId')
-  delete(@Param('orgId') orgId: string, @CurrentUser() user: JwtPayload) {
-    return this.orgService.delete(orgId, user.sub);
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  delete(@Param('orgId') orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: DeleteOrganizationDto) {
+    return this.orgService.delete(orgId, user.sub, dto);
   }
 }

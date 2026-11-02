@@ -88,6 +88,12 @@ export const invoiceService = {
       .get<InvoiceDetail>(`/invoices/${id}`)
       .then((res) => res.data),
 
+  /** GET /invoices/:id/pdf — the invoice as the PDF customers are sent. */
+  pdf: (id: string) =>
+    apiClient
+      .get<Blob>(`/invoices/${id}/pdf`, { responseType: "blob" })
+      .then((res) => res.data),
+
   /** Cancel an issued invoice. */
   cancel: (id: string) =>
     apiClient

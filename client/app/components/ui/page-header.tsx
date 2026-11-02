@@ -14,7 +14,7 @@ function PageHeader({ className, ...props }: React.ComponentProps<"div">) {
 
 function PageHeaderContent({ className, ...props }: React.ComponentProps<"div">) {
     return (
-        <div data-slot="page-header-content" className={cn("space-y-1", className)} {...props} />
+        <div data-slot="page-header-content" className={cn("min-w-0 space-y-1.5", className)} {...props} />
     )
 }
 
@@ -42,7 +42,7 @@ function PageHeaderActions({ className, ...props }: React.ComponentProps<"div">)
     return (
         <div
             data-slot="page-header-actions"
-            className={cn("flex items-center gap-2", className)}
+            className={cn("flex max-w-full flex-wrap items-center gap-2", className)}
             {...props}
         />
     )

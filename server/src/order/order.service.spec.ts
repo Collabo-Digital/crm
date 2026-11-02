@@ -51,7 +51,7 @@ function build(order: ReturnType<typeof manualOrder>, opts: { enqueued?: boolean
     // ledger, shopifyPushQueue
     { isWarehousingEnabled: jest.fn().mockResolvedValue(false) } as any,
     { getRate: jest.fn().mockResolvedValue(1) } as any,
-    { add: jest.fn().mockResolvedValue(undefined) } as any,
+    { add: jest.fn().mockResolvedValue(undefined) } as any, { order: jest.fn() } as any /* commerceEvents */,
   );
   return { service, prisma, enqueuer, pushService };
 }
@@ -74,6 +74,22 @@ describe('OrderService.syncToShopify', () => {
     const patch = JSON.parse(values.find((v) => typeof v === 'string' && v.startsWith('{')) as string);
     expect(patch.shopifySync).toMatchObject({ status: 'PENDING', attempts: 0 });
     expect(Number.isFinite(Date.parse(patch.shopifySync.queuedAt))).toBe(true);
+  });
+
+  // The push books a PAID Shopify order with a full SALE and decrements stock;
+  // for a cancelled sale its echo would also revive the order in the CRM.
+  it('refuses a cancelled sale with a plain reason, before claiming anything', async () => {
+    const { service, enqueuer, prisma } = build({
+      ...manualOrder(null),
+      cancelledAt: new Date(),
+      financialStatus: 'PAID',
+    } as any);
+
+    await expect(service.syncToShopify(ORDER_ID, ORG)).rejects.toThrow(
+      'This order was cancelled, so it is not sent to Shopify.',
+    );
+    expect(enqueuer.enqueueOrderPush).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 
   it('refuses to re-queue while a recent claim is still in flight', async () => {
@@ -172,6 +188,8 @@ describe('OrderService.setVendorItemsStatus (released)', () => {
       },
       order: { findUnique: jest.fn().mockResolvedValue({ lineItems: lines }), update: jest.fn() },
       orderTimelineEvent: { create: jest.fn().mockResolvedValue({}) },
+      // The order-row lock taken before any line is written.
+      $queryRaw: jest.fn().mockResolvedValue([{ id: ORDER, cancelledAt: null }]),
     };
     const prisma = {
       order: {
@@ -191,7 +209,7 @@ describe('OrderService.setVendorItemsStatus (released)', () => {
       {} as any, {} as any, {} as any, {} as any, {} as any,
       { isWarehousingEnabled: jest.fn().mockResolvedValue(false) } as any,
       { getRate: jest.fn().mockResolvedValue(1) } as any,
-      { add: jest.fn().mockResolvedValue(undefined) } as any,
+      { add: jest.fn().mockResolvedValue(undefined) } as any, { order: jest.fn() } as any /* commerceEvents */,
     );
     return { service, tx, updated };
   }
@@ -233,7 +251,7 @@ describe('OrderService.computeFulfillmentStatus', () => {
   const compute = (items: any[]) =>
     (new OrderService(
       {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, { order: jest.fn() } as any /* commerceEvents */,
     ) as any).computeFulfillmentStatus(items);
 
   it('is UNFULFILLED when no unit has shipped', () => {
@@ -293,7 +311,7 @@ describe('OrderService.findOne invoice', () => {
     };
     const service = new OrderService(
       prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, { order: jest.fn() } as any /* commerceEvents */,
     );
     return service;
   }
@@ -332,7 +350,7 @@ describe('OrderService.findAll date range', () => {
     };
     const service = new OrderService(
       prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, { order: jest.fn() } as any /* commerceEvents */,
     );
     return { service, prisma };
   }
@@ -371,5 +389,164 @@ describe('OrderService.findAll date range', () => {
       expect.arrayContaining([{ name: { contains: 'shirt', mode: 'insensitive' } }]),
     );
     expect(where.AND).toHaveLength(1);
+  });
+
+  it('searches every date when no range is sent', async () => {
+    const { service, prisma } = build();
+    await service.findAll(ORG, { search: '#4706' } as any);
+
+    const { where } = prisma.order.findMany.mock.calls[0][0];
+    expect(where.AND).toBeUndefined();
+    expect(where.OR).toEqual(
+      expect.arrayContaining([{ name: { contains: '#4706', mode: 'insensitive' } }]),
+    );
+  });
+});
+
+describe('OrderService.findAll phone search', () => {
+  function build(phoneMatches: string[] = ['ord_1', 'ord_2']) {
+    const prisma = {
+      order: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      $queryRaw: jest.fn().mockResolvedValue(phoneMatches.map((id) => ({ id }))),
+      organization: { findUnique: jest.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    };
+    const service = new OrderService(
+      prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, { order: jest.fn() } as any /* commerceEvents */,
+    );
+    return { service, prisma };
+  }
+
+  const sqlOf = (call: any[]) => (call[0] as string[]).join('?');
+
+  it('finds the orders of a buyer typed with spaces, by digits only', async () => {
+    const { service, prisma } = build();
+    await service.findAll(ORG, { search: '98765 43210' } as any);
+
+    const call = prisma.$queryRaw.mock.calls[0];
+    expect(sqlOf(call)).toContain(`regexp_replace(coalesce(c."phone", ''), '\\D', '', 'g') LIKE`);
+    expect(sqlOf(call)).toContain(`o."shipping_address"->>'phone'`);
+    expect(call.slice(1)).toContain('%9876543210%');
+
+    const { where } = prisma.order.findMany.mock.calls[0][0];
+    expect(where.OR).toEqual(expect.arrayContaining([{ id: { in: ['ord_1', 'ord_2'] } }]));
+    // Still matches names and emails as before.
+    expect(where.OR).toEqual(
+      expect.arrayContaining([{ name: { contains: '98765 43210', mode: 'insensitive' } }]),
+    );
+  });
+
+  it('matches the last ten digits, so a number with its country code finds one saved without', async () => {
+    const { service, prisma } = build();
+    await service.findAll(ORG, { search: '+91 98765-43210' } as any);
+
+    expect(prisma.$queryRaw.mock.calls[0].slice(1)).toContain('%9876543210%');
+  });
+
+  it('leaves order numbers and names to the plain search', async () => {
+    const { service, prisma } = build();
+    await service.findAll(ORG, { search: '4706' } as any);
+    await service.findAll(ORG, { search: 'Meera 98765' } as any);
+
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('adds nothing to the search when no buyer has the number', async () => {
+    const { service, prisma } = build([]);
+    await service.findAll(ORG, { search: '9876543210' } as any);
+
+    const { where } = prisma.order.findMany.mock.calls[0][0];
+    expect(where.OR.some((c: any) => 'id' in c)).toBe(false);
+  });
+});
+
+describe('OrderService.findAll payment filter', () => {
+  const UNPAID = ['PENDING', 'AUTHORIZED', 'PARTIALLY_PAID'];
+
+  function build(gateways: string[] = ['Cash on Delivery (COD)', 'Razorpay', 'cod']) {
+    const prisma = {
+      order: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      $queryRaw: jest.fn().mockResolvedValue(gateways.map((name) => ({ name }))),
+      organization: { findUnique: jest.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    };
+    const service = new OrderService(
+      prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, { order: jest.fn() } as any /* commerceEvents */,
+    );
+    return { service, prisma };
+  }
+
+  const whereOf = (prisma: ReturnType<typeof build>['prisma']) =>
+    prisma.order.findMany.mock.calls[0][0].where;
+
+  it('COD is unpaid cash on delivery, by the gateway names this org uses', async () => {
+    const { service, prisma } = build();
+    await service.findAll(ORG, { payment: 'cod' } as any);
+
+    expect(whereOf(prisma).AND).toEqual([
+      {
+        financialStatus: { in: UNPAID },
+        paymentGateways: { hasSome: ['Cash on Delivery (COD)', 'cod'] },
+      },
+    ]);
+  });
+
+  it('pending is an unpaid order that is not cash on delivery', async () => {
+    const { service, prisma } = build();
+    await service.findAll(ORG, { payment: 'pending' } as any);
+
+    expect(whereOf(prisma).AND).toEqual([
+      {
+        financialStatus: { in: UNPAID },
+        NOT: { paymentGateways: { hasSome: ['Cash on Delivery (COD)', 'cod'] } },
+      },
+    ]);
+  });
+
+  it('matches no order for COD when no order was ever cash on delivery', async () => {
+    const { service, prisma } = build(['Razorpay']);
+    await service.findAll(ORG, { payment: 'cod' } as any);
+
+    expect(whereOf(prisma).AND).toEqual([{ id: { in: [] } }]);
+  });
+
+  it('paid and refunded are plain statuses, with partly refunded counted as refunded', async () => {
+    const { service, prisma } = build();
+    await service.findAll(ORG, { payment: 'paid' } as any);
+    await service.findAll(ORG, { payment: 'refunded' } as any);
+
+    expect(prisma.order.findMany.mock.calls[0][0].where.AND).toEqual([{ financialStatus: 'PAID' }]);
+    expect(prisma.order.findMany.mock.calls[1][0].where.AND).toEqual([
+      { financialStatus: { in: ['REFUNDED', 'PARTIALLY_REFUNDED'] } },
+    ]);
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('keeps the date window beside the payment filter', async () => {
+    const { service, prisma } = build();
+    await service.findAll(ORG, { payment: 'paid', dateFrom: '2026-10-01' } as any);
+
+    expect(whereOf(prisma).AND).toHaveLength(2);
+  });
+
+  it('marks each row as cash on delivery or not', async () => {
+    const { service, prisma } = build();
+    const row = (id: string, paymentGateways: string[]) => ({
+      id, paymentGateways, metadata: null, customer: null, channel: null, _count: { lineItems: 1 },
+    });
+    prisma.order.findMany.mockResolvedValue([
+      row('a', ['Cash on Delivery (COD)']),
+      row('b', ['Razorpay']),
+    ]);
+
+    const { data } = await service.findAll(ORG, {} as any);
+
+    expect(data.map((o: any) => o.cashOnDelivery)).toEqual([true, false]);
   });
 });

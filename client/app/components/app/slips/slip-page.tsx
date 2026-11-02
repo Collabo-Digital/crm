@@ -56,6 +56,7 @@ export function SlipCell({
           showBarcodeZone={showBarcodeZone}
           showItems={showItems}
           highlight={highlight}
+          contentWidthMm={profile.widthMm - 2 * profile.paddingMm}
         />
       )}
     </div>

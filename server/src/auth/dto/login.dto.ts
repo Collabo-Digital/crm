@@ -1,6 +1,8 @@
 import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
+import { NormalizeEmail } from '../../common/utils/email.util';
 
 export class LoginDto {
+    @NormalizeEmail()
     @IsEmail()
     email: string;
 

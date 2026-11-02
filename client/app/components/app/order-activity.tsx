@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { oneOf, useSessionState } from "~/hooks/use-session-state";
-import { Package } from "lucide-react";
+import { useMediaQuery } from "~/hooks/use-media-query";
+import { ChevronDown, Package } from "lucide-react";
 
 import { cn, formatCurrency } from "~/lib/utils";
 import type { OrderDetail, OrgMember } from "~/types/api";
@@ -27,6 +28,7 @@ const EVENT_CATEGORY: Record<string, EventCategory> = {
   invoice_edited: "order",
   paid: "payment",
   captured: "payment",
+  capture_pending: "payment",
   payment_status_changed: "payment",
   refunded: "payment",
   fulfilled: "fulfilment",
@@ -37,6 +39,12 @@ const EVENT_CATEGORY: Record<string, EventCategory> = {
   fulfillment_status_changed: "fulfilment",
   tracking_updated: "fulfilment",
   fulfillment_cancelled: "fulfilment",
+  // Packing checks the parcel; it is not a shipment.
+  packing_started: "fulfilment",
+  packing_held: "fulfilment",
+  packing_resumed: "fulfilment",
+  packed: "fulfilment",
+  packing_cancelled: "fulfilment",
 };
 
 const CATEGORY_LABEL: Record<EventCategory, string> = {
@@ -127,6 +135,11 @@ export function OrderActivity({
     oneOf(["all", "order", "payment", "fulfilment"]),
   );
   const timeline = order.timeline ?? [];
+  // On a phone the log starts folded, so the customer and actions above it
+  // are not pushed further away by history nobody asked for.
+  const wide = useMediaQuery("(min-width: 768px)");
+  const [unfolded, setUnfolded] = useState(false);
+  const open = wide || unfolded;
 
   const counts = useMemo(() => {
     const tally: Record<EventCategory, number> = { order: 0, payment: 0, fulfilment: 0 };
@@ -155,10 +168,22 @@ export function OrderActivity({
 
   return (
     <section className="rounded-xl bg-card shadow-sm ring-1 ring-border">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3">
+      <div className={cn("flex flex-wrap items-center justify-between gap-3 px-5 py-3", open && "border-b")}>
         <h2 className="text-micro font-semibold uppercase tracking-wider text-muted-foreground">
           Order lifecycle · {timeline.length} event{timeline.length === 1 ? "" : "s"}
         </h2>
+        {!wide && (
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => setUnfolded((value) => !value)}
+            className="-my-2 -mr-2 flex min-h-11 items-center gap-1 rounded-lg px-2 text-caption font-medium text-foreground"
+          >
+            {open ? "Hide" : "Show"}
+            <ChevronDown className={cn("size-4 transition-transform", open && "rotate-180")} />
+          </button>
+        )}
+        {open && (
         <div role="tablist" className="flex gap-1 rounded-full bg-muted p-1">
           {FILTERS.map(({ id, label }) => {
             const count = id === "all" ? timeline.length : counts[id];
@@ -170,7 +195,7 @@ export function OrderActivity({
                 aria-selected={filter === id}
                 onClick={() => setFilter(id)}
                 className={cn(
-                  "rounded-full px-3 py-1 text-micro font-medium transition-colors",
+                  "rounded-full px-3 py-1 text-micro font-medium transition-colors max-md:min-h-11 pointer-coarse:min-h-11",
                   filter === id
                     ? "bg-ink font-semibold text-brand"
                     : "text-muted-foreground hover:text-foreground",
@@ -182,9 +207,10 @@ export function OrderActivity({
             );
           })}
         </div>
+        )}
       </div>
 
-      {timeline.length === 0 ? (
+      {!open ? null : timeline.length === 0 ? (
         <p className="px-5 py-4 text-caption text-muted-foreground">
           No activity recorded yet. Changes made here and in Shopify both appear on
           this feed from the point they happen.

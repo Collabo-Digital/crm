@@ -1,16 +1,23 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ACTIVE_MEMBERSHIP } from '../auth/active-membership';
+import { ChannelService } from '../channel/channel.service';
+import { normalizeEmail } from '../common/utils/email.util';
+import { releaseMemberWork } from '../organization/member-release';
 
 @Injectable()
 export class UserService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly channels: ChannelService,
+  ) { }
 
   async create(data: { email: string; password: string; firstName: string; lastName: string; avatarUrl?: string }) {
-    const existing = await this.prisma.user.findUnique({ where: { email: data.email } });
-    if (existing) throw new ConflictException('Email already registered');
+    const email = normalizeEmail(data.email);
+    if (await this.findIdByEmail(email)) throw new ConflictException('Email already registered');
 
     const passwordHash = await bcrypt.hash(data.password, 12);
     const emailVerifyCode = randomInt(100000, 1000000).toString();
@@ -18,7 +25,7 @@ export class UserService {
 
     return this.prisma.user.create({
       data: {
-        email: data.email,
+        email,
         password: passwordHash,
         firstName: data.firstName,
         lastName: data.lastName,
@@ -29,8 +36,25 @@ export class UserService {
     });
   }
 
+  /**
+   * The account for an address, whatever its case. New accounts are stored
+   * lower-cased, but older ones kept the casing typed at signup and the
+   * unique index on `email` is case-sensitive. Plain SQL rather than Prisma's
+   * `mode: 'insensitive'`, which compares with ILIKE and would read `_` and
+   * `%` in an address as wildcards.
+   */
+  async findIdByEmail(email: string): Promise<string | null> {
+    const normalized = normalizeEmail(email);
+    const exact = await this.prisma.user.findUnique({ where: { email: normalized }, select: { id: true } });
+    if (exact) return exact.id;
+    const [row] = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM users WHERE lower(email) = ${normalized} ORDER BY created_at ASC LIMIT 1`;
+    return row?.id ?? null;
+  }
+
   async findByEmail(email: string) {
-    return this.prisma.user.findUnique({ where: { email } });
+    const id = await this.findIdByEmail(email);
+    return id ? this.findById(id) : null;
   }
 
   async findById(id: string) {
@@ -86,7 +110,49 @@ export class UserService {
     });
   }
 
-  async softDelete(id: string) {
-    return this.prisma.user.update({ where: { id }, data: { deletedAt: new Date() } });
+  /**
+   * Close an account, confirmed with its password: a signed-in session alone
+   * (a stolen token, an unlocked phone) cannot. Refused while it owns a live
+   * workspace: there is no ownership transfer, so the workspace would be left
+   * running with nobody able to manage or delete it. Its memberships end
+   * (releasing their conversations), and the address is freed so it can sign
+   * up again.
+   */
+  async softDelete(id: string, password: string) {
+    const account = await this.prisma.user.findUnique({ where: { id }, select: { password: true } });
+    if (!account || !(await bcrypt.compare(password, account.password))) {
+      throw new ForbiddenException('That password is not right.');
+    }
+
+    const owned = await this.prisma.organizationMember.findFirst({
+      where: { userId: id, role: UserRole.OWNER, ...ACTIVE_MEMBERSHIP },
+      select: { organization: { select: { name: true } } },
+    });
+    if (owned) {
+      throw new ConflictException(
+        `You own the workspace "${owned.organization.name}". Delete that workspace in Settings first, then delete your account.`,
+      );
+    }
+
+    // An influencer's Instagram leaves with them. Done first, so a failure
+    // leaves the account open and closing it can simply be tried again.
+    const influencing = await this.prisma.organizationMember.findMany({
+      where: { userId: id, isActive: true, role: UserRole.INFLUENCER },
+      select: { organizationId: true },
+    });
+    await this.channels.disconnectOwnedBy(influencing.map((m) => m.organizationId), id);
+
+    return this.prisma.$transaction(async (tx) => {
+      const memberships = await tx.organizationMember.findMany({
+        where: { userId: id, isActive: true },
+        select: { organizationId: true },
+      });
+      await tx.organizationMember.updateMany({ where: { userId: id, isActive: true }, data: { isActive: false } });
+      await releaseMemberWork(tx, memberships.map((m) => m.organizationId), id);
+      return tx.user.update({
+        where: { id },
+        data: { deletedAt: new Date(), email: `deleted+${id}@deleted.invalid` },
+      });
+    });
   }
 }

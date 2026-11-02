@@ -8,6 +8,8 @@ import { WarehouseService } from './warehouse.service';
 import { WarehouseController } from './warehouse.controller';
 import { SkuGeneratorService } from './sku-generator.service';
 import { InventoryProcessor } from './inventory.processor';
+import { LocationsSwitchOver } from './locations-switch-over';
+import { LocationLinkService } from './location-links.service';
 import { INVENTORY_QUEUE } from './inventory.queue';
 import { SHOPIFY_PUSH_QUEUE } from '../channel/shopify-push.queue';
 
@@ -36,7 +38,9 @@ import { SHOPIFY_PUSH_QUEUE } from '../channel/shopify-push.queue';
     WarehouseService,
     SkuGeneratorService,
     InventoryProcessor,
+    LocationsSwitchOver,
+    LocationLinkService,
   ],
-  exports: [InventoryLedgerService, SkuGeneratorService],
+  exports: [InventoryLedgerService, SkuGeneratorService, LocationLinkService],
 })
 export class InventoryModule {}

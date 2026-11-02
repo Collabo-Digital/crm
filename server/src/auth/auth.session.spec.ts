@@ -1,4 +1,5 @@
 import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 
@@ -14,7 +15,8 @@ describe('JwtStrategy.validate — session must be live', () => {
     const redis = {
       isAuthSessionActive,
       getSession: jest.fn().mockResolvedValue(cached),
-      setSession: jest.fn().mockResolvedValue(undefined),
+      sessionRevision: jest.fn().mockResolvedValue('rev-1'),
+      setSession: jest.fn().mockResolvedValue(true),
     };
     const config = { get: jest.fn().mockReturnValue('test-secret') };
     const prisma = { user: { findFirst: jest.fn() } };
@@ -88,6 +90,33 @@ describe('JwtStrategy.validate — session must be live', () => {
     await expect(strategy.validate(payload)).rejects.toBeInstanceOf(ServiceUnavailableException);
     expect(prisma.user.findFirst).not.toHaveBeenCalled();
   });
+
+  describe('for a support (impersonation) session', () => {
+    const support = { ...payload, isSuperAdmin: false, impersonatedBy: 'admin-1', impersonatorSid: 'admin-sid' };
+    const liveExcept = (dead: string) => jest.fn((sid: string) => Promise.resolve(sid !== dead));
+
+    it('rejects the token once the admin session it was started from is revoked', async () => {
+      const { strategy, redis } = build(liveExcept('admin-sid'));
+
+      await expect(strategy.validate(support)).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(redis.isAuthSessionActive).toHaveBeenCalledWith('admin-sid', 'admin-1');
+      expect(redis.getSession).not.toHaveBeenCalled();
+    });
+
+    it('accepts it while both sessions are live', async () => {
+      const { strategy } = build(liveExcept('none'));
+
+      await expect(strategy.validate(support)).resolves.toMatchObject({ sub: 'u1', impersonatedBy: 'admin-1' });
+    });
+
+    it('does not look up an admin session for an ordinary token', async () => {
+      const { strategy, redis } = build(liveExcept('none'));
+
+      await strategy.validate(payload);
+
+      expect(redis.isAuthSessionActive).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe('AuthService — session lifecycle', () => {
@@ -133,7 +162,8 @@ describe('AuthService — session lifecycle', () => {
       deleteRefreshToken: jest.fn().mockResolvedValue(undefined),
       setRefreshToken: jest.fn().mockResolvedValue(undefined),
       trackUserToken: jest.fn().mockResolvedValue(undefined),
-      setSession: jest.fn().mockResolvedValue(undefined),
+      sessionRevision: jest.fn().mockResolvedValue('rev-1'),
+      setSession: jest.fn().mockResolvedValue(true),
       deleteSession: jest.fn().mockResolvedValue(undefined),
       setAuthSession: jest.fn<Promise<void>, [string, string]>().mockResolvedValue(undefined),
       touchAuthSession: jest.fn().mockResolvedValue(touch),
@@ -152,8 +182,10 @@ describe('AuthService — session lifecycle', () => {
       {} as never,
       redis as never,
     );
-    return { service, redis, jwt };
+    return { service, redis, jwt, prisma };
   }
+
+  const hashed = (token: string) => 'sha256:' + createHash('sha256').update(token).digest('hex');
 
   it('gives a new token pair a session and signs it into the access token', async () => {
     const { service, redis, jwt } = build(null);
@@ -164,6 +196,27 @@ describe('AuthService — session lifecycle', () => {
     expect(redis.setAuthSession).toHaveBeenCalledWith(sid, 'u1');
     expect(jwt.sign).toHaveBeenCalledWith(expect.objectContaining({ sid }));
     expect(redis.setRefreshToken).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ sid }));
+  });
+
+  it('stores only a hash of a new refresh token in the database; Redis keeps the token itself', async () => {
+    const { service, redis, prisma } = build(null);
+
+    const { refreshToken } = await service.generateTokenPair({ sub: 'u1', email: 'u1@example.com' });
+
+    expect(redis.setRefreshToken).toHaveBeenCalledWith(refreshToken, expect.anything());
+    expect(prisma.refreshToken.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ token: hashed(refreshToken) }),
+    });
+  });
+
+  it('marks the spent refresh token revoked whether its row is hashed or from before hashing', async () => {
+    const { service, prisma } = build({ userId: 'u1', orgId: 'org-a', sid: 's1' });
+
+    await service.rotateRefreshToken('old');
+
+    expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { token: { in: [hashed('old'), 'old'] }, revokedAt: null } }),
+    );
   });
 
   it('keeps the same session across a refresh', async () => {
@@ -246,6 +299,27 @@ describe('AuthService — session lifecycle', () => {
 
     await service.revokeAllUserTokens('u1');
 
-    expect(redis.deleteAllAuthSessions).toHaveBeenCalledWith('u1');
+    expect(redis.deleteAllAuthSessions).toHaveBeenCalledWith('u1', undefined);
+    expect(redis.deleteAllUserTokens).toHaveBeenCalledWith('u1', undefined);
+  });
+
+  it('keeps the named session on revoke-all, as after a password change', async () => {
+    const { service, redis } = build(null);
+
+    await service.revokeAllUserTokens('u1', 's-mine');
+
+    expect(redis.deleteAllAuthSessions).toHaveBeenCalledWith('u1', 's-mine');
+    expect(redis.deleteAllUserTokens).toHaveBeenCalledWith('u1', 's-mine');
+  });
+
+  it('takes a logged-out refresh token off the user\'s token list', async () => {
+    const { service, redis, prisma } = build({ userId: 'u1' });
+
+    await service.logout('u1', 's1', 'refresh');
+
+    expect(redis.deleteRefreshToken).toHaveBeenCalledWith('refresh', 'u1');
+    expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { token: { in: [hashed('refresh'), 'refresh'] }, revokedAt: null } }),
+    );
   });
 });

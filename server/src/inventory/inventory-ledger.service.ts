@@ -170,6 +170,60 @@ export class InventoryLedgerService {
   }
 
   /**
+   * A new variant's opening stock at the locations the merchant chose for it,
+   * in place of `ensureStockRows`' single row at the default location.
+   *
+   * Every listed location gets a row, so a location given 0 still stocks the
+   * variant. Each non-zero quantity then enters AVAILABLE through
+   * `applyMovement`, like a stock-in on the Inventory screen: its ledger entry
+   * names the location and the variant's cached quantity ends as the sum.
+   *
+   * Runs in the caller's transaction; the caller has checked the locations.
+   * Returns the variant's quantity afterwards.
+   */
+  async recordOpeningStock(
+    tx: Prisma.TransactionClient,
+    args: {
+      orgId: string;
+      variantId: string;
+      stock: Array<{ warehouseId: string; quantity: number }>;
+      referenceType: string;
+      referenceId: string;
+      actorId?: string;
+    },
+  ): Promise<number> {
+    await tx.stockLevel.createMany({
+      data: args.stock.map((line) => ({
+        organizationId: args.orgId,
+        variantId: args.variantId,
+        warehouseId: line.warehouseId,
+      })),
+      skipDuplicates: true,
+    });
+    let inventoryQuantity = 0;
+    for (const line of args.stock) {
+      if (line.quantity === 0) continue;
+      const result = await this.applyMovement(
+        {
+          orgId: args.orgId,
+          variantId: args.variantId,
+          warehouseId: line.warehouseId,
+          fromBucket: null,
+          toBucket: StockBucket.AVAILABLE,
+          quantity: line.quantity,
+          reason: 'initial',
+          referenceType: args.referenceType,
+          referenceId: args.referenceId,
+          actorId: args.actorId,
+        },
+        tx,
+      );
+      inventoryQuantity = result.inventoryQuantity;
+    }
+    return inventoryQuantity;
+  }
+
+  /**
    * Sets which locations a variant is stocked at — the "Edit locations" dialog.
    *
    * Every stock screen lists stock ROWS, so a variant could only ever be

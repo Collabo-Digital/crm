@@ -31,9 +31,17 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         // Fails closed, but a Redis outage is a 503, not a 401: the client
         // treats 401 as "refresh, then sign out", which would log every user
         // out on a Redis blip.
+        //
+        // A support session also lasts only while the admin session it was
+        // started from does, so revoking the admin ends it on the next request
+        // rather than when its access token expires. Sessions started before
+        // that origin was recorded carry none, as at refresh.
         let active: boolean;
         try {
             active = !!payload.sid && (await this.redis.isAuthSessionActive(payload.sid, payload.sub));
+            if (active && payload.impersonatedBy && payload.impersonatorSid) {
+                active = await this.redis.isAuthSessionActive(payload.impersonatorSid, payload.impersonatedBy);
+            }
         } catch {
             throw new ServiceUnavailableException('Authentication is temporarily unavailable');
         }
@@ -74,7 +82,15 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
             // Redis down — fall through to DB
         }
 
-        // Cache miss — load from DB
+        // Cache miss — load from DB. The revision is read first, so what is
+        // loaded is cached only if no role change or removal evicted the
+        // session meanwhile (see RedisService.setSession).
+        let revision: string | null = null;
+        try {
+            revision = await this.redis.sessionRevision(payload.sub);
+        } catch {
+            // Redis down — answer from the DB without caching
+        }
         const user = await this.prisma.user.findFirst({
             where: { id: payload.sub, deletedAt: null },
             include: {
@@ -117,7 +133,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         };
 
         // Cache for subsequent requests (ignore errors)
-        this.redis.setSession(user.id, session as unknown as Record<string, unknown>).catch(() => {});
+        if (revision !== null) {
+            this.redis.setSession(user.id, session as unknown as Record<string, unknown>, revision).catch(() => {});
+        }
 
         return { ...session, ...flags };
     }

@@ -20,16 +20,25 @@ import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
  * The retried work must be a single transaction that allocates its number
  * inside itself — a rolled-back attempt then consumes nothing and re-running
  * it is side-effect free.
+ *
+ * Each retry waits a random time that doubles per attempt. Postgres lets one
+ * of N concurrent numbering transactions commit per round, so a burst (a sale
+ * spike of paid-order webhooks, each auto-invoicing) retried in lockstep
+ * collided again every time and three immediate attempts left paid orders
+ * uninvoiced. The jitter spreads the losers out.
  */
 export async function retryOnNumberingConflict<T>(
   fn: () => Promise<T>,
   opts: {
     maxAttempts?: number;
+    /** First retry waits up to this long; each later one up to twice the last. */
+    baseDelayMs?: number;
     isRetriableUniqueViolation: (e: PrismaClientKnownRequestError) => boolean;
     onRetry?: (attempt: number, error: PrismaClientKnownRequestError) => void;
   },
 ): Promise<T> {
-  const maxAttempts = opts.maxAttempts ?? 3;
+  const maxAttempts = opts.maxAttempts ?? 8;
+  const baseDelayMs = opts.baseDelayMs ?? 25;
 
   for (let attempt = 1; ; attempt++) {
     try {
@@ -43,6 +52,10 @@ export async function retryOnNumberingConflict<T>(
         throw err;
       }
       opts.onRetry?.(attempt, err);
+      const ceiling = Math.min(baseDelayMs * 2 ** (attempt - 1), 1_000);
+      if (ceiling > 0) {
+        await new Promise((resolve) => setTimeout(resolve, Math.random() * ceiling));
+      }
     }
   }
 }

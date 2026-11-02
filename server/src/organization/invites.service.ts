@@ -4,13 +4,18 @@ import {
     NotFoundException,
     ConflictException,
     BadRequestException,
+    HttpException,
+    HttpStatus,
     Logger,
 } from '@nestjs/common';
 import { OrganizationType, InviteStatus, UserRole, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 import { SendInviteDto } from './dto/send-invite.dto';
 import { EmailService } from '../email/email.service';
+import { UserService } from '../user/user.service';
+import { resolveVendorScope } from './vendor-scope';
 import { extractGrants, sectionGrants, SECTION_SCOPED_ROLES } from '../auth/permissions';
 
 /** How long an invitation stays claimable. */
@@ -43,7 +48,12 @@ export function deriveInviteState(
 export class InvitesService {
     private readonly logger = new Logger(InvitesService.name);
 
-    constructor(private readonly prisma: PrismaService, private readonly emailService: EmailService) { }
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly emailService: EmailService,
+        private readonly users: UserService,
+        private readonly redis: RedisService,
+    ) { }
 
     // ─── SEND INVITE ───
     async send(orgId: string, userId: string, dto: SendInviteDto) {
@@ -69,25 +79,8 @@ export class InvitesService {
         }
 
         // 2b. VENDOR invites must be scoped to a real vendor; non-vendors carry no scope.
-        let vendorScope: string | null = null;
-        if (dto.role === UserRole.VENDOR) {
-            const scope = dto.vendorScope?.trim();
-            if (!scope) {
-                throw new BadRequestException('A vendor must be selected for VENDOR invites.');
-            }
-            const hasProducts = await this.prisma.product.findFirst({
-                where: {
-                    organizationId: orgId,
-                    deletedAt: null,
-                    OR: [{ vendorKey: scope }, { vendor: scope }],
-                },
-                select: { id: true },
-            });
-            if (!hasProducts) {
-                throw new BadRequestException(`No products found for vendor "${scope}".`);
-            }
-            vendorScope = scope;
-        }
+        const vendorScope =
+            dto.role === UserRole.VENDOR ? await resolveVendorScope(this.prisma, orgId, dto.vendorScope) : null;
 
         // 2c. Section access applies to AGENT / VIEWER only — every other role
         // resolves its access from the role itself. A list that names no
@@ -101,10 +94,10 @@ export class InvitesService {
         }
 
         // 3. Check if already a member
-        const existingUser = await this.prisma.user.findUnique({ where: { email } });
-        if (existingUser) {
+        const existingUserId = await this.users.findIdByEmail(email);
+        if (existingUserId) {
             const existingMember = await this.prisma.organizationMember.findUnique({
-                where: { organizationId_userId: { organizationId: orgId, userId: existingUser.id } },
+                where: { organizationId_userId: { organizationId: orgId, userId: existingUserId } },
             });
             if (existingMember?.isActive) {
                 throw new ConflictException('This person is already a member of the organization.');
@@ -133,6 +126,8 @@ export class InvitesService {
             }
         }
 
+        await this.assertMayEmail(userId, email);
+
         // 5. Create the invite
         const invite = await this.createInviteRow({
             organizationId: orgId,
@@ -140,7 +135,7 @@ export class InvitesService {
             name: dto.name ?? null,
             role: dto.role,
             vendorScope,
-            grants,
+            permissions: grants ? { grants } : null,
             invitedBy: userId,
         });
 
@@ -163,16 +158,17 @@ export class InvitesService {
         name: string | null;
         role: UserRole;
         vendorScope: string | null;
-        /** Section access chosen on the invite form; null = not configured. */
-        grants: string[] | null;
+        permissions: { grants: string[] } | null;
         invitedBy: string;
     }) {
-        const { grants, ...row } = data;
+        const { permissions, ...rest } = data;
         try {
             return await this.prisma.teamInvite.create({
                 data: {
-                    ...row,
-                    ...(grants ? { permissions: { grants } } : {}),
+                    ...rest,
+                    // Section access chosen on the invite form; copied onto the
+                    // membership when the invitation is accepted.
+                    ...(permissions ? { permissions } : {}),
                     token: randomBytes(32).toString('hex'),
                     expiresAt: new Date(Date.now() + INVITE_TTL_MS),
                 },
@@ -187,6 +183,27 @@ export class InvitesService {
                 );
             }
             throw error;
+        }
+    }
+
+    /**
+     * Invitation emails are limited per recipient, like every other account
+     * email, and per sender, so a free account cannot use the shared SMTP
+     * account to flood an inbox or anyone at all. Checked before the
+     * invitation is created or re-issued, so a refused one leaves no live link.
+     */
+    private async assertMayEmail(senderId: string, email: string) {
+        if (!(await this.redis.allowInviteFromSender(senderId))) {
+            throw new HttpException(
+                'You have sent as many invitations as one person can today. Try again tomorrow.',
+                HttpStatus.TOO_MANY_REQUESTS,
+            );
+        }
+        if (!(await this.redis.allowEmailSend('invite', email))) {
+            throw new HttpException(
+                'An invitation was emailed to this address very recently. Please wait before sending another.',
+                HttpStatus.TOO_MANY_REQUESTS,
+            );
         }
     }
 
@@ -220,7 +237,7 @@ export class InvitesService {
         name: string | null;
         role: UserRole;
         vendorScope: string | null;
-        permissions: Prisma.JsonValue | null;
+        permissions: Prisma.JsonValue;
         status: InviteStatus;
         expiresAt: Date;
         createdAt: Date;
@@ -244,8 +261,8 @@ export class InvitesService {
             where: { organizationId: orgId, status: InviteStatus.PENDING },
             orderBy: { createdAt: 'desc' },
             select: {
-                id: true, email: true, name: true, role: true, vendorScope: true, permissions: true,
-                status: true, invitedBy: true, expiresAt: true, createdAt: true,
+                id: true, email: true, name: true, role: true, vendorScope: true,
+                status: true, invitedBy: true, expiresAt: true, createdAt: true, permissions: true,
             },
         });
         // Deliberately still returns rows that have lapsed, carrying status
@@ -274,6 +291,7 @@ export class InvitesService {
         if (invite.status === InviteStatus.ACCEPTED) {
             throw new ConflictException('This invitation has already been accepted.');
         }
+        await this.assertMayEmail(userId, invite.email);
 
         const updated = await this.prisma.teamInvite.update({
             where: { id: invite.id },
@@ -284,6 +302,9 @@ export class InvitesService {
                 // forcing the admin to delete and retype it.
                 status: InviteStatus.PENDING,
                 revokedAt: null,
+                // It now stands on this admin's authority: acceptance checks
+                // that the sender may still invite.
+                invitedBy: userId,
             },
         });
 

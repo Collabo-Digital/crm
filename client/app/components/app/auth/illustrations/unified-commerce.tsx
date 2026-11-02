@@ -1,10 +1,8 @@
 import { motion, type Variants } from "framer-motion";
-import { Mail, Camera } from "lucide-react";
+import { ReceiptText, Store } from "lucide-react";
 import { BrandLogo } from "~/components/app/brand-logo";
 import ShopifyIcon from "~/assests/icon/shopifyIcon";
 import WhatsappIcon from "~/assests/icon/whatsappIcon";
-import MailIcon from "~/assests/icon/mailIcon";
-import InstagramIcon from "~/assests/icon/instagramIcon";
 
 const container: Variants = {
     hidden: {},
@@ -100,22 +98,22 @@ export function UnifiedCommerceIllustration() {
                 <span className="text-[10px] font-medium text-gray-900">WhatsApp</span>
             </motion.div>
 
-            {/* Bottom-left — Email */}
+            {/* Bottom-left — the counter (point of sale) */}
             <motion.div
                 variants={channelPop}
                 className="absolute left-0 bottom-0 flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 shadow-md shadow-black/20 ring-1 ring-black/5"
             >
-                <MailIcon width={15} height={15} />
-                <span className="text-[10px] font-medium text-gray-900">Email</span>
+                <Store className="size-[15px] text-gray-900" />
+                <span className="text-[10px] font-medium text-gray-900">In-store</span>
             </motion.div>
 
-            {/* Bottom-right — Instagram */}
+            {/* Bottom-right — GST invoices */}
             <motion.div
                 variants={channelPop}
                 className="absolute right-0 bottom-0 flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 shadow-md shadow-black/20 ring-1 ring-black/5"
             >
-                <InstagramIcon width={15} height={15} />
-                <span className="text-[10px] font-medium text-gray-900">Instagram</span>
+                <ReceiptText className="size-[15px] text-gray-900" />
+                <span className="text-[10px] font-medium text-gray-900">GST invoices</span>
             </motion.div>
 
             {/* Central hub — Collabo */}

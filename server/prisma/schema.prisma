@@ -122,9 +122,25 @@ enum LocationType {
   BIN
 }
 
-// Physical stock buckets on StockLevel. Closed set for V1 — Picked/Packed/
-// Dispatched are PickTask statuses (stock stays RESERVED until dispatch),
-// transfers are paired ledger events, returns end in AVAILABLE or DAMAGED.
+/// What a stock location is for. A STORE is an offline shop and the only kind
+/// the point of sale bills at; a WAREHOUSE holds stock and has no till.
+enum StockLocationKind {
+  STORE
+  WAREHOUSE
+}
+
+/// The merchant's decision for one Shopify location: share stock with an
+/// existing location (LINK), make a new location for it (CREATE), or leave it
+/// out of stock sync (IGNORE). No decision yet = the location is pending.
+enum ShopifyLocationAction {
+  LINK
+  CREATE
+  IGNORE
+}
+
+// Physical stock buckets on StockLevel. Closed set for V1 — packing
+// (PickTask) never moves stock; it leaves with the shipment as before.
+// Transfers are paired ledger events, returns end in AVAILABLE or DAMAGED.
 // INCOMING / IN_TRANSIT are planned V2 additions.
 enum StockBucket {
   AVAILABLE
@@ -247,6 +263,7 @@ model User {
   // doesn't exist yet. Copied to Organization on org creation and cleared.
   pendingBillingPlan            BillingPlan?        @map("pending_billing_plan")
   pendingBillingInterval        BillingInterval?    @map("pending_billing_interval")
+  pendingBillingCurrency        String?             @map("pending_billing_currency")
   pendingExternalCustomerId     String?             @map("pending_external_customer_id")
   pendingExternalSubscriptionId String?             @map("pending_external_subscription_id")
   pendingSubscriptionStatus     SubscriptionStatus? @map("pending_subscription_status")
@@ -261,6 +278,9 @@ model User {
   ownedAutomations            Automation[]         @relation("AutomationOwner")
   publishedAutomationVersions AutomationVersion[]  @relation("AutomationPublisher")
   assignedConversations       Conversation[]       @relation("ConversationAssignee")
+  conversationNotes           ConversationNote[]   @relation("ConversationNoteAuthor")
+  inboxTeams                  InboxTeamMember[]
+  ownedContacts               ChannelContact[]     @relation("ContactOwner")
   refreshTokens               RefreshToken[]
   passwordResetTokens         PasswordResetToken[]
   impersonationsMade          ImpersonationLog[]   @relation("ImpersonatorLogs")
@@ -308,6 +328,8 @@ model Organization {
   billingProvider        BillingProvider?    @map("billing_provider")
   subscriptionStatus     SubscriptionStatus? @map("subscription_status")
   currentPeriodEnd       DateTime?           @map("current_period_end")
+  /// INR or USD: the currency of the Razorpay plan the subscription is on.
+  billingCurrency        String?             @map("billing_currency")
   lowStockThreshold      Int                 @default(10) @map("low_stock_threshold")
   gstEnabled             Boolean             @default(false) @map("gst_enabled")
   loyaltyMetric          LoyaltyMetric       @default(ORDERS) @map("loyalty_metric")
@@ -343,13 +365,36 @@ model Organization {
   rawAnalyticsEvents     RawAnalyticsEvent[]
   settings               OrganizationSettings?
   warehouses             Warehouse[]
+  shopifyLocationLinks   ShopifyLocationLink[]
   stockLevels            StockLevel[]
   stockReservations      StockReservation[]
   stockReceipts          StockReceipt[]
   pickTasks              PickTask[]
+  pickTaskEvents         PickTaskEvent[]
   gstFilings             GstFiling[]
   inwardSupplies         InwardSupply[]
   channelContacts        ChannelContact[]
+  checkouts              Checkout[]
+  catalogItems           CatalogItem[]
+  paymentAccounts        PaymentAccount[]
+  paymentLinks           PaymentLink[]
+  growthLinks            GrowthLink[]
+  siteWidgets            SiteWidget[]
+  widgetSignups          WidgetSignup[]
+  adReferrals            AdReferral[]
+  adAccounts             AdAccount[]
+  conversionEvents       ConversionEvent[]
+  apiKeys                ApiKey[]
+  webhookEndpoints       WebhookEndpoint[]
+  shopifySegments        ShopifySegment[]
+  whatsappGroups         WhatsAppGroup[]
+  whatsappCalls          WhatsAppCall[]
+  reviewAccounts         ReviewAccount[]
+  productReviews         ProductReview[]
+  googleAccount          GoogleAccount?
+  googleSheets           GoogleSheet[]
+  usageMonths            UsageMonth[]
+  usageBills             UsageBill[]
   channelMedia           ChannelMedia[]
   conversations          Conversation[]
   contactDailyStats      ContactDailyStat[]
@@ -360,6 +405,22 @@ model Organization {
   automationRuns         AutomationRun[]
   automationRunSteps     AutomationRunStep[]
   messages               Message[]
+  consentEvents          ConsentEvent[]
+  conversationNotes      ConversationNote[]
+  inboxTeams             InboxTeam[]
+  quickReplies           QuickReply[]
+  inboxViews             InboxView[]
+  messageTemplates       MessageTemplate[]
+  templatePacks          TemplatePack[]
+  segments               Segment[]
+  broadcasts             Broadcast[]
+  broadcastRecipients    BroadcastRecipient[]
+  messageRates           MessageRate[]
+  contactImports         ContactImport[]
+  customerRfmScores      CustomerRfmScore[]
+  posStaff               PosStaff[]
+  orderPayments          OrderPayment[]
+  posActivities          PosActivity[]
 
   @@map("organizations")
 }
@@ -379,6 +440,16 @@ model OrganizationSettings {
   /// phone / WhatsApp / email, website, logo URL. Read by the package slip's
   /// "From" block; `Organization` has no address or contact columns at all.
   storeProfileSettings Json?    @map("store_profile_settings") @db.JsonB
+  /// Business hours, welcome and away messages, routing, round-robin and
+  /// auto-close. See src/inbox/inbox-settings.schema.ts.
+  inboxSettings        Json?    @map("inbox_settings") @db.JsonB
+  /// The point of sale: UPI id, round-off, staff PINs required, approval
+  /// limits, receipt width and footer, quick tiles. See src/pos/pos-settings.schema.ts.
+  posSettings          Json?    @map("pos_settings") @db.JsonB
+  /// How invoices, bills and receipts look: theme, brand colour, business IDs,
+  /// terms, signature, and which optional blocks print. See
+  /// src/organization-settings/schemas/invoice-settings.schema.ts.
+  invoiceSettings      Json?    @map("invoice_settings") @db.JsonB
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
@@ -388,16 +459,22 @@ model OrganizationSettings {
 }
 
 model OrganizationMember {
-  id             String   @id @default(cuid())
-  organizationId String   @map("organization_id")
-  userId         String   @map("user_id")
-  role           UserRole @default(AGENT)
-  permissions    Json?    @db.JsonB // Fine-grained overrides
-  vendorScope    String?  @map("vendor_scope") // For VENDOR role: the Product.vendor value this member is limited to
-  isActive       Boolean  @default(true) @map("is_active")
-  joinedAt       DateTime @default(now()) @map("joined_at")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id                  String            @id @default(cuid())
+  organizationId      String            @map("organization_id")
+  userId              String            @map("user_id")
+  role                UserRole          @default(AGENT)
+  permissions         Json?             @db.JsonB // Fine-grained overrides
+  vendorScope         String?           @map("vendor_scope") // For VENDOR role: the Product.vendor value this member is limited to
+  isActive            Boolean           @default(true) @map("is_active")
+  /// What the member chose in the inbox. Whether they are actually there is
+  /// inboxSeenAt, refreshed while an inbox is open.
+  inboxStatus         InboxAvailability @default(ONLINE) @map("inbox_status")
+  inboxSeenAt         DateTime?         @map("inbox_seen_at")
+  /// When round-robin last gave this member a conversation; ties go to whoever waited longest.
+  inboxLastAssignedAt DateTime?         @map("inbox_last_assigned_at")
+  joinedAt            DateTime          @default(now()) @map("joined_at")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -496,6 +573,10 @@ model Channel {
   /// is dollars or rupees. Null until a first order reveals it.
   currency         String?
   lastSyncedAt     DateTime?       @map("last_synced_at")
+  /// Start of the last scheduled order catch-up that finished for this store
+  /// (ShopifyOrderCatchUpScheduler). The next one reads orders updated since
+  /// then, less an overlap.
+  orderCatchUpAt   DateTime?       @map("order_catch_up_at")
   syncStatus       SyncStatus      @default(IDLE) @map("sync_status")
   /// When this account was linked. NOT the same as `createdAt`: a row that is
   /// disconnected and later reconnected keeps its original creation date, so
@@ -525,11 +606,11 @@ model Channel {
   createdAt        DateTime        @default(now()) @map("created_at")
   updatedAt        DateTime        @updatedAt @map("updated_at")
 
-  organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization       Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   /// SetNull, not Cascade: removing a person must not delete the channel and
   /// with it the orders and message logs that hang off it. The row survives as
   /// an org-level channel with no owner.
-  ownerUser          User?                @relation("ChannelOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerUser          User?                 @relation("ChannelOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   syncLogs           SyncLog[]
   syncStates         ChannelSyncState[]
   products           Product[]
@@ -543,10 +624,16 @@ model Channel {
   contacts           ChannelContact[]
   media              ChannelMedia[]
   conversations      Conversation[]
+  checkouts          Checkout[]
+  catalogItems       CatalogItem[]
   automations        Automation[]
   automationTriggers AutomationTrigger[]
   automationEvents   AutomationEvent[]
   messages           Message[]
+  messageTemplates   MessageTemplate[]
+  templatePacks      TemplatePack[]
+  broadcasts         Broadcast[]
+  shopifyLocations   ShopifyLocationLink[]
 
   /// ONE ROW = ONE CONNECTED ACCOUNT. An org may hold several rows of the same
   /// platform (many Instagram accounts); the limits are PARTIAL unique indexes,
@@ -572,11 +659,27 @@ model Channel {
   /// tenant. Disconnect therefore NULLs external_store_id to release the claim
   /// and copies it to metadata.externalAccountId so the row can be revived.
   ///
-  /// See migrations 20260731140000_channel_store_url_unique and
-  /// 20260910090000_channel_connected_accounts.
+  /// The external_store_id index is built only where no account was already
+  /// claimed twice (20261031010000 says how to finish it by hand), so the
+  /// connect flows also refuse another organization's account themselves and
+  /// the webhook routers pick one row deterministically.
+  ///
+  /// See migrations 20260731140000_channel_store_url_unique,
+  /// 20260910090000_channel_connected_accounts and
+  /// 20261031010000_channel_external_account_unique.
   ///
   /// There is deliberately NO @@unique([organizationId, platform]) — it is what
   /// made multiple Instagram accounts impossible.
+  paymentLinks PaymentLink[]
+
+  growthLinks GrowthLink[]
+  siteWidgets SiteWidget[]
+
+  shopifySegments ShopifySegment[]
+
+  whatsappGroups WhatsAppGroup[]
+  whatsappCalls  WhatsAppCall[]
+
   @@index([organizationId, platform])
   @@index([organizationId])
   /// Drives "the channels this influencer connected" on every page load.
@@ -654,6 +757,8 @@ model Product {
   channelId         String        @map("channel_id")
   externalId        String        @map("external_id") // Shopify product ID
   title             String // "Blue T-Shirt"
+  /// Shopify's URL handle: the storefront page is /products/{handle}.
+  handle            String?
   bodyHtml          String?       @map("body_html") // Product description HTML
   vendor            String? // "Nike" (built-in Shopify Vendor field)
   vendorKey         String?       @map("vendor_key") // vendor metafield value — primary vendor match key
@@ -721,6 +826,9 @@ model ProductVariant {
   cost                          Decimal?       @db.Decimal(12, 2) // Cost per item (COGS) — drives margin display
   inventoryItemId               String?        @map("inventory_item_id")
   inventoryQuantity             Int            @default(0) @map("inventory_quantity")
+  /// StockLevel.shopifyUpdatedAt for orgs without warehousing, whose
+  /// inventory_levels/update webhooks write `inventoryQuantity` directly.
+  shopifyInventoryUpdatedAt     DateTime?      @map("shopify_inventory_updated_at")
   weight                        Decimal?       @db.Decimal(10, 4)
   weightUnit                    String?        @map("weight_unit") // "kg", "lb"
   option1                       String? // "Small"
@@ -752,6 +860,7 @@ model ProductVariant {
   lineItems           OrderLineItem[]
   draftOrderLineItems DraftOrderLineItem[]
   stockLevels         StockLevel[]
+  catalogItems        CatalogItem[]
 
   @@unique([productId, externalId])
   @@index([productId])
@@ -827,9 +936,12 @@ model Customer {
   whatsappMessages WhatsAppMessageLog[]
   channelContacts  ChannelContact[]
   conversations    Conversation[]
+  rfm              CustomerRfmScore?
   automationEvents AutomationEvent[]
   automationRuns   AutomationRun[]
   messages         Message[]
+
+  shopifySegments ShopifySegmentMember[]
 
   @@unique([channelId, externalId])
   @@unique([organizationId, email])
@@ -894,6 +1006,9 @@ model Order {
   billingAddress      Json?                  @map("billing_address") @db.JsonB
   note                String?
   tags                String[]               @default([])
+  /// Shopify `payment_gateway_names`, e.g. ["Cash on Delivery (COD)"]; how a
+  /// cash-on-delivery order is told apart from a prepaid one.
+  paymentGateways     String[]               @default([]) @map("payment_gateways")
   cancelReason        OrderCancelReason?     @map("cancel_reason")
   cancelledAt         DateTime?              @map("cancelled_at")
   closedAt            DateTime?              @map("closed_at")
@@ -910,6 +1025,11 @@ model Order {
   /// assignment read before auto-invoicing; never null-overwritten by a later
   /// sync. Snapshotted onto the invoice as "Dispatch From".
   dispatchWarehouseId String?                @map("dispatch_warehouse_id")
+  /// Billed at Collabo's point of sale. Kept through a Shopify push and
+  /// rebadge, unlike the channel, so store reports can always find it.
+  posSale             Boolean                @default(false) @map("pos_sale")
+  /// The store employee who billed it, when the till was unlocked with a PIN.
+  posStaffId          String?                @map("pos_staff_id")
   /// Where the order was created WITHIN its channel. `sourceName` is Shopify's
   /// raw code (`web`, `pos`, `shopify_draft_order`, `collabo-crm`, or an app
   /// id); `sourceLabel` is Shopify's own display name for the creating app
@@ -945,6 +1065,9 @@ model Order {
   channel           Channel              @relation(fields: [channelId], references: [id], onDelete: Cascade)
   customer          Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
   dispatchWarehouse Warehouse?           @relation("OrderDispatchWarehouse", fields: [dispatchWarehouseId], references: [id], onDelete: SetNull)
+  posStaff          PosStaff?            @relation(fields: [posStaffId], references: [id], onDelete: SetNull)
+  payments          OrderPayment[]
+  posActivities     PosActivity[]
   lineItems         OrderLineItem[]
   fulfillments      OrderFulfillment[]
   refunds           OrderRefund[]
@@ -958,6 +1081,9 @@ model Order {
   /// originate from a draft; this lets us link "this order was created from
   /// draft <name>" in the UI.
   draftOrderOrigin  DraftOrder?          @relation("DraftOrderCompletedOrder")
+
+  paymentLinks   PaymentLink[]
+  productReviews ProductReview[]
 
   @@unique([channelId, externalId])
   // NOTE (not expressible in Prisma): a PARTIAL unique index
@@ -980,6 +1106,7 @@ model Order {
   // Finding orders that still need an FX rate, and grouping totals per currency.
   @@index([organizationId, currency])
   @@index([organizationId, fulfillmentStatus])
+  @@index([organizationId, posSale, createdAt])
   @@map("orders")
 }
 
@@ -1023,18 +1150,20 @@ model OrderLineItem {
 }
 
 model OrderFulfillment {
-  id              String    @id @default(cuid())
-  orderId         String    @map("order_id")
-  externalId      String?   @map("external_id")
-  status          String    @default("pending")
-  trackingNumber  String?   @map("tracking_number")
-  trackingUrl     String?   @map("tracking_url")
-  trackingCompany String?   @map("tracking_company")
-  shippedAt       DateTime? @map("shipped_at")
-  deliveredAt     DateTime? @map("delivered_at")
-  metadata        Json?     @db.JsonB
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  id               String    @id @default(cuid())
+  orderId          String    @map("order_id")
+  externalId       String?   @map("external_id")
+  status           String    @default("pending")
+  trackingNumber   String?   @map("tracking_number")
+  trackingUrl      String?   @map("tracking_url")
+  trackingCompany  String?   @map("tracking_company")
+  shippedAt        DateTime? @map("shipped_at")
+  deliveredAt      DateTime? @map("delivered_at")
+  /// First time the carrier reported it out for delivery; announced once.
+  outForDeliveryAt DateTime? @map("out_for_delivery_at")
+  metadata         Json?     @db.JsonB
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
@@ -1137,6 +1266,8 @@ model DraftOrder {
   lineItems      DraftOrderLineItem[]
   completedOrder Order?               @relation("DraftOrderCompletedOrder", fields: [completedOrderId], references: [id])
 
+  paymentLinks PaymentLink[]
+
   @@unique([channelId, externalId])
   @@index([organizationId])
   @@index([channelId])
@@ -1219,41 +1350,43 @@ model InventoryEvent {
 // ============================================================
 
 model Warehouse {
-  id                String   @id @default(cuid())
-  organizationId    String   @map("organization_id")
-  name              String // "Main Warehouse"
+  id                String            @id @default(cuid())
+  organizationId    String            @map("organization_id")
+  name              String // "Main warehouse"
   code              String // "WH1" — prefix of location fullCodes
-  // Numeric Shopify location id this warehouse mirrors (V1: at most one mapped
-  // warehouse per org — seeded from Channel.metadata.shopifyLocationId).
-  shopifyLocationId String?  @map("shopify_location_id")
+  kind              StockLocationKind @default(WAREHOUSE)
+  // Numeric Shopify location id this location shares stock with. Set by the
+  // merchant's decision (ShopifyLocationLink), never by a sync on its own.
+  shopifyLocationId String?           @map("shopify_location_id")
   // Canonical address keys ({ address1, address2, city, zip, province }) plus
   // `stateCode` (GST 2-digit) so both `extractStateFromAddress` (server) and
   // `readAddress` (client) can read it. Filled once from Shopify when absent,
   // then the merchant's to edit; the sync never overwrites it.
-  address           Json?    @db.JsonB
+  address           Json?             @db.JsonB
   /// Which GST registration this warehouse operates under — an *additional
   /// place of business* (APOB) of that GSTIN. Null = not linked. The state of
   /// `address` must match the registration's state (a place of business in
   /// another state needs its own GSTIN); enforced in WarehouseService.
-  gstinId           String?  @map("gstin_id")
+  gstinId           String?           @map("gstin_id")
   /// Merchant's confirmation that this APOB has been declared on the GST
   /// portal — a registration amendment the app cannot perform for them.
-  apobDeclared      Boolean  @default(false) @map("apob_declared")
-  isDefault         Boolean  @default(false) @map("is_default")
-  isActive          Boolean  @default(true) @map("is_active") // deactivate, never hard-delete (ledger references)
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  apobDeclared      Boolean           @default(false) @map("apob_declared")
+  isDefault         Boolean           @default(false) @map("is_default")
+  isActive          Boolean           @default(true) @map("is_active") // deactivate, never hard-delete (ledger references)
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
 
-  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization     Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   locations        WarehouseLocation[]
   stockLevels      StockLevel[]
   reservations     StockReservation[]
   receipts         StockReceipt[]
   pickTasks        PickTask[]
   inventoryEvents  InventoryEvent[]
-  gstin            OrganizationGstin?  @relation(fields: [gstinId], references: [id], onDelete: SetNull)
-  dispatchOrders   Order[]             @relation("OrderDispatchWarehouse")
-  dispatchInvoices Invoice[]           @relation("InvoiceDispatchWarehouse")
+  gstin            OrganizationGstin?    @relation(fields: [gstinId], references: [id], onDelete: SetNull)
+  dispatchOrders   Order[]               @relation("OrderDispatchWarehouse")
+  dispatchInvoices Invoice[]             @relation("InvoiceDispatchWarehouse")
+  shopifyLocations ShopifyLocationLink[]
 
   // SQL-only partial uniques:
   //   (organization_id) WHERE is_default          — one default per org
@@ -1265,6 +1398,39 @@ model Warehouse {
   @@index([organizationId])
   @@index([gstinId])
   @@map("warehouses")
+}
+
+/// One Shopify location of a connected store and what the merchant decided
+/// for it. Rows are refreshed from Shopify on every locations sync; a location
+/// that appears later arrives with no decision and waits for the merchant.
+/// Whether stock is shared is `Warehouse.shopifyLocationId`; `warehouseId`
+/// here only remembers which location the decision named.
+model ShopifyLocationLink {
+  id                String                 @id @default(cuid())
+  organizationId    String                 @map("organization_id")
+  channelId         String                 @map("channel_id")
+  /// Numeric Shopify location id, as stored on Warehouse.shopifyLocationId.
+  shopifyLocationId String                 @map("shopify_location_id")
+  name              String
+  isPrimary         Boolean                @default(false) @map("is_primary")
+  isActive          Boolean                @default(true) @map("is_active")
+  /// The location's address as Shopify sends it, in the warehouse address shape.
+  address           Json?                  @db.JsonB
+  /// Null while the merchant has not decided.
+  action            ShopifyLocationAction?
+  warehouseId       String?                @map("warehouse_id")
+  decidedAt         DateTime?              @map("decided_at")
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  warehouse    Warehouse?   @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+
+  @@unique([channelId, shopifyLocationId])
+  @@index([organizationId])
+  @@index([warehouseId])
+  @@map("shopify_location_links")
 }
 
 // Self-referencing location tree: Zone → Rack → Shelf → Bin at any depth.
@@ -1298,19 +1464,23 @@ model WarehouseLocation {
 // CHECKs reserved>=0, qc>=0, damaged>=0. `available` may go negative ONLY via
 // the Shopify order-mirror path (oversold — surfaced as an alert, not an error).
 model StockLevel {
-  id                String   @id @default(cuid())
-  organizationId    String   @map("organization_id") // denormalized for org-scoped listing
-  variantId         String   @map("variant_id")
-  warehouseId       String   @map("warehouse_id")
-  locationId        String?  @map("location_id")
-  available         Int      @default(0)
-  reserved          Int      @default(0)
-  qc                Int      @default(0)
-  damaged           Int      @default(0)
+  id                String    @id @default(cuid())
+  organizationId    String    @map("organization_id") // denormalized for org-scoped listing
+  variantId         String    @map("variant_id")
+  warehouseId       String    @map("warehouse_id")
+  locationId        String?   @map("location_id")
+  available         Int       @default(0)
+  reserved          Int       @default(0)
+  qc                Int       @default(0)
+  damaged           Int       @default(0)
   // Informational putaway/pick hint shown on pick lists in V1 (true bin-level
   // quantities are V2).
-  defaultLocationId String?  @map("default_location_id")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  defaultLocationId String?   @map("default_location_id")
+  /// Shopify's `updated_at` from the inventory_levels/update webhook that last
+  /// set `available`. Shopify does not deliver those in order, so one older
+  /// than this is ignored rather than winding stock back.
+  shopifyUpdatedAt  DateTime? @map("shopify_updated_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
   organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   variant         ProductVariant     @relation(fields: [variantId], references: [id], onDelete: Restrict)
@@ -1401,46 +1571,101 @@ model StockReceiptLine {
   @@map("stock_receipt_lines")
 }
 
-// One fulfillment task per order (SQL partial unique allows a new task once the
-// prior one is DISPATCHED/CANCELLED — partial-pick remainders). Stock stays
-// RESERVED through PICKED and PACKED; it exits (RESERVED→NULL) at dispatch.
+// An order's packing job: the packer checks the right items and quantities
+// go into the parcel. It never moves stock, creates a shipment or calls
+// Shopify; shipping stays with fulfilment. A SQL partial unique allows one
+// PACKING or ON_HOLD task per order; PACKED and CANCELLED tasks stay as the
+// record, and the rest of a partly packed order gets a new task once the
+// packed part has shipped.
 model PickTask {
   id             String    @id @default(cuid())
   organizationId String    @map("organization_id")
   orderId        String    @map("order_id") // plain string; partial unique in SQL
-  warehouseId    String    @map("warehouse_id")
-  status         String // PENDING | PICKING | PICKED | PACKED | DISPATCHED | CANCELLED
-  assigneeId     String?   @map("assignee_id")
+  warehouseId    String?   @map("warehouse_id") // the order's dispatch location, when it has one
+  status         String // PACKING | ON_HOLD | PACKED | CANCELLED (PENDING/PICKING/PICKED/DISPATCHED are never written)
+  assigneeId     String?   @map("assignee_id") // who started it
   startedAt      DateTime? @map("started_at")
   packedAt       DateTime? @map("packed_at")
+  packedBy       String?   @map("packed_by")
   dispatchedAt   DateTime? @map("dispatched_at")
+  holdReason     String?   @map("hold_reason") // items_short | damaged | customer_request | other
+  holdNote       String?   @map("hold_note")
+  heldAt         DateTime? @map("held_at")
+  heldBy         String?   @map("held_by")
+  // Packed with items left over (prepaid orders only: a split COD order
+  // would mean two cash collections).
+  partial        Boolean   @default(false)
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  warehouse    Warehouse      @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  warehouse    Warehouse?      @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
   lines        PickTaskLine[]
+  events       PickTaskEvent[]
 
-  // SQL-only partial unique: (order_id) WHERE status NOT IN ('DISPATCHED','CANCELLED')
+  // SQL-only partial unique: (order_id) WHERE status IN ('PACKING','ON_HOLD')
   @@index([organizationId, status])
   @@index([orderId])
   @@map("pick_tasks")
 }
 
+// One order line still to ship. Reconciled with the order each time the task
+// is opened. SQL checks keep qty_picked <= qty_required and
+// qty_hand_confirmed + qty_counted <= qty_picked (the rest were scanned).
 model PickTaskLine {
-  id              String  @id @default(cuid())
-  pickTaskId      String  @map("pick_task_id")
-  orderLineItemId String  @map("order_line_item_id")
-  variantId       String  @map("variant_id")
-  qtyRequired     Int     @map("qty_required")
-  qtyPicked       Int     @default(0) @map("qty_picked") // persisted per scan — station crash loses nothing
-  locationCode    String? @map("location_code") // snapshot of defaultLocation.fullCode at task creation
+  id               String  @id @default(cuid())
+  pickTaskId       String  @map("pick_task_id")
+  orderLineItemId  String  @map("order_line_item_id")
+  variantId        String? @map("variant_id") // null for a custom line: confirmed by hand only
+  // Snapshots: title/variantTitle for display, sku/barcode for matching scans
+  // (variant codes are not unique per organization, so scans only ever match
+  // this task's own lines).
+  title            String  @default("")
+  variantTitle     String? @map("variant_title")
+  sku              String?
+  barcode          String?
+  qtyRequired      Int     @map("qty_required")
+  qtyPicked        Int     @default(0) @map("qty_picked") // packed in total: scanned + hand-confirmed + counted
+  qtyHandConfirmed Int     @default(0) @map("qty_hand_confirmed")
+  qtyCounted       Int     @default(0) @map("qty_counted")
+  problemReason    String? @map("problem_reason") // missing | damaged | wrong_item_on_shelf
+  problemQty       Int     @default(0) @map("problem_qty")
+  locationCode     String? @map("location_code") // snapshot of defaultLocation.fullCode at task creation
 
-  pickTask PickTask @relation(fields: [pickTaskId], references: [id], onDelete: Cascade)
+  pickTask PickTask        @relation(fields: [pickTaskId], references: [id], onDelete: Cascade)
+  events   PickTaskEvent[]
 
+  @@unique([pickTaskId, orderLineItemId])
   @@index([pickTaskId])
   @@index([variantId])
   @@map("pick_task_lines")
+}
+
+// The packing diary, and the source of the accuracy figures: every scan
+// (wrong ones too), hand confirmation, count, undo, problem and status change.
+// A retried request carries the same clientScanId and changes nothing.
+model PickTaskEvent {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  pickTaskId     String   @map("pick_task_id")
+  pickTaskLineId String?  @map("pick_task_line_id")
+  actorId        String   @map("actor_id")
+  // SCAN_MATCH | SCAN_NOT_IN_ORDER | SCAN_OVER | SCAN_UNKNOWN | HAND_CONFIRM | COUNT | UNDO
+  // | PROBLEM | PROBLEM_CLEARED | HOLD | RESUME | PACKED | CANCELLED
+  kind           String
+  code           String? // what was scanned
+  qty            Int      @default(0)
+  reason         String?
+  clientScanId   String?  @map("client_scan_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pickTask     PickTask      @relation(fields: [pickTaskId], references: [id], onDelete: Cascade)
+  line         PickTaskLine? @relation(fields: [pickTaskLineId], references: [id], onDelete: SetNull)
+
+  @@unique([pickTaskId, clientScanId])
+  @@index([organizationId, createdAt])
+  @@map("pick_task_events")
 }
 
 // Tracks Shopify-format CSV import jobs through their preview → run lifecycle.
@@ -1936,6 +2161,47 @@ enum MessageKind {
   DOCUMENT
   IMAGE
   PRIVATE_REPLY
+  VIDEO
+  AUDIO
+  STICKER
+  LOCATION
+  CONTACTS
+  /// Buttons, lists, button and list replies, Flows.
+  INTERACTIVE
+  REACTION
+  /// One product, a product list, or a catalog message.
+  PRODUCT
+  /// A cart the customer sent from the catalog.
+  ORDER
+  /// Platform notices: a number change, an ad referral with no text.
+  SYSTEM
+  /// A type the platform could not deliver to the API.
+  UNSUPPORTED
+  /// A public comment on a post (Instagram, Facebook).
+  COMMENT
+}
+
+/// Who authored a message. Inbound rows are CUSTOMER; the rest say which
+/// part of the business sent it.
+enum MessageSource {
+  CUSTOMER
+  /// A person in the Collabo inbox.
+  AGENT
+  AUTOMATION
+  BROADCAST
+  /// Typed on the WhatsApp Business app sharing the number (coexistence).
+  BUSINESS_APP
+  /// Another app on the Page or account: Meta Business Suite, another tool.
+  OTHER_APP
+  /// The order notifications and other system sends.
+  SYSTEM
+  /// Sent by another system through the public API, with an API key.
+  API
+}
+
+enum ConsentType {
+  OPT_IN
+  OPT_OUT
 }
 
 enum MessageStatus {
@@ -1943,6 +2209,8 @@ enum MessageStatus {
   SENT
   DELIVERED
   READ
+  /// WhatsApp: the customer played a voice message. Ranks above READ.
+  PLAYED
   FAILED
 }
 
@@ -1968,8 +2236,24 @@ model ChannelContact {
   organizationId       String          @map("organization_id")
   channelId            String          @map("channel_id")
   platform             ChannelPlatform
-  /// IGSID for Instagram, wa_id (E.164 digits) for WhatsApp.
+  /// IGSID / PSID for Instagram and Messenger. For WhatsApp the business-scoped
+  /// user id (BSUID) when Meta sent one, else the wa_id: users who adopt a
+  /// username stop sending their phone number, so the number cannot be the key.
   externalId           String          @map("external_id")
+  /// WhatsApp phone number digits, when known. Mutable: a user can change it.
+  waId                 String?         @map("wa_id")
+  /// Ids this contact was known by before a WhatsApp number or BSUID change.
+  previousExternalIds  String[]        @default([]) @map("previous_external_ids")
+  /// Name in the business's WhatsApp Business app address book (coexistence).
+  addressBookName      String?         @map("address_book_name")
+  tags                 String[]        @default([])
+  /// Custom key/value fields set by the team, imports or automations.
+  attributes           Json?           @db.JsonB
+  /// Current marketing consent; the history is in consent_events.
+  optInAt              DateTime?       @map("opt_in_at")
+  optInSource          String?         @map("opt_in_source")
+  /// Spam or abuse: nothing is sent and new messages do not reopen the chat.
+  blockedAt            DateTime?       @map("blocked_at")
   username             String?
   displayName          String?         @map("display_name")
   profilePicUrl        String?         @map("profile_pic_url")
@@ -1991,23 +2275,44 @@ model ChannelContact {
   consecutiveFailures  Int             @default(0) @map("consecutive_failures")
   /// Manual or automatic cool-off; no sends while in the future.
   mutedUntil           DateTime?       @map("muted_until")
+  /// A WhatsApp group's chat, not a person: kept out of audiences and the contact list.
+  isGroup              Boolean         @default(false) @map("is_group")
+  /// WhatsApp call permission from the person's call_permission_reply:
+  /// temporary, permanent or declined. A temporary one ends at callPermissionUntil.
+  callPermission       String?         @map("call_permission")
+  callPermissionUntil  DateTime?       @map("call_permission_until")
+  /// When this person's current conversation ends, for Collabo's usage meter: a
+  /// WhatsApp message either way opens a 24-hour conversation when none is open.
+  usageWindowEndsAt    DateTime?       @map("usage_window_ends_at")
+  /// The member or team responsible for this contact.
+  ownerUserId          String?         @map("owner_user_id")
+  ownerTeamId          String?         @map("owner_team_id")
   metadata             Json?           @db.JsonB
   createdAt            DateTime        @default(now()) @map("created_at")
   updatedAt            DateTime        @updatedAt @map("updated_at")
 
-  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  channel       Channel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  customer      Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  events        AutomationEvent[]
-  runs          AutomationRun[]
-  messages      Message[]
-  conversations Conversation[]
-  dailyStats    ContactDailyStat[]
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel             Channel              @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  customer            Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  ownerUser           User?                @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerTeam           InboxTeam?           @relation("ContactOwnerTeam", fields: [ownerTeamId], references: [id], onDelete: SetNull)
+  events              AutomationEvent[]
+  runs                AutomationRun[]
+  messages            Message[]
+  conversations       Conversation[]
+  dailyStats          ContactDailyStat[]
+  consentEvents       ConsentEvent[]
+  broadcastRecipients BroadcastRecipient[]
+  whatsappGroup       WhatsAppGroup?
+  whatsappCalls       WhatsAppCall[]
+  productReviews      ProductReview[]
 
   @@unique([channelId, externalId])
+  @@index([channelId, waId])
   @@index([organizationId, platform])
   @@index([customerId])
   @@index([organizationId, phone])
+  @@index([organizationId, createdAt])
   @@map("channel_contacts")
 }
 
@@ -2082,13 +2387,19 @@ model Automation {
   settings           Json?     @db.JsonB
 
   // Health and list-page counters.
-  triggeredCount  Int       @default(0) @map("triggered_count")
-  lastTriggeredAt DateTime? @map("last_triggered_at")
-  lastError       String?   @map("last_error")
-  lastErrorAt     DateTime? @map("last_error_at")
-  archivedAt      DateTime? @map("archived_at")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  triggeredCount    Int       @default(0) @map("triggered_count")
+  lastTriggeredAt   DateTime? @map("last_triggered_at")
+  lastError         String?   @map("last_error")
+  lastErrorAt       DateTime? @map("last_error_at")
+  archivedAt        DateTime? @map("archived_at")
+  /// Set on the automations Collabo's recommended pack made: which one it is
+  /// (order_confirmed, cod_confirmation, cart_recovery, ...).
+  packKey           String?   @map("pack_key")
+  /// A pack automation waiting to go live: it is published by itself once
+  /// every template it sends is approved.
+  activateWhenReady Boolean   @default(false) @map("activate_when_ready")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
   organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   channel          Channel?            @relation(fields: [channelId], references: [id], onDelete: SetNull)
@@ -2100,6 +2411,7 @@ model Automation {
   runSteps         AutomationRunStep[]
   messages         Message[]
 
+  @@unique([organizationId, packKey])
   @@index([organizationId, status])
   @@index([organizationId, ownerUserId])
   @@map("automations")
@@ -2128,6 +2440,9 @@ model AutomationTrigger {
   /// The post a comment trigger listens on. FK for the UI, external id for the
   /// webhook (Instagram sends the media id, not our cuid).
   mediaId        String?  @map("media_id")
+  /// The post's external id for a comment trigger; the secret token for a webhook trigger.
+  /// SQL-only partial unique: (subject_id) WHERE trigger_type = 'crm.webhook'
+  /// (migration 20261023160000_webhook_token_unique).
   subjectId      String?  @map("subject_id")
   /// Lower-cased keywords for "contains" / "exact". Empty means any comment.
   keywords       String[] @default([])
@@ -2255,6 +2570,9 @@ model AutomationRun {
   currentStepKey      String?             @map("current_step_key")
   /// Wait: when to wake up.
   resumeAt            DateTime?           @map("resume_at")
+  /// Waiting for the contact's next message (a wait-for-reply step); their
+  /// reply resumes this run instead of starting new automations.
+  waitingForReply     Boolean             @default(false) @map("waiting_for_reply")
   /// Resolved variables: first_name, product_name, order_number, link, discount.
   context             Json                @default("{}") @db.JsonB
   error               String?
@@ -2280,6 +2598,8 @@ model AutomationRun {
   @@index([organizationId, createdAt])
   /// Once-per-contact rule and "has this person been through it".
   @@index([automationId, contactId])
+  /// A reply finds the run waiting for it.
+  @@index([contactId, waitingForReply])
   @@map("automation_runs")
 }
 
@@ -2331,20 +2651,42 @@ model Conversation {
   /// Inbound rows not yet read by staff.
   unreadCount        Int                @default(0) @map("unread_count")
   messageCount       Int                @default(0) @map("message_count")
-  /// For the future Chat module; unused by automations.
   assignedUserId     String?            @map("assigned_user_id")
+  /// The team the conversation is queued for; a person may also be assigned.
+  teamId             String?            @map("team_id")
+  /// SNOOZED conversations reopen at this time, or at the next inbound message.
+  snoozedUntil       DateTime?          @map("snoozed_until")
+  /// When the current open spell began: created by a customer's message, or
+  /// reopened. With closedAt it gives resolution time. Null on rows from
+  /// before it was recorded.
+  openedAt           DateTime?          @map("opened_at")
+  closedAt           DateTime?          @map("closed_at")
+  closedById         String?            @map("closed_by_id")
+  /// First reply by a person or automation after the conversation opened;
+  /// response-time analytics read this.
+  firstResponseAt    DateTime?          @map("first_response_at")
+  lastAgentReplyAt   DateTime?          @map("last_agent_reply_at")
+  /// The next inbound message this conversation is waiting on came in at
+  /// this time and has no reply yet. Cleared by any business reply.
+  awaitingReplySince DateTime?          @map("awaiting_reply_since")
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  channel      Channel        @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  contact      ChannelContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  customer     Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  assignedUser User?          @relation("ConversationAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  contact      ChannelContact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  customer     Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  assignedUser User?              @relation("ConversationAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  team         InboxTeam?         @relation(fields: [teamId], references: [id], onDelete: SetNull)
   messages     Message[]
+  notes        ConversationNote[]
+  calls        WhatsAppCall[]
+  reviews      ProductReview[]
 
   @@unique([channelId, contactId])
   @@index([organizationId, status, lastMessageAt])
+  @@index([organizationId, assignedUserId, status])
+  @@index([organizationId, teamId, status])
   @@index([customerId])
   @@map("conversations")
 }
@@ -2409,6 +2751,27 @@ model Message {
   templateLanguage    String?          @map("template_language")
   /// Instagram comment id this private reply answers.
   inReplyToExternalId String?          @map("in_reply_to_external_id")
+  /// Who authored it. Null on rows written before the column existed.
+  source              MessageSource?
+  /// The inbox member who sent it, for AGENT rows.
+  sentByUserId        String?          @map("sent_by_user_id")
+  /// The quoted message: platform id always, our row when we have it.
+  replyToExternalId   String?          @map("reply_to_external_id")
+  replyToMessageId    String?          @map("reply_to_message_id")
+  /// { mime, size, sha256, caption, filename, platformMediaId, storageKey,
+  ///   downloadedAt, error } — the file itself is copied into private
+  ///   storage because platform media URLs and ids expire.
+  media               Json?            @db.JsonB
+  /// Latest reaction from each side: { customer?: emoji, business?: emoji }.
+  reactions           Json?            @db.JsonB
+  editedAt            DateTime?        @map("edited_at")
+  /// Deleted by its author (WhatsApp revoke, Instagram unsend).
+  revokedAt           DateTime?        @map("revoked_at")
+  /// Imported from the WhatsApp Business app's history, not received live:
+  /// never triggers automations or counts toward analytics.
+  imported            Boolean          @default(false)
+  /// Meta's pricing for the delivered message: { type, category, billable }.
+  pricing             Json?            @db.JsonB
   /// Outbound: exactly what was sent to the API. Inbound: the webhook message
   /// object (attachments, quoted message, etc.).
   body                Json             @db.JsonB
@@ -2454,6 +2817,80 @@ model Message {
   @@index([automationRunId])
   @@index([orderId])
   @@map("messages")
+}
+
+/// Every webhook delivery from Meta (WhatsApp, Messenger, Instagram), stored
+/// raw before it is processed. The endpoint acknowledges as soon as this row
+/// exists, because Messenger unsubscribes an app whose deliveries keep failing
+/// for an hour and a single coexistence history delivery can describe
+/// thousands of messages. Processing happens on the meta-inbound queue, and a
+/// stored row can be replayed while debugging. Pruned after 14 days.
+model MetaWebhookDelivery {
+  id          String    @id @default(cuid())
+  /// whatsapp_business_account | page | instagram
+  object      String
+  /// entry[].id values: WABA, Page or Instagram account ids.
+  entryIds    String[]  @default([]) @map("entry_ids")
+  /// changes[].field values, plus "messaging" / "standby" for Messenger events.
+  fields      String[]  @default([])
+  payload     Json      @db.JsonB
+  /// sha256 of the raw body. Meta redelivers byte-identical bodies, so a
+  /// repeat lands on this unique key instead of being processed twice.
+  bodyHash    String    @unique @map("body_hash")
+  receivedAt  DateTime  @default(now()) @map("received_at")
+  processedAt DateTime? @map("processed_at")
+  attempts    Int       @default(0)
+  error       String?
+
+  @@index([receivedAt])
+  @@index([object, processedAt])
+  @@map("meta_webhook_deliveries")
+}
+
+/// Every change to a contact's marketing consent, in order. WhatsApp policy
+/// needs proof of opt-in; opt-outs come from keywords, buttons, Meta's
+/// marketing preference webhook and the team.
+model ConsentEvent {
+  id             String      @id @default(cuid())
+  organizationId String      @map("organization_id")
+  contactId      String      @map("contact_id")
+  type           ConsentType
+  /// checkout | import | keyword | button | meta_preference | widget | agent | api
+  source         String
+  /// What proves it: the message id, the import file, the member who set it.
+  evidence       Json?       @db.JsonB
+  actorUserId    String?     @map("actor_user_id")
+  occurredAt     DateTime    @default(now()) @map("occurred_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact      ChannelContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId, occurredAt])
+  @@index([organizationId, occurredAt])
+  @@map("consent_events")
+}
+
+/// A team-only note on a conversation. Shown in the thread in time order;
+/// never sent to the customer.
+model ConversationNote {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  conversationId String   @map("conversation_id")
+  authorUserId   String?  @map("author_user_id")
+  /// Who wrote it when no member did: "automation" or "inbox_rule". Null on members' notes.
+  source         String?
+  body           String
+  /// User ids mentioned in the note.
+  mentions       String[] @default([])
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User?        @relation("ConversationNoteAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@map("conversation_notes")
 }
 
 // ─── Analytics ───────────────────────────────────────────────────────────────
@@ -2531,4 +2968,1241 @@ model RawAnalyticsEvent {
   @@index([eventName, occurredAt])
   @@index([sessionId])
   @@map("raw_analytics_events")
+}
+
+// ─── Inbox: teams, quick replies, saved views ───────────────────────────────
+
+enum InboxAvailability {
+  ONLINE
+  AWAY
+}
+
+/// Who a quick reply or saved view is for.
+enum InboxShareScope {
+  PERSONAL
+  TEAM
+  ORGANIZATION
+}
+
+/// A named group of members that conversations and contacts are queued for.
+model InboxTeam {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  name           String
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members       InboxTeamMember[]
+  conversations Conversation[]
+  contacts      ChannelContact[]  @relation("ContactOwnerTeam")
+  quickReplies  QuickReply[]
+  views         InboxView[]
+
+  @@unique([organizationId, name])
+  @@map("inbox_teams")
+}
+
+model InboxTeamMember {
+  teamId    String   @map("team_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  team InboxTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([teamId, userId])
+  @@index([userId])
+  @@map("inbox_team_members")
+}
+
+/// A saved answer the composer inserts when an agent types "/" and its shortcut.
+model QuickReply {
+  id             String          @id @default(cuid())
+  organizationId String          @map("organization_id")
+  shortcut       String
+  body           String
+  /// Extra words the picker matches on.
+  keywords       String[]        @default([])
+  /// { storageKey, mime, filename, mediaKind }: sent as a file with the body as its caption.
+  attachment     Json?           @db.JsonB
+  scope          InboxShareScope @default(ORGANIZATION)
+  /// TEAM scope only.
+  teamId         String?         @map("team_id")
+  /// PERSONAL scope only.
+  ownerUserId    String?         @map("owner_user_id")
+  createdById    String?         @map("created_by_id")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  team         InboxTeam?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, shortcut])
+  @@map("quick_replies")
+}
+
+/// A saved inbox filter. Each member still sees only the conversations
+/// their own access allows.
+model InboxView {
+  id             String          @id @default(cuid())
+  organizationId String          @map("organization_id")
+  name           String
+  /// The conversation list filters: status, channelId, platform, tag, teamId,
+  /// assigneeId, unread, comments, search.
+  filters        Json            @db.JsonB
+  scope          InboxShareScope @default(PERSONAL)
+  teamId         String?         @map("team_id")
+  ownerUserId    String?         @map("owner_user_id")
+  position       Int             @default(0)
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  team         InboxTeam?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("inbox_views")
+}
+
+// ─── Campaigns: templates, segments, broadcasts ─────────────────────────────
+
+enum TemplateCategory {
+  MARKETING
+  UTILITY
+  AUTHENTICATION
+}
+
+/// A WhatsApp message template. Meta owns its status and quality; rows are
+/// kept current by sync and by the template webhooks.
+model MessageTemplate {
+  id                  String            @id @default(cuid())
+  organizationId      String            @map("organization_id")
+  channelId           String            @map("channel_id")
+  wabaId              String            @map("waba_id")
+  /// Meta's template id.
+  externalId          String?           @map("external_id")
+  name                String
+  language            String
+  category            TemplateCategory
+  /// The category the business asked for, when Meta approved it as another.
+  requestedCategory   TemplateCategory? @map("requested_category")
+  /// Meta's status: PENDING, APPROVED, REJECTED, PAUSED, DISABLED, ...
+  status              String
+  /// Rejection or pause reason as Meta gave it.
+  statusReason        String?           @map("status_reason")
+  /// GREEN, YELLOW, RED or UNKNOWN.
+  qualityScore        String?           @map("quality_score")
+  /// NAMED or POSITIONAL.
+  parameterFormat     String            @default("POSITIONAL") @map("parameter_format")
+  /// Meta's `components` array, as created or as last synced.
+  components          Json              @db.JsonB
+  /// The starter it was made from, if any.
+  starterKey          String?           @map("starter_key")
+  /// Set when Collabo's recommended pack made this template: the slot it fills
+  /// (order_confirmed, cod_confirm, ...; see campaigns/templates/pack).
+  packSlot            String?           @map("pack_slot")
+  /// The pack version that created it; a replacement is the next version.
+  packVersion         Int?              @map("pack_version")
+  /// 'library' (created from Meta's Template Library) or 'collabo' (our wording).
+  packSource          String?           @map("pack_source")
+  /// The Meta Template Library template it was created from.
+  libraryTemplateName String?           @map("library_template_name")
+  /// Meta's rejection_info from the status webhook: { reason, recommendation }.
+  rejectionInfo       Json?             @map("rejection_info") @db.JsonB
+  /// When Meta's last status event for it happened; older events are ignored.
+  statusUpdatedAt     DateTime?         @map("status_updated_at")
+  submittedAt         DateTime?         @map("submitted_at")
+  /// Approved templates may be edited once a day and ten times in 30 days.
+  editedAt            DateTime[]        @default([]) @map("edited_at")
+  syncedAt            DateTime?         @map("synced_at")
+  createdById         String?           @map("created_by_id")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  broadcasts   Broadcast[]
+
+  @@unique([wabaId, name, language])
+  @@index([organizationId, status])
+  @@index([organizationId, packSlot])
+  @@map("message_templates")
+}
+
+/// Collabo's recommended template pack on one WhatsApp Business Account: what
+/// has been created there, and whether its automations go live by themselves.
+model TemplatePack {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  channelId      String    @map("channel_id")
+  wabaId         String    @map("waba_id")
+  /// True when WhatsApp was connected after the pack shipped: its automations
+  /// go live as soon as their templates are approved. Accounts connected
+  /// before stay off until the merchant turns them on.
+  autoActivate   Boolean   @default(false) @map("auto_activate")
+  /// 'connect', 'backfill' or 'manual'.
+  origin         String
+  /// The pack version last fully ensured on this account; 0 before the first run.
+  version        Int       @default(0)
+  /// 'pending', 'running', 'ready' or 'stopped'.
+  status         String    @default("pending")
+  /// Why the pack stopped (Meta's template limit, a restricted account, ...).
+  stoppedReason  String?   @map("stopped_reason")
+  lastRunAt      DateTime? @map("last_run_at")
+  /// { cartDiscount?: { code, text, validDays } }
+  settings       Json?     @db.JsonB
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([wabaId])
+  @@index([organizationId])
+  @@map("template_packs")
+}
+
+/// A saved audience: rules over contacts, their store customer and their
+/// broadcast history. See src/campaigns/segments/segment-rules.ts.
+model Segment {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  name           String
+  description    String?
+  /// { match: "all" | "any", rules: [...] }
+  definition     Json      @db.JsonB
+  lastCount      Int?      @map("last_count")
+  lastCountedAt  DateTime? @map("last_counted_at")
+  createdById    String?   @map("created_by_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name])
+  @@map("segments")
+}
+
+/// Recency, frequency and monetary scores (1-5) per store customer, and the
+/// group they put the customer in. Recomputed daily and on demand.
+model CustomerRfmScore {
+  customerId     String   @id @map("customer_id")
+  organizationId String   @map("organization_id")
+  recency        Int
+  frequency      Int
+  monetary       Int
+  /// champions, loyal, new, needs_attention, at_risk, hibernating, lost
+  segment        String
+  lastOrderAt    DateTime @map("last_order_at")
+  orderCount     Int      @map("order_count")
+  computedAt     DateTime @map("computed_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, segment])
+  @@map("customer_rfm_scores")
+}
+
+enum BroadcastStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+/// One template sent to an audience on WhatsApp.
+model Broadcast {
+  id               String            @id @default(cuid())
+  organizationId   String            @map("organization_id")
+  channelId        String            @map("channel_id")
+  name             String
+  /// Free-text grouping, for reporting several broadcasts as one campaign.
+  campaign         String?
+  status           BroadcastStatus   @default(DRAFT)
+  templateId       String?           @map("template_id")
+  /// Snapshot when sending starts; the template row may change later.
+  templateName     String?           @map("template_name")
+  templateLanguage String?           @map("template_language")
+  templateCategory TemplateCategory? @map("template_category")
+  /// Where each template parameter's value comes from. See broadcast-variables.ts.
+  variables        Json?             @db.JsonB
+  /// Who receives it and who is left out. See broadcast-audience.ts.
+  audience         Json?             @db.JsonB
+  scheduledAt      DateTime?         @map("scheduled_at")
+  startedAt        DateTime?         @map("started_at")
+  completedAt      DateTime?         @map("completed_at")
+  cancelledAt      DateTime?         @map("cancelled_at")
+  /// Why a broadcast stopped as FAILED.
+  failureReason    String?           @map("failure_reason")
+  createdById      String?           @map("created_by_id")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel              @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  template     MessageTemplate?     @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  recipients   BroadcastRecipient[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
+  @@map("broadcasts")
+}
+
+enum BroadcastRecipientStatus {
+  PENDING
+  SKIPPED
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+/// One person in a broadcast, and how far the message got.
+model BroadcastRecipient {
+  id             String                   @id @default(cuid())
+  organizationId String                   @map("organization_id")
+  broadcastId    String                   @map("broadcast_id")
+  contactId      String                   @map("contact_id")
+  status         BroadcastRecipientStatus @default(PENDING)
+  /// Why they were left out: opted_out, blocked, recently_messaged, no_number, ...
+  skipReason     String?                  @map("skip_reason")
+  messageId      String?                  @unique @map("message_id")
+  errorCode      String?                  @map("error_code")
+  errorMessage   String?                  @map("error_message")
+  attempts       Int                      @default(0)
+  queuedAt       DateTime?                @map("queued_at")
+  sentAt         DateTime?                @map("sent_at")
+  deliveredAt    DateTime?                @map("delivered_at")
+  readAt         DateTime?                @map("read_at")
+  /// First message from them after the broadcast, within the reply window.
+  repliedAt      DateTime?                @map("replied_at")
+  /// They tapped one of the template's quick-reply buttons.
+  clickedAt      DateTime?                @map("clicked_at")
+  failedAt       DateTime?                @map("failed_at")
+  createdAt      DateTime                 @default(now()) @map("created_at")
+  updatedAt      DateTime                 @updatedAt @map("updated_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  broadcast    Broadcast      @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  contact      ChannelContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([broadcastId, contactId])
+  @@index([broadcastId, status])
+  @@index([contactId, sentAt])
+  @@map("broadcast_recipients")
+}
+
+/// What Meta charges per delivered template, as the business copied it from
+/// its rate card, for the broadcast cost estimate. Keyed by calling-code
+/// prefix; "*" covers every country without its own row.
+model MessageRate {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  countryPrefix  String   @map("country_prefix")
+  label          String?
+  currency       String
+  marketing      Decimal? @db.Decimal(10, 4)
+  utility        Decimal? @db.Decimal(10, 4)
+  authentication Decimal? @db.Decimal(10, 4)
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, countryPrefix])
+  @@map("message_rates")
+}
+
+/// A spreadsheet of contacts brought in by hand, kept for the record.
+model ContactImport {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  channelId      String   @map("channel_id")
+  filename       String
+  rowCount       Int      @map("row_count")
+  created        Int
+  updated        Int
+  skipped        Int
+  /// The first rows that could not be imported, with why.
+  errors         Json     @db.JsonB
+  createdById    String?  @map("created_by_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@map("contact_imports")
+}
+
+/// A Shopify checkout, from the checkouts/create and checkouts/update
+/// webhooks. One that goes quiet without completing raises a
+/// `crm.checkout.abandoned` event for recovery automations.
+model Checkout {
+  id                 String    @id @default(cuid())
+  organizationId     String    @map("organization_id")
+  /// The store channel the checkout came from.
+  channelId          String    @map("channel_id")
+  externalId         String    @map("external_id")
+  token              String?
+  /// Shopify's `abandoned_checkout_url`: reopens the checkout with its cart.
+  recoveryUrl        String?   @map("recovery_url")
+  phone              String?
+  email              String?
+  firstName          String?   @map("first_name")
+  customerExternalId String?   @map("customer_external_id")
+  currency           String?
+  total              Decimal?  @db.Decimal(12, 2)
+  /// [{ variantId, productId, title, quantity, price }]
+  items              Json      @default("[]") @db.JsonB
+  completedAt        DateTime? @map("completed_at")
+  /// When the abandoned event was raised; set once.
+  abandonedAt        DateTime? @map("abandoned_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, externalId])
+  @@index([channelId, token])
+  /// The abandonment sweep: open, not yet raised, quiet for a while.
+  @@index([completedAt, abandonedAt, updatedAt])
+  @@map("checkouts")
+}
+
+/// One product variant as pushed to a WhatsApp number's Meta catalog. The
+/// catalog item id (product_retailer_id) is the variant id, so carts and
+/// product messages map straight back to variants.
+model CatalogItem {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  /// The WhatsApp channel whose catalog holds the item.
+  channelId      String    @map("channel_id")
+  variantId      String    @map("variant_id")
+  /// SYNCED | ERROR | SKIPPED | REMOVED
+  status         String
+  error          String?
+  /// Hash of the fields last sent, so unchanged items are not re-sent.
+  contentHash    String?   @map("content_hash")
+  syncedAt       DateTime? @map("synced_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel        @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  variant      ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, variantId])
+  @@index([channelId, status])
+  @@map("catalog_items")
+}
+
+// ─── Payments: the merchant's own gateway account ──────────────────────────
+
+enum PaymentProvider {
+  RAZORPAY
+  /// WhatsApp Pay (India): an order_details bill paid through the gateway linked in WhatsApp Manager.
+  WHATSAPP_PAY
+}
+
+enum PaymentLinkStatus {
+  CREATED
+  PARTIALLY_PAID
+  PAID
+  EXPIRED
+  CANCELLED
+}
+
+/// A merchant's own payment gateway account, so payments made in chat land
+/// in the merchant's account. Never Collabo's subscription billing account,
+/// which lives in env and BillingService.
+model PaymentAccount {
+  id             String          @id @default(cuid())
+  organizationId String          @map("organization_id")
+  provider       PaymentProvider
+  /// Razorpay key id (`rzp_live_…` / `rzp_test_…`); not secret, shown to the merchant.
+  keyId          String          @map("key_id")
+  /// EncryptionService ciphertext of { keySecret, webhookSecret }; null once disconnected.
+  credentials    String?
+  /// The secret path segment of this account's webhook URL. 24 random bytes.
+  webhookToken   String          @unique @map("webhook_token")
+  /// Whether the key is a live or a test key.
+  livemode       Boolean         @default(false)
+  connectedById  String?         @map("connected_by_id")
+  lastWebhookAt  DateTime?       @map("last_webhook_at")
+  /// Set on disconnect, with the secrets cleared. The row stays so its links keep their history.
+  disconnectedAt DateTime?       @map("disconnected_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  links        PaymentLink[]
+
+  @@unique([organizationId, provider])
+  @@map("payment_accounts")
+}
+
+/// A payment link sent in chat: for an order (cash on delivery turned
+/// prepaid, or an unpaid order), for a draft order made from a cart, or for
+/// an amount typed in the inbox.
+model PaymentLink {
+  id                   String            @id @default(cuid())
+  organizationId       String            @map("organization_id")
+  /// The Razorpay account; null for WhatsApp Pay, which is paid through the number's payment configuration.
+  accountId            String?           @map("account_id")
+  /// WhatsApp Pay: the number the bill was sent from, and its payment configuration.
+  channelId            String?           @map("channel_id")
+  paymentConfiguration String?           @map("payment_configuration")
+  provider             PaymentProvider
+  /// The gateway's id (`plink_…`).
+  externalId           String            @map("external_id")
+  shortUrl             String            @map("short_url")
+  /// Sent as the gateway's reference_id; unique per gateway account.
+  referenceId          String            @unique @map("reference_id")
+  amount               Decimal           @db.Decimal(12, 2)
+  amountPaid           Decimal           @default(0) @map("amount_paid") @db.Decimal(12, 2)
+  currency             String            @default("INR")
+  description          String
+  status               PaymentLinkStatus @default(CREATED)
+  orderId              String?           @map("order_id")
+  draftOrderId         String?           @map("draft_order_id")
+  customerId           String?           @map("customer_id")
+  contactId            String?           @map("contact_id")
+  conversationId       String?           @map("conversation_id")
+  automationRunId      String?           @map("automation_run_id")
+  createdById          String?           @map("created_by_id")
+  /// Added to the order when it is paid, e.g. "cod-to-prepaid".
+  tagOnPaid            String?           @map("tag_on_paid")
+  expiresAt            DateTime          @map("expires_at")
+  paidAt               DateTime?         @map("paid_at")
+  paymentId            String?           @map("payment_id")
+  paymentMethod        String?           @map("payment_method")
+  /// Why the paid order or draft could not be updated; the payment itself stands.
+  followUpError        String?           @map("follow_up_error")
+  /// When the order or draft was updated after payment (or the attempt recorded). Null on a
+  /// paid link means the follow-up never finished, and the sweep runs it again.
+  followedUpAt         DateTime?         @map("followed_up_at")
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  account      PaymentAccount? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  channel      Channel?        @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  order        Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  draftOrder   DraftOrder?     @relation(fields: [draftOrderId], references: [id], onDelete: SetNull)
+
+  @@unique([accountId, externalId])
+  @@index([organizationId, createdAt])
+  @@index([orderId])
+  @@index([draftOrderId])
+  @@index([conversationId])
+  @@index([channelId])
+  /// The status sweep for links whose webhook never came.
+  @@index([status, expiresAt])
+  @@map("payment_links")
+}
+
+// ─── Growth tools: chat links, QR codes, the website button and pop-up ─────
+
+/// A short link (and its QR code) that opens a chat with the business:
+/// wa.me with a pre-filled message, m.me or ig.me. Collabo redirects
+/// /l/:code to it and counts the clicks.
+model GrowthLink {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  channelId      String    @map("channel_id")
+  name           String
+  /// The public part of the short link; also the reference in WhatsApp's pre-filled message.
+  code           String    @unique
+  prefilledText  String?   @map("prefilled_text")
+  /// Added to a WhatsApp contact whose first message carries this link's reference.
+  tag            String?
+  clicks         Int       @default(0)
+  lastClickAt    DateTime? @map("last_click_at")
+  chats          Int       @default(0)
+  createdById    String?   @map("created_by_id")
+  archivedAt     DateTime? @map("archived_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, archivedAt])
+  @@map("growth_links")
+}
+
+/// The chat button and number-capture pop-up for the merchant's website,
+/// loaded from /widget/:key.js. One per organization.
+model SiteWidget {
+  id             String   @id @default(cuid())
+  organizationId String   @unique @map("organization_id")
+  /// The WhatsApp number the button opens and pop-up sign-ups join.
+  channelId      String   @map("channel_id")
+  /// Public: in the script URL on the merchant's site.
+  key            String   @unique
+  enabled        Boolean  @default(false)
+  /// { button: {...}, popup: {...} }, validated by the widget schema.
+  settings       Json     @db.JsonB
+  /// Sites allowed to send pop-up sign-ups (host names). Empty: none.
+  allowedDomains String[] @default([]) @map("allowed_domains")
+  /// The chat link behind the button: its clicks and the chats it starts are counted there.
+  buttonLinkId   String?  @unique @map("button_link_id")
+  popupViews     Int      @default(0) @map("popup_views")
+  signups        Int      @default(0)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel        Channel        @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  pendingSignups WidgetSignup[]
+
+  @@map("site_widgets")
+}
+
+/// A pop-up sign-up waiting to be confirmed on WhatsApp. The number typed
+/// proves nothing; a message carrying the code proves its sender owns the
+/// number it came from, and that contact is opted in. Pruned once expired.
+model WidgetSignup {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  widgetId       String    @map("widget_id")
+  /// Digits with the country code, as typed. The number that confirms may differ.
+  phone          String
+  name           String?
+  page           String?
+  /// The pop-up's consent wording the person agreed to.
+  consentText    String    @map("consent_text")
+  /// In WhatsApp's pre-filled message ("Code: K7Q2MX"); works once.
+  code           String
+  expiresAt      DateTime  @map("expires_at")
+  confirmedAt    DateTime? @map("confirmed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  widget       SiteWidget   @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, code])
+  @@index([organizationId, createdAt])
+  @@map("widget_signups")
+}
+
+// ─── Ads: chats from click-to-message ads, their results, and conversions ──
+
+/// A chat that started from a click-to-WhatsApp, -Messenger or -Instagram ad:
+/// the referral Meta puts on the first message.
+model AdReferral {
+  id             String          @id @default(cuid())
+  organizationId String          @map("organization_id")
+  channelId      String          @map("channel_id")
+  platform       ChannelPlatform
+  contactId      String          @map("contact_id")
+  conversationId String?         @map("conversation_id")
+  /// The message that carried it; one referral per message.
+  messageId      String?         @unique @map("message_id")
+  /// WhatsApp `source_id`, Messenger and Instagram `ad_id`.
+  adId           String          @map("ad_id")
+  headline       String?
+  body           String?
+  sourceUrl      String?         @map("source_url")
+  mediaUrl       String?         @map("media_url")
+  /// WhatsApp's click id, for the Conversions API (absent for Status ads).
+  ctwaClid       String?         @map("ctwa_clid")
+  ref            String?
+  occurredAt     DateTime        @map("occurred_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, occurredAt])
+  @@index([organizationId, adId])
+  @@index([contactId, occurredAt])
+  @@map("ad_referrals")
+}
+
+/// The Meta ad account whose results (spend, conversations) the Ads page
+/// shows, read with a token from Facebook Login with `ads_read`.
+model AdAccount {
+  id             String    @id @default(cuid())
+  organizationId String    @unique @map("organization_id")
+  /// `act_…`; null until one of the shared accounts is chosen.
+  externalId     String?   @map("external_id")
+  name           String?
+  currency       String?
+  /// EncryptionService ciphertext of the user's long-lived token.
+  credentials    String
+  /// The ad accounts the token can read: [{ id, name, currency }].
+  available      Json      @default("[]") @db.JsonB
+  tokenExpiresAt DateTime? @map("token_expires_at")
+  connectedById  String?   @map("connected_by_id")
+  lastError      String?   @map("last_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("ad_accounts")
+}
+
+/// A conversion sent to Meta's Conversions API for business messaging, kept
+/// so each is sent once: Meta does not de-duplicate these.
+model ConversionEvent {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  channelId      String    @map("channel_id")
+  paymentLinkId  String?   @map("payment_link_id")
+  orderId        String?   @map("order_id")
+  eventName      String    @map("event_name")
+  datasetId      String    @map("dataset_id")
+  ctwaClid       String    @map("ctwa_clid")
+  value          Decimal   @db.Decimal(12, 2)
+  currency       String
+  /// SENT | FAILED
+  status         String
+  error          String?
+  sentAt         DateTime? @map("sent_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentLinkId, eventName])
+  @@index([organizationId, createdAt])
+  @@map("conversion_events")
+}
+
+// ─── Public API and outgoing webhooks ──────────────────────────────────────
+
+/// A key for /api/v1/public/v1, shown once when made. Only its SHA-256 is kept.
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  name           String
+  /// The first characters, to tell keys apart in the list.
+  prefix         String
+  hash           String    @unique
+  /// messages:send · contacts:read · contacts:write · templates:read · webhooks:manage
+  scopes         String[]
+  createdById    String?   @map("created_by_id")
+  lastUsedAt     DateTime? @map("last_used_at")
+  revokedAt      DateTime? @map("revoked_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("api_keys")
+}
+
+/// Where Collabo posts events, signed with the endpoint's secret.
+model WebhookEndpoint {
+  id                  String    @id @default(cuid())
+  organizationId      String    @map("organization_id")
+  url                 String
+  description         String?
+  /// message.received · contact.tag_added · order.* · payment.received · website.signup · ad.referral
+  events              String[]
+  /// EncryptionService ciphertext of the signing secret.
+  secret              String
+  enabled             Boolean   @default(true)
+  /// Made through the API (a Zapier REST hook, say) with this key.
+  apiKeyId            String?   @map("api_key_id")
+  consecutiveFailures Int       @default(0) @map("consecutive_failures")
+  disabledReason      String?   @map("disabled_reason")
+  lastDeliveryAt      DateTime? @map("last_delivery_at")
+  createdById         String?   @map("created_by_id")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deliveries   WebhookDelivery[]
+
+  @@index([organizationId])
+  @@map("webhook_endpoints")
+}
+
+/// One event for one endpoint: sent, retried, or given up on.
+model WebhookDelivery {
+  id             String    @id @default(cuid())
+  endpointId     String    @map("endpoint_id")
+  organizationId String    @map("organization_id")
+  event          String
+  /// What happened, so a retried source sends once: an event row id, order:kind, payment:id.
+  sourceId       String    @map("source_id")
+  payload        Json      @db.JsonB
+  /// PENDING | SENT | FAILED
+  status         String    @default("PENDING")
+  attempts       Int       @default(0)
+  responseStatus Int?      @map("response_status")
+  error          String?
+  deliveredAt    DateTime? @map("delivered_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@unique([endpointId, sourceId])
+  @@index([endpointId, createdAt])
+  @@map("webhook_deliveries")
+}
+
+// ─── Shopify customer segments, for broadcast audiences ────────────────────
+
+/// A customer segment from the store's Shopify admin, linked so Collabo
+/// segments can use it ("Shopify segment is …"). Its members are re-read
+/// daily and on demand.
+model ShopifySegment {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  /// The Shopify store channel.
+  channelId      String    @map("channel_id")
+  /// gid://shopify/Segment/…
+  externalId     String    @map("external_id")
+  name           String
+  /// Shopify's segment query, for reference.
+  query          String?
+  /// Members Shopify reported, and how many are customers Collabo has.
+  memberCount    Int?      @map("member_count")
+  matchedCount   Int?      @map("matched_count")
+  syncedAt       DateTime? @map("synced_at")
+  lastError      String?   @map("last_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel                @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  members      ShopifySegmentMember[]
+
+  @@unique([channelId, externalId])
+  @@index([organizationId])
+  @@map("shopify_segments")
+}
+
+model ShopifySegmentMember {
+  segmentId  String   @map("segment_id")
+  customerId String   @map("customer_id")
+  syncedAt   DateTime @map("synced_at")
+
+  segment  ShopifySegment @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+  customer Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@id([segmentId, customerId])
+  @@index([customerId])
+  @@map("shopify_segment_members")
+}
+
+// ─── WhatsApp groups (Cloud API Groups) ─────────────────────────────────────
+
+enum WhatsAppGroupStatus {
+  /// Asked for; Meta's group_create webhook brings the id and invite link.
+  CREATING
+  ACTIVE
+  SUSPENDED
+  DELETING
+  DELETED
+  FAILED
+}
+
+/// A WhatsApp group the business runs on one of its numbers: Official
+/// Business Accounts only, up to 8 participants besides the business, who join
+/// by invite link. Its chat is an inbox conversation of `contact`.
+model WhatsAppGroup {
+  id               String              @id @default(cuid())
+  organizationId   String              @map("organization_id")
+  channelId        String              @map("channel_id")
+  /// Meta's group id; null until the group_create webhook names it.
+  externalId       String?             @map("external_id")
+  /// From the create call, to match its group_create webhook.
+  requestId        String?             @map("request_id")
+  subject          String
+  description      String?
+  /// auto_approve, or approval_required for join requests the team approves.
+  joinApprovalMode String              @default("auto_approve") @map("join_approval_mode")
+  inviteLink       String?             @map("invite_link")
+  status           WhatsAppGroupStatus @default(CREATING)
+  statusReason     String?             @map("status_reason")
+  participantCount Int                 @default(0) @map("participant_count")
+  /// The contact that stands for the group in the inbox.
+  contactId        String?             @unique @map("contact_id")
+  createdByUserId  String?             @map("created_by_user_id")
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  organization Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel                    @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  contact      ChannelContact?            @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  participants WhatsAppGroupParticipant[]
+  joinRequests WhatsAppGroupJoinRequest[]
+
+  @@unique([channelId, externalId])
+  @@unique([channelId, requestId])
+  @@index([organizationId])
+  @@map("whatsapp_groups")
+}
+
+model WhatsAppGroupParticipant {
+  id        String    @id @default(cuid())
+  groupId   String    @map("group_id")
+  waId      String    @map("wa_id")
+  /// Their WhatsApp profile name, from their messages.
+  name      String?
+  joinedAt  DateTime  @default(now()) @map("joined_at")
+  leftAt    DateTime? @map("left_at")
+  /// business (removed) or participant (left).
+  leftBy    String?   @map("left_by")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  group WhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, waId])
+  @@map("whatsapp_group_participants")
+}
+
+model WhatsAppGroupJoinRequest {
+  id              String    @id @default(cuid())
+  groupId         String    @map("group_id")
+  /// Meta's join_request_id.
+  externalId      String    @map("external_id")
+  waId            String    @map("wa_id")
+  /// PENDING, APPROVED, REJECTED or REVOKED (withdrawn by the user).
+  status          String    @default("PENDING")
+  requestedAt     DateTime  @map("requested_at")
+  decidedAt       DateTime? @map("decided_at")
+  decidedByUserId String?   @map("decided_by_user_id")
+
+  group WhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, externalId])
+  @@index([groupId, status])
+  @@map("whatsapp_group_join_requests")
+}
+
+// ─── WhatsApp calling (Business Calling API) ────────────────────────────────
+
+enum WhatsAppCallDirection {
+  USER_INITIATED
+  BUSINESS_INITIATED
+}
+
+enum WhatsAppCallStatus {
+  /// A person's call waiting for a teammate, or a business call ringing them.
+  RINGING
+  /// Answered or placed in a browser; the media path is being set up.
+  CONNECTING
+  ACTIVE
+  COMPLETED
+  /// A person's call nobody answered, or a business call they did not pick up.
+  MISSED
+  REJECTED
+  FAILED
+}
+
+/// A WhatsApp voice call answered or placed from a teammate's browser over
+/// WebRTC. The SDPs are kept while the call is set up; the outcome is posted
+/// in the conversation.
+model WhatsAppCall {
+  id              String                @id @default(cuid())
+  organizationId  String                @map("organization_id")
+  channelId       String                @map("channel_id")
+  conversationId  String?               @map("conversation_id")
+  contactId       String?               @map("contact_id")
+  /// Meta's call id (wacid…).
+  externalId      String?               @map("external_id")
+  direction       WhatsAppCallDirection
+  status          WhatsAppCallStatus    @default(RINGING)
+  /// Meta's offer for a person's call; the browser's for a business call.
+  offerSdp        String?               @map("offer_sdp")
+  answerSdp       String?               @map("answer_sdp")
+  /// The teammate who answered or placed it.
+  agentUserId     String?               @map("agent_user_id")
+  startedAt       DateTime              @default(now()) @map("started_at")
+  answeredAt      DateTime?             @map("answered_at")
+  endedAt         DateTime?             @map("ended_at")
+  durationSeconds Int?                  @map("duration_seconds")
+  failure         String?
+  createdAt       DateTime              @default(now()) @map("created_at")
+  updatedAt       DateTime              @updatedAt @map("updated_at")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel         @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  conversation Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  contact      ChannelContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@unique([channelId, externalId])
+  @@index([organizationId, status])
+  @@index([conversationId])
+  @@map("whatsapp_calls")
+}
+
+enum ReviewProvider {
+  JUDGEME
+}
+
+/// A merchant's own review app, where reviews collected on WhatsApp are
+/// published. Judge.me: the shop's myshopify domain, proven with the shop's
+/// private API key when connected. The key is not kept: publishing needs none.
+model ReviewAccount {
+  id             String         @id @default(cuid())
+  organizationId String         @map("organization_id")
+  provider       ReviewProvider
+  /// The shop on the review app (Judge.me: example.myshopify.com).
+  shopDomain     String         @map("shop_domain")
+  /// The shop's name on the review app, read when it was connected.
+  shopName       String?        @map("shop_name")
+  /// Whether the review app publishes new reviews without approval, read when it was connected.
+  autopublish    Boolean?
+  connectedById  String?        @map("connected_by_id")
+  disconnectedAt DateTime?      @map("disconnected_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, provider])
+  @@map("review_accounts")
+}
+
+enum ProductReviewStatus {
+  /// Sent to the review app.
+  POSTED
+  /// Kept in Collabo only: no review text, no email, or no review app connected.
+  SAVED
+  /// The review app refused it or could not be reached.
+  FAILED
+}
+
+/// A rating and review a customer gave on WhatsApp for a product of an order
+/// (or for the shop), and what happened when it was published.
+model ProductReview {
+  id                String              @id @default(cuid())
+  organizationId    String              @map("organization_id")
+  orderId           String?             @map("order_id")
+  conversationId    String?             @map("conversation_id")
+  contactId         String?             @map("contact_id")
+  automationRunId   String?             @map("automation_run_id")
+  /// Shopify product id; null for a review of the shop.
+  productExternalId String?             @map("product_external_id")
+  productTitle      String?             @map("product_title")
+  rating            Int
+  body              String              @default("")
+  reviewerName      String              @map("reviewer_name")
+  reviewerEmail     String?             @map("reviewer_email")
+  provider          ReviewProvider?
+  status            ProductReviewStatus
+  /// Why it was only saved, or why the review app refused it.
+  reason            String?
+  postedAt          DateTime?           @map("posted_at")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order        Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  conversation Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  contact      ChannelContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([orderId])
+  @@map("product_reviews")
+}
+
+/// The organization's Google account, for sheets used by automations. Scope
+/// drive.file only: Google gives access to the sheets Collabo creates or the
+/// merchant picks, never the rest of their Drive.
+model GoogleAccount {
+  id             String    @id @default(cuid())
+  organizationId String    @unique @map("organization_id")
+  email          String?
+  /// EncryptionService ciphertext of the refresh token; null once disconnected.
+  credentials    String?
+  scopes         String[]  @default([])
+  connectedById  String?   @map("connected_by_id")
+  disconnectedAt DateTime? @map("disconnected_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("google_accounts")
+}
+
+/// A spreadsheet automations use: they add rows to it, or a new row in it
+/// starts one ("A row is added to a sheet").
+model GoogleSheet {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  spreadsheetId  String    @map("spreadsheet_id")
+  title          String
+  url            String
+  /// The tab rows are read from and added to: the first one.
+  tab            String
+  /// created (by Collabo) or picked (an existing sheet chosen in Google's picker).
+  origin         String
+  /// Rows (the header included) already seen; null until an automation watches the sheet.
+  seenRows       Int?      @map("seen_rows")
+  /// A hash of the last row seen's values, to find it again when rows above it are deleted.
+  lastRowHash    String?   @map("last_row_hash")
+  checkedAt      DateTime? @map("checked_at")
+  /// Why the sheet could not be read last time; cleared when it can.
+  lastError      String?   @map("last_error")
+  /// The last new row that started nothing, and why (no phone number).
+  skippedRow     String?   @map("skipped_row")
+  createdById    String?   @map("created_by_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, spreadsheetId])
+  @@map("google_sheets")
+}
+
+/// Collabo's usage meter, a calendar month (UTC, "2026-10") at a time: the
+/// WhatsApp conversations started. Calling minutes, team members and Instagram
+/// accounts are read from their own tables.
+model UsageMonth {
+  organizationId String   @map("organization_id")
+  period         String
+  conversations  Int      @default(0)
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, period])
+  @@map("usage_months")
+}
+
+enum UsageBillStatus {
+  PROCESSING
+  /// Nothing over the plan's allowance, or too little to charge.
+  NOTHING_DUE
+  /// An add-on on the card subscription, charged with its next renewal.
+  ADDED
+  /// Emailed as a payment link: add-ons need a subscription paid by card.
+  LINK_SENT
+  PAID
+  /// Not billed here: no active subscription on a plan with usage prices.
+  SKIPPED
+  FAILED
+}
+
+/// A month's charges over the plan's allowance, billed once the month is over.
+/// Amounts are in the currency's smallest unit (paise, cents).
+model UsageBill {
+  id             String          @id @default(cuid())
+  organizationId String          @map("organization_id")
+  period         String
+  status         UsageBillStatus @default(PROCESSING)
+  plan           BillingPlan?
+  currency       String?
+  /// The month's usage: { conversations, callingMinutes, members, instagramAccounts }.
+  usage          Json?           @db.JsonB
+  /// Each charge: [{ key, quantity, unitPrice, amount }].
+  lines          Json?           @db.JsonB
+  subtotal       Int?
+  tax            Int?
+  total          Int?
+  /// The Razorpay add-on (ao_…) or payment link (plink_…).
+  externalId     String?         @map("external_id")
+  paymentUrl     String?         @map("payment_url")
+  /// Why it was skipped or failed.
+  note           String?
+  attempts       Int             @default(0)
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, period])
+  @@index([status])
+  @@map("usage_bills")
+}
+
+// ─── Point of sale ───────────────────────────────────────────────────────────
+
+enum PosStaffRole {
+  CASHIER
+  /// Can approve discounts and price changes over the store's limits.
+  MANAGER
+}
+
+enum PosPaymentMethod {
+  CASH
+  UPI
+  CARD
+  OTHER
+}
+
+/// A store employee who bills at the point of sale. Cashiers need no Collabo
+/// login: a device a member is signed in on unlocks for them with their PIN.
+model PosStaff {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  name           String
+  role           PosStaffRole @default(CASHIER)
+  /// bcrypt of the 4–6 digit PIN. PINs are unique per organization, checked in code.
+  pinHash        String       @map("pin_hash")
+  isActive       Boolean      @default(true) @map("is_active")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orders       Order[]
+  payments     OrderPayment[]
+  activities   PosActivity[]  @relation("PosActivityStaff")
+  approvals    PosActivity[]  @relation("PosActivityApprover")
+
+  @@index([organizationId])
+  @@map("pos_staff")
+}
+
+/// One payment taken for an order at the counter. A sale can have several
+/// (split across cash, UPI and card) or come to less than its total (part-paid,
+/// the balance collected later).
+model OrderPayment {
+  id             String           @id @default(cuid())
+  organizationId String           @map("organization_id")
+  orderId        String           @map("order_id")
+  method         PosPaymentMethod
+  amount         Decimal          @db.Decimal(12, 2)
+  /// Cash handed over when more than the amount; the change is the difference.
+  tendered       Decimal?         @db.Decimal(12, 2)
+  /// UPI transaction id, or the card machine's approval code or last four digits.
+  reference      String?
+  posStaffId     String?          @map("pos_staff_id")
+  /// The Collabo member signed in on the device.
+  receivedById   String?          @map("received_by_id")
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order        Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  posStaff     PosStaff?    @relation(fields: [posStaffId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([organizationId, createdAt])
+  @@map("order_payments")
+}
+
+/// What happened at the counter that a manager may want to review: sales,
+/// approvals given, wrong PINs, staff switching.
+model PosActivity {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  type           String
+  posStaffId     String?  @map("pos_staff_id")
+  /// The manager whose PIN approved it, for approvals.
+  approvedById   String?  @map("approved_by_id")
+  orderId        String?  @map("order_id")
+  /// The Collabo member signed in on the device.
+  deviceUserId   String?  @map("device_user_id")
+  details        Json?    @db.JsonB
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  posStaff     PosStaff?    @relation("PosActivityStaff", fields: [posStaffId], references: [id], onDelete: SetNull)
+  approvedBy   PosStaff?    @relation("PosActivityApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  order        Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@map("pos_activities")
 }

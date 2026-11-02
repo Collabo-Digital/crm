@@ -1,0 +1,80 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "field": "group_settings_update",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "groups": [
+              {
+                "timestamp": "1744344520",
+                "group_id": "HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA",
+                "type": "group_settings_update",
+                "request_id": "req-5",
+                "group_subject": {
+                  "text": "Summer drop insiders",
+                  "update_successful": true
+                },
+                "group_description": {
+                  "text": "Nope",
+                  "update_successful": false,
+                  "errors": [
+                    {
+                      "code": 131009,
+                      "message": "Invalid parameter",
+                      "title": "Invalid",
+                      "error_data": {
+                        "details": "Too long"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "field": "group_status_update",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "groups": [
+              {
+                "timestamp": "1744344521",
+                "type": "group_suspend",
+                "group_id": "HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA"
+              }
+            ]
+          }
+        },
+        {
+          "field": "group_status_update",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "groups": [
+              {
+                "timestamp": "1744344522",
+                "type": "group_suspend_cleared",
+                "group_id": "HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

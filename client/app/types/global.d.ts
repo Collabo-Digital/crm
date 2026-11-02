@@ -1,6 +1,6 @@
 /**
  * Global declarations for the Meta JavaScript SDK (Facebook Login / WhatsApp
- * Embedded Signup). Loaded via <script> tag in root.tsx.
+ * Embedded Signup). Loaded on demand by lib/meta-sdk.ts.
  *
  * The SDK is typed loosely as `any` because we only touch `FB.init` and
  * `FB.login` — building full types for the whole SDK is not worth the weight.

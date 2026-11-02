@@ -25,10 +25,13 @@ export function InstagramConnectDialog({
   open,
   onOpenChange,
   reconnectChannelId,
+  onUseFacebook,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   reconnectChannelId?: string;
+  /** Offer the Facebook Page route instead (staff only; influencers have no Page). */
+  onUseFacebook?: () => void;
 }) {
   const install = useInstallInstagramMutation();
 
@@ -79,6 +82,20 @@ export function InstagramConnectDialog({
           Each sign-in connects one account. To add another, connect again and
           sign in with that account.
         </p>
+
+        {onUseFacebook && (
+          <p className="text-caption text-muted-foreground">
+            Is the account linked to a Facebook Page?{" "}
+            <button
+              type="button"
+              onClick={onUseFacebook}
+              className="font-medium text-brand-strong underline hover:text-brand-strong-hover"
+            >
+              Connect it through the Page instead
+            </button>{" "}
+            — Messenger and Instagram then share one connection.
+          </p>
+        )}
 
         <DialogFooter>
           <Button

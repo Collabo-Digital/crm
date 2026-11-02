@@ -29,16 +29,9 @@ import type {
  * returns unwrapped response data (the API client strips the envelope).
  */
 export const inventoryService = {
-  // ── Status / enable ────────────────────────────────────────────────────
+  // ── Status ─────────────────────────────────────────────────────────────
   status: () =>
     apiClient.get<InventoryStatus>("/inventory/status").then((r) => r.data),
-
-  enable: () =>
-    apiClient
-      .post<{ status: "ALREADY_ENABLED" | "SEEDING"; warehouseId?: string }>(
-        "/inventory/enable",
-      )
-      .then((r) => r.data),
 
   // ── Stock ──────────────────────────────────────────────────────────────
   listStock: (params?: StockListParams) =>

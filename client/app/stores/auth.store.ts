@@ -29,6 +29,12 @@ interface AuthState {
    */
   pendingPlan: BillingPlan | null;
   pendingBillingInterval: BillingInterval | null;
+  /**
+   * The page a session that ended on its own (expired, refused by the server)
+   * was on, to return to after signing in again. Null after signing out on
+   * purpose. Not persisted.
+   */
+  returnTo: string | null;
 }
 
 /** Actions available on the auth store. */
@@ -45,7 +51,7 @@ interface AuthActions {
   setImpersonation: (impersonatedBy: string | null) => void;
   setPendingPlan: (plan: BillingPlan, interval: BillingInterval) => void;
   clearPendingPlan: () => void;
-  logout: () => void;
+  logout: (returnTo?: string) => void;
 }
 
 const initialState: AuthState = {
@@ -58,6 +64,7 @@ const initialState: AuthState = {
   impersonatedBy: null,
   pendingPlan: null,
   pendingBillingInterval: null,
+  returnTo: null,
 };
 
 /**
@@ -157,7 +164,7 @@ export const useAuthStore = create<AuthState & AuthActions>()(
       clearPendingPlan: () =>
         set({ pendingPlan: null, pendingBillingInterval: null }),
 
-      logout: () => set(initialState),
+      logout: (returnTo) => set({ ...initialState, returnTo: returnTo ?? null }),
     }),
     {
       name: "crm-auth",

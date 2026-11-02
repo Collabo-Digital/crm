@@ -111,6 +111,8 @@ export class RateLimitedError extends Error {
     /// Earliest sensible moment to try again, epoch ms.
     public readonly retryAtMs: number,
     public readonly reason: DenyReason,
+    /// Meta's error code when Meta itself refused the call (131048, 131056...).
+    public readonly metaCode?: number,
   ) {
     super(
       `Rate limited on ${scopeKey(scope)} until ${new Date(retryAtMs).toISOString()} (${reason})`,

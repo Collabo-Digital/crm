@@ -44,7 +44,9 @@ export class SyncProcessor extends WorkerHost {
         );
 
         try {
-            await this.syncService.runSync(channelId, organizationId, entityTypes, priority);
+            await this.syncService.runSync(channelId, organizationId, entityTypes, priority, {
+                pushAfter: job.data.pushAfter === true,
+            });
         } catch (err) {
             // A rate limit mid-run parks the job (no attempt consumed) and the
             // per-entity cursors resume it later. Everything else rethrows.

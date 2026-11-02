@@ -21,9 +21,12 @@ export class InventoryProcessor extends WorkerHost {
       case 'enable-seed':
         await this.inventory.runEnableSeed(data.organizationId, data.userId);
         break;
+      case 'switch-over':
+        await this.inventory.runSwitchOver(data.organizationId);
+        break;
       default: {
-        const _exhaustive: never = data.type;
-        throw new Error(`Unknown inventory job type: ${String(_exhaustive)}`);
+        const _exhaustive: never = data;
+        throw new Error(`Unknown inventory job type: ${JSON.stringify(_exhaustive)}`);
       }
     }
   }

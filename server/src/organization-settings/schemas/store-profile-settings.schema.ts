@@ -55,6 +55,13 @@ export const StoreProfileSettingsSchema = z.object({
    * drops to the wordmark when it is empty or fails to load.
    */
   logoUrl: z.string().default(''),
+  /**
+   * The stored file behind `logoUrl` when the logo was uploaded rather than
+   * typed in. Set and cleared only by the logo upload route, never by PATCH.
+   * PDFs embed only an uploaded logo: the server never fetches a URL a member
+   * typed, and a typed one prints the trading name instead.
+   */
+  logoStorageKey: z.string().default(''),
 });
 
 export type StoreProfileSettings = z.infer<typeof StoreProfileSettingsSchema>;

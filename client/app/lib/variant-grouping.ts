@@ -220,10 +220,10 @@ export function pendingCombinationCount(
  */
 const SWATCH_TINTS = [
   "bg-brand text-brand-foreground",
-  "bg-info-subtle text-info",
-  "bg-success-subtle text-success",
-  "bg-warning-subtle text-warning",
-  "bg-danger-subtle text-danger",
+  "bg-info-subtle text-info-text",
+  "bg-success-subtle text-success-text",
+  "bg-warning-subtle text-warning-text",
+  "bg-danger-subtle text-danger-text",
   "bg-muted text-muted-foreground",
 ] as const;
 
