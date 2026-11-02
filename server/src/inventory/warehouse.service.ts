@@ -185,6 +185,35 @@ export class WarehouseService {
         'Set another warehouse as default instead of unsetting this one.',
       );
     }
+    // Against the location as this edit leaves it: the stored flag alone lets
+    // one edit make a location both the default and inactive.
+    if (dto.isDefault === true && !(dto.isActive ?? warehouse.isActive)) {
+      throw new BadRequestException(
+        'An inactive location cannot be the default. Make it active first.',
+      );
+    }
+    if (dto.isActive === false && warehouse.isActive) {
+      // An inactive location takes no adjustment, while its units still count
+      // in each variant's cached quantity: stock left there is sold from other
+      // locations and can never be corrected.
+      const holding = await this.prisma.stockLevel.findFirst({
+        where: {
+          warehouseId: id,
+          OR: [
+            { available: { not: 0 } },
+            { reserved: { not: 0 } },
+            { qc: { not: 0 } },
+            { damaged: { not: 0 } },
+          ],
+        },
+        select: { id: true },
+      });
+      if (holding) {
+        throw new BadRequestException(
+          `${warehouse.name} still holds stock. Set every quantity there to 0 before making it inactive.`,
+        );
+      }
+    }
     if (dto.code !== undefined && dto.code !== warehouse.code) {
       // The code prefixes every rack and bin code, which are printed on
       // labels and scanned; renaming it would orphan them.

@@ -24,7 +24,7 @@ function matches(row: Row, where: Row = {}): boolean {
 }
 const defined = (data: Row) => Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
 
-function build(opts: { gstEnabled?: boolean; bins?: number } = {}) {
+function build(opts: { gstEnabled?: boolean; bins?: number; stock?: Row[] } = {}) {
   const warehouses: Row[] = [
     { id: 'wh_main', organizationId: ORG, name: 'Main warehouse', code: 'WH1', kind: 'WAREHOUSE', isDefault: true, isActive: true, address: null, gstinId: null, shopifyLocationId: null, apobDeclared: false, createdAt: new Date(1) },
   ];
@@ -51,7 +51,21 @@ function build(opts: { gstEnabled?: boolean; bins?: number } = {}) {
       }),
     },
     warehouseLocation: { count: jest.fn(async () => opts.bins ?? 0) },
-    stockLevel: { groupBy: jest.fn(async () => []) },
+    stockLevel: {
+      groupBy: jest.fn(() => Promise.resolve([])),
+      findFirst: jest.fn(
+        ({ where }: { where: { warehouseId: string; OR: Array<Record<string, { not: number }>> } }) =>
+          Promise.resolve(
+            (opts.stock ?? []).find(
+              (row) =>
+                row.warehouseId === where.warehouseId &&
+                where.OR.some((bucket) =>
+                  Object.entries(bucket).every(([column, { not }]) => row[column] !== not),
+                ),
+            ) ?? null,
+          ),
+      ),
+    },
     organization: { findUnique: jest.fn(async () => ({ gstEnabled: opts.gstEnabled ?? true, name: 'Acme Pvt Ltd' })) },
     organizationGstin: {
       findFirst: jest.fn(async ({ where }: any) => gstins.find((g) => matches(g, where)) ?? null),
@@ -218,5 +232,58 @@ describe('WarehouseService — editing a location', () => {
       "The code can't change once racks and bins use it.",
     );
     expect((await build().service.update(ORG, 'wh_main', { code: 'MAIN' })).code).toBe('MAIN');
+  });
+
+  const kochiStore = {
+    id: 'wh_kochi', organizationId: ORG, name: 'Kochi store', code: 'KO', kind: 'STORE', isDefault: false, isActive: true,
+    address: kochi, gstinId: null, shopifyLocationId: null, apobDeclared: false, createdAt: new Date(2),
+  };
+  const stockAt = (warehouseId: string, buckets: { available?: number; reserved?: number }) => ({
+    warehouseId, available: 0, reserved: 0, qc: 0, damaged: 0, ...buckets,
+  });
+
+  it('refuses to make a location inactive while it holds stock, sellable or reserved', async () => {
+    // Inactive, it takes no adjustment while its units still count in each
+    // variant's total: sold from elsewhere, and never correctable.
+    for (const buckets of [{ available: 10 }, { reserved: 2 }]) {
+      const { service, warehouses } = build({ stock: [stockAt('wh_kochi', buckets)] });
+      warehouses.push({ ...kochiStore });
+
+      await expect(service.update(ORG, 'wh_kochi', { isActive: false })).rejects.toThrow(
+        new BadRequestException('Kochi store still holds stock. Set every quantity there to 0 before making it inactive.'),
+      );
+      expect(warehouses[1].isActive).toBe(true);
+    }
+  });
+
+  it('makes a location inactive once every quantity there is 0', async () => {
+    const { service, warehouses } = build({ stock: [stockAt('wh_kochi', {}), stockAt('wh_main', { available: 7 })] });
+    warehouses.push({ ...kochiStore });
+
+    expect((await service.update(ORG, 'wh_kochi', { isActive: false })).isActive).toBe(false);
+  });
+
+  it('refuses to make an inactive location the default, including one this edit makes inactive', async () => {
+    const { service, warehouses } = build();
+    warehouses.push({ ...kochiStore }, { ...kochiStore, id: 'wh_old', name: 'Old godown', code: 'OG', isActive: false });
+
+    await expect(service.update(ORG, 'wh_kochi', { isDefault: true, isActive: false })).rejects.toThrow(
+      new BadRequestException('An inactive location cannot be the default. Make it active first.'),
+    );
+    await expect(service.update(ORG, 'wh_old', { isDefault: true })).rejects.toThrow(
+      'An inactive location cannot be the default. Make it active first.',
+    );
+    expect(warehouses.filter((w) => w.isDefault).map((w) => w.id as string)).toEqual(['wh_main']);
+  });
+
+  it('makes an inactive location the default in the edit that makes it active', async () => {
+    const { service, warehouses } = build();
+    warehouses.push({ ...kochiStore, isActive: false });
+
+    expect(await service.update(ORG, 'wh_kochi', { isDefault: true, isActive: true })).toMatchObject({
+      isDefault: true,
+      isActive: true,
+    });
+    expect(warehouses[0].isDefault).toBe(false);
   });
 });
