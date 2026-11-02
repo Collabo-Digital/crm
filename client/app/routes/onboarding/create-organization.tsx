@@ -48,8 +48,16 @@ const TIMEZONES = [
 //
 // Note: `currency` is intentionally NOT collected here. It gets auto-populated
 // from the Shopify shop's currency when the user connects their Shopify store
-// (see server/src/channel/shopify-oauth.service.ts). Users without Shopify
-// keep the backend default ("USD") and can change it in Settings → General.
+// (see server/src/channel/shopify-oauth.service.ts). Until then a workspace on
+// India time starts in rupees, and any other keeps the backend default ("USD");
+// both can be changed in Settings → General.
+
+/** The browser's time zone when it is one we list ("Asia/Calcutta" is the older name for India's). */
+function browserTimezone(): string {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const name = zone === "Asia/Calcutta" ? "Asia/Kolkata" : zone;
+  return TIMEZONES.some((option) => option.value === name) ? name : "UTC";
+}
 
 const createOrganizationSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").max(100),
@@ -81,6 +89,7 @@ export default function CreateOrganizationPage() {
   const pendingBillingInterval = useAuthStore((state) => state.pendingBillingInterval);
   const clearPendingPlan = useAuthStore((state) => state.clearPendingPlan);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [defaultTimezone] = useState(browserTimezone);
 
   const {
     register,
@@ -90,7 +99,7 @@ export default function CreateOrganizationPage() {
     formState: { errors },
   } = useForm<CreateOrganizationFormValues>({
     resolver: zodResolver(createOrganizationSchema),
-    defaultValues: { name: "", industry: "", website: "", logo: "", timezone: "UTC" },
+    defaultValues: { name: "", industry: "", website: "", logo: "", timezone: defaultTimezone },
   });
 
   const logoValue = watch("logo");
@@ -104,8 +113,8 @@ export default function CreateOrganizationPage() {
         website: data.website || undefined,
         logo: data.logo || undefined,
         timezone: data.timezone || undefined,
-        // currency is auto-synced from Shopify on channel connect; backend
-        // default ("USD") covers users who haven't connected a store yet.
+        // Shopify sets the shop's own currency on connect; before that, India time means rupees.
+        currency: data.timezone === "Asia/Kolkata" ? "INR" : undefined,
         billingPlan: pendingPlan ?? "BASIC",
         billingInterval: pendingBillingInterval ?? "MONTHLY",
       });
@@ -309,7 +318,7 @@ export default function CreateOrganizationPage() {
           <div className="grid grid-cols-1 gap-4">
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-gray-700">Timezone</label>
-              <Select defaultValue="UTC" onValueChange={(selectedTimezone) => setValue("timezone", selectedTimezone)}>
+              <Select defaultValue={defaultTimezone} onValueChange={(selectedTimezone) => setValue("timezone", selectedTimezone)}>
                 <SelectTrigger className="w-full border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 dark:text-gray-100 shadow-sm">
                   <SelectValue placeholder="Select timezone" />
                 </SelectTrigger>
