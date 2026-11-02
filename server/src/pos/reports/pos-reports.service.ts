@@ -91,11 +91,16 @@ export class PosReportsService {
           SUM((li."price" * li."quantity" - li."total_discount") * o."exchange_rate")::float8 AS sales
         FROM "orders" o
         JOIN "order_line_items" li ON li."order_id" = o."id"
+        LEFT JOIN "product_variants" v ON v."id" = li."variant_id"
+        LEFT JOIN "products" pr ON pr."id" = v."product_id"
         WHERE ${scope}
           AND o."exchange_rate" IS NOT NULL
           AND UPPER(o."base_currency") = ${window.currency}
-        -- A line typed in at the counter has no variant; it groups by its name.
-        GROUP BY li."variant_id", CASE WHEN li."variant_id" IS NULL THEN li."title" END
+        -- A line typed in at the counter has no variant, and a custom item
+        -- shares the till's hidden variant with every other: each groups by
+        -- its name.
+        GROUP BY li."variant_id",
+          CASE WHEN li."variant_id" IS NULL OR pr."metadata"->>'posCustomItem' = 'true' THEN li."title" END
         ORDER BY quantity DESC, sales DESC
         LIMIT 10`,
     ]);
