@@ -234,6 +234,19 @@ describe('InvoiceService.getGstReturn', () => {
     expect(result.interState.byState[0].invoiceCount).toBe(2);
   });
 
+  it('takes a quarter’s reverse charge from the months in it as well as the quarter', async () => {
+    prisma.invoice.count.mockResolvedValue(0);
+    prisma.invoice.findMany.mockResolvedValue([]);
+
+    await service.getGstReturn('org1', { ...query, period: 'Q2', returnType: GstReturnType.GSTR3B });
+    await service.getGstReturn('org1', { ...query, period: '08', returnType: GstReturnType.GSTR3B });
+
+    const periods = (prisma.inwardSupply.findMany.mock.calls as Array<[{ where: { period: unknown } }]>).map(
+      ([args]) => args.where.period,
+    );
+    expect(periods).toEqual([{ in: ['Q2', '07', '08', '09'] }, '08']);
+  });
+
   it('files a dollar invoice and its credit note in rupees, at their order’s rate', async () => {
     // Rupees stay as they are, whatever rate the order carries into the org's
     // own currency.

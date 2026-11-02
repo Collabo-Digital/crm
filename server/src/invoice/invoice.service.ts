@@ -2384,11 +2384,23 @@ export class InvoiceService {
     financialYear: string,
     period: string,
   ): Promise<Gstr3bReturn['reverseCharge']> {
+    // Fees are entered for a month ("04") or a quarter ("Q1"); a quarterly
+    // return owes the tax on its three months' entries as well.
+    const quarter = /^Q([1-4])$/i.exec(period);
     const rows = await this.prisma.inwardSupply.findMany({
       where: {
         organizationId: orgId,
         financialYear,
-        period,
+        period: quarter
+          ? {
+              in: [
+                period,
+                ...[0, 1, 2].map((i) =>
+                  String((((Number(quarter[1]) - 1) * 3 + i + 3) % 12) + 1).padStart(2, '0'),
+                ),
+              ],
+            }
+          : period,
         isReverseCharge: true,
       },
       select: { feeAmount: true, gstAmount: true },
