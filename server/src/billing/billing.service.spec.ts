@@ -127,3 +127,83 @@ describe('BillingService checkout', () => {
         expect(razorpay.createSubscription).not.toHaveBeenCalled();
     });
 });
+
+describe('BillingService.subscribeOrganization', () => {
+    const config = new ConfigService({ billing: { plans: { GROWTH: { MONTHLY: { INR: 'plan_growthINR' }, YEARLY: { INR: 'plan_growthINRyearly' } } } } });
+    function build(org: Record<string, unknown>) {
+        const prisma = {
+            organization: { findUniqueOrThrow: jest.fn(() => Promise.resolve(org)), update: jest.fn(() => Promise.resolve({})) },
+            user: { findUniqueOrThrow: jest.fn(() => Promise.resolve({ email: 'owner@acme.test' })) },
+        };
+        const razorpay = {
+            createSubscription: jest.fn(() => Promise.resolve({ id: 'sub_new' })),
+            cancelSubscription: jest.fn(() => Promise.resolve()),
+            getKeyId: jest.fn(() => 'rzp_test_1'),
+        };
+        return { prisma, razorpay, service: new BillingService(prisma as never, razorpay as never, config, {} as never) };
+    }
+
+    it('starts a subscription for the workspace, leaving its plan as it is until Razorpay says it is paid', async () => {
+        const { service, prisma, razorpay } = build({ billingProvider: null, externalSubscriptionId: null, subscriptionStatus: null });
+        await expect(service.subscribeOrganization('org_1', 'u_1', 'GROWTH', 'YEARLY', 'INR')).resolves.toEqual({ subscriptionId: 'sub_new', razorpayKeyId: 'rzp_test_1', currency: 'INR' });
+        expect(razorpay.createSubscription).toHaveBeenCalledWith({
+            planId: 'plan_growthINRyearly',
+            totalCount: 10,
+            notifyEmail: 'owner@acme.test',
+            notes: { organizationId: 'org_1', userId: 'u_1', plan: 'GROWTH', interval: 'YEARLY', currency: 'INR' },
+        });
+        expect(prisma.organization.update).toHaveBeenCalledWith({
+            where: { id: 'org_1' },
+            data: { externalSubscriptionId: 'sub_new', subscriptionStatus: 'CREATED', billingProvider: 'RAZORPAY' },
+        });
+        expect(razorpay.cancelSubscription).not.toHaveBeenCalled();
+    });
+
+    it('cancels the subscription it replaces, one left unpaid or halted', async () => {
+        const { service, razorpay } = build({ billingProvider: 'RAZORPAY', externalSubscriptionId: 'sub_halted', subscriptionStatus: 'HALTED' });
+        await service.subscribeOrganization('org_1', 'u_1', 'GROWTH', 'MONTHLY', 'INR');
+        expect(razorpay.cancelSubscription).toHaveBeenCalledWith('sub_halted');
+    });
+
+    it('refuses a workspace already paying, and one on a plan the Collabo team set up', async () => {
+        for (const org of [
+            { billingProvider: 'RAZORPAY', externalSubscriptionId: 'sub_live', subscriptionStatus: 'ACTIVE' },
+            { billingProvider: 'MANUAL', externalSubscriptionId: null, subscriptionStatus: null },
+        ]) {
+            const { service, razorpay } = build(org);
+            await expect(service.subscribeOrganization('org_1', 'u_1', 'GROWTH', 'MONTHLY', 'INR')).rejects.toThrow(/Talk to/);
+            expect(razorpay.createSubscription).not.toHaveBeenCalled();
+        }
+    });
+});
+
+describe('BillingService.handleWebhookEvent', () => {
+    const config = new ConfigService({ billing: { plans: { PRO: { YEARLY: { USD: 'plan_proUSDyearly' } } } } });
+
+    it('moves a workspace to the plan its subscription is on once Razorpay activates it', async () => {
+        const prisma = {
+            user: { updateMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+            organization: { updateMany: jest.fn(() => Promise.resolve({ count: 1 })) },
+        };
+        const service = new BillingService(prisma as never, {} as never, config, {} as never);
+        await service.handleWebhookEvent('subscription.activated', {
+            subscription: { entity: { id: 'sub_1', status: 'active', current_end: 1_800_000_000, customer_id: 'cust_1', plan_id: 'plan_proUSDyearly' } },
+        });
+        expect(prisma.organization.updateMany).toHaveBeenCalledWith({
+            where: { externalSubscriptionId: 'sub_1' },
+            data: {
+                subscriptionStatus: 'ACTIVE',
+                currentPeriodEnd: new Date(1_800_000_000_000),
+                externalCustomerId: 'cust_1',
+                billingPlan: 'PRO',
+                billingInterval: 'YEARLY',
+                billingCurrency: 'USD',
+            },
+        });
+
+        await service.handleWebhookEvent('subscription.charged', {
+            subscription: { entity: { id: 'sub_2', status: 'active', current_end: null, plan_id: 'plan_earlierPrice' } },
+        });
+        expect(prisma.organization.updateMany).toHaveBeenLastCalledWith({ where: { externalSubscriptionId: 'sub_2' }, data: { subscriptionStatus: 'ACTIVE', currentPeriodEnd: null } });
+    });
+});

@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import {
     BillingInterval,
     BillingPlan,
+    BillingProvider,
     Prisma,
     SubscriptionStatus,
 } from '@prisma/client';
@@ -16,7 +17,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { BILLING_CURRENCIES, BILLING_INTERVALS, BillingCurrency, GST_PERCENT, PLANS, pricingPlan, YEARLY_DISCOUNT_PERCENT } from './pricing';
 import { RazorpayService } from './razorpay.service';
-import { razorpayPlanId } from './razorpay-plans';
+import { planOfRazorpayId, razorpayPlanId } from './razorpay-plans';
 import { UsageBillingService } from './usage-billing.service';
 
 /**
@@ -30,6 +31,7 @@ interface RazorpayWebhookPayload {
             status: string;
             current_end: number | null;
             customer_id?: string | null;
+            plan_id?: string | null;
         };
     };
     /**
@@ -67,6 +69,9 @@ interface RazorpayWebhookPayload {
 
 /** About ten years of renewals: subscriptions end by being cancelled, not by running out. */
 const SUBSCRIPTION_CYCLES: Record<BillingInterval, number> = { MONTHLY: 120, YEARLY: 10 };
+
+/** Paid for, or authorised and about to be. */
+const LIVE_SUBSCRIPTION: SubscriptionStatus[] = [SubscriptionStatus.ACTIVE, SubscriptionStatus.AUTHENTICATED];
 
 /** Subscriptions Razorpay will not charge again. */
 const ENDED_SUBSCRIPTION: SubscriptionStatus[] = [
@@ -227,6 +232,71 @@ export class BillingService {
         return planId;
     }
 
+    /**
+     * Settings → Billing, for a workspace that already exists: a Razorpay
+     * subscription the owner pays for in Checkout.js. The workspace moves to
+     * the plan once Razorpay says it is paid (handleWebhookEvent), so leaving
+     * the payment half-way changes nothing. A workspace already paying changes
+     * plan with the Collabo team, as does one whose plan the team set up.
+     */
+    async subscribeOrganization(
+        orgId: string,
+        userId: string,
+        plan: BillingPlan,
+        interval: BillingInterval,
+        currency: BillingCurrency,
+    ) {
+        const planId = this.checkoutPlanId(plan, interval, currency);
+        const [org, user] = await Promise.all([
+            this.prisma.organization.findUniqueOrThrow({
+                where: { id: orgId },
+                select: { billingProvider: true, externalSubscriptionId: true, subscriptionStatus: true },
+            }),
+            this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true } }),
+        ]);
+        if (org.billingProvider === BillingProvider.MANUAL) {
+            throw new BadRequestException('The Collabo team looks after this workspace’s plan. Talk to them to change it.');
+        }
+        if (org.subscriptionStatus && LIVE_SUBSCRIPTION.includes(org.subscriptionStatus)) {
+            throw new BadRequestException('This workspace already pays for a plan. Talk to us to change it.');
+        }
+
+        let subscription: Awaited<ReturnType<typeof this.razorpay.createSubscription>>;
+        try {
+            subscription = await this.razorpay.createSubscription({
+                planId,
+                totalCount: SUBSCRIPTION_CYCLES[interval],
+                notifyEmail: user.email,
+                notes: { organizationId: orgId, userId, plan, interval, currency },
+            });
+        } catch (err) {
+            this.rethrowRazorpay('subscription creation', err);
+        }
+
+        // The one it replaces (left unpaid, or halted) must not be charged later.
+        const earlier = org.externalSubscriptionId;
+        if (earlier && !(org.subscriptionStatus && ENDED_SUBSCRIPTION.includes(org.subscriptionStatus))) {
+            await this.razorpay.cancelSubscription(earlier).catch((err: unknown) =>
+                this.logger.warn(`Earlier subscription ${earlier} of org ${orgId} was not cancelled: ${this.extractRazorpayError(err) ?? String(err)}`),
+            );
+        }
+        await this.prisma.organization.update({
+            where: { id: orgId },
+            data: {
+                externalSubscriptionId: subscription.id,
+                subscriptionStatus: SubscriptionStatus.CREATED,
+                billingProvider: BillingProvider.RAZORPAY,
+            },
+        });
+        this.logger.log(`Org ${orgId}: subscription ${subscription.id} started on ${planId} by ${userId}`);
+
+        return {
+            subscriptionId: subscription.id,
+            razorpayKeyId: this.razorpay.getKeyId(),
+            currency,
+        };
+    }
+
     /** Polled by the client after the Razorpay modal closes. */
     async getPendingStatus(userId: string) {
         const user = await this.prisma.user.findUniqueOrThrow({
@@ -376,6 +446,7 @@ export class BillingService {
                     this.mapRazorpayStatus(sub.status),
                     sub.current_end,
                     sub.customer_id ?? null,
+                    sub.plan_id ?? null,
                 );
                 break;
             }
@@ -436,6 +507,7 @@ export class BillingService {
         status: SubscriptionStatus,
         currentEndUnix: number | null,
         customerId: string | null,
+        planId: string | null = null,
     ): Promise<void> {
         const periodEnd = currentEndUnix ? new Date(currentEndUnix * 1000) : null;
 
@@ -457,13 +529,17 @@ export class BillingService {
             return;
         }
 
-        // Post-org-creation: subscription is on the Organization (renewals etc.)
+        // Post-org-creation: subscription is on the Organization (renewals,
+        // and one started from Settings). The plan follows the Razorpay plan
+        // the subscription is on; one of an earlier price leaves it as it is.
+        const onPlan = planId ? planOfRazorpayId(this.config, planId) : null;
         const orgResult = await this.prisma.organization.updateMany({
             where: { externalSubscriptionId: razorpaySubId },
             data: {
                 subscriptionStatus: status,
                 currentPeriodEnd: periodEnd,
                 ...(customerId ? { externalCustomerId: customerId } : {}),
+                ...(onPlan ? { billingPlan: onPlan.plan, billingInterval: onPlan.interval, billingCurrency: onPlan.currency } : {}),
             },
         });
         if (orgResult.count > 0) {
