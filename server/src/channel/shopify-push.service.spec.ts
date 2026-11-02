@@ -50,6 +50,7 @@ function offlineOrder(overrides: Record<string, unknown> = {}) {
     currency: 'INR',
     note: null,
     totalPrice: decimal('1769.90'),
+    financialStatus: 'PAID',
     metadata: { source: 'offline', paymentMethod: 'CARD' },
     externalId: 'manual_abc',
     channel: { platform: ChannelPlatform.MANUAL },
@@ -402,6 +403,29 @@ describe('ShopifyPushService.pushOrder', () => {
     expect(graphql.request).not.toHaveBeenCalled();
     expect(lastSyncPatch(prisma)).toMatchObject({ status: 'FAILED', attempts: 0 });
     expect(lastSyncPatch(prisma).error).toMatch(reason);
+  });
+
+  // A SALE for the total is what makes Shopify call the order paid: its echo
+  // books the payment here, and a courier reading Shopify stops collecting the
+  // cash on delivery.
+  it.each(['PENDING', 'AUTHORIZED', 'PARTIALLY_PAID'])('sends no payment for an order still %s', async (financialStatus) => {
+    const { service, graphql } = build(offlineOrder({ financialStatus }));
+
+    await service.pushOrder(ORDER_ID, ORG);
+
+    const createCall = graphql.request.mock.calls.find((c) => c[1] === ORDER_CREATE_MUTATION);
+    expect(createCall?.[2]).toMatchObject({ order: { transactions: [] } });
+  });
+
+  it('sends the full SALE for a paid order refunded in part, as the money was taken', async () => {
+    const { service, graphql } = build(offlineOrder({ financialStatus: 'PARTIALLY_REFUNDED' }));
+
+    await service.pushOrder(ORDER_ID, ORG);
+
+    const createCall = graphql.request.mock.calls.find((c) => c[1] === ORDER_CREATE_MUTATION);
+    expect(createCall?.[2]).toMatchObject({
+      order: { transactions: [{ kind: 'SALE', status: 'SUCCESS', amountSet: { shopMoney: { amount: '1769.9' } } }] },
+    });
   });
 });
 

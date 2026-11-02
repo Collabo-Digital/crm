@@ -137,10 +137,11 @@ export function isStalePendingSync(
 /**
  * Why a CRM order must not be pushed, or null when it may be.
  *
- * The push creates a PAID Shopify order with a SALE transaction for the full
- * total and decrements Shopify stock, and a Shopify order cannot be deleted.
- * A cancelled, refunded or voided sale would arrive as a live paid order that
- * fulfilment apps may ship, and its echo would revive it in the CRM.
+ * The push creates a live Shopify order, paid by a SALE transaction for the
+ * full total once the money was taken, and decrements Shopify stock, and a
+ * Shopify order cannot be deleted. A cancelled, refunded or voided sale would
+ * arrive as a live order that fulfilment apps may ship, and its echo would
+ * revive it in the CRM.
  */
 export function unpushableOrderReason(order: {
   cancelledAt: Date | null;
@@ -529,7 +530,9 @@ export class ShopifyPushService {
         }
         : {}),
       ...(customerBlock ? { customer: customerBlock } : {}),
-      // A successful SALE transaction covering the total marks the order paid.
+      // A successful SALE transaction covering the total marks the order paid,
+      // so it is sent only once the money was taken: an order still unpaid
+      // must reach Shopify unpaid, or couriers stop collecting it on delivery.
       // A point-of-sale bill sends what was actually taken instead.
       transactions:
         order.posSale || order.payments?.length
@@ -540,14 +543,17 @@ export class ShopifyPushService {
             gateway: t.gateway,
             ...(t.locationId ? { locationId: t.locationId } : {}),
           }))
-          : [
-            {
-              kind: 'SALE',
-              status: 'SUCCESS',
-              amountSet: money(grandTotal),
-              gateway: this.resolveGateway(order.metadata),
-            },
-          ],
+          : order.financialStatus === OrderFinancialStatus.PAID ||
+            order.financialStatus === OrderFinancialStatus.PARTIALLY_REFUNDED
+            ? [
+              {
+                kind: 'SALE',
+                status: 'SUCCESS',
+                amountSet: money(grandTotal),
+                gateway: this.resolveGateway(order.metadata),
+              },
+            ]
+            : [],
     };
 
     // A counter sale that was not pushed at sale time already had its stock
