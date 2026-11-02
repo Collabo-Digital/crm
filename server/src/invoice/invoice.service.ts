@@ -2081,6 +2081,30 @@ export class InvoiceService {
     const scale = (value: Prisma.Decimal.Value) =>
       isFull ? dec(value) : money(dec(value).times(ratio));
 
+    // The note that credits the last of the goods takes what each line has
+    // left, not its share. Every note rounds its share half-up, so shares alone
+    // can reverse more of a tax head than the invoice charged (9.01 of 9.00).
+    const finishesGoods =
+      !credited.isZero() && goodsPart.greaterThan(0) && goodsPart.equals(goodsRemaining);
+    const creditedLines = finishesGoods
+      ? await tx.invoiceLineItem.findMany({
+          where: {
+            invoice: {
+              organizationId: orgId,
+              creditNoteForId: invoiceId,
+              status: InvoiceStatus.CREDIT_NOTE,
+            },
+          },
+          select: {
+            orderLineItemId: true,
+            taxableValue: true,
+            cgstAmount: true,
+            sgstAmount: true,
+            igstAmount: true,
+          },
+        })
+      : [];
+
     const financialYear = this.calculator.getFinancialYear(noteDate, timeZone);
     const noteNumber = await this.invoiceNumber.getNextCreditNoteNumber(
       orgId,
@@ -2089,10 +2113,16 @@ export class InvoiceService {
     );
 
     const lines = original.lineItems.map((li) => {
-      const taxableValue = scale(li.taxableValue);
-      const cgstAmount = scale(li.cgstAmount);
-      const sgstAmount = scale(li.sgstAmount);
-      const igstAmount = scale(li.igstAmount);
+      // A note's lines carry their invoice line's orderLineItemId.
+      const earlier = creditedLines.filter((c) => c.orderLineItemId === li.orderLineItemId);
+      const part = (field: 'taxableValue' | 'cgstAmount' | 'sgstAmount' | 'igstAmount') =>
+        finishesGoods
+          ? earlier.reduce((left, c) => left.minus(c[field]), dec(li[field]))
+          : scale(li[field]);
+      const taxableValue = part('taxableValue');
+      const cgstAmount = part('cgstAmount');
+      const sgstAmount = part('sgstAmount');
+      const igstAmount = part('igstAmount');
       const totalTax = cgstAmount.plus(sgstAmount).plus(igstAmount);
       return {
         orderLineItemId: li.orderLineItemId,

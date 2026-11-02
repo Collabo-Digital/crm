@@ -964,7 +964,13 @@ describe('InvoiceService credit notes', () => {
 
   // 1000 of goods + 180 GST + 100 of untaxed shipping.
   function build(
-    opts: { lines?: object[]; totals?: Record<string, string>; credited?: Record<string, string | null> } = {},
+    opts: {
+      lines?: object[];
+      totals?: Record<string, string>;
+      credited?: Record<string, string | null>;
+      /** Lines of the notes already raised, as `invoiceLineItem.findMany` reads them. */
+      creditedLines?: object[];
+    } = {},
   ) {
     const original = {
       id: 'inv_1',
@@ -994,6 +1000,9 @@ describe('InvoiceService credit notes', () => {
           _sum: { grandTotal: null, subtotal: null, totalTax: null, ...opts.credited },
         }),
         create: jest.fn(({ data }: any) => Promise.resolve(data)),
+      },
+      invoiceLineItem: {
+        findMany: jest.fn(() => Promise.resolve(opts.creditedLines ?? [])),
       },
       organization: {
         findUnique: jest.fn().mockResolvedValue({ gstEnabled: true, timezone: 'Asia/Kolkata' }),
@@ -1100,6 +1109,47 @@ describe('InvoiceService credit notes', () => {
     // Same share of each line: 18% stays 18%, 5% stays 5%.
     expect(note.lines[0].tax / note.lines[0].taxable).toBeCloseTo(0.18, 3);
     expect(note.lines[1].tax / note.lines[1].taxable).toBeCloseTo(0.05, 2);
+  });
+
+  it('credits what each tax head has left on the last note, never more than was charged', async () => {
+    // 100 + 9 CGST + 9 SGST. A first note for 0.59 took 0.05 of each head
+    // (0.045 rounded up) and 0.49 of goods.
+    const { raise, tx } = build({
+      lines: [
+        line({
+          taxableValue: '100.00',
+          cgstAmount: '9.00',
+          sgstAmount: '9.00',
+          totalTax: '18.00',
+          totalAmount: '118.00',
+        }),
+      ],
+      totals: {
+        grandTotal: '118.00',
+        subtotal: '100.00',
+        totalCgst: '9.00',
+        totalSgst: '9.00',
+        totalTax: '18.00',
+        shippingCharge: '0.00',
+      },
+      credited: { grandTotal: '0.59', subtotal: '0.49', totalTax: '0.10' },
+      creditedLines: [
+        { orderLineItemId: 'li_1', taxableValue: '0.49', cgstAmount: '0.05', sgstAmount: '0.05', igstAmount: '0.00' },
+      ],
+    });
+
+    const note = await raise({});
+    const [[{ data }]] = tx.invoice.create.mock.calls as unknown as [
+      [{ data: Record<'totalCgst' | 'totalSgst', unknown> }],
+    ];
+
+    // 9.00 - 0.05 of each head, not 8.955 rounded up to 8.96 (9.01 in all).
+    expect([Number(data.totalCgst), Number(data.totalSgst)]).toEqual([8.95, 8.95]);
+    expect(note).toMatchObject({ subtotal: 99.51, tax: 17.9, shipping: 0, total: 117.41 });
+    const [[{ where }]] = tx.invoiceLineItem.findMany.mock.calls as unknown as [[{ where: object }]];
+    expect(where).toEqual({
+      invoice: { organizationId: ORG, creditNoteForId: 'inv_1', status: InvoiceStatus.CREDIT_NOTE },
+    });
   });
 });
 
