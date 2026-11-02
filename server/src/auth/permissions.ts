@@ -123,8 +123,9 @@ export interface PermissionPreset {
  *
  * Every template names a section, or a section-less job: a member with
  * neither is unrestricted (see `resolveSections`). The Packer, Warehouse and
- * Cashier stay within the grants billed as an ops seat. The Accountant has no
- * Orders section, because Agents can change orders.
+ * Cashier stay within the grants billed as an ops seat, so none of them holds
+ * products.edit; changing the catalogue is the Catalogue's job. The Accountant
+ * has no Orders section, because Agents can change orders.
  */
 export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
   {
@@ -146,6 +147,13 @@ export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
     description:
       'Sees and downloads invoices, GST returns and payment fees, and opens Analytics. Cannot issue, cancel or change anything. No orders, chats or customers.',
     grants: ['section.invoices', 'section.analytics', 'reports.finance'],
+  },
+  {
+    id: 'catalogue',
+    label: 'Catalogue',
+    description:
+      'Adds and edits products, their prices and photos, and the stock counts in the product form. Sees stock at each location. No orders, customers or sales figures.',
+    grants: ['section.products', 'products.edit', 'inventory.view'],
   },
   {
     id: 'warehouse',

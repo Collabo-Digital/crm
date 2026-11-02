@@ -121,6 +121,12 @@ describe('product route access', () => {
         }
     });
 
+    it('lets a Catalogue member make every change an agent may', () => {
+        expect(reachable({ role: UserRole.AGENT, permissions: template('catalogue') })).toEqual(
+            names([...reads, ...writes.filter((r) => !managerOnly(r) && !STOCK_ROUTES.includes(r.name))]),
+        );
+    });
+
     it('refuses a viewer every change, even holding products.edit', () => {
         expect(reachable({ role: UserRole.VIEWER, permissions: ['section.products', 'products.edit'] })).toEqual(names(reads));
     });
