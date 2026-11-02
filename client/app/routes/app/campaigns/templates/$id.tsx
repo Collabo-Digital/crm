@@ -23,11 +23,11 @@ export function meta() {
 /** One template: its status at Meta and, where Meta allows it, an editor. */
 export default function TemplatePage() {
   const { id } = useParams();
-  const { data: template, isLoading, isError, refetch } = useTemplate(id);
+  const { data: template, isLoading, isError, error, refetch } = useTemplate(id);
   const save = useSaveTemplateMutation();
   const { can } = useCurrentRole();
 
-  if (isError) return <QueryErrorState resource="this template" onRetry={() => void refetch()} />;
+  if (isError) return <QueryErrorState resource="this template" error={error} onRetry={() => void refetch()} />;
   if (isLoading || !template) return <Skeleton className="h-96 w-full rounded-xl" />;
 
   const editable = template.editable && can("templates.manage");

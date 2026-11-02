@@ -34,7 +34,7 @@ export default function SegmentPage() {
   const { id } = useParams();
   const isNew = !id;
   const navigate = useNavigate();
-  const { data: segment, isLoading, isError, refetch } = useSegment(id);
+  const { data: segment, isLoading, isError, error, refetch } = useSegment(id);
   const save = useSaveSegmentMutation();
   const { data: tagRows = [] } = useContactTags();
   const { data: channels = [] } = useChannels();
@@ -57,7 +57,7 @@ export default function SegmentPage() {
   const debounced = useDebounced(definition, 400);
   const preview = useSegmentPreview(complete ? debounced : null);
 
-  if (!isNew && isError) return <QueryErrorState resource="this segment" onRetry={() => void refetch()} />;
+  if (!isNew && isError) return <QueryErrorState resource="this segment" error={error} onRetry={() => void refetch()} />;
   if (!isNew && (isLoading || !segment)) return <Skeleton className="h-96 w-full rounded-xl" />;
 
   return (

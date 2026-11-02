@@ -94,7 +94,7 @@ export default function OrderDetailPage() {
 }
 
 function OwnerOrderDetail({ id }: { id: string }) {
-  const { data: order, isLoading, isError, refetch } = useOrder(id);
+  const { data: order, isLoading, isError, error, refetch } = useOrder(id);
   // Back to the list as it was left: same page and search, even after walking
   // Previous/Next through other orders.
   const ordersPath = useListReturnPath("orders", "/orders");
@@ -139,7 +139,7 @@ function OwnerOrderDetail({ id }: { id: string }) {
   if (isError && !order) {
     return (
       <div className="p-8">
-        <QueryErrorState resource="this order" onRetry={() => refetch()} />
+        <QueryErrorState resource="this order" error={error} onRetry={() => refetch()} />
       </div>
     );
   }
