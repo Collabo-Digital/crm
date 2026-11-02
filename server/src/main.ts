@@ -3,6 +3,7 @@ import { ValidationPipe } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { json } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import type { IncomingMessage } from 'node:http';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -40,6 +41,15 @@ async function bootstrap() {
     contentSecurityPolicy: false,
   }));
   app.use(cookieParser());
+
+  // Signed-in API answers are private and change from one request to the
+  // next; without a Cache-Control the browser keeps them in its disk cache.
+  // Routes that may be cached (chat media, group pictures, the website
+  // widget) set their own header in the handler, which replaces this one.
+  app.use('/api/v1', (_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
 
   // Response compression lives here, not in Caddy: only the DigitalOcean
   // deploy has a proxy in front, while the single-container compose, Render
