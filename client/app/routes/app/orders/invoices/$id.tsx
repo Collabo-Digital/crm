@@ -104,7 +104,7 @@ function toRequest(d: Draft): UpdateInvoiceRequest {
 
 export default function InvoicePage() {
   const { id } = useParams<{ id: string }>();
-  const { data: invoice, isLoading, isError, refetch } = useInvoice(id);
+  const { data: invoice, isLoading, isError, error, refetch } = useInvoice(id);
   const { canCancel } = useInvoiceActionGates();
   // An Accountant reads invoices without the order book.
   const opensOrders = useSectionAccess().canAccess("/orders");
@@ -124,7 +124,7 @@ export default function InvoicePage() {
   const [creditTarget, setCreditTarget] = useState<InvoiceDetail | null>(null);
 
   if (isError) {
-    return <QueryErrorState resource="this invoice" onRetry={() => refetch()} />;
+    return <QueryErrorState resource="this invoice" error={error} onRetry={() => refetch()} />;
   }
   if (isLoading || !invoice) {
     return (

@@ -51,7 +51,7 @@ export default function DraftDetailPage() {
   const navigate = useNavigate();
   // Back to the list as it was left: same page and search.
   const draftsPath = useListReturnPath("drafts", "/orders/drafts");
-  const { data: draft, isLoading, isError, refetch } = useDraftOrder(id);
+  const { data: draft, isLoading, isError, error, refetch } = useDraftOrder(id);
   const { data: org } = useCurrentOrg();
   const currency = draft?.currency ?? org?.currency ?? "INR";
 
@@ -67,7 +67,7 @@ export default function DraftDetailPage() {
   if (isError && !draft) {
     return (
       <div className="p-8">
-        <QueryErrorState resource="this draft" onRetry={() => refetch()} />
+        <QueryErrorState resource="this draft" error={error} onRetry={() => refetch()} />
       </div>
     );
   }

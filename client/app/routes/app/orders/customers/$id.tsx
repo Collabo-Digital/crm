@@ -83,7 +83,7 @@ export default function CustomerDetailPage() {
   );
   const [gstOpen, setGstOpen] = useState(false);
 
-  const { data: customer, isLoading, isError, refetch } = useCustomer(id);
+  const { data: customer, isLoading, isError, error, refetch } = useCustomer(id);
   const navigate = useNavigate();
   const startChat = useStartChatMutation();
   const { canAccess } = useSectionAccess();
@@ -103,7 +103,7 @@ export default function CustomerDetailPage() {
   if (isError || !customer) {
     return (
       <div className="p-8">
-        <QueryErrorState resource="this customer" onRetry={() => refetch()} />
+        <QueryErrorState resource="this customer" error={error} onRetry={() => refetch()} />
       </div>
     );
   }

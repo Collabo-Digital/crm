@@ -6,6 +6,7 @@ import { SectionCard } from "~/components/app/section-card";
 import { Button } from "~/components/ui/button";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { useSetupProgress } from "~/hooks/use-dashboard-queries";
+import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { cn } from "~/lib/utils";
 import { useAuthStore } from "~/stores/auth.store";
 import type { SetupProgress } from "~/types/api";
@@ -42,6 +43,8 @@ type Step = {
   why: string;
   done: (p: SetupProgress) => boolean;
   actions: (p: SetupProgress) => Array<{ label: string; to: string } | false>;
+  /** Personal workspaces are for one person: the server refuses every invite. */
+  teamsOnly?: true;
 };
 
 const STEPS: Step[] = [
@@ -74,6 +77,7 @@ const STEPS: Step[] = [
     why: "Give packers, agents and managers their own sign-in, with only what they need.",
     done: (p) => p.team,
     actions: () => [{ label: "Invite", to: "/settings/members" }],
+    teamsOnly: true,
   },
   {
     title: "Turn on the recommended messages",
@@ -95,6 +99,8 @@ export function GetStartedCard({ className }: { className?: string }) {
   const canSetUp = role === "OWNER" || role === "ADMIN";
   const [hidden, setHidden] = useState(() => readHidden(orgId));
   const { data } = useSetupProgress(canSetUp && !hidden);
+  const { data: org } = useCurrentOrg();
+  const steps = STEPS.filter((step) => !(step.teamsOnly && org?.type === "PERSONAL"));
 
   useEffect(() => {
     const sync = () => setHidden(readHidden(orgId));
@@ -104,14 +110,14 @@ export function GetStartedCard({ className }: { className?: string }) {
   }, [orgId]);
 
   if (!canSetUp || hidden || !data || !orgId) return null;
-  const done = STEPS.filter((step) => step.done(data)).length;
-  if (done === STEPS.length) return null;
+  const done = steps.filter((step) => step.done(data)).length;
+  if (done === steps.length) return null;
 
   return (
     <SectionCard
       className={className}
       title="Get your store live"
-      description={`${done} of ${STEPS.length} done. Each step ticks itself off once it's set up.`}
+      description={`${done} of ${steps.length} done. Each step ticks itself off once it's set up.`}
       action={
         <Button variant="ghost" size="icon-sm" aria-label="Hide the setup guide" title="Hide the setup guide" onClick={() => writeHidden(orgId, true)}>
           <X />
@@ -120,11 +126,11 @@ export function GetStartedCard({ className }: { className?: string }) {
     >
       <div className="px-5 pt-4" aria-hidden>
         <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-          <div className="h-full rounded-full bg-success" style={{ width: `${(done / STEPS.length) * 100}%` }} />
+          <div className="h-full rounded-full bg-success" style={{ width: `${(done / steps.length) * 100}%` }} />
         </div>
       </div>
       <ol className="divide-y divide-border/70 pb-1">
-        {STEPS.map((step) => {
+        {steps.map((step) => {
           const complete = step.done(data);
           const actions = step.actions(data).filter((a): a is { label: string; to: string } => !!a);
           return (

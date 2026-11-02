@@ -98,14 +98,14 @@ function Recipients({ broadcast }: { broadcast: BroadcastDetail }) {
 export default function BroadcastPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { data: broadcast, isLoading, isError, refetch } = useBroadcast(id);
+  const { data: broadcast, isLoading, isError, error, refetch } = useBroadcast(id);
   const { can } = useCurrentRole();
   const duplicate = useDuplicateBroadcastMutation();
   const remove = useDeleteBroadcastMutation();
   const cancel = useCancelBroadcastMutation(id ?? "");
   const retry = useRetryBroadcastMutation(id ?? "");
 
-  if (isError) return <QueryErrorState resource="this broadcast" onRetry={() => void refetch()} />;
+  if (isError) return <QueryErrorState resource="this broadcast" error={error} onRetry={() => void refetch()} />;
   if (isLoading || !broadcast) return <Skeleton className="h-96 w-full rounded-xl" />;
 
   const isDraft = broadcast.status === "DRAFT";

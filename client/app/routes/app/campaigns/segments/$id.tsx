@@ -5,6 +5,7 @@ import { ArrowLeft, Loader2, Users } from "lucide-react";
 import { SegmentBuilder, isComplete } from "~/components/app/campaigns/segment-builder";
 import { ChannelBadge } from "~/components/app/channel-badge";
 import { TagChip } from "~/components/app/inbox/tag-chip";
+import { QueryErrorState } from "~/components/app/query-error-state";
 import { SectionCard } from "~/components/app/section-card";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -33,7 +34,7 @@ export default function SegmentPage() {
   const { id } = useParams();
   const isNew = !id;
   const navigate = useNavigate();
-  const { data: segment, isLoading } = useSegment(id);
+  const { data: segment, isLoading, isError, error, refetch } = useSegment(id);
   const save = useSaveSegmentMutation();
   const { data: tagRows = [] } = useContactTags();
   const { data: channels = [] } = useChannels();
@@ -56,6 +57,7 @@ export default function SegmentPage() {
   const debounced = useDebounced(definition, 400);
   const preview = useSegmentPreview(complete ? debounced : null);
 
+  if (!isNew && isError) return <QueryErrorState resource="this segment" error={error} onRetry={() => void refetch()} />;
   if (!isNew && (isLoading || !segment)) return <Skeleton className="h-96 w-full rounded-xl" />;
 
   return (

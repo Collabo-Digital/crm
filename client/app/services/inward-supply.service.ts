@@ -13,25 +13,25 @@ import type {
  * for a fee to drift into a return total by accident.
  */
 export const inwardSupplyService = {
-  /** GET /inward-supplies?financialYear=&period= */
+  /** GET /payment-fees?financialYear=&period= */
   list: (financialYear: string, period: string) =>
     apiClient
-      .get<InwardSuppliesResponse>("/inward-supplies", {
+      .get<InwardSuppliesResponse>("/payment-fees", {
         params: { financialYear, period },
       })
       .then((res) => res.data),
 
   /**
-   * PUT /inward-supplies — create or correct one supplier's figure.
+   * PUT /payment-fees — create or correct one supplier's figure.
    *
    * PUT because the server keys on (year, period, supplier): re-sending a
    * month's total corrects it rather than adding a row that would double the
    * claim.
    */
   upsert: (data: UpsertInwardSupplyRequest) =>
-    apiClient.put<InwardSupply>("/inward-supplies", data).then((res) => res.data),
+    apiClient.put<InwardSupply>("/payment-fees", data).then((res) => res.data),
 
-  /** DELETE /inward-supplies/:id */
+  /** DELETE /payment-fees/:id */
   remove: (id: string) =>
-    apiClient.delete<{ id: string }>(`/inward-supplies/${id}`).then((res) => res.data),
+    apiClient.delete<{ id: string }>(`/payment-fees/${id}`).then((res) => res.data),
 };
