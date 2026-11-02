@@ -4,7 +4,7 @@ import { UserRole } from '@prisma/client';
  * Fine-grained capability keys stored in `OrganizationMember.permissions`
  * (JSONB, shape: `{ grants: PermissionKey[], preset?: string }`).
  *
- * Design: jobs (Packer, Warehouse, Cashier, Accountant, Marketing) are NOT
+ * Design: jobs (Packer, Warehouse, Cashier, Catalogue, Accountant, Marketing) are NOT
  * UserRole enum values — they are capability sets granted to existing roles,
  * surfaced in the team UI as job templates (PERMISSION_PRESETS). A Cashier is
  * an AGENT holding `pos.sell`. This avoids a Postgres enum migration,
@@ -38,6 +38,14 @@ export type SectionKey = (typeof SECTION_KEYS)[number];
 
 export const PERMISSION_KEYS = [
   ...SECTION_KEYS,
+  /**
+   * Changing the catalogue: adding, editing and deleting products and
+   * variants, their prices and photos, the stock counts set in the product
+   * form, bulk actions and CSV import. Checked on top of the Products section,
+   * which on its own only reads, so a Packer or a Warehouse member looks
+   * products up without being able to rewrite the prices the till sells at.
+   */
+  'products.edit',
   'inventory.view',
   'inventory.receive',
   'inventory.adjust',
