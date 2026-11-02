@@ -75,9 +75,10 @@ export class GstCalculatorService {
     let igstAmount = 0;
 
     if (isIntraState) {
-      // Intra-state: split into CGST + SGST
-      cgstRate = this.round(gstRate / 2);
-      sgstRate = this.round(gstRate / 2);
+      // Intra-state: split into CGST + SGST. The half rate is not rounded:
+      // the 0.25% slab splits into 0.125% each, and 0.13% would overcharge.
+      cgstRate = gstRate / 2;
+      sgstRate = gstRate / 2;
       cgstAmount = this.round((taxableValue * cgstRate) / 100);
       sgstAmount = this.round((taxableValue * sgstRate) / 100);
     } else {
@@ -133,8 +134,8 @@ export class GstCalculatorService {
     let igstAmount = 0;
 
     if (isIntraState) {
-      cgstRate = this.round(gstRate / 2);
-      sgstRate = this.round(gstRate / 2);
+      cgstRate = gstRate / 2;
+      sgstRate = gstRate / 2;
       cgstAmount = this.round(totalTax / 2);
       sgstAmount = this.round(totalTax - cgstAmount);
     } else {

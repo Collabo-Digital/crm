@@ -82,6 +82,19 @@ describe('GstCalculatorService', () => {
       expect(result.totalTax).toBe(0);
       expect(result.totalAmount).toBe(1500);
     });
+
+    it('splits the 0.25% slab into 0.125% halves without rounding the rate', () => {
+      const result = calculator.calculateLineItem(
+        { unitPrice: 100000, quantity: 1, discount: 0, gstRate: 0.25 },
+        true,
+      );
+
+      expect(result.totalTax).toBe(250); // 0.25% of 1,00,000, not 0.13% twice
+      expect(result.cgstAmount).toBe(125);
+      expect(result.sgstAmount).toBe(125);
+      expect(result.cgstRate).toBe(0.125);
+      expect(result.sgstRate).toBe(0.125);
+    });
   });
 
   describe('calculateInclusiveLineItem', () => {
@@ -129,6 +142,17 @@ describe('GstCalculatorService', () => {
 
       expect(result.taxableValue).toBe(1000);
       expect(result.totalTax).toBe(0);
+    });
+
+    it('reports the 0.25% slab as 0.125% halves', () => {
+      const result = calculator.calculateInclusiveLineItem(
+        { unitPrice: 100250, quantity: 1, discount: 0, gstRate: 0.25 },
+        true,
+      );
+
+      expect(result.taxableValue).toBe(100000);
+      expect([result.cgstRate, result.sgstRate]).toEqual([0.125, 0.125]);
+      expect([result.cgstAmount, result.sgstAmount]).toEqual([125, 125]);
     });
   });
 
