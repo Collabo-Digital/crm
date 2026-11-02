@@ -17,6 +17,7 @@ import {
   ORDER_CREATE_MUTATION,
   PRODUCT_SET_MUTATION,
 } from './shopify-graphql.types';
+import { isPackableLine } from '../packing/packing-rules';
 
 /**
  * `pushOrder` is the only code that turns a CRM counter sale into a real
@@ -216,11 +217,11 @@ describe('ShopifyPushService.pushOrder', () => {
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(prisma.orderLineItem.update).toHaveBeenCalledWith({
       where: { id: 'li_1' },
-      data: { externalId: '15162543800372' },
+      data: { externalId: '15162543800372', requiresShipping: true },
     });
     expect(prisma.orderLineItem.update).toHaveBeenCalledWith({
       where: { id: 'li_2' },
-      data: { externalId: '15162543833140' },
+      data: { externalId: '15162543833140', requiresShipping: true },
     });
 
     expect(lastSyncPatch(prisma)).toMatchObject({
@@ -229,6 +230,23 @@ describe('ShopifyPushService.pushOrder', () => {
       shopifyOrderName: '#1008',
       attempts: 1,
     });
+  });
+
+  // Packing counts a line whose id starts `manual_` whatever requiresShipping
+  // says, because the CRM writes false on every line it creates. Adopting
+  // Shopify's ids takes that prefix away.
+  it('keeps the adopted lines packable', async () => {
+    const { service, prisma } = build(offlineOrder({ fulfillmentStatus: 'UNFULFILLED' }));
+
+    await service.pushOrder(ORDER_ID, ORG);
+
+    const writes = prisma.orderLineItem.update.mock.calls as Array<
+      [{ data: { externalId: string; requiresShipping?: boolean } }]
+    >;
+    expect(writes).toHaveLength(2);
+    for (const [{ data }] of writes) {
+      expect(isPackableLine({ quantity: 1, fulfilledQuantity: 0, requiresShipping: false, ...data })).toBe(true);
+    }
   });
 
   it('associates a customer that came from Shopify by GID', async () => {

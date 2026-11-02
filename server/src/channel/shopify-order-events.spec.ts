@@ -219,6 +219,33 @@ describe('ShopifySyncService.writeOrderChildren — refunds', () => {
   });
 });
 
+describe('ShopifySyncService.writeOrderChildren — a line already stored', () => {
+  // A pushed CRM order's lines take Shopify's ids with requiresShipping true
+  // (ShopifyPushService.adoptShopifyLineItemIds), which keeps them on the
+  // packing queue. Shopify's flag on a custom line in the echo must not undo it.
+  it('does not rewrite requiresShipping', async () => {
+    const upsert = jest.fn((args: { update: Record<string, unknown> }) => Promise.resolve(args));
+    const tx = {
+      orderLineItem: {
+        findMany: jest.fn(() => Promise.resolve([])),
+        upsert,
+        deleteMany: jest.fn(() => Promise.resolve({ count: 0 })),
+      },
+    };
+    const service = new ShopifySyncService(
+      {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never, {} as never, {} as never,
+    );
+    const echoed = { id: 15162543833140, title: 'Gift wrap — Large', quantity: 2, price: '50.00', requires_shipping: false };
+    const maps = { variantByExternalId: new Map(), productByExternalId: new Map() };
+
+    await service['writeOrderChildren'](tx as never, 'o1', { id: 6418037801012 }, [echoed], maps);
+
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert.mock.calls[0][0].update).not.toHaveProperty('requiresShipping');
+  });
+});
+
 describe('ShopifySyncService.upsertOrder — new store events', () => {
   it("raises 'out_for_delivery' from the write's news", async () => {
     const { service, s, commerceEvents } = build();

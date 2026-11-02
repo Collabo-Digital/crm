@@ -682,7 +682,11 @@ export class ShopifyPushService {
         updates.map((u) =>
           this.prisma.orderLineItem.update({
             where: { id: u.id },
-            data: { externalId: u.externalId },
+            // Packing counts a `manual_` line whatever requiresShipping says,
+            // as the CRM writes false on every line it creates; without the
+            // prefix only the flag keeps the line packable. The order webhook
+            // never rewrites it.
+            data: { externalId: u.externalId, requiresShipping: true },
           }),
         ),
       );
