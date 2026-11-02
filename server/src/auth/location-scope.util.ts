@@ -23,6 +23,7 @@ type Db = PrismaClient | Prisma.TransactionClient;
  * place the plan decides it: true on every plan until billing has plan
  * features, then Scale and Enterprise.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- the plan decides once billing has plan features
 export function storeScopingAllowed(_org: { billingPlan: BillingPlan }): boolean {
   return true;
 }

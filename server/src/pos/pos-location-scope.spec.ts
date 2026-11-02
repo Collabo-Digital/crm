@@ -18,35 +18,37 @@ const STORES = [
   { id: 'st_pu', name: 'Pune', code: 'PU', kind: 'STORE', isDefault: false, isActive: true, address: { stateCode: '27' }, gstin: null },
 ];
 
+type StoreWhere = { kind?: string; isActive?: boolean; id?: string | { in: string[] } };
+
 function catalog() {
   // The where clauses the service sends, as Postgres would answer them.
-  const matching = (where: any) =>
+  const matching = (where: StoreWhere) =>
     STORES.filter(
       (w) =>
         (where.kind === undefined || w.kind === where.kind) &&
         (where.isActive === undefined || w.isActive === where.isActive) &&
         (where.id === undefined || (typeof where.id === 'string' ? w.id === where.id : where.id.in.includes(w.id))),
     ).sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name));
-  const prisma: any = {
+  const prisma = {
     organizationSettings: { findUnique: jest.fn().mockResolvedValue({ posSettings: null }) },
     organization: { findUnique: jest.fn().mockResolvedValue({ name: 'Acme', gstEnabled: false, currency: 'INR' }) },
     warehouse: {
-      findMany: jest.fn(async ({ where }: any) => matching(where)),
-      findFirst: jest.fn(async ({ where }: any) => matching(where)[0] ?? null),
+      findMany: jest.fn(({ where }: { where: StoreWhere }) => Promise.resolve(matching(where))),
+      findFirst: jest.fn(({ where }: { where: StoreWhere }) => Promise.resolve(matching(where)[0] ?? null)),
     },
     productVariant: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null) },
     stockLevel: { groupBy: jest.fn().mockResolvedValue([]) },
   };
   const service = new PosCatalogService(
-    prisma,
+    prisma as never,
     {
       getStoreProfileSettings: jest.fn().mockResolvedValue({ storeName: '' }),
       getProductSettings: jest.fn().mockResolvedValue({}),
       getTaxSettings: jest.fn().mockResolvedValue({ composition: false }),
-    } as any,
-    { isWarehousingEnabled: jest.fn().mockResolvedValue(true) } as any,
-    { getRate: jest.fn() } as any,
-    { list: jest.fn().mockResolvedValue([]) } as any,
+    } as never,
+    { isWarehousingEnabled: jest.fn().mockResolvedValue(true) } as never,
+    { getRate: jest.fn() } as never,
+    { list: jest.fn().mockResolvedValue([]) } as never,
   );
   return { service, prisma };
 }
@@ -56,7 +58,8 @@ describe('the till for a store-limited member', () => {
     const { service, prisma } = catalog();
     const setup = await service.setup(ORG, 'st_mg', ['st_ko', 'st_pu']);
     expect(setup.stores.map((s) => s.id)).toEqual(['st_ko', 'st_pu']);
-    expect(prisma.warehouse.findFirst).toHaveBeenLastCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: 'st_ko' }) }));
+    const [args] = prisma.warehouse.findFirst.mock.calls[prisma.warehouse.findFirst.mock.calls.length - 1];
+    expect(args.where).toMatchObject({ id: 'st_ko' });
   });
 
   it('lists every store for everyone else', async () => {
@@ -167,7 +170,9 @@ describe('store reports for a store-limited manager', () => {
   }
   /** Every value bound into the summary's three queries. */
   const bound = (prisma: ReturnType<typeof reports>['prisma']) =>
-    (prisma.$queryRaw.mock.calls as unknown[][]).flatMap((call) => call.slice(1).flatMap((v: any) => v?.values ?? [v]));
+    (prisma.$queryRaw.mock.calls as unknown[][]).flatMap((call) =>
+      call.slice(1).flatMap((v) => (v as { values?: unknown[] } | null)?.values ?? [v]),
+    );
 
   it('adds up their stores only', async () => {
     const { service, prisma } = reports();

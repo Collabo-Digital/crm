@@ -10,12 +10,12 @@ import { OrderService } from './order.service';
  */
 describe('selling from the order form', () => {
   const user = (role: UserRole) => ({ sub: 'u1', orgId: 'org_1', role });
-  const check = (scope: string[], role: UserRole, warehouseId?: string) =>
+  const check = (scope: string[], role: UserRole, warehouseId?: string): Promise<void> =>
     OrderService.prototype.assertSaleLocation.call(
       { prisma: { organizationMember: { findUnique: jest.fn(() => Promise.resolve({ locationScope: scope })) } } },
       user(role),
       warehouseId,
-    );
+    ) as Promise<void>;
 
   it('is refused from a location outside their list, or from none, which means the default', async () => {
     await expect(check(['st_ko'], UserRole.AGENT, 'st_mg')).rejects.toBeInstanceOf(ForbiddenException);

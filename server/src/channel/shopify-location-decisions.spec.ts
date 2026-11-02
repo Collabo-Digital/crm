@@ -63,6 +63,7 @@ function fakeDb(init: { warehouses?: Row[]; records?: Row[]; gstins?: Row[]; gst
   }));
   const gstins: Row[] = (init.gstins ?? []).map((g) => ({ organizationId: ORG, isActive: true, isDefault: false, ...g }));
   let seq = 0;
+  const executeRaw = jest.fn<Promise<number>, unknown[]>(() => Promise.resolve(0));
   const db: any = {
     warehouse: {
       findMany: jest.fn(async ({ where }: any = {}) => warehouses.filter((w) => matches(w, where))),
@@ -120,9 +121,9 @@ function fakeDb(init: { warehouses?: Row[]; records?: Row[]; gstins?: Row[]; gst
     },
     $transaction: jest.fn(async (fn: any) => fn(db)),
     // Taking closed locations out of members' stores (auth/location-scope.util).
-    $executeRaw: jest.fn(async () => 0),
+    $executeRaw: executeRaw,
   };
-  return { db, warehouses, records, settings };
+  return { db, warehouses, records, settings, executeRaw };
 }
 
 const node = (id: string, name: string, over: Partial<{ isPrimary: boolean; isActive: boolean; stateCode: string }> = {}) => ({
@@ -136,7 +137,7 @@ const node = (id: string, name: string, over: Partial<{ isPrimary: boolean; isAc
 });
 
 function build(init: Parameters<typeof fakeDb>[0], nodes: ReturnType<typeof node>[] = []) {
-  const { db, warehouses, records, settings } = fakeDb(init);
+  const { db, warehouses, records, settings, executeRaw } = fakeDb(init);
   const graphql = {
     request: jest.fn(async () => ({ locations: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } })),
   };
@@ -148,12 +149,13 @@ function build(init: Parameters<typeof fakeDb>[0], nodes: ReturnType<typeof node
   const decisions = new ShopifyLocationDecisionService(db, locationSync, links, ledger as any);
   const sync = (autoLink = false) => locationSync.syncLocations(CHANNEL, ORG, async () => ({ shopDomain: 's', accessToken: 't' }), { autoLink });
   const stockJobs = () => pushQueue.add.mock.calls.map((c) => c[1]);
-  return { db, warehouses, records, settings, graphql, locationSync, decisions, sync, stockJobs, ledger, pushQueue, links };
+  return { db, warehouses, records, settings, graphql, locationSync, decisions, sync, stockJobs, ledger, pushQueue, links, executeRaw };
 }
 
 const byId = (rows: Row[], id: string) => rows.find((r) => r.id === id)!;
 /** The locations taken out of members' and invitations' stores, one entry per table updated. */
-const scopeCleanups = (db: any) => db.$executeRaw.mock.calls.map((call: unknown[]) => call.slice(1).find(Array.isArray));
+const scopeCleanups = (executeRaw: jest.Mock<Promise<number>, unknown[]>) =>
+  executeRaw.mock.calls.map((call) => call.slice(1).find(Array.isArray) as string[] | undefined);
 const recordFor = (rows: Row[], shopifyLocationId: string) => rows.find((r) => r.shopifyLocationId === shopifyLocationId)!;
 
 describe('syncing a store’s Shopify locations', () => {
@@ -247,7 +249,7 @@ describe('syncing a store’s Shopify locations', () => {
 
     expect(byId(t.warehouses, 'wh_main').isActive).toBe(true);
     expect(byId(t.warehouses, 'wh_store').isActive).toBe(false);
-    expect(scopeCleanups(t.db)).toEqual([['wh_store'], ['wh_store']]);
+    expect(scopeCleanups(t.executeRaw)).toEqual([['wh_store'], ['wh_store']]);
   });
 
   it('deactivates the location linked to a Shopify location that was removed — not the default — and forgets the location', async () => {
@@ -270,7 +272,7 @@ describe('syncing a store’s Shopify locations', () => {
     expect(byId(t.warehouses, 'wh_gone').isActive).toBe(false);
     expect(byId(t.warehouses, 'wh_main').isActive).toBe(true);
     expect(t.records.map((r) => r.shopifyLocationId)).toEqual(['101']);
-    expect(scopeCleanups(t.db)).toEqual([['wh_gone'], ['wh_gone']]);
+    expect(scopeCleanups(t.executeRaw)).toEqual([['wh_gone'], ['wh_gone']]);
   });
 
   it('a location unlinked since waits for a decision again', async () => {

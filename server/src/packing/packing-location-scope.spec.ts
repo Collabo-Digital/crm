@@ -79,11 +79,8 @@ describe('the packing queue for a store-limited packer', () => {
   it('keeps the accuracy report to their locations and orders with none', async () => {
     const { service, prisma } = build(null);
     await service.accuracy(ORG, {}, SCOPE);
-    expect(prisma.pickTaskEvent.groupBy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({ pickTask: { OR: [{ warehouseId: null }, { warehouseId: { in: SCOPE } }] } }),
-      }),
-    );
+    const [[args]] = prisma.pickTaskEvent.groupBy.mock.calls as unknown as Array<[{ where: Record<string, unknown> }]>;
+    expect(args.where.pickTask).toEqual({ OR: [{ warehouseId: null }, { warehouseId: { in: SCOPE } }] });
   });
 });
 

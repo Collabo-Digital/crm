@@ -8,6 +8,9 @@ import { MembersService } from './members.service';
  * The stores a Manager or Agent works at: chosen on the invitation, carried
  * onto the membership when it is accepted, and changed later in Team members.
  */
+
+/** The first argument of a mock's nth call. */
+const argOf = (fn: { mock: { calls: unknown[][] } }, n = 0) => fn.mock.calls[n][0] as Record<string, unknown>;
 describe('store scoping on invitations', () => {
   function build(locationsFound: number) {
     const prisma = {
@@ -39,9 +42,7 @@ describe('store scoping on invitations', () => {
       locationScope: ['s1', 's2', 's1'],
     });
     expect(prisma.warehouse.count).toHaveBeenCalledWith({ where: { organizationId: 'org', id: { in: ['s1', 's2'] } } });
-    expect(prisma.teamInvite.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ role: UserRole.MANAGER, locationScope: ['s1', 's2'] }) }),
-    );
+    expect(argOf(prisma.teamInvite.create)).toMatchObject({ data: { role: UserRole.MANAGER, locationScope: ['s1', 's2'] } });
     expect(invite.locationScope).toEqual(['s1', 's2']);
   });
 
@@ -49,7 +50,7 @@ describe('store scoping on invitations', () => {
     const { service, prisma } = build(0);
     await service.send('org', 'u-admin', { email: 'ravi@shop.in', role: UserRole.AGENT });
     expect(prisma.warehouse.count).not.toHaveBeenCalled();
-    expect(prisma.teamInvite.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ locationScope: [] }) }));
+    expect(argOf(prisma.teamInvite.create)).toMatchObject({ data: { locationScope: [] } });
   });
 
   it("refuses another workspace's location, and sends no email", async () => {
@@ -121,12 +122,10 @@ describe('accepting an invitation with stores', () => {
 
     await service.acceptInvite({ token: 'tok', firstName: 'Priya', lastName: 'S', password: 'long-enough-1' });
 
-    expect(prisma.organizationMember.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        create: expect.objectContaining({ role: UserRole.MANAGER, locationScope: ['s1', 's2'] }),
-        update: expect.objectContaining({ role: UserRole.MANAGER, locationScope: ['s1', 's2'] }),
-      }),
-    );
+    expect(argOf(prisma.organizationMember.upsert)).toMatchObject({
+      create: { role: UserRole.MANAGER, locationScope: ['s1', 's2'] },
+      update: { role: UserRole.MANAGER, locationScope: ['s1', 's2'] },
+    });
   });
 });
 

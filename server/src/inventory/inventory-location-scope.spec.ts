@@ -15,6 +15,9 @@ import { WarehouseController } from './warehouse.controller';
 const ORG = 'org_1';
 const SCOPE = ['st_ko', 'wh_back'];
 
+/** The first argument of a mock's nth call. */
+const argOf = (fn: { mock: { calls: unknown[][] } }, n = 0) => fn.mock.calls[n][0] as Record<string, unknown>;
+
 function inventory() {
   const prisma = {
     stockLevel: {
@@ -40,9 +43,7 @@ describe('stock reads for a store-limited member', () => {
   it('lists stock at their locations only', async () => {
     const { service, prisma } = inventory();
     await service.listStock(ORG, {}, SCOPE);
-    expect(prisma.stockLevel.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ organizationId: ORG, warehouseId: { in: SCOPE } }) }),
-    );
+    expect(argOf(prisma.stockLevel.findMany)).toMatchObject({ where: { organizationId: ORG, warehouseId: { in: SCOPE } } });
   });
 
   it('lists nothing for a location outside their list, and the one asked for inside it', async () => {
@@ -65,10 +66,10 @@ describe('stock reads for a store-limited member', () => {
   it('adds up the stat tiles over their locations only', async () => {
     const { service, prisma } = inventory();
     await service.getStockStats(ORG, undefined, SCOPE);
-    expect(prisma.stockLevel.aggregate).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ warehouseId: { in: SCOPE } }) }),
-    );
-    const values = (prisma.$queryRaw.mock.calls as unknown as unknown[][])[0].slice(1).flatMap((v: any) => v?.values ?? [v]);
+    expect(argOf(prisma.stockLevel.aggregate)).toMatchObject({ where: { warehouseId: { in: SCOPE } } });
+    const values = (prisma.$queryRaw.mock.calls as unknown as unknown[][])[0]
+      .slice(1)
+      .flatMap((v) => (v as { values?: unknown[] } | null)?.values ?? [v]);
     expect(values).toContainEqual(SCOPE);
   });
 
@@ -97,11 +98,7 @@ describe('stock reads for a store-limited member', () => {
   it('shows a scanned product’s stock at their locations only', async () => {
     const { service, prisma } = inventory();
     await service.lookup(ORG, '8901', SCOPE);
-    expect(prisma.productVariant.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        select: expect.objectContaining({ stockLevels: expect.objectContaining({ where: { warehouseId: { in: SCOPE } } }) }),
-      }),
-    );
+    expect(argOf(prisma.productVariant.findMany)).toMatchObject({ select: { stockLevels: { where: { warehouseId: { in: SCOPE } } } } });
   });
 });
 
@@ -204,7 +201,7 @@ describe('"Edit locations" for a store-limited member', () => {
     const change = await service.setVariantLocations(db as never, ORG, 'v1', ['wh_back'], SCOPE);
     expect(change.removed).toEqual([{ warehouseId: 'st_ko', shopifyLocationId: null }]);
     expect(change.added).toEqual([{ warehouseId: 'wh_back', shopifyLocationId: null }]);
-    expect(db.stockLevel.deleteMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: { in: ['row_st_ko'] } }) }));
+    expect(argOf(db.stockLevel.deleteMany)).toMatchObject({ where: { id: { in: ['row_st_ko'] } } });
   });
 
   it('refuses stocking it at a location they do not work at', async () => {
@@ -226,10 +223,22 @@ describe('linking Shopify locations', () => {
   function controller(scope: string[]) {
     const prisma = { organizationMember: { findUnique: jest.fn(() => Promise.resolve({ locationScope: scope })) } };
     const decisions = { apply: jest.fn(() => Promise.resolve({})) };
-    const deps = Array.from({ length: 13 }, () => ({}) as never);
-    deps[0] = prisma as never;
-    deps[11] = decisions as never;
-    return { c: new (ChannelController as any)(...deps) as ChannelController, decisions };
+    const c = new ChannelController(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      decisions as never,
+      {} as never,
+    );
+    return { c, decisions };
   }
   const manager = { sub: 'u1', email: 'm@shop.in', orgId: ORG, role: UserRole.MANAGER };
 
