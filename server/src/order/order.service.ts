@@ -2665,11 +2665,21 @@ export class OrderService {
 
         const lineItems = await tx.orderLineItem.findMany({
           where: { orderId: id },
-          include: { variant: true },
+          include: { variant: { include: { product: { select: { metadata: true } } } } },
         });
         for (const li of lineItems) {
           if (!li.variant) continue;
           if (!trackGlobally && li.variant.trackQuantity === false) continue;
+          // A point-of-sale custom item, on the hidden product the till marks:
+          // its sale took no stock, however the org tracks quantities.
+          const productMeta = li.variant.product.metadata;
+          if (
+            !!productMeta &&
+            typeof productMeta === 'object' &&
+            (productMeta as Record<string, unknown>).posCustomItem === true
+          ) {
+            continue;
+          }
 
           if (warehousing) {
             if (!restockWarehouseId) continue;

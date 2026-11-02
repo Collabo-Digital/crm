@@ -211,3 +211,40 @@ describe('OrderService.cancel of a CRM sale pushed to Shopify', () => {
     expect(queue.add).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A point-of-sale custom item rides on a hidden, untracked variant, and the
+ * sale never takes stock for it, even when the org tracks every variant. So
+ * its cancellation must not put any back.
+ */
+describe('OrderService.cancel of a bill with a custom item', () => {
+  const customLine = {
+    id: 'li_2',
+    quantity: 2,
+    variant: { id: 'var_custom', trackQuantity: false, inventoryQuantity: 0, product: { metadata: { posCustomItem: true } } },
+  };
+
+  it('restocks only the stocked line, in a workspace with locations', async () => {
+    const { service, ledger, queue } = build({ warehousing: true, lineItems: [shirtLine, customLine] });
+
+    await service.cancel(ORDER, ORG, USER, { reason: 'CUSTOMER', restock: true });
+
+    expect(ledger.applyMovement).toHaveBeenCalledTimes(1);
+    expect(ledger.applyMovement).toHaveBeenCalledWith(expect.objectContaining({ variantId: 'var_1' }), expect.anything());
+    expect(queue.add).toHaveBeenCalledWith(
+      'push-availability',
+      expect.objectContaining({ variantIds: ['var_1'] }),
+      expect.anything(),
+    );
+  });
+
+  it('restocks only the stocked line, in a workspace without locations', async () => {
+    const built = build({ warehousing: false, lineItems: [shirtLine, customLine] });
+
+    await built.service.cancel(ORDER, ORG, USER, { reason: 'CUSTOMER', restock: true });
+
+    const update = (built.tx as { productVariant: { update: jest.Mock } }).productVariant.update;
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'var_1' } }));
+  });
+});
