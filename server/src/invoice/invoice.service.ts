@@ -1766,7 +1766,7 @@ export class InvoiceService {
   }
 
   /**
-   * Refunded orders whose invoice has not been credited.
+   * Refunded or cancelled orders whose invoice has not been credited.
    *
    * Returns the ISSUED invoice alongside the refund totals, so the UI can
    * pre-fill a credit note instead of making someone re-key the amount off a
@@ -1779,7 +1779,9 @@ export class InvoiceService {
       where: {
         organizationId: orgId,
         deletedAt: null,
-        refunds: { some: {} },
+        // Cancelling an order leaves its invoice ISSUED, and nothing else
+        // reverses it: a counter sale cancelled in the CRM has no refund row.
+        OR: [{ refunds: { some: {} } }, { cancelledAt: { not: null } }],
         invoices: { some: { status: InvoiceStatus.ISSUED } },
         // Deliberately NOT "has no credit note". An order part-credited once
         // is still under-credited if it is refunded again, and excluding it
@@ -1790,6 +1792,7 @@ export class InvoiceService {
         id: true,
         name: true,
         currency: true,
+        cancelledAt: true,
         refunds: { select: { amount: true, totalTax: true, processedAt: true, reason: true } },
         invoices: {
           // Both statuses in ONE selection — a relation may appear only once —
@@ -1839,16 +1842,24 @@ export class InvoiceService {
         new Prisma.Decimal(0),
       );
 
+      // A cancelled order owes a credit for its whole invoice, refunded or not:
+      // the supply it declares did not happen.
+      const dueAmount = order.cancelledAt
+        ? new Prisma.Decimal(invoice.grandTotal)
+        : refundedAmount;
+      const dueTax = order.cancelledAt
+        ? new Prisma.Decimal(invoice.totalTax)
+        : refundedTax;
+
       // Fully credited — nothing to warn about. Strictly less-than, so an exact
       // match settles the order rather than leaving a zero-value row on screen.
-      if (!creditedAmount.lessThan(refundedAmount)) return [];
+      if (!creditedAmount.lessThan(dueAmount)) return [];
 
       // What a credit note raised NOW should be for. Prefilling the gross
       // refund instead would be refused by createCreditNote as over-crediting
       // the moment any part of it had already been credited.
-      const pendingAmount = refundedAmount.minus(creditedAmount);
-      const pendingTax =
-        refundedTax === null ? null : refundedTax.minus(creditedTax);
+      const pendingAmount = dueAmount.minus(creditedAmount);
+      const pendingTax = dueTax === null ? null : dueTax.minus(creditedTax);
 
       return [
         {
@@ -1870,7 +1881,9 @@ export class InvoiceService {
               .map((r) => r.processedAt)
               .filter((d): d is Date => !!d)
               .sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
-          reason: order.refunds.find((r) => r.reason)?.reason ?? null,
+          reason: order.cancelledAt
+            ? 'Order cancelled'
+            : (order.refunds.find((r) => r.reason)?.reason ?? null),
         },
       ];
     });
@@ -2655,20 +2668,30 @@ export class InvoiceService {
       // states a number the list beneath it contradicts.
       //
       // Credit notes store POSITIVE amounts, as on the paper document, so this
-      // is a straight greater-than.
+      // is a straight greater-than. A cancelled order owes its whole invoice,
+      // refunded or not, as in the list; at most one invoice per order is
+      // ISSUED, so the SUM is that invoice's total.
       this.prisma.$queryRaw<Array<{ count: bigint }>>`
         SELECT COUNT(*) AS count
         FROM orders o
         WHERE o.organization_id = ${orgId}
           AND o.deleted_at IS NULL
-          AND EXISTS (SELECT 1 FROM order_refunds r WHERE r.order_id = o.id)
+          AND (
+            o.cancelled_at IS NOT NULL
+            OR EXISTS (SELECT 1 FROM order_refunds r WHERE r.order_id = o.id)
+          )
           AND EXISTS (
             SELECT 1 FROM invoices i
             WHERE i.order_id = o.id AND i.status = 'ISSUED'
           )
-          AND COALESCE(
-                (SELECT SUM(r.amount) FROM order_refunds r WHERE r.order_id = o.id), 0
-              ) > COALESCE(
+          AND CASE
+                WHEN o.cancelled_at IS NOT NULL THEN
+                  (SELECT SUM(i.grand_total) FROM invoices i
+                   WHERE i.order_id = o.id AND i.status = 'ISSUED')
+                ELSE COALESCE(
+                  (SELECT SUM(r.amount) FROM order_refunds r WHERE r.order_id = o.id), 0
+                )
+              END > COALESCE(
                 (SELECT SUM(i.grand_total) FROM invoices i
                  WHERE i.order_id = o.id AND i.status = 'CREDIT_NOTE'), 0
               )

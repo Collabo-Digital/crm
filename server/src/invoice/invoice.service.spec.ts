@@ -1504,3 +1504,69 @@ describe('InvoiceService.bulkCreate', () => {
     expect(create).not.toHaveBeenCalled();
   });
 });
+
+describe('InvoiceService.listRefundsNeedingCreditNote', () => {
+  // A ₹11,800 counter sale, invoiced and then cancelled. Nothing went back
+  // through a sales channel, so the order has no refund row.
+  const cancelledSale = (n: string, credited: Array<{ grandTotal: string; totalTax: string }>) => ({
+    id: `order_${n}`,
+    name: `#M${n}`,
+    currency: 'INR',
+    cancelledAt: new Date('2026-10-05T10:00:00.000Z'),
+    refunds: [],
+    invoices: [
+      {
+        id: `inv_${n}`,
+        invoiceNumber: `INV-26-27/00${n}`,
+        grandTotal: '11800.00',
+        totalTax: '1800.00',
+        status: InvoiceStatus.ISSUED,
+      },
+      ...credited.map((cn, i) => ({
+        id: `cn_${n}_${i}`,
+        invoiceNumber: `CN-26-27/00${n}${i}`,
+        status: InvoiceStatus.CREDIT_NOTE,
+        ...cn,
+      })),
+    ],
+  });
+
+  it('lists a cancelled order whose invoice is still issued, though nothing was refunded', async () => {
+    const findMany = jest.fn(() =>
+      Promise.resolve([
+        cancelledSale('1001', []),
+        cancelledSale('1002', [{ grandTotal: '5900.00', totalTax: '900.00' }]),
+        cancelledSale('1003', [{ grandTotal: '11800.00', totalTax: '1800.00' }]),
+      ]),
+    );
+    const service = new InvoiceService(
+      { order: { findMany } } as never,
+      {} as never,
+      new GstCalculatorService(),
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    const rows = await service.listRefundsNeedingCreditNote('org_1');
+
+    // The invoice's whole value and tax stay declared until a note reverses
+    // them, so that is what is owed, less what is already credited.
+    expect(
+      rows.map((r) => ({
+        invoiceId: r.invoiceId,
+        pendingAmount: r.pendingAmount.toFixed(2),
+        pendingTax: r.pendingTax?.toFixed(2),
+        reason: r.reason,
+      })),
+    ).toEqual([
+      { invoiceId: 'inv_1001', pendingAmount: '11800.00', pendingTax: '1800.00', reason: 'Order cancelled' },
+      { invoiceId: 'inv_1002', pendingAmount: '5900.00', pendingTax: '900.00', reason: 'Order cancelled' },
+    ]);
+    const [[{ where }]] = findMany.mock.calls as unknown as [[{ where: object }]];
+    expect(where).toMatchObject({
+      OR: [{ refunds: { some: {} } }, { cancelledAt: { not: null } }],
+    });
+  });
+});
