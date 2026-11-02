@@ -93,6 +93,8 @@ function build(
         ),
     },
   };
+  // No rate can be had, should one be asked for.
+  const fx = { getRate: jest.fn(() => Promise.resolve(null)) };
   const service = new OrderService(
     prisma,
     new GstCalculatorService(),
@@ -110,12 +112,12 @@ function build(
     } as any,
     { recomputeForCustomer: jest.fn().mockResolvedValue(undefined) } as any,
     { isWarehousingEnabled: jest.fn().mockResolvedValue(false), applyMovement: jest.fn() } as any,
-    { getRate: jest.fn() } as any,
+    fx as never,
     { add: jest.fn() } as any,
     { order: jest.fn(), invoiceIssued: jest.fn() } as any,
   );
   jest.spyOn(service as any, 'markPendingSync').mockResolvedValue(undefined);
-  return { service, tx, prisma };
+  return { service, tx, prisma, fx };
 }
 
 const dto = (over: Record<string, unknown> = {}) =>
@@ -317,3 +319,38 @@ describe('createOfflineOrder on goods that attract no GST', () => {
   });
 });
 
+/**
+ * A typed price is already in the order's currency, so it needs no exchange
+ * rate: it is how the till sells a product priced in another currency when no
+ * rate can be had ("Type the price to sell it").
+ */
+describe('createOfflineOrder when no exchange rate can be had', () => {
+  const usdProduct = { channel: { currency: 'USD' } };
+
+  it('sells at a typed price', async () => {
+    const built = build({ product: usdProduct });
+    const { service, fx } = built;
+
+    await service.createOfflineOrder(
+      'org_1',
+      'user_1',
+      dto({ lineItems: [{ productVariantId: 'var_1', quantity: 1, unitPriceOverride: 1000 }] }) as CreateOfflineOrderDto,
+    );
+
+    expect(fx.getRate).not.toHaveBeenCalled();
+    const [[{ data }]] = (built.tx as { order: { create: jest.Mock } }).order.create.mock.calls as [[{ data: object }]];
+    expect(data).toMatchObject({ lineItems: { create: [{ price: 1000 }] } });
+  });
+
+  it('still refuses a catalogue price it cannot convert', async () => {
+    const { service } = build({ product: usdProduct });
+
+    await expect(
+      service.createOfflineOrder(
+        'org_1',
+        'user_1',
+        dto({ lineItems: [{ productVariantId: 'var_1', quantity: 1 }] }) as CreateOfflineOrderDto,
+      ),
+    ).rejects.toThrow('Cannot price this sale: no USD→INR exchange rate is available');
+  });
+});

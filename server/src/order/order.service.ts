@@ -1650,14 +1650,22 @@ export class OrderService {
           )
           : dto.lineItems.map(() => 0);
 
-        // Catalogue prices restated in the order's currency, once per line.
-        // Resolved before the loop because it may hit the FX provider and the
-        // loop body runs inside the Serializable transaction that prices the
-        // order — see `catalogueUnitPrice`.
-        const catalogueUnitPrices = await this.catalogueUnitPrices(
+        // Catalogue prices restated in the order's currency, once per line
+        // without a typed price. A typed price needs no rate, so it still
+        // sells when no rate can be had. Resolved before the loop because it
+        // may hit the FX provider and the loop body runs inside the
+        // Serializable transaction that prices the order — see
+        // `catalogueUnitPrice`.
+        const catalogueLines = [...dto.lineItems.entries()].filter(
+          ([, li]) => li.unitPriceOverride == null,
+        );
+        const cataloguePrices = await this.catalogueUnitPrices(
           orgId,
           orderCurrency,
-          dto.lineItems.map((li) => variantById.get(li.productVariantId)!),
+          catalogueLines.map(([, li]) => variantById.get(li.productVariantId)!),
+        );
+        const catalogueUnitPrices = new Map(
+          catalogueLines.map(([lineIndex], i) => [lineIndex, cataloguePrices[i]]),
         );
 
         for (const [lineIndex, li] of dto.lineItems.entries()) {
@@ -1665,7 +1673,7 @@ export class OrderService {
           const customTitle = customTitleAt(lineIndex);
           // The cashier's typed price is authoritative and is already in the
           // order's currency; only the catalogue fallback needs converting.
-          const unitPrice = li.unitPriceOverride ?? catalogueUnitPrices[lineIndex];
+          const unitPrice = li.unitPriceOverride ?? catalogueUnitPrices.get(lineIndex)!;
           const discount = li.discount ?? 0;
 
           // Validated here, not in the DTO: the unit price may come from the
