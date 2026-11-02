@@ -1,3 +1,5 @@
+import { Prisma } from '@prisma/client';
+import { MessagingAnalyticsService } from './messaging-analytics.service';
 import { attributeOrders, csvLine, estimateCost, percentile } from './messaging-metrics';
 
 const at = (h: number) => new Date(Date.UTC(2026, 9, 20, h));
@@ -63,5 +65,50 @@ describe('csvLine', () => {
         expect(csvLine(['Asha x\r=cmd|\' /C calc\'!A0', 'AGENT'])).toBe('"Asha x\r=cmd|\' /C calc\'!A0",AGENT');
         expect(csvLine(['\r=1+1'])).toBe('"\'\r=1+1"');
         expect(csvLine(['\t=1+1'])).toBe('\'\t=1+1');
+    });
+});
+
+describe('MessagingAnalyticsService › revenue', () => {
+    const period = { from: at(0), to: at(24), timeZone: 'UTC', days: 1, channelId: null };
+
+    function build(orders: Array<{ id: string; customer_id: string; at: Date; revenue: number | null }>) {
+        const queryRaw = jest.fn((sql: Prisma.Sql) => Promise.resolve(/FROM orders/.test(sql.text) ? orders : []));
+        const prisma = {
+            organization: { findUniqueOrThrow: jest.fn(() => Promise.resolve({ currency: 'INR' })) },
+            broadcast: { findMany: jest.fn(() => Promise.resolve([])) },
+            automation: { findMany: jest.fn(() => Promise.resolve([])) },
+            $queryRaw: queryRaw,
+        };
+        return {
+            service: new MessagingAnalyticsService(prisma as never),
+            ordersSql: () => queryRaw.mock.calls.map(([sql]) => sql).find((sql) => /FROM orders/.test(sql.text)),
+        };
+    }
+
+    it('reads sales only, as the dashboard does, and never books an unknown rate at 1', async () => {
+        const { service, ordersSql } = build([]);
+
+        await service['revenue']('org_1', period);
+
+        const sql = ordersSql();
+        expect(sql?.text).toMatch(/deleted_at IS NULL/);
+        expect(sql?.text).toMatch(/cancelled_at IS NULL/);
+        expect(sql?.text).toMatch(/financial_status::text IN \(\$\d+(,\s*\$\d+){2}\)/);
+        expect(sql?.values).toEqual(expect.arrayContaining(['PAID', 'PARTIALLY_PAID', 'PARTIALLY_REFUNDED']));
+        for (const status of ['PENDING', 'AUTHORIZED', 'REFUNDED', 'VOIDED']) expect(sql?.values).not.toContain(status);
+        expect(sql?.text).not.toMatch(/coalesce\(exchange_rate, 1\)/i);
+        expect(sql?.text).toMatch(/exchange_rate IS NOT NULL AND upper\(base_currency\) = \$\d+/);
+        expect(sql?.values).toContain('INR');
+    });
+
+    it('counts an order it cannot convert apart from the revenue', async () => {
+        const { service } = build([
+            { id: 'o1', customer_id: 'c1', at: at(2), revenue: 100 },
+            { id: 'o2', customer_id: 'c2', at: at(3), revenue: null },
+        ]);
+
+        const revenue = await service['revenue']('org_1', period);
+
+        expect(revenue).toMatchObject({ ordersInPeriod: 1, revenueInPeriod: 100, unconvertedOrders: 1 });
     });
 });
