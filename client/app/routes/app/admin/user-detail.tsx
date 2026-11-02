@@ -4,6 +4,7 @@ import {
     ArrowLeft,
     Building2,
     ChevronDown,
+    CreditCard,
     LogIn,
     Mail,
     ShieldCheck,
@@ -37,6 +38,8 @@ import {
     DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import { EmptyState } from "~/components/app/empty-state";
+import { OrgBillingDialog, billingSummary } from "~/components/app/admin/org-billing-dialog";
+import type { AdminUserMembership } from "~/services/admin.service";
 
 export function meta() {
     return [{ title: "Super Admin · User | Collabo CRM" }];
@@ -91,6 +94,7 @@ export default function UserDetailPage() {
     const impersonate = useImpersonate();
     const moderation = useUserModerationMutations(userId);
     const [confirm, setConfirm] = useState<ConfirmKind | null>(null);
+    const [billingFor, setBillingFor] = useState<AdminUserMembership | null>(null);
 
     if (!me?.isSuperAdmin || impersonatedBy) {
         return (
@@ -278,6 +282,7 @@ export default function UserDetailPage() {
                                     <p className="text-xs text-gray-500">
                                         {m.orgSlug} · {m.orgType}
                                     </p>
+                                    <p className="text-xs text-gray-500">{billingSummary(m.billing)}</p>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <Badge variant="outline">{m.role}</Badge>
@@ -286,6 +291,10 @@ export default function UserDetailPage() {
                                             inactive
                                         </Badge>
                                     )}
+                                    <Button variant="outline" size="sm" onClick={() => setBillingFor(m)}>
+                                        <CreditCard className="size-4" />
+                                        Set plan or trial
+                                    </Button>
                                 </div>
                             </li>
                         ))}
@@ -323,6 +332,8 @@ export default function UserDetailPage() {
                     </Button>
                 </div>
             </section>
+
+            {billingFor && <OrgBillingDialog userId={user.id} membership={billingFor} onClose={() => setBillingFor(null)} />}
 
             <Dialog open={!!confirm} onOpenChange={(open) => !open && setConfirm(null)}>
                 <DialogContent>
