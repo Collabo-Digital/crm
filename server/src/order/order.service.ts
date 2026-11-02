@@ -1971,6 +1971,9 @@ export class OrderService {
                 // Passing the raw one made the invoice re-derive independently
                 // and disagree with the tax the order just charged.
                 placeOfSupplyCode,
+                // The GSTIN typed for this sale comes before the one on file,
+                // as it did for the place of supply above.
+                buyerGstin: dto.customer.gstin,
                 notes: dto.note,
               },
             );
