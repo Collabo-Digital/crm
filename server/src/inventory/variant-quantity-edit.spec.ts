@@ -1,5 +1,5 @@
 import { InventoryLedgerService } from './inventory-ledger.service';
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { StockBucket } from '@prisma/client';
 
 /**
@@ -17,9 +17,27 @@ import { StockBucket } from '@prisma/client';
 const ORG = 'org_1';
 const VARIANT = 'var_1';
 const WAREHOUSE = 'wh_kochi';
+const WAREHOUSES = [
+  { id: WAREHOUSE, organizationId: ORG, isActive: true },
+  { id: 'wh_closed', organizationId: ORG, isActive: false },
+  { id: 'wh_other_org', organizationId: 'org_2', isActive: true },
+];
+type WarehouseWhere = { id: string; organizationId: string; isActive?: boolean };
 
 function build({ warehousing, currentAvailable = 2 }) {
   const db: any = {
+    warehouse: {
+      findFirst: jest.fn(({ where }: { where: WarehouseWhere }) =>
+        Promise.resolve(
+          WAREHOUSES.find(
+            (w) =>
+              w.id === where.id &&
+              w.organizationId === where.organizationId &&
+              (where.isActive === undefined || w.isActive === where.isActive),
+          ) ?? null,
+        ),
+      ),
+    },
     productVariant: {
       findUnique: jest.fn().mockResolvedValue({ inventoryQuantity: 3, sku: 'SJ00376' }),
       update: jest.fn().mockResolvedValue({ inventoryQuantity: 5, sku: 'SJ00376' }),
@@ -79,6 +97,23 @@ describe('InventoryLedgerService.auditedVariantUpdate', () => {
     const patch = db.productVariant.update.mock.calls[0][0].data;
     expect(patch.sku).toBe('NEW-SKU');
     expect(patch.inventoryQuantity).toBeUndefined();
+  });
+
+  it('refuses a location of another workspace, an inactive one, or an unknown one, moving nothing', async () => {
+    for (const warehouseId of ['wh_other_org', 'wh_closed', 'wh_missing']) {
+      const { svc, applyMovement } = build({ warehousing: true });
+
+      await expect(
+        svc.auditedVariantUpdate({
+          orgId: ORG,
+          variantId: VARIANT,
+          data: { inventoryQuantity: 5 },
+          reason: 'adjustment',
+          warehouseId,
+        }),
+      ).rejects.toThrow(new NotFoundException('Location not found'));
+      expect(applyMovement).not.toHaveBeenCalled();
+    }
   });
 
   it('emits no movement when the warehouse already holds that quantity', async () => {

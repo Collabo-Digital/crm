@@ -468,6 +468,16 @@ export class InventoryLedgerService {
     }
 
     const run = async (db: Prisma.TransactionClient) => {
+      if (movesStock) {
+        // applyMovement writes to whatever warehouse id it is given, so this
+        // one must be an active location of this org, as for every other
+        // stock write.
+        const warehouse = await db.warehouse.findFirst({
+          where: { id: args.warehouseId, organizationId: args.orgId, isActive: true },
+          select: { id: true },
+        });
+        if (!warehouse) throw new NotFoundException('Location not found');
+      }
       const before = await db.productVariant.findUnique({
         where: { id: args.variantId },
         select: { inventoryQuantity: true, sku: true },
