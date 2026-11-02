@@ -2545,7 +2545,14 @@ export class OrderService {
       throw new BadRequestException('Order is already cancelled');
     }
     const isShopify = order.channel.platform === ChannelPlatform.SHOPIFY;
-    // Variants restocked into a warehouse bucket; pushed to Shopify after the
+    // A CRM sale pushed with BYPASS, by the same test as `pushOrder`: Collabo
+    // took its stock and Shopify never did, so the restock is Collabo's and
+    // Shopify must not add units it never took.
+    const stockMovedByCollabo =
+      !!order.metadata &&
+      typeof order.metadata === 'object' &&
+      (order.metadata as Record<string, unknown>).shopifyStockPushed === true;
+    // Variants restocked here that Shopify must hear of; pushed after the
     // transaction commits so a failed push can never roll back the cancel.
     const restockedVariantIds: string[] = [];
 
@@ -2579,7 +2586,7 @@ export class OrderService {
         orderId: orderGid,
         reason: dto.reason,
         refund: dto.refund ?? false,
-        restock: dto.restock ?? true,
+        restock: !stockMovedByCollabo && (dto.restock ?? true),
         notifyCustomer: dto.notifyCustomer ?? true,
         staffNote: dto.staffNote ?? null,
       };
@@ -2626,8 +2633,9 @@ export class OrderService {
 
       // Local restock for MANUAL channel orders. Shopify orders are restocked
       // server-side by the orderCancel mutation we already sent — adjusting
-      // inventory locally would double-count once the next pull-sync lands.
-      if (dto.restock && !isShopify) {
+      // inventory locally would double-count once the next pull-sync lands —
+      // except one whose stock Collabo moved, which Shopify was told not to.
+      if (dto.restock && (!isShopify || stockMovedByCollabo)) {
         const productSettings = await this.settings.getProductSettings(orgId);
         const trackGlobally = productSettings.trackQuantityGlobally === true;
 
@@ -2706,6 +2714,10 @@ export class OrderService {
               referenceId: id,
             },
           });
+          // Shopify holds the figure this sale pushed and restocks nothing,
+          // so it learns the restocked one the same way, or the next pull
+          // takes the units back.
+          if (isShopify) restockedVariantIds.push(li.variant.id);
         }
       }
 
