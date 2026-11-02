@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { BillingPlan, BillingProvider, ChannelPlatform, ChannelStatus, StockLocationKind } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { BillingAccessService } from './billing-access';
 import { BillingCurrency, periodOf, periodRange, pricingPlan, Usage, usageCharges } from './pricing';
 import { BILLED_ROLES, seatOf } from './seats';
 
@@ -10,7 +11,10 @@ const LIVE_CHANNEL = { isEnabled: true, status: { not: ChannelStatus.DISCONNECTE
 
 @Injectable()
 export class UsageService {
-    constructor(private readonly prisma: PrismaService) { }
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly billingAccess: BillingAccessService,
+    ) { }
 
     /**
      * A month's usage. Calling minutes are each answered call's talk time,
@@ -47,7 +51,10 @@ export class UsageService {
         };
     }
 
-    /** Settings → Billing: the plan, this month so far and what it would add, and past usage bills. */
+    /**
+     * Settings → Billing: the plan (a trial's too) and where the workspace
+     * stands, this month so far and what it would add, and past usage bills.
+     */
     async summary(organizationId: string) {
         const org = await this.prisma.organization.findUniqueOrThrow({
             where: { id: organizationId },
@@ -59,6 +66,7 @@ export class UsageService {
                 externalSubscriptionId: true,
                 subscriptionStatus: true,
                 currentPeriodEnd: true,
+                trialEndsAt: true,
             },
         });
         const period = periodOf(new Date());
@@ -76,6 +84,8 @@ export class UsageService {
         return {
             period,
             usage,
+            plan: org.billingPlan,
+            access: this.billingAccess.of(org),
             subscription: subscribed
                 ? {
                     plan: org.billingPlan,

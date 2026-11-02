@@ -2,10 +2,11 @@ import { BadRequestException } from '@nestjs/common';
 import { BroadcastRecipientStatus as R, BroadcastStatus, MessageStatus } from '@prisma/client';
 import { assertOwnHeaderFile, parseVariables } from './broadcast-variables';
 import { BroadcastsService } from './broadcasts.service';
+import { NOT_SENT_READ_ONLY } from '../../billing/billing-access';
 
 const approved = { id: 'tpl_1', name: 'diwali', language: 'en', category: 'MARKETING', status: 'APPROVED', wabaId: 'waba_1', parameterFormat: 'POSITIONAL', components: [{ type: 'BODY', text: 'Hi' }] };
 
-function setup(over: { broadcast?: Record<string, unknown>; template?: Record<string, unknown> | null } = {}) {
+function setup(over: { broadcast?: Record<string, unknown>; template?: Record<string, unknown> | null; readOnly?: boolean } = {}) {
     const broadcast = { id: 'b_1', organizationId: 'org_1', channelId: 'ch_1', name: 'Diwali', campaign: null, status: BroadcastStatus.SENDING, templateId: 'tpl_1', variables: null, audience: null, startedAt: new Date(), ...over.broadcast };
     const template = over.template === undefined ? approved : over.template;
     const recipientUpdates: any[] = [];
@@ -39,7 +40,8 @@ function setup(over: { broadcast?: Record<string, unknown>; template?: Record<st
     };
     const queue = { add: jest.fn(async (...args: unknown[]) => queued.push(args)), remove: jest.fn(), addBulk: jest.fn() };
     const templates = { view: (t: unknown) => t, load: jest.fn(), channelFor: jest.fn() };
-    const service = new BroadcastsService(prisma as any, templates as any, {} as any, {} as any, {} as any, queue as any);
+    const billingAccess = { isReadOnly: jest.fn(async () => over.readOnly ?? false) };
+    const service = new BroadcastsService(prisma as any, templates as any, {} as any, {} as any, {} as any, queue as any, billingAccess as any);
     return { service, prisma, broadcast, recipientUpdates, messageUpdates, queued };
 }
 
@@ -66,6 +68,19 @@ describe('broadcasts', () => {
         // Failed with no error code, so Retry failed takes them.
         expect(recipientUpdates[0].data).toMatchObject({ status: R.FAILED, errorMessage: 'Not sent: the template is paused.' });
         expect(recipientUpdates[0].data.errorCode).toBeUndefined();
+    });
+
+    it('a read-only workspace sends no broadcast: a scheduled one fails when it would start, and one under way stops', async () => {
+        const scheduled = setup({ broadcast: { status: BroadcastStatus.SCHEDULED }, readOnly: true });
+        await scheduled.service.start('b_1');
+        expect(scheduled.broadcast).toMatchObject({ status: BroadcastStatus.FAILED, failureReason: NOT_SENT_READ_ONLY });
+        expect(scheduled.prisma.messageTemplate.findUnique).not.toHaveBeenCalled();
+        expect(scheduled.queued).toEqual([]);
+
+        const sending = setup({ readOnly: true });
+        await sending.service.sendBatch('b_1', ['r_1']);
+        expect(sending.broadcast.status).toBe(BroadcastStatus.FAILED);
+        expect(sending.recipientUpdates[0]).toEqual({ where: { broadcastId: 'b_1', status: R.PENDING }, data: { status: R.SKIPPED, skipReason: 'cancelled' } });
     });
 
     it('a template deleted mid-send fails the broadcast instead of leaving it sending', async () => {

@@ -17,9 +17,12 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AcceptInviteDto } from './dto/accept-invite.dto';
+import { AllowWhenExpired } from '../billing/allow-when-expired.decorator';
 
 @Controller('auth')
 @NoOrgRequired()
+// Signing in and out, and switching workspace, work in a read-only one too.
+@AllowWhenExpired()
 export class AuthController {
   constructor(private readonly authService: AuthService) { }
 

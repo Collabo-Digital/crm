@@ -4,6 +4,7 @@ import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { SessionPayload } from '../auth/interfaces/jwt-payload.interface';
+import { AllowWhenExpired } from './allow-when-expired.decorator';
 import { BillingService } from './billing.service';
 import { SubscribeDto } from './dto/subscribe.dto';
 import { UsageService } from './usage.service';
@@ -13,6 +14,7 @@ import { UsageService } from './usage.service';
  * owners and admins see. Only the owner changes what the workspace pays.
  */
 @Controller('billing')
+@AllowWhenExpired()
 export class BillingUsageController {
     constructor(
         private readonly usage: UsageService,

@@ -83,7 +83,7 @@ function harness(opts: { steps: Row[]; platform?: string; contact?: Row; sentTod
         conversationFor: jest.fn(async () => 'conv1'),
     };
     const none = {} as never;
-    const runner = new AutomationRunner(prisma as never, sender as never, { resume: jest.fn(), event: jest.fn() } as never, none, { publish: jest.fn() } as never, none, none, none, none, none, none, none, { get: () => undefined } as never);
+    const runner = new AutomationRunner(prisma as never, sender as never, { resume: jest.fn(), event: jest.fn() } as never, none, { publish: jest.fn() } as never, none, none, none, none, none, none, none, { get: () => undefined } as never, { isReadOnly: () => Promise.resolve(false) } as never);
     jest.spyOn((runner as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => undefined);
     return { runner, run, prisma, sent, steps };
 }

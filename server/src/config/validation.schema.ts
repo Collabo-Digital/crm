@@ -97,6 +97,12 @@ export const validationSchema = Joi.object({
     RAZORPAY_PLAN_PRO_USD_YEARLY: RAZORPAY_PLAN_ID,
     BILLING_SALES_EMAIL: Joi.string().email({ tlds: { allow: false } }).optional(),
     BILLING_USAGE_POLL_SECONDS: Joi.number().integer().min(1).max(86400).optional(),
+    BILLING_ENFORCEMENT: Joi.string().valid('true', 'false').optional(),
+    // When existing workspaces' trials start. Needed once enforcement is on:
+    // without it every workspace made before trials would have none.
+    BILLING_ENFORCE_FROM: Joi.string().isoDate().when('BILLING_ENFORCEMENT', { is: 'true', then: Joi.required(), otherwise: Joi.optional() }),
+    BILLING_TRIAL_DAYS: Joi.number().integer().min(1).max(365).optional(),
+    BILLING_GRACE_DAYS: Joi.number().integer().min(0).max(90).optional(),
     JUDGEME_API_BASE: Joi.string().uri().optional(),
     GOOGLE_CLIENT_ID: Joi.string().optional(),
     GOOGLE_CLIENT_SECRET: Joi.string().optional(),

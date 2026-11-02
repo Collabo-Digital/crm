@@ -1,6 +1,5 @@
 import {
     BadRequestException,
-    ForbiddenException,
     Injectable,
     Logger,
     ServiceUnavailableException,
@@ -15,6 +14,7 @@ import {
 } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { BillingAccess, billingAccess, BillingAccessFields, billingRules, newTrialEnd } from './billing-access';
 import { BILLING_CURRENCIES, BILLING_INTERVALS, BillingCurrency, GST_PERCENT, PLANS, pricingPlan, YEARLY_DISCOUNT_PERCENT } from './pricing';
 import { RazorpayService } from './razorpay.service';
 import { planOfRazorpayId, razorpayPlanId } from './razorpay-plans';
@@ -67,6 +67,9 @@ interface RazorpayWebhookPayload {
     };
 }
 
+/** A workspace that starts without paying tries Growth. */
+const TRIAL_PLAN = BillingPlan.GROWTH;
+
 /** About ten years of renewals: subscriptions end by being cancelled, not by running out. */
 const SUBSCRIPTION_CYCLES: Record<BillingInterval, number> = { MONTHLY: 120, YEARLY: 10 };
 
@@ -114,6 +117,7 @@ export class BillingService {
 
     /** The price list, and which plans can be bought, paid monthly or yearly, in which currency. */
     plans() {
+        const rules = billingRules(this.config);
         return {
             plans: PLANS,
             gstPercent: GST_PERCENT,
@@ -125,7 +129,15 @@ export class BillingService {
                 ]),
             ),
             salesEmail: this.config.get<string>('billing.salesEmail') ?? null,
+            // BILLING_ENFORCEMENT: trials and the payment step in onboarding are on.
+            enforcement: rules.enforced,
+            trialDays: rules.enforced ? rules.trialDays : null,
         };
+    }
+
+    /** Where a workspace stands: trialing, active, in grace or read-only. */
+    access(org: BillingAccessFields, now = new Date()): BillingAccess {
+        return billingAccess(org, now, billingRules(this.config));
     }
 
     /**
@@ -320,10 +332,14 @@ export class BillingService {
     /**
      * Atomic helper called from inside OrganizationService.create() and
      * createPersonal()'s `$transaction`. Copies User.pending_* → Organization
-     * billing fields, clears the pending fields. Throws if no ACTIVE/AUTHENTICATED
-     * subscription — this is the server-side hard gate that prevents an org from
-     * being created without payment. The plan is the one paid for, whatever
-     * the create request said.
+     * billing fields, clears the pending fields. The plan is the one paid for,
+     * whatever the create request said.
+     *
+     * Without a payment the workspace starts on a free trial of Growth while
+     * BILLING_ENFORCEMENT is on; with it off, on the plan asked for if it is
+     * one sold at checkout. Scale and Enterprise are only ever set by the
+     * Collabo team. A checkout left unpaid stays on the workspace, so paying
+     * it later still counts.
      */
     async applyPendingSubscriptionToOrg(
         tx: Prisma.TransactionClient,
@@ -344,37 +360,32 @@ export class BillingService {
         });
 
         const status = user.pendingSubscriptionStatus;
-
-        // TEMP: pricing/billing step is hidden from users during onboarding.
-        // Allow orgs to be created without a paid subscription. When billing
-        // ships, remove this early-return to restore the payment gate below.
-        if (!status) {
-            return;
-        }
-
-        const isPaid =
-            status === SubscriptionStatus.ACTIVE ||
-            status === SubscriptionStatus.AUTHENTICATED;
-
-        if (!isPaid) {
-            throw new ForbiddenException(
-                'Subscription payment required before creating an organization',
-            );
+        const paid = !!status && LIVE_SUBSCRIPTION.includes(status);
+        let plan = user.pendingBillingPlan;
+        if (!paid) {
+            const { billingPlan: requested } = await tx.organization.findUniqueOrThrow({ where: { id: orgId }, select: { billingPlan: true } });
+            plan = billingRules(this.config).enforced ? TRIAL_PLAN : pricingPlan(requested).selfServe ? requested : BillingPlan.BASIC;
         }
 
         await tx.organization.update({
             where: { id: orgId },
             data: {
-                ...(user.pendingBillingPlan ? { billingPlan: user.pendingBillingPlan } : {}),
-                ...(user.pendingBillingInterval ? { billingInterval: user.pendingBillingInterval } : {}),
-                billingCurrency: user.pendingBillingCurrency,
-                externalCustomerId: user.pendingExternalCustomerId,
-                externalSubscriptionId: user.pendingExternalSubscriptionId,
-                billingProvider: 'RAZORPAY',
-                subscriptionStatus: status,
-                currentPeriodEnd: user.pendingCurrentPeriodEnd,
+                ...(plan ? { billingPlan: plan } : {}),
+                ...(paid && user.pendingBillingInterval ? { billingInterval: user.pendingBillingInterval } : {}),
+                trialEndsAt: newTrialEnd(billingRules(this.config), new Date()),
+                ...(status
+                    ? {
+                        billingCurrency: user.pendingBillingCurrency,
+                        externalCustomerId: user.pendingExternalCustomerId,
+                        externalSubscriptionId: user.pendingExternalSubscriptionId,
+                        billingProvider: BillingProvider.RAZORPAY,
+                        subscriptionStatus: status,
+                        currentPeriodEnd: user.pendingCurrentPeriodEnd,
+                    }
+                    : {}),
             },
         });
+        if (!status) return;
 
         await tx.user.update({
             where: { id: userId },

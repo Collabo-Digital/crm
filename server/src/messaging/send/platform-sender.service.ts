@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ChannelPlatform, ChannelStatus, MessageDirection, MessageSource, MessageStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsageMeter } from '../../billing/usage-meter';
+import { BillingAccessService, NOT_SENT_READ_ONLY } from '../../billing/billing-access';
 import { MetaGraphClient } from '../../channel/meta-graph.client';
 import { MetaGraphError } from '../../channel/meta-graph.types';
 import { Priority, isRateLimitedError } from '../../rate-limit/rate-limit.types';
@@ -182,6 +183,7 @@ export class PlatformSenderService {
         private readonly broadcasts: BroadcastTracker,
         private readonly usageMeter: UsageMeter,
         private readonly voiceNotes: VoiceNoteConverter,
+        private readonly billingAccess: BillingAccessService,
     ) { }
 
     async deliver(messageId: string, humanAgentTag: boolean): Promise<'sent' | 'failed' | 'skipped'> {
@@ -191,6 +193,8 @@ export class PlatformSenderService {
         });
         if (!message || message.status !== MessageStatus.QUEUED) return 'skipped';
         if (handedOverAt(message.responsePayload)) return this.fail(message, undefined, UNCONFIRMED_SEND);
+        // Whoever queued it (an inbox reply, an automation, a broadcast), a read-only workspace sends nothing.
+        if (await this.billingAccess.isReadOnly(message.organizationId)) return this.fail(message, undefined, NOT_SENT_READ_ONLY);
         const contact = message.contact;
         if (!contact) return this.fail(message, undefined, 'The contact was deleted, so this message was not sent.');
         const payload = (message.body as { payload?: OutboundPayload }).payload;

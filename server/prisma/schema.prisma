@@ -334,6 +334,9 @@ model Organization {
   currentPeriodEnd       DateTime?           @map("current_period_end")
   /// INR or USD: the currency of the Razorpay plan the subscription is on.
   billingCurrency        String?             @map("billing_currency")
+  /// When the free trial ends. Null for workspaces made before trials: theirs
+  /// ends BILLING_TRIAL_DAYS after BILLING_ENFORCE_FROM. See billing-access.ts.
+  trialEndsAt            DateTime?           @map("trial_ends_at")
   lowStockThreshold      Int                 @default(10) @map("low_stock_threshold")
   gstEnabled             Boolean             @default(false) @map("gst_enabled")
   loyaltyMetric          LoyaltyMetric       @default(ORDERS) @map("loyalty_metric")

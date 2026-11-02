@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { AutomationController } from './automation.controller';
 import { AutomationService } from './automation.service';
 import { ChannelModule } from '../channel/channel.module';
+import { BillingModule } from '../billing/billing.module';
 import { MessagingModule } from '../messaging/messaging.module';
 import { CampaignsModule } from '../campaigns/campaigns.module';
 import { InstagramMediaService } from './platforms/instagram/instagram-media.service';
@@ -36,6 +37,8 @@ import { ManagedAutomationsService } from './pack/managed-automations.service';
 @Module({
   imports: [
     ChannelModule, MessagingModule, CampaignsModule, InboxModule, CommerceModule, PaymentsModule, GrowthModule, AdsModule, DeveloperModule, ReviewsModule, GoogleModule,
+    // A read-only workspace runs no automations.
+    BillingModule,
     BullModule.registerQueue({ name: META_INBOUND_QUEUE }),
     BullModule.registerQueue({ name: AUTOMATION_QUEUE }),
   ],

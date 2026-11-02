@@ -33,6 +33,13 @@ describe('config validation', () => {
         expect(errors({ ...production, SMTP_HOST: '', SMTP_PASS: '' })).toEqual(['SMTP_HOST', 'SMTP_PASS']);
     });
 
+    it('needs BILLING_ENFORCE_FROM once BILLING_ENFORCEMENT is on', () => {
+        expect(errors({ ...production, BILLING_ENFORCEMENT: 'true' })).toEqual(['BILLING_ENFORCE_FROM']);
+        expect(errors({ ...production, BILLING_ENFORCEMENT: 'true', BILLING_ENFORCE_FROM: '2026-12-01' })).toEqual([]);
+        expect(errors({ ...production, BILLING_ENFORCE_FROM: 'next week' })).toEqual(['BILLING_ENFORCE_FROM']);
+        expect(errors({ ...production, BILLING_ENFORCEMENT: 'yes' })).toEqual(['BILLING_ENFORCEMENT']);
+    });
+
     it('refuses an http APP_URL in production', () => {
         expect(errors({ ...production, APP_URL: 'http://api.example.com' })).toEqual(['APP_URL']);
     });

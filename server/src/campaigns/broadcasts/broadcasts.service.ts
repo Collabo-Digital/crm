@@ -12,6 +12,7 @@ import {
     TemplateCategory,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { BillingAccessService, NOT_SENT_READ_ONLY } from '../../billing/billing-access';
 import { contactName } from '../../messaging/contact-name';
 import { MessagingSendService } from '../../messaging/send/messaging-send.service';
 import { ORIGIN_PRIORITY, broadcastPriority } from '../../messaging/send/outbound.queue';
@@ -104,6 +105,7 @@ export class BroadcastsService {
         private readonly sender: MessagingSendService,
         private readonly platform: PlatformSenderService,
         @InjectQueue(BROADCAST_QUEUE) private readonly queue: Queue<BroadcastJobData>,
+        private readonly billingAccess: BillingAccessService,
     ) { }
 
     // ─── Drafts ────────────────────────────────────────────────────────
@@ -449,6 +451,7 @@ export class BroadcastsService {
     async start(broadcastId: string) {
         const b = await this.prisma.broadcast.findUnique({ where: { id: broadcastId } });
         if (!b || (b.status !== BroadcastStatus.SCHEDULED && b.status !== BroadcastStatus.SENDING)) return;
+        if (await this.stoppedReadOnly(b)) return;
         const template = b.templateId ? await this.prisma.messageTemplate.findUnique({ where: { id: b.templateId } }) : null;
         if (!template || template.status !== 'APPROVED') {
             await this.fail(b.id, template ? `The template was ${template.status.toLowerCase()} when sending started.` : 'The template was deleted.');
@@ -498,6 +501,7 @@ export class BroadcastsService {
     async sendBatch(broadcastId: string, recipientIds: string[], batch = 0) {
         const b = await this.prisma.broadcast.findUnique({ where: { id: broadcastId } });
         if (!b || b.status !== BroadcastStatus.SENDING) return;
+        if (await this.stoppedReadOnly(b)) return;
         // A deleted template leaves templateId null.
         const template = b.templateId ? await this.prisma.messageTemplate.findUnique({ where: { id: b.templateId } }) : null;
         if (!template) return this.fail(b.id, 'The template was deleted while sending, so the rest of the audience was not sent to.');
@@ -580,6 +584,17 @@ export class BroadcastsService {
             this.logger.warn(`Broadcast ${broadcastId}: closed after ${STALLED_CHECKS} checks without progress, ${waiting} still waiting`);
         }
         await this.prisma.broadcast.update({ where: { id: broadcastId }, data: { status: BroadcastStatus.COMPLETED, completedAt: new Date(), failureReason } });
+    }
+
+    /**
+     * A read-only workspace (no plan, trial and grace over) sends no
+     * broadcast, scheduled or under way: it stops for good, saying why.
+     */
+    private async stoppedReadOnly(b: Broadcast): Promise<boolean> {
+        if (!(await this.billingAccess.isReadOnly(b.organizationId))) return false;
+        this.logger.log(`Broadcast ${b.id} stopped: org ${b.organizationId} is read-only until a plan is active`);
+        await this.fail(b.id, NOT_SENT_READ_ONLY);
+        return true;
     }
 
     /** Stop for good: nobody else is sent to, and messages still waiting in the send queue are withdrawn. */

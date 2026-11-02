@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ChannelModule } from '../channel/channel.module';
+import { BillingModule } from '../billing/billing.module';
 import { AUTOMATION_QUEUE } from '../messaging/automation-jobs';
 import { MessagingModule } from '../messaging/messaging.module';
 import { BROADCAST_QUEUE } from './broadcasts/broadcast.queue';
@@ -35,6 +36,8 @@ import { TemplatePackService } from './templates/pack/template-pack.service';
     imports: [
         ChannelModule,
         MessagingModule,
+        // A read-only workspace sends no broadcasts.
+        BillingModule,
         BullModule.registerQueue(
             { name: BROADCAST_QUEUE },
             { name: TEMPLATE_PACK_QUEUE },

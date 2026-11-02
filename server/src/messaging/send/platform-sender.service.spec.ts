@@ -3,6 +3,7 @@ import { MetaGraphError } from '../../channel/meta-graph.types';
 import { VoiceNoteError } from '../media/voice-note.converter';
 import { RateLimitedError } from '../../rate-limit/rate-limit.types';
 import { PlatformSenderService, UNCONFIRMED_SEND, maySendHaveGoneOut } from './platform-sender.service';
+import { NOT_SENT_READ_ONLY } from '../../billing/billing-access';
 
 const channel = {
     id: 'ch1',
@@ -34,7 +35,7 @@ function row(overrides: Record<string, unknown> = {}) {
     };
 }
 
-function build(message = row(), deps: { channel?: object; storage?: object; voiceNotes?: object } = {}) {
+function build(message = row(), deps: { channel?: object; storage?: object; voiceNotes?: object; readOnly?: boolean } = {}) {
     const writes: Array<{ op: string; args: any }> = [];
     const prisma = {
         message: {
@@ -69,6 +70,7 @@ function build(message = row(), deps: { channel?: object; storage?: object; voic
         broadcasts as never,
         usageMeter as never,
         (deps.voiceNotes ?? {}) as never,
+        { isReadOnly: jest.fn(() => Promise.resolve(deps.readOnly ?? false)) } as never,
     );
     return { sender, prisma, metaGraph, broadcasts, writes };
 }
@@ -98,6 +100,17 @@ describe('PlatformSenderService.deliver', () => {
             expect.objectContaining({ where: { id: 'm1', status: MessageStatus.QUEUED }, data: expect.objectContaining({ status: MessageStatus.FAILED, errorMessage: UNCONFIRMED_SEND }) }),
         );
         expect(broadcasts.onStatus).toHaveBeenCalledWith('m1', MessageStatus.FAILED, expect.any(Date), { code: null, message: UNCONFIRMED_SEND });
+    });
+
+    it('sends nothing for a workspace that is read-only for want of a plan: the message fails, saying why', async () => {
+        const { sender, metaGraph, broadcasts, prisma } = build(row(), { readOnly: true });
+
+        expect(await sender.deliver('m1', false)).toBe('failed');
+        expect(metaGraph.request).not.toHaveBeenCalled();
+        expect(prisma.message.updateMany).toHaveBeenCalledWith(
+            expect.objectContaining({ where: { id: 'm1', status: MessageStatus.QUEUED }, data: expect.objectContaining({ status: MessageStatus.FAILED, errorMessage: NOT_SENT_READ_ONLY }) }),
+        );
+        expect(broadcasts.onStatus).toHaveBeenCalledWith('m1', MessageStatus.FAILED, expect.any(Date), { code: null, message: NOT_SENT_READ_ONLY });
     });
 
     it('a timeout after the hand-over fails as unconfirmed instead of being retried', async () => {

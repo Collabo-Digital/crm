@@ -43,7 +43,7 @@ describe('UsageService.usage', () => {
             warehouse: { count: jest.fn(() => Promise.resolve(3)) },
             channel: { count: jest.fn((args: { where: { platform: string } }) => Promise.resolve(args.where.platform === 'WHATSAPP' ? 2 : 1)) },
         };
-        const usage = await new UsageService(prisma as never).usage('org_1', '2026-10');
+        const usage = await new UsageService(prisma as never, {} as never).usage('org_1', '2026-10');
 
         expect(usage).toEqual({ conversations: 2_345, callingMinutes: 3, members: 2, opsSeats: 2, storeLocations: 3, whatsappNumbers: 2, instagramAccounts: 1 });
         expect(prisma.organizationMember.findMany).toHaveBeenCalledWith({

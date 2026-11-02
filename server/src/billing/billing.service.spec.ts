@@ -5,9 +5,10 @@ import { BillingService } from './billing.service';
 
 describe('BillingService.applyPendingSubscriptionToOrg', () => {
     const service = new BillingService({} as never, {} as never, new ConfigService({}), {} as never);
-    const tx = (pending: Record<string, unknown>) => ({
+    const enforcing = new BillingService({} as never, {} as never, new ConfigService({ billing: { enforcement: true, enforceFrom: '2026-12-01T00:00:00Z', trialDays: 14, graceDays: 7 } }), {} as never);
+    const tx = (pending: Record<string, unknown>, requested = 'BASIC') => ({
         user: { findUniqueOrThrow: jest.fn().mockResolvedValue(pending), update: jest.fn() },
-        organization: { update: jest.fn() },
+        organization: { update: jest.fn(), findUniqueOrThrow: jest.fn().mockResolvedValue({ billingPlan: requested }) },
     });
 
     it('gives the new organization the plan, interval and currency that were paid for', async () => {
@@ -28,10 +29,56 @@ describe('BillingService.applyPendingSubscriptionToOrg', () => {
         expect(t.user.update.mock.calls[0][0].data).toMatchObject({ pendingBillingPlan: null, pendingBillingCurrency: null, pendingExternalSubscriptionId: null });
     });
 
-    it('leaves an organization made without a subscription as it is, while the payment step is off', async () => {
-        const t = tx({ pendingSubscriptionStatus: null });
+    it('leaves an organization made without a subscription on the plan asked for, with no trial, while enforcement is off', async () => {
+        const t = tx({ pendingSubscriptionStatus: null }, 'GROWTH');
         await service.applyPendingSubscriptionToOrg(t as never, 'u_1', 'org_1');
-        expect(t.organization.update).not.toHaveBeenCalled();
+        expect(t.organization.update).toHaveBeenCalledWith({ where: { id: 'org_1' }, data: { billingPlan: 'GROWTH', trialEndsAt: null } });
+        expect(t.user.update).not.toHaveBeenCalled();
+    });
+
+    it('never lets the create request choose a plan the Collabo team sets up', async () => {
+        for (const requested of ['SCALE', 'ADVANCE']) {
+            const t = tx({ pendingSubscriptionStatus: null }, requested);
+            await service.applyPendingSubscriptionToOrg(t as never, 'u_1', 'org_1');
+            expect(t.organization.update).toHaveBeenCalledWith({ where: { id: 'org_1' }, data: { billingPlan: 'BASIC', trialEndsAt: null } });
+        }
+    });
+
+    it('starts a 14-day trial of Growth for a workspace made without paying, while enforcement is on', async () => {
+        const t = tx({ pendingSubscriptionStatus: null }, 'ADVANCE');
+        const before = Date.now();
+        await enforcing.applyPendingSubscriptionToOrg(t as never, 'u_1', 'org_1');
+        const data = t.organization.update.mock.calls[0][0].data;
+        expect(data.billingPlan).toBe('GROWTH');
+        expect(data.trialEndsAt.getTime() - before).toBeGreaterThanOrEqual(14 * 24 * 3600_000);
+        expect(data.trialEndsAt.getTime() - before).toBeLessThan(14 * 24 * 3600_000 + 60_000);
+    });
+
+    it('keeps a checkout left unpaid on the trial workspace, so paying it later counts there', async () => {
+        const t = tx({
+            pendingBillingPlan: 'PRO',
+            pendingBillingInterval: 'YEARLY',
+            pendingBillingCurrency: 'INR',
+            pendingExternalCustomerId: null,
+            pendingExternalSubscriptionId: 'sub_unpaid',
+            pendingSubscriptionStatus: SubscriptionStatus.CREATED,
+            pendingCurrentPeriodEnd: null,
+        });
+        await enforcing.applyPendingSubscriptionToOrg(t as never, 'u_1', 'org_1');
+        expect(t.organization.update.mock.calls[0][0].data).toMatchObject({
+            billingPlan: 'GROWTH',
+            externalSubscriptionId: 'sub_unpaid',
+            subscriptionStatus: 'CREATED',
+            billingProvider: 'RAZORPAY',
+        });
+        expect(t.organization.update.mock.calls[0][0].data.billingInterval).toBeUndefined();
+        expect(t.user.update.mock.calls[0][0].data).toMatchObject({ pendingExternalSubscriptionId: null, pendingSubscriptionStatus: null });
+    });
+
+    it('says where a workspace stands, and whether trials and the payment step are on', () => {
+        expect(enforcing.plans()).toMatchObject({ enforcement: true, trialDays: 14 });
+        expect(service.plans()).toMatchObject({ enforcement: false, trialDays: null });
+        expect(enforcing.access({ billingProvider: 'MANUAL', subscriptionStatus: null, trialEndsAt: null, currentPeriodEnd: null })).toMatchObject({ state: 'active', enforced: true });
     });
 });
 

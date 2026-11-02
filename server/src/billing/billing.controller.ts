@@ -3,6 +3,7 @@ import { Body, Controller, Get, Post } from '@nestjs/common';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { NoOrgRequired } from '../auth/decorators/no-org-required.decorator';
+import { AllowWhenExpired } from './allow-when-expired.decorator';
 import { BillingService } from './billing.service';
 import { RazorpayService } from './razorpay.service';
 import { StartOnboardingCheckoutDto } from './dto/start-onboarding-checkout.dto';
@@ -11,6 +12,7 @@ import { StartOnboardingCheckoutDto } from './dto/start-onboarding-checkout.dto'
 // @NoOrgRequired: onboarding checkout runs before the user has an org.
 @Controller('billing')
 @NoOrgRequired()
+@AllowWhenExpired()
 export class BillingController {
     constructor(
         private readonly billing: BillingService,
