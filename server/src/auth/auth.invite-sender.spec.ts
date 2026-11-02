@@ -114,7 +114,7 @@ describe('InvitesService.resend — the admin who re-sends takes the invitation 
     };
     const email = { sendTeamInvite: jest.fn(() => Promise.resolve()) };
     const redis = { allowInviteFromSender: jest.fn(() => Promise.resolve(true)), allowEmailSend: jest.fn(() => Promise.resolve(true)) };
-    const service = new InvitesService(prisma as never, email as never, {} as never, redis as never);
+    const service = new InvitesService(prisma as never, email as never, {} as never, redis as never, { allows: async () => true } as never);
 
     await service.resend('org', 'inv1', 'u-current-admin');
 

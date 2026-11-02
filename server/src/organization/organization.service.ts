@@ -343,6 +343,10 @@ export class OrganizationService {
       website: org.website,
       billingPlan: org.billingPlan,
       billingInterval: org.billingInterval,
+      // Trialing, active, in grace or read-only: the app shell's billing banner.
+      billingAccess: this.billing.access(org),
+      // The plan's gated features as they apply now (all open while plans are not enforced).
+      planFeatures: this.billing.features(org.billingPlan),
       lowStockThreshold: org.lowStockThreshold,
       gstEnabled: org.gstEnabled,
       loyaltyMetric: org.loyaltyMetric,

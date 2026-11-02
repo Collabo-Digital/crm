@@ -118,7 +118,7 @@ describe('Scheduling a broadcast when the queue cannot take it', () => {
             },
         };
         const queue = { add: jest.fn().mockRejectedValue(new Error('Connection is closed.')) };
-        const service = new BroadcastsService(prisma as any, {} as any, {} as any, {} as any, {} as any, queue as any);
+        const service = new BroadcastsService(prisma as any, {} as any, {} as any, {} as any, {} as any, queue as any, {} as any);
         jest.spyOn(service, 'preview').mockResolvedValue({ ready: true, blockers: [] } as any);
         await expect(service.schedule('org1', 'b1', null)).rejects.toThrow('The broadcast was not scheduled and is still a draft. Try again in a minute.');
         expect(prisma.broadcast.update).toHaveBeenLastCalledWith({ where: { id: 'b1' }, data: { status: BroadcastStatus.DRAFT, scheduledAt: null } });

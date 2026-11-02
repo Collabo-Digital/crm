@@ -32,16 +32,27 @@ function realRedis() {
 }
 beforeEach(() => realRedis().client.flushall());
 
-function setup(apiKey: string | null = 'test-key', caps: { perUser?: number; total?: number } = {}) {
+function setup(apiKey: string | null = 'test-key', caps: { perUser?: number; total?: number; plan?: string } = {}) {
     const prisma = {
-        organization: { findUniqueOrThrow: jest.fn().mockResolvedValue({ name: 'Meera Studio', industry: 'Handloom sarees', website: null, currency: 'INR' }) },
+        organization: {
+            findUniqueOrThrow: jest.fn().mockResolvedValue({ name: 'Meera Studio', industry: 'Handloom sarees', website: null, currency: 'INR' }),
+            findUnique: jest.fn().mockResolvedValue({ billingPlan: caps.plan }),
+        },
         channel: { findFirst: jest.fn().mockResolvedValue({ externalStoreUrl: 'https://meera.myshopify.com' }) },
         messageTemplate: { findMany: jest.fn().mockResolvedValue([{ name: 'order_shipped' }]) },
     };
     const { redis, client } = realRedis();
     const config = {
         get: (key: string) =>
-            ({ 'ai.anthropicApiKey': apiKey ?? undefined, 'ai.anthropicBaseUrl': undefined, 'ai.draftsPerUserPerDay': caps.perUser, 'ai.draftsPerDayTotal': caps.total })[key],
+            ({
+                'ai.anthropicApiKey': apiKey ?? undefined,
+                'ai.anthropicBaseUrl': undefined,
+                'ai.draftsPerUserPerDay': caps.perUser,
+                'ai.draftsPerDayTotal': caps.total,
+                // A plan given: plans are enforced, so it sets the drafts a day.
+                'billing.enforcement': !!caps.plan,
+                'billing.enforceFrom': '2026-11-01T00:00:00Z',
+            })[key],
     };
     const service = new TemplateWriterService(prisma as any, redis, config as any);
     const create = jest.fn();
@@ -54,7 +65,7 @@ const input = { brief: 'Tell customers their order has shipped', language: 'en' 
 describe('TemplateWriterService', () => {
     it('reports itself unavailable without Collabo’s key', async () => {
         const { service } = setup(null);
-        expect(service.status()).toEqual({ available: false, draftsPerDay: DRAFTS_PER_DAY });
+        await expect(service.status('org1')).resolves.toEqual({ available: false, draftsPerDay: DRAFTS_PER_DAY });
         await expect(service.write('org1', 'u1', input)).rejects.toBeInstanceOf(ServiceUnavailableException);
     });
 
@@ -112,6 +123,15 @@ describe('TemplateWriterService', () => {
         expect((err as HttpException).getStatus()).toBe(429);
         expect((err as HttpException).message).toBe(`Your team has used today’s ${DRAFTS_PER_DAY} AI drafts. You can write more tomorrow.`);
         expect(create).not.toHaveBeenCalled();
+    });
+
+    it('gives each plan its own drafts a day while plans are enforced: 20 on Starter', async () => {
+        const { service, create, client } = setup('test-key', { plan: 'BASIC' });
+        await expect(service.status('org1')).resolves.toEqual({ available: true, draftsPerDay: 20 });
+        await client.set(`crm:ai:template_drafts:org1:${today()}`, 20);
+        await expect(service.write('org1', 'u1', input)).rejects.toThrow('Your team has used today’s 20 AI drafts. You can write more tomorrow.');
+        expect(create).not.toHaveBeenCalled();
+        await expect(setup('test-key', { plan: 'SCALE' }).service.status('org1')).resolves.toEqual({ available: true, draftsPerDay: 100 });
     });
 
     it('turns API errors into messages for the merchant', async () => {

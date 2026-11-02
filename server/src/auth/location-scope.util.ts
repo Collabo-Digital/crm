@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { BillingPlan, InviteStatus, Prisma, PrismaClient, UserRole } from '@prisma/client';
+import { InviteStatus, Prisma, PrismaClient, UserRole } from '@prisma/client';
 
 /**
  * Store scoping: a Manager or Agent limited to the stock locations (stores and
@@ -18,18 +18,8 @@ export const LOCATION_SCOPED_ROLES: UserRole[] = [UserRole.MANAGER, UserRole.AGE
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-/**
- * Whether this workspace's plan includes limiting members to stores. The one
- * place the plan decides it: true on every plan until billing has plan
- * features, then Scale and Enterprise.
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- the plan decides once billing has plan features
-export function storeScopingAllowed(_org: { billingPlan: BillingPlan }): boolean {
-  return true;
-}
-
 export const STORE_SCOPING_UPGRADE =
-  'Limiting members to stores is part of the Scale plan. Upgrade to choose the stores each member works at.';
+  'Choosing the stores a member works at is part of the Unlimited plan. Book a demo with us to move up.';
 
 /**
  * The locations this member works at, or null for every location.
@@ -96,7 +86,8 @@ export function scopedLocationSql(
 
 /**
  * The scope to save for a member or invitation of `role`: the org's own
- * locations, each once. `allowed` is `storeScopingAllowed` for the org.
+ * locations, each once. `allowed` is whether the org's plan includes it
+ * (BillingAccessService.allows(orgId, 'storeScoping')).
  * Clearing a scope is always allowed, on any plan and for any role.
  */
 export async function resolveLocationScope(

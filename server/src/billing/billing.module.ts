@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
 import { PrismaModule } from '../prisma/prisma.module';
+import { BillingAccessService } from './billing-access';
 import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
 import { BillingReconciler } from './billing.reconciler';
@@ -15,7 +16,7 @@ import { RazorpayWebhookController } from './webhooks/razorpay-webhook.controlle
 @Module({
     imports: [ConfigModule, PrismaModule],
     controllers: [BillingController, BillingUsageController, RazorpayWebhookController],
-    providers: [BillingService, RazorpayService, BillingReconciler, UsageMeter, UsageService, UsageBillingService],
-    exports: [BillingService, UsageMeter],
+    providers: [BillingService, BillingAccessService, RazorpayService, BillingReconciler, UsageMeter, UsageService, UsageBillingService],
+    exports: [BillingService, BillingAccessService, UsageMeter],
 })
 export class BillingModule { }

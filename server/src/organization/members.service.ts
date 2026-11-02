@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { extractGrants, namesAccess, SECTION_SCOPED_ROLES } from '../auth/permissions';
-import { resolveLocationScope, storeScopingAllowed } from '../auth/location-scope.util';
+import { resolveLocationScope } from '../auth/location-scope.util';
+import { BillingAccessService } from '../billing/billing-access';
 import { ChannelService } from '../channel/channel.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -19,6 +20,7 @@ export class MembersService {
         private readonly redis: RedisService,
         private readonly inboxEvents: InboxEventsService,
         private readonly channels: ChannelService,
+        private readonly billingAccess: BillingAccessService,
     ) { }
 
     // ─── LIST MEMBERS ───
@@ -147,9 +149,8 @@ export class MembersService {
             select: { id: true, role: true },
         });
         if (!member) throw new NotFoundException('Member not found');
-        const org = await this.prisma.organization.findUnique({ where: { id: orgId }, select: { billingPlan: true } });
         const locationScope = await resolveLocationScope(
-            this.prisma, orgId, member.role, locationIds, !!org && storeScopingAllowed(org),
+            this.prisma, orgId, member.role, locationIds, await this.billingAccess.allows(orgId, 'storeScoping'),
         );
         return this.prisma.organizationMember.update({
             where: { id: memberId },

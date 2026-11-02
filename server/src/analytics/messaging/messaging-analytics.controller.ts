@@ -7,6 +7,7 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { RequireSection } from '../../auth/decorators/require-section.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import type { SessionPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { RequirePlanFeature } from '../../billing/require-plan-feature.decorator';
 import { MessagingAnalyticsService } from './messaging-analytics.service';
 
 export class QueryMessagingAnalyticsDto {
@@ -23,6 +24,8 @@ export class QueryMessagingAnalyticsDto {
  */
 @Controller('analytics/messaging')
 @RequireSection('analytics')
+// Messaging and team-performance analytics are on Growth and above (only while plans are enforced).
+@RequirePlanFeature('messagingAnalytics')
 @Roles(UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER)
 export class MessagingAnalyticsController {
     constructor(private readonly analytics: MessagingAnalyticsService) { }

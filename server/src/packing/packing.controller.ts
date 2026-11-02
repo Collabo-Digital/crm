@@ -6,6 +6,7 @@ import { RequirePermissions } from '../auth/decorators/require-permissions.decor
 import { ORG_OPERATORS, Roles } from '../auth/decorators/roles.decorator';
 import { locationScopeFor } from '../auth/location-scope.util';
 import { PrismaService } from '../prisma/prisma.service';
+import { RequirePlanFeature } from '../billing/require-plan-feature.decorator';
 import { PackingService } from './packing.service';
 import {
     AccuracyQuerySchema,
@@ -30,6 +31,8 @@ const ORG_MEMBERS: UserRole[] = [...ORG_OPERATORS, UserRole.VIEWER];
  * store-limited packer packs for their own locations (see PackingService).
  */
 @RequirePermissions('inventory.pack')
+// The packing assistant is on Growth and above (only while plans are enforced).
+@RequirePlanFeature('packing')
 @Controller('packing')
 export class PackingController {
     constructor(

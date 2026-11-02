@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { billingService } from "~/services/billing.service";
 import { handleMutationError } from "~/lib/handle-mutation-error";
-import type { StartOnboardingCheckoutRequest } from "~/types/api";
+import type { StartOnboardingCheckoutRequest, SubscribeRequest } from "~/types/api";
 
 /**
  * Mutation hook to kick off the Razorpay onboarding checkout. Creates a
@@ -14,5 +14,13 @@ export function useStartOnboardingCheckoutMutation() {
       billingService.startOnboardingCheckout(data),
     onError: (error) =>
       handleMutationError(error, "Failed to start checkout."),
+  });
+}
+
+/** Owners: start a subscription for the workspace, to pay in Razorpay Checkout.js. */
+export function useSubscribeMutation() {
+  return useMutation({
+    mutationFn: (data: SubscribeRequest) => billingService.subscribe(data),
+    onError: (error) => handleMutationError(error, "The subscription could not be started."),
   });
 }

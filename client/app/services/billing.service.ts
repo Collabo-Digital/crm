@@ -6,6 +6,7 @@ import type {
   PendingStatusResponse,
   StartOnboardingCheckoutRequest,
   StartOnboardingCheckoutResponse,
+  SubscribeRequest,
 } from "~/types/api";
 
 /**
@@ -47,5 +48,11 @@ export const billingService = {
   getUsage: () =>
     apiClient
       .get<BillingUsageSummary>("/billing/usage")
+      .then((response) => response.data),
+
+  /** Owners: a Razorpay subscription for the workspace, paid in Checkout.js. */
+  subscribe: (data: SubscribeRequest) =>
+    apiClient
+      .post<StartOnboardingCheckoutResponse>("/billing/subscribe", data)
       .then((response) => response.data),
 };

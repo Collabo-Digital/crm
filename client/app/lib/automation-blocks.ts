@@ -431,6 +431,7 @@ export const SKIP_REASON_LABEL: Record<string, string> = {
   paused_after_failures: "Paused for a day: messages to them kept failing",
   daily_cap: "They already got 10 automated messages in 24 hours",
   comment_too_old: "The comment is over 7 days old, too late for a private reply",
+  read_only: "The workspace was read-only: no plan was active",
 };
 
 // ─── Playbooks ──────────────────────────────────────────────────────────────

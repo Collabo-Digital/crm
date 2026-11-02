@@ -25,9 +25,12 @@ import {
     type WriterCategory,
     type WriterOutput,
 } from './template-writer';
+import { billingRules, type BillingRules } from '../../billing/billing-access';
+import { planFeatures } from '../../billing/pricing';
 
 const MODEL = 'claude-opus-5-5';
 /// Drafts an organization may ask for in a UTC day: a guard on API spend.
+/// While plans are enforced, the plan's own number (planFeatures) instead.
 export const DRAFTS_PER_DAY = 50;
 /// Drafts one member may ask for in a UTC day, across organizations, which
 /// anyone may create for free (AI_DRAFTS_PER_USER_PER_DAY).
@@ -75,6 +78,7 @@ export class TemplateWriterService {
     private readonly client: Anthropic | null;
     private readonly perUser: number;
     private readonly total: number;
+    private readonly rules: BillingRules;
 
     constructor(
         private readonly prisma: PrismaService,
@@ -87,10 +91,18 @@ export class TemplateWriterService {
             : null;
         this.perUser = config.get<number>('ai.draftsPerUserPerDay') ?? DRAFTS_PER_USER_PER_DAY;
         this.total = config.get<number>('ai.draftsPerDayTotal') ?? DRAFTS_PER_DAY_TOTAL;
+        this.rules = billingRules(config);
     }
 
-    status() {
-        return { available: !!this.client, draftsPerDay: DRAFTS_PER_DAY };
+    async status(orgId: string) {
+        return { available: !!this.client, draftsPerDay: await this.draftsPerDay(orgId) };
+    }
+
+    /** The organization's drafts a day: its plan's while plans are enforced. */
+    private async draftsPerDay(orgId: string): Promise<number> {
+        if (!this.rules.enforced) return DRAFTS_PER_DAY;
+        const org = await this.prisma.organization.findUnique({ where: { id: orgId }, select: { billingPlan: true } });
+        return org ? planFeatures(org.billingPlan).aiDraftsPerDay : DRAFTS_PER_DAY;
     }
 
     async write(orgId: string, userId: string, input: WriteTemplateInput): Promise<WrittenTemplate> {
@@ -147,17 +159,18 @@ export class TemplateWriterService {
      */
     private async countDraft(orgId: string, userId: string): Promise<void> {
         const day = new Date().toISOString().slice(0, 10);
+        const perOrg = await this.draftsPerDay(orgId);
         const usedUp = Number(await this.redis.runScript(
             'aiTemplateDraftCount',
             COUNT_LUA,
             3,
             [`ai:template_drafts:${orgId}:${day}`, `ai:template_drafts_user:${userId}:${day}`, `ai:template_drafts_total:${day}`],
-            [2 * 86_400, DRAFTS_PER_DAY, this.perUser, this.total],
+            [2 * 86_400, perOrg, this.perUser, this.total],
         ));
         if (usedUp === 0) return;
         if (usedUp === 3) this.logger.warn(`AI template drafts: today's ${this.total} for the whole server are used up`);
         const message = [
-            `Your team has used today’s ${DRAFTS_PER_DAY} AI drafts. You can write more tomorrow.`,
+            `Your team has used today’s ${perOrg} AI drafts. You can write more tomorrow.`,
             `You have used today’s ${this.perUser} AI drafts. You can write more tomorrow.`,
             'Collabo has used today’s AI drafts for every store. You can write more tomorrow.',
         ][usedUp - 1];

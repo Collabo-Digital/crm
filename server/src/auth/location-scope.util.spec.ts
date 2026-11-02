@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { BillingPlan, Prisma, UserRole } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import {
   assertInLocationScope,
   inLocationScope,
@@ -9,7 +9,6 @@ import {
   resolveLocationScope,
   scopedLocationFilter,
   scopedLocationSql,
-  storeScopingAllowed,
   STORE_SCOPING_UPGRADE,
 } from './location-scope.util';
 
@@ -131,9 +130,6 @@ describe('resolveLocationScope', () => {
     expect(prisma.warehouse.count).not.toHaveBeenCalled();
   });
 
-  it('is allowed on every plan until billing wires the plans in', () => {
-    for (const billingPlan of Object.values(BillingPlan)) expect(storeScopingAllowed({ billingPlan })).toBe(true);
-  });
 });
 
 describe('closing a location', () => {

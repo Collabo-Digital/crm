@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AutomationRunStatus, AutomationStatus, ChannelPlatform, ChannelStatus, ConversationStatus, MessageDirection, MessageKind, MessageSource, MessageStatus, MessageTemplate, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { BillingAccessService } from '../../billing/billing-access';
 import { AutomationEventService } from '../../messaging/automation-event.service';
 import { AutomationJobs } from '../../messaging/automation-jobs';
 import { InboxEventsService } from '../../messaging/inbox-events.service';
@@ -141,6 +142,7 @@ export class AutomationRunner {
         private readonly reviews: ReviewsService,
         private readonly google: GoogleService,
         config: ConfigService,
+        private readonly billingAccess: BillingAccessService,
     ) {
         this.allowPrivate = config.get<string>('AUTOMATION_HTTP_ALLOW_PRIVATE') === 'true';
         this.frontendUrl = config.get<string>('frontendUrl') ?? '';
@@ -162,6 +164,7 @@ export class AutomationRunner {
         const run = await this.load(runId);
         if (!run.startedAt) await this.prisma.automationRun.update({ where: { id: run.id }, data: { startedAt: new Date() } });
         if (!(await this.stillLive(run))) return;
+        if (await this.skippedReadOnly(run)) return;
         const flow = await this.flowOf(run);
         if (!flow) return;
         const start = run.currentStepKey ? flow.step(run.currentStepKey) : flow.first();
@@ -190,6 +193,7 @@ export class AutomationRunner {
         if (!count) return;
         const run = await this.load(runId);
         if (!(await this.stillLive(run))) return;
+        if (await this.skippedReadOnly(run)) return;
         const flow = await this.flowOf(run);
         if (!flow) return;
         const ctx = parseRunContext(run.context);
@@ -987,6 +991,21 @@ export class AutomationRunner {
             data: { status: AutomationRunStatus.CANCELLED, error: 'The automation was paused or archived.', completedAt: new Date(), waitingForReply: false },
         });
         return false;
+    }
+
+    /**
+     * A read-only workspace (no plan, trial and grace over) runs no step:
+     * not a send, a tag, a call out or a store action. The run is skipped,
+     * not held, so nothing fires late once a plan is active.
+     */
+    private async skippedReadOnly(run: LoadedRun): Promise<boolean> {
+        if (!(await this.billingAccess.isReadOnly(run.organizationId))) return false;
+        this.logger.log(`Run ${run.id} skipped: org ${run.organizationId} is read-only until a plan is active`);
+        await this.prisma.automationRun.update({
+            where: { id: run.id },
+            data: { status: AutomationRunStatus.SKIPPED, skipReason: 'read_only', completedAt: new Date(), waitingForReply: false },
+        });
+        return true;
     }
 
     private async state(run: LoadedRun, ctx: RunContext, env: RunEnv): Promise<StepState | null> {

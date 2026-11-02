@@ -7,7 +7,9 @@ import { Checkbox } from "~/components/ui/checkbox";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Switch } from "~/components/ui/switch";
+import { PlanLocked } from "~/components/billing/plan-locked";
 import { useCurrentRole } from "~/hooks/use-current-role";
+import { usePlanFeature } from "~/hooks/use-plan-feature";
 import { formatDateTime } from "~/lib/format-date";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { cn } from "~/lib/utils";
@@ -47,7 +49,7 @@ function OnceSecret({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ApiKeys({ scopes }: { scopes: string[] }) {
+function ApiKeys({ scopes, locked }: { scopes: string[]; locked: boolean }) {
   const queryClient = useQueryClient();
   const { data: list = [] } = useQuery({ queryKey: keys.keys, queryFn: developerService.keys });
   const [name, setName] = useState("");
@@ -84,7 +86,7 @@ function ApiKeys({ scopes }: { scopes: string[] }) {
           ))}
         </ul>
       )}
-      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); create.mutate({ name: name.trim(), scopes: chosen }); }}>
+      {!locked && <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); create.mutate({ name: name.trim(), scopes: chosen }); }}>
         <div className="space-y-1.5">
           <Label htmlFor="key-name">Name</Label>
           <Input id="key-name" placeholder="Zapier" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
@@ -101,7 +103,7 @@ function ApiKeys({ scopes }: { scopes: string[] }) {
           {create.isPending && <Loader2 className="animate-spin" />}
           Make a key
         </Button>
-      </form>
+      </form>}
     </Card>
   );
 }
@@ -126,7 +128,7 @@ function Deliveries({ id }: { id: string }) {
   );
 }
 
-function Webhooks({ events }: { events: string[] }) {
+function Webhooks({ events, locked }: { events: string[]; locked: boolean }) {
   const queryClient = useQueryClient();
   const { data: list = [] } = useQuery({ queryKey: keys.webhooks, queryFn: developerService.webhooks });
   const [url, setUrl] = useState("");
@@ -175,7 +177,7 @@ function Webhooks({ events }: { events: string[] }) {
           ))}
         </ul>
       )}
-      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); create.mutate({ url: url.trim(), events: chosen }); }}>
+      {!locked && <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); create.mutate({ url: url.trim(), events: chosen }); }}>
         <div className="space-y-1.5">
           <Label htmlFor="wh-url">URL</Label>
           <Input id="wh-url" type="url" placeholder="https://example.com/collabo-webhook" value={url} onChange={(e) => setUrl(e.target.value)} />
@@ -192,7 +194,7 @@ function Webhooks({ events }: { events: string[] }) {
           {create.isPending && <Loader2 className="animate-spin" />}
           Add webhook
         </Button>
-      </form>
+      </form>}
     </Card>
   );
 }
@@ -201,6 +203,8 @@ function Webhooks({ events }: { events: string[] }) {
 export function DevelopersTab() {
   const { role } = useCurrentRole();
   const allowed = role === "OWNER" || role === "ADMIN";
+  // Making keys and webhooks is on Growth and above; ones already made are listed, and can be revoked, as ever.
+  const { locked, pending } = usePlanFeature("publicApi");
   const { data: catalog } = useQuery({ queryKey: keys.catalog, queryFn: developerService.catalog, enabled: allowed });
   return (
     <div className="space-y-6">
@@ -212,8 +216,9 @@ export function DevelopersTab() {
         <p className="text-xs text-muted-foreground">Only owners and admins can manage API keys and webhooks.</p>
       ) : catalog ? (
         <>
-          <ApiKeys scopes={catalog.scopes} />
-          <Webhooks events={catalog.events} />
+          {locked && <PlanLocked gate="publicApi" />}
+          <ApiKeys scopes={catalog.scopes} locked={locked || pending} />
+          <Webhooks events={catalog.events} locked={locked || pending} />
         </>
       ) : (
         <Loader2 className="size-4 animate-spin text-muted-foreground" />

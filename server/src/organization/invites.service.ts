@@ -17,7 +17,8 @@ import { EmailService } from '../email/email.service';
 import { UserService } from '../user/user.service';
 import { resolveVendorScope } from './vendor-scope';
 import { extractGrants, namesAccess, SECTION_SCOPED_ROLES } from '../auth/permissions';
-import { resolveLocationScope, storeScopingAllowed } from '../auth/location-scope.util';
+import { resolveLocationScope } from '../auth/location-scope.util';
+import { BillingAccessService } from '../billing/billing-access';
 
 /** How long an invitation stays claimable. */
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -54,6 +55,7 @@ export class InvitesService {
         private readonly emailService: EmailService,
         private readonly users: UserService,
         private readonly redis: RedisService,
+        private readonly billingAccess: BillingAccessService,
     ) { }
 
     // ─── SEND INVITE ───
@@ -98,7 +100,7 @@ export class InvitesService {
         // 2d. The stores a Manager / Agent will work at: the org's own
         // locations, on a plan that includes it.
         const locationScope = await resolveLocationScope(
-            this.prisma, orgId, dto.role, dto.locationScope, storeScopingAllowed(org),
+            this.prisma, orgId, dto.role, dto.locationScope, await this.billingAccess.allows(orgId, 'storeScoping'),
         );
 
         // 3. Check if already a member

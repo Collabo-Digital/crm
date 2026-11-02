@@ -15,6 +15,7 @@ import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { UpgradeToOrganizationDto } from './dto/upgrade-to-organization.dto';
 import { DeleteOrganizationDto } from './dto/delete-organization.dto';
 import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
+import { AllowWhenExpired } from '../billing/allow-when-expired.decorator';
 
 // JWT required. @NoOrgRequired: create/list orgs must work before JWT has orgId.
 @Controller('organizations')
@@ -28,6 +29,7 @@ export class OrganizationController {
 
   // POST /api/v1/organizations — create a team org
   @Post()
+  @AllowWhenExpired()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateOrganizationDto) {
     return this.orgService.create(user.sub, dto);
   }
@@ -36,6 +38,7 @@ export class OrganizationController {
   // WHY we need UserService? To get the user's firstName for the workspace name.
   // The body carries the plan chosen during onboarding.
   @Post('personal')
+  @AllowWhenExpired()
   async createPersonal(
     @CurrentUser() user: JwtPayload,
     @Body() dto: CreatePersonalDto,
@@ -86,6 +89,7 @@ export class OrganizationController {
   // carries the owner's password and the workspace's name; a few tries a
   // minute, so the password cannot be guessed here.
   @Delete(':orgId')
+  @AllowWhenExpired()
   @Throttle({ default: { ttl: 60_000, limit: 5 } })
   delete(@Param('orgId') orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: DeleteOrganizationDto) {
     return this.orgService.delete(orgId, user.sub, dto);

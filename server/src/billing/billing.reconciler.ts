@@ -1,19 +1,25 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { SubscriptionStatus } from '@prisma/client';
+import { BillingProvider, SubscriptionStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { RazorpayService } from './razorpay.service';
+import { planOfRazorpayId, subscriptionStatusOf } from './razorpay-plans';
+
+/** A workspace's checkout from Settings is followed up this long. */
+const ORG_CHECKOUT_FOLLOW_UP_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Two crons that catch what webhooks miss:
+ * Crons that catch what webhooks miss:
  *
  *   1. Reconcile (every 10 min): if a webhook fails to arrive, fetch the
- *      authoritative subscription state from Razorpay's API.
+ *      authoritative subscription state from Razorpay's API, for checkouts
+ *      at onboarding (on the User) and from Settings (on the Organization).
  *   2. Cleanup (daily at 3 AM): cancel + clear Razorpay subscriptions that
  *      were created during onboarding but the user abandoned.
  *
- * Both age rows by User.updatedAt, so they write only when something changed.
+ * They age rows by updatedAt, so they write only when something changed.
  */
 @Injectable()
 export class BillingReconciler {
@@ -22,6 +28,7 @@ export class BillingReconciler {
     constructor(
         private readonly prisma: PrismaService,
         private readonly razorpay: RazorpayService,
+        private readonly config: ConfigService,
     ) { }
 
     @Cron(CronExpression.EVERY_10_MINUTES)
@@ -55,6 +62,49 @@ export class BillingReconciler {
                 this.logger.error(
                     `Reconcile failed for user ${user.id}: ${(err as Error).message}`,
                 );
+            }
+        }
+    }
+
+    /**
+     * A subscription started from Settings that Razorpay has moved on (paid,
+     * most often) while its webhook went missing: a paid workspace must not
+     * stay unpaid here, and turn read-only.
+     */
+    @Cron(CronExpression.EVERY_10_MINUTES)
+    async reconcileOrganizationSubscriptions() {
+        if (!this.razorpay.isConfigured()) return;
+        const now = Date.now();
+        const orgs = await this.prisma.organization.findMany({
+            where: {
+                deletedAt: null,
+                billingProvider: BillingProvider.RAZORPAY,
+                externalSubscriptionId: { not: null },
+                subscriptionStatus: { in: [SubscriptionStatus.CREATED, SubscriptionStatus.AUTHENTICATED] },
+                updatedAt: { lt: new Date(now - 2 * 60 * 1000), gt: new Date(now - ORG_CHECKOUT_FOLLOW_UP_MS) },
+            },
+            orderBy: { updatedAt: 'desc' },
+            select: { id: true, externalSubscriptionId: true, subscriptionStatus: true },
+            take: 50,
+        });
+        for (const org of orgs) {
+            try {
+                const sub = await this.razorpay.fetchSubscription(org.externalSubscriptionId!);
+                const status = subscriptionStatusOf(sub.status);
+                if (status === org.subscriptionStatus) continue;
+                const onPlan = planOfRazorpayId(this.config, sub.plan_id);
+                // Conditional, so a webhook that landed meanwhile is not overwritten.
+                const { count } = await this.prisma.organization.updateMany({
+                    where: { id: org.id, externalSubscriptionId: org.externalSubscriptionId, subscriptionStatus: org.subscriptionStatus },
+                    data: {
+                        subscriptionStatus: status,
+                        currentPeriodEnd: sub.current_end ? new Date(sub.current_end * 1000) : null,
+                        ...(onPlan ? { billingPlan: onPlan.plan, billingInterval: onPlan.interval, billingCurrency: onPlan.currency } : {}),
+                    },
+                });
+                if (count) this.logger.log(`Reconciled org ${org.id} → ${sub.status}`);
+            } catch (err) {
+                this.logger.error(`Reconcile failed for org ${org.id}: ${(err as Error).message}`);
             }
         }
     }
@@ -116,7 +166,7 @@ export class BillingReconciler {
         user: { id: string; pendingExternalSubscriptionId: string | null; pendingSubscriptionStatus: SubscriptionStatus | null; pendingCurrentPeriodEnd: Date | null },
         sub: { status: string; current_end: number | null },
     ): Promise<boolean> {
-        const status = this.mapStatus(sub.status);
+        const status = subscriptionStatusOf(sub.status);
         const periodEnd = sub.current_end ? new Date(sub.current_end * 1000) : null;
         if (status === user.pendingSubscriptionStatus && periodEnd?.getTime() === user.pendingCurrentPeriodEnd?.getTime()) {
             return false;
@@ -129,17 +179,4 @@ export class BillingReconciler {
         return count > 0;
     }
 
-    private mapStatus(raw: string): SubscriptionStatus {
-        const map: Record<string, SubscriptionStatus> = {
-            created: SubscriptionStatus.CREATED,
-            authenticated: SubscriptionStatus.AUTHENTICATED,
-            active: SubscriptionStatus.ACTIVE,
-            paused: SubscriptionStatus.PAUSED,
-            halted: SubscriptionStatus.HALTED,
-            cancelled: SubscriptionStatus.CANCELLED,
-            completed: SubscriptionStatus.COMPLETED,
-            expired: SubscriptionStatus.EXPIRED,
-        };
-        return map[raw] ?? SubscriptionStatus.CREATED;
-    }
 }

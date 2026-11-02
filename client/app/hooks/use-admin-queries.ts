@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { handleMutationError } from "~/lib/handle-mutation-error";
-import { adminService } from "~/services/admin.service";
+import { adminService, type SetOrgBillingRequest } from "~/services/admin.service";
 import { useAuthStore } from "~/stores/auth.store";
 
 export const adminKeys = {
@@ -112,4 +112,17 @@ export function useUserModerationMutations(userId: string) {
             onError: (error) => handleMutationError(error, "Failed to revoke sessions."),
         }),
     };
+}
+
+/** Set plan / extend trial for one workspace, from a member's page. */
+export function useSetOrgBilling(userId: string) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: ({ orgId, body }: { orgId: string; body: SetOrgBillingRequest }) => adminService.setOrgBilling(orgId, body),
+        onSuccess: () => {
+            toast.success("Billing updated.");
+            void queryClient.invalidateQueries({ queryKey: adminKeys.user(userId) });
+        },
+        onError: (error) => handleMutationError(error, "Billing was not updated."),
+    });
 }

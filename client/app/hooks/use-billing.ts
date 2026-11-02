@@ -8,8 +8,8 @@ export const billingKeys = {
 };
 
 /** The price list. It changes with a deploy, not while the page is open. */
-export function useBillingPlans() {
-  return useQuery({ queryKey: billingKeys.plans(), queryFn: billingService.getPlans, staleTime: 30 * 60_000 });
+export function useBillingPlans(enabled = true) {
+  return useQuery({ queryKey: billingKeys.plans(), queryFn: billingService.getPlans, staleTime: 30 * 60_000, enabled });
 }
 
 /** The organization's plan, this month's usage and its usage bills (owners and admins). */

@@ -12,9 +12,12 @@ import { UserService } from './user.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { DeleteAccountDto } from './dto/delete-account.dto';
+import { AllowWhenExpired } from '../billing/allow-when-expired.decorator';
 
 @Controller('users')
 @NoOrgRequired()
+// The profile, the password and signing out work in a read-only workspace too.
+@AllowWhenExpired()
 export class UserController {
   constructor(
     private readonly userService: UserService,

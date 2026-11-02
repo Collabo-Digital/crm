@@ -49,6 +49,8 @@ import { InvoiceModule } from './invoice/invoice.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { AdminModule } from './admin/admin.module';
 import { BillingModule } from './billing/billing.module';
+import { BillingAccessGuard } from './billing/billing-access.guard';
+import { PlanFeatureGuard } from './billing/plan-feature.guard';
 import { InventoryModule } from './inventory/inventory.module';
 import { AutomationModule } from './automation/automation.module';
 import { InboxModule } from './inbox/inbox.module';
@@ -158,6 +160,10 @@ import { PackingModule } from './packing/packing.module';
     // Per-member section access (@RequireSection) — same allow-by-default shape.
     { provide: APP_GUARD, useClass: SectionAccessGuard },
     { provide: APP_GUARD, useClass: SuperAdminGuard },
+    // Last: a workspace read-only for want of a plan refuses writes (402), and
+    // a plan without a feature its routes (403), both only while enforcing.
+    { provide: APP_GUARD, useClass: BillingAccessGuard },
+    { provide: APP_GUARD, useClass: PlanFeatureGuard },
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },
     { provide: APP_FILTER, useClass: PrismaExceptionFilter },
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },

@@ -24,7 +24,7 @@ describe('MembersService', () => {
     const redis = { deleteSession: jest.fn().mockResolvedValue(undefined) };
     const events = { publish: jest.fn() };
     const channels = { disconnectOwnedBy: jest.fn().mockResolvedValue(undefined) };
-    return { service: new MembersService(prisma as never, redis as never, events as never, channels as never), prisma, redis, events, channels };
+    return { service: new MembersService(prisma as never, redis as never, events as never, channels as never, { allows: async () => true } as never), prisma, redis, events, channels };
   }
 
   describe('updateRole', () => {

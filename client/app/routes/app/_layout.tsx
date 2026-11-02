@@ -5,6 +5,10 @@ import { CallDock } from "~/components/app/calls/call-dock";
 import { EmptyState } from "~/components/app/empty-state";
 import { Navbar } from "~/components/app/navbar";
 import { ImpersonationBanner } from "~/components/app/impersonation-banner";
+import { BillingBanner } from "~/components/app/billing-banner";
+import { PlanLocked } from "~/components/billing/plan-locked";
+import { usePlanFeature } from "~/hooks/use-plan-feature";
+import type { PlanGate } from "~/types/api";
 import { Button } from "~/components/ui/button";
 import { AuthGuard } from "~/components/guards/auth-guard";
 import { useMembershipSync, useSectionAccess } from "~/hooks/use-section-access";
@@ -45,6 +49,16 @@ const FULL_HEIGHT_ROUTE_IDS = ["routes/app/inbox", "routes/app/orders/pos"];
 // deliberately wider than the chrome above it.
 const FULL_WIDTH_ROUTE_IDS = ["routes/app/orders/$id", "routes/app/orders/pos"];
 
+// Pages of a feature not every plan has: a workspace whose plan lacks it sees
+// a locked state instead (the server refuses the routes too). Only while
+// plans are enforced; see usePlanFeature.
+const ROUTE_GATES: Record<string, PlanGate> = {
+  "routes/app/orders/packing": "packing",
+  "routes/app/orders/packing/accuracy": "packing",
+  "routes/app/orders/packing/$orderId": "packing",
+  "routes/app/analytics/messaging": "messagingAnalytics",
+};
+
 export default function AppLayout() {
   const { canAccess, landingPath } = useSectionAccess();
   useMembershipSync();
@@ -54,6 +68,8 @@ export default function AppLayout() {
   const matches = useMatches();
   const signedIn = useAuthStore((state) => state.isAuthenticated);
   useNewMessageAlerts(signedIn && canAccess("/inbox"));
+  const gate = matches.map((m) => ROUTE_GATES[m.id]).find(Boolean) ?? null;
+  const { locked, pending: gatePending } = usePlanFeature(gate);
 
   // A section this member was not given, or a page outside a vendor's allow
   // list (the server enforces the real boundary; this is UX so nobody lands on
@@ -101,6 +117,8 @@ export default function AppLayout() {
         <SkipToContent targetId="main-content" />
         <ImpersonationBanner />
         <Navbar immersive={immersive} />
+        {/* Trial and payment state. Off the phone screens that drop the app bar. */}
+        <BillingBanner className={cn("flex-none", immersive && "max-md:hidden")} />
         {/* Same container on every route except a full-width one — otherwise
             only the vertical behaviour differs. */}
         <main
@@ -118,7 +136,7 @@ export default function AppLayout() {
             immersive && !edgeToEdge && "max-md:pt-[max(16px,env(safe-area-inset-top))]",
           )}
         >
-          {redirectTo ? <Navigate to={redirectTo} replace /> : <Outlet />}
+          {redirectTo ? <Navigate to={redirectTo} replace /> : locked && gate ? <PlanLocked gate={gate} className="mt-8" /> : gatePending ? null : <Outlet />}
         </main>
         {/* WhatsApp calls ring on every page for members who work the inbox. */}
         {canAccess("/inbox") && <CallDock />}

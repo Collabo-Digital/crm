@@ -21,7 +21,7 @@ describe('section access — invites', () => {
     const email = { sendTeamInvite: jest.fn().mockResolvedValue(undefined) };
     const users = { findIdByEmail: jest.fn().mockResolvedValue(null) };
     const redis = { allowInviteFromSender: jest.fn().mockResolvedValue(true), allowEmailSend: jest.fn().mockResolvedValue(true) };
-    return { service: new InvitesService(prisma as never, email as never, users as never, redis as never), prisma, email };
+    return { service: new InvitesService(prisma as never, email as never, users as never, redis as never, { allows: async () => true } as never), prisma, email };
   }
 
   it('stores the chosen sections on an AGENT invite', async () => {
@@ -63,7 +63,7 @@ describe('section access — members', () => {
       },
     };
     const redis = { deleteSession: jest.fn().mockResolvedValue(undefined) };
-    return { service: new MembersService(prisma as never, redis as never, {} as never, {} as never), prisma, redis };
+    return { service: new MembersService(prisma as never, redis as never, {} as never, {} as never, { allows: async () => true } as never), prisma, redis };
   }
 
   it('replaces the grants and drops the cached session', async () => {

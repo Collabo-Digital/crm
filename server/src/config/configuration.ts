@@ -40,14 +40,35 @@ export default () => ({
     // (RAZORPAY_KEY_*). The API base is for local tests of usage billing.
     billing: {
         razorpayApiBase: process.env.RAZORPAY_API_BASE || 'https://api.razorpay.com',
-        // The Razorpay plan for each plan and currency: test and live mode have their own.
+        // The Razorpay plan for each plan, interval and currency: test and live
+        // mode have their own. Enterprise is invoiced, so has none.
         plans: {
-            BASIC: { INR: process.env.RAZORPAY_PLAN_BASIC_INR, USD: process.env.RAZORPAY_PLAN_BASIC_USD },
-            GROWTH: { INR: process.env.RAZORPAY_PLAN_GROWTH_INR, USD: process.env.RAZORPAY_PLAN_GROWTH_USD },
+            BASIC: {
+                MONTHLY: { INR: process.env.RAZORPAY_PLAN_BASIC_INR, USD: process.env.RAZORPAY_PLAN_BASIC_USD },
+                YEARLY: { INR: process.env.RAZORPAY_PLAN_BASIC_INR_YEARLY, USD: process.env.RAZORPAY_PLAN_BASIC_USD_YEARLY },
+            },
+            GROWTH: {
+                MONTHLY: { INR: process.env.RAZORPAY_PLAN_GROWTH_INR, USD: process.env.RAZORPAY_PLAN_GROWTH_USD },
+                YEARLY: { INR: process.env.RAZORPAY_PLAN_GROWTH_INR_YEARLY, USD: process.env.RAZORPAY_PLAN_GROWTH_USD_YEARLY },
+            },
+            SCALE: {
+                MONTHLY: { INR: process.env.RAZORPAY_PLAN_SCALE_INR, USD: process.env.RAZORPAY_PLAN_SCALE_USD },
+                YEARLY: { INR: process.env.RAZORPAY_PLAN_SCALE_INR_YEARLY, USD: process.env.RAZORPAY_PLAN_SCALE_USD_YEARLY },
+            },
         },
-        // Where "Talk to us" on the Enterprise plan writes to.
+        // Where "Talk to us" writes to, and "Book a demo" when there is no demo link.
         salesEmail: process.env.BILLING_SALES_EMAIL,
+        // "Book a demo" opens this (a booking page), when set.
+        demoUrl: process.env.BILLING_DEMO_URL,
         usagePollSeconds: Number.parseInt(process.env.BILLING_USAGE_POLL_SECONDS || '3600', 10),
+        // Trials, grace and read-only for workspaces without a paid plan (see
+        // billing/billing-access.ts). Off until the payment step is switched
+        // on, so deploying changes nothing. Workspaces made before trials get
+        // theirs from BILLING_ENFORCE_FROM.
+        enforcement: process.env.BILLING_ENFORCEMENT === 'true',
+        enforceFrom: process.env.BILLING_ENFORCE_FROM,
+        trialDays: Number.parseInt(process.env.BILLING_TRIAL_DAYS || '14', 10),
+        graceDays: Number.parseInt(process.env.BILLING_GRACE_DAYS || '7', 10),
     },
     // Merchants' own gateway accounts, for payment links sent in chat. Not
     // Collabo's subscription billing (RAZORPAY_KEY_* / BillingService).

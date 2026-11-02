@@ -1,5 +1,5 @@
 import { apiClient } from "~/lib/api-client";
-import type { AuthOrganization, PaginatedResponse, User } from "~/types/api";
+import type { AuthOrganization, BillingAccess, BillingInterval, BillingPlan, PaginatedResponse, SubscriptionStatus, User } from "~/types/api";
 
 // ─── Types mirroring the NestJS AdminController responses ──────────────────
 
@@ -17,6 +17,28 @@ export interface AdminUserListItem {
     organizationCount: number;
 }
 
+/** A workspace's billing, as "Set plan / extend trial" shows and changes it. */
+export interface AdminOrgBilling {
+    billingPlan: BillingPlan;
+    billingInterval: BillingInterval | null;
+    billingProvider: "RAZORPAY" | "MANUAL" | null;
+    subscriptionStatus: SubscriptionStatus | null;
+    /** The trial's real end: a workspace made before trials counts from BILLING_ENFORCE_FROM. */
+    trialEndsAt: string | null;
+    currentPeriodEnd: string | null;
+    access: BillingAccess["state"];
+}
+
+/** Body of PATCH /admin/organizations/:orgId/billing: what is sent is changed. */
+export interface SetOrgBillingRequest {
+    billingPlan?: BillingPlan;
+    billingInterval?: BillingInterval;
+    /** True: invoiced by the Collabo team (MANUAL). */
+    manual?: boolean;
+    /** ISO date; null ends the trial now. */
+    trialEndsAt?: string | null;
+}
+
 export interface AdminUserMembership {
     organizationId: string;
     orgName: string;
@@ -24,6 +46,7 @@ export interface AdminUserMembership {
     orgType: "PERSONAL" | "ORGANIZATION";
     role: "OWNER" | "ADMIN" | "MANAGER" | "AGENT" | "VIEWER";
     isActive: boolean;
+    billing: AdminOrgBilling;
 }
 
 export interface AdminUserDetail {
@@ -99,4 +122,7 @@ export const adminService = {
 
     forceLogout: (userId: string) =>
         apiClient.post<{ ok: true }>(`/admin/users/${userId}/force-logout`, {}).then((r) => r.data),
+
+    setOrgBilling: (orgId: string, body: SetOrgBillingRequest) =>
+        apiClient.patch<AdminOrgBilling & { id: string }>(`/admin/organizations/${orgId}/billing`, body).then((r) => r.data),
 };

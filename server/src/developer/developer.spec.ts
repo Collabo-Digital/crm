@@ -23,7 +23,7 @@ describe('API keys', () => {
         const prisma = {
             apiKey: {
                 create: jest.fn(async ({ data }: any) => { created.push(data); return { id: 'k1', name: data.name, prefix: data.prefix, scopes: data.scopes, lastUsedAt: null, createdAt: new Date() }; }),
-                findUnique: jest.fn(async ({ where }: any) => (created[0]?.hash === where.hash ? { id: 'k1', organizationId: 'org_1', scopes: created[0].scopes, revokedAt: null } : null)),
+                findUnique: jest.fn(async ({ where }: any) => (created[0]?.hash === where.hash ? { id: 'k1', organizationId: 'org_1', scopes: created[0].scopes, revokedAt: null, organization: { billingPlan: 'GROWTH' } } : null)),
                 updateMany: jest.fn(async () => ({ count: 1 })),
             },
         };
@@ -37,7 +37,7 @@ describe('API keys', () => {
         expect(created[0].hash).toBe(createHash('sha256').update(made.key).digest('hex'));
         expect(JSON.stringify(created[0])).not.toContain(made.key);
         expect(made.prefix).toBe(made.key.slice(0, 12));
-        await expect(service.authenticate(made.key)).resolves.toEqual({ keyId: 'k1', organizationId: 'org_1', scopes: ['messages:send', 'contacts:write'] });
+        await expect(service.authenticate(made.key)).resolves.toEqual({ keyId: 'k1', organizationId: 'org_1', scopes: ['messages:send', 'contacts:write'], plan: 'GROWTH' });
         await expect(service.authenticate(`${made.key}x`)).resolves.toBeNull();
         await expect(service.authenticate('not-a-key')).resolves.toBeNull();
     });
@@ -147,14 +147,14 @@ describe('webhook subscriptions through the public API', () => {
 
     it('lists only the calling key’s own subscriptions, not other integrations’ receiving URLs', async () => {
         const { api } = build();
-        const listed = await api.subscriptions({ keyId: 'key_a', organizationId: 'org_1', scopes: ['webhooks:manage'] });
+        const listed = await api.subscriptions({ keyId: 'key_a', organizationId: 'org_1', scopes: ['webhooks:manage'], plan: 'GROWTH' });
         expect(listed.map((w) => w.id)).toEqual(['by_key_a']);
         expect(JSON.stringify(listed)).not.toContain('secret-by_key_b');
     });
 
     it('lists nothing for a key that made no subscriptions', async () => {
         const { api } = build();
-        await expect(api.subscriptions({ keyId: 'key_new', organizationId: 'org_1', scopes: ['webhooks:manage'] })).resolves.toEqual([]);
+        await expect(api.subscriptions({ keyId: 'key_new', organizationId: 'org_1', scopes: ['webhooks:manage'], plan: 'GROWTH' })).resolves.toEqual([]);
     });
 
     it('still lists every webhook of the organization in Settings', async () => {

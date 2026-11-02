@@ -1,8 +1,9 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { BillingPlan, InviteStatus, OrganizationType, UserRole } from '@prisma/client';
 import { AuthService } from '../auth/auth.service';
 import { InvitesService } from './invites.service';
 import { MembersService } from './members.service';
+import { STORE_SCOPING_UPGRADE } from '../auth/location-scope.util';
 
 /**
  * The stores a Manager or Agent works at: chosen on the invitation, carried
@@ -31,7 +32,7 @@ describe('store scoping on invitations', () => {
     const email = { sendTeamInvite: jest.fn(() => Promise.resolve()) };
     const users = { findIdByEmail: jest.fn(() => Promise.resolve(null)) };
     const redis = { allowInviteFromSender: jest.fn(() => Promise.resolve(true)), allowEmailSend: jest.fn(() => Promise.resolve(true)) };
-    return { service: new InvitesService(prisma as never, email as never, users as never, redis as never), prisma, email };
+    return { service: new InvitesService(prisma as never, email as never, users as never, redis as never, { allows: async () => true } as never), prisma, email };
   }
 
   it('saves the chosen stores on the invitation and returns them', async () => {
@@ -130,7 +131,7 @@ describe('accepting an invitation with stores', () => {
 });
 
 describe('MembersService.updateLocationScope', () => {
-  function build(role: UserRole | null, locationsFound = 0) {
+  function build(role: UserRole | null, locationsFound = 0, planAllows = true) {
     const prisma = {
       organizationMember: {
         findFirst: jest.fn(() => Promise.resolve(role ? { id: 'm1', role } : null)),
@@ -139,8 +140,17 @@ describe('MembersService.updateLocationScope', () => {
       organization: { findUnique: jest.fn(() => Promise.resolve({ billingPlan: BillingPlan.ADVANCE })) },
       warehouse: { count: jest.fn(() => Promise.resolve(locationsFound)) },
     };
-    return { service: new MembersService(prisma as never, {} as never, {} as never, {} as never), prisma };
+    const allows = jest.fn(() => Promise.resolve(planAllows));
+    return { service: new MembersService(prisma as never, {} as never, {} as never, {} as never, { allows } as never), prisma, allows };
   }
+
+  it("refuses stores on a plan without them, and still lets them be cleared", async () => {
+    const { service, prisma, allows } = build(UserRole.MANAGER, 1, false);
+    await expect(service.updateLocationScope('org', 'm1', ['s1'])).rejects.toThrow(new ForbiddenException(STORE_SCOPING_UPGRADE));
+    expect(allows).toHaveBeenCalledWith('org', 'storeScoping');
+    expect(prisma.organizationMember.update).not.toHaveBeenCalled();
+    await expect(service.updateLocationScope('org', 'm1', [])).resolves.toMatchObject({ locationScope: [] });
+  });
 
   it("saves a Manager's stores", async () => {
     const { service, prisma } = build(UserRole.MANAGER, 1);
@@ -195,7 +205,7 @@ describe('MembersService.findAll', () => {
         ),
       },
     };
-    const service = new MembersService(prisma as never, {} as never, {} as never, {} as never);
+    const service = new MembersService(prisma as never, {} as never, {} as never, {} as never, { allows: async () => true } as never);
     const [row] = await service.findAll('org', { userId: 'u-admin', role: UserRole.ADMIN });
     expect(row).toMatchObject({ id: 'm1', locationScope: ['s1'] });
   });

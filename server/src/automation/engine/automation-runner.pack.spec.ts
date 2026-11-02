@@ -147,7 +147,7 @@ function harness(opts: {
     };
     const none = {} as never;
     const config = { get: (key: string) => (key === 'frontendUrl' ? APP : undefined) };
-    const runner = new AutomationRunner(prisma as never, sender as never, jobs as never, none, { publish: jest.fn() } as never, none, none, store as never, paymentLinks as never, none, none, none, config as never);
+    const runner = new AutomationRunner(prisma as never, sender as never, jobs as never, none, { publish: jest.fn() } as never, none, none, store as never, paymentLinks as never, none, none, none, config as never, { isReadOnly: () => Promise.resolve(false) } as never);
     jest.spyOn((runner as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => undefined);
     return { runner, run, prisma, sent, steps, runUpdates, jobs, store, paymentLinks, sender };
 }

@@ -54,8 +54,8 @@ export class TemplatesController {
     @Get('templates/writer')
     @Roles(...CAMPAIGN_READERS)
     @RequirePermissions('campaigns.view')
-    writerStatus() {
-        return this.writer.status();
+    writerStatus(@CurrentUser() user: SessionPayload) {
+        return this.writer.status(user.orgId!);
     }
 
     /** A draft written by AI from a description, for the editor; nothing is sent to Meta. */

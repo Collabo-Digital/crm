@@ -32,7 +32,7 @@ describe('InvitesService — invitation email limits', () => {
     };
     const email = { sendTeamInvite: jest.fn(() => Promise.resolve()) };
     const users = { findIdByEmail: jest.fn(() => Promise.resolve(null)) };
-    const service = new InvitesService(prisma as never, email as never, users as never, redis);
+    const service = new InvitesService(prisma as never, email as never, users as never, redis, { allows: async () => true } as never);
     return { service, prisma, email, client };
   }
 

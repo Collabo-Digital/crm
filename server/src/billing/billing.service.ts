@@ -1,6 +1,6 @@
 import {
     BadRequestException,
-    ForbiddenException,
+    ConflictException,
     Injectable,
     Logger,
     ServiceUnavailableException,
@@ -9,14 +9,16 @@ import { ConfigService } from '@nestjs/config';
 import {
     BillingInterval,
     BillingPlan,
+    BillingProvider,
     Prisma,
     SubscriptionStatus,
 } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
-import { BILLING_CURRENCIES, BillingCurrency, GST_PERCENT, PLANS, pricingPlan } from './pricing';
+import { BillingAccess, billingAccess, BillingAccessFields, billingRules, LIVE_SUBSCRIPTION, newTrialEnd, PAYMENT_PROBLEM } from './billing-access';
+import { BILLING_CURRENCIES, BILLING_INTERVALS, BillingCurrency, GATE_PLAN, GST_PERCENT, PLAN_GATES, PlanGate, planFeatures, PLANS, pricingPlan, YEARLY_MONTHS_FREE } from './pricing';
 import { RazorpayService } from './razorpay.service';
-import { razorpayPlanId } from './razorpay-plans';
+import { planOfRazorpayId, razorpayPlanId, subscriptionStatusOf } from './razorpay-plans';
 import { UsageBillingService } from './usage-billing.service';
 
 /**
@@ -30,6 +32,7 @@ interface RazorpayWebhookPayload {
             status: string;
             current_end: number | null;
             customer_id?: string | null;
+            plan_id?: string | null;
         };
     };
     /**
@@ -64,6 +67,12 @@ interface RazorpayWebhookPayload {
         };
     };
 }
+
+/** A workspace that starts without paying tries Growth. */
+const TRIAL_PLAN = BillingPlan.GROWTH;
+
+/** About ten years of renewals: subscriptions end by being cancelled, not by running out. */
+const SUBSCRIPTION_CYCLES: Record<BillingInterval, number> = { MONTHLY: 120, YEARLY: 10 };
 
 /** Subscriptions Razorpay will not charge again. */
 const ENDED_SUBSCRIPTION: SubscriptionStatus[] = [
@@ -104,16 +113,40 @@ export class BillingService {
         private readonly usageBilling: UsageBillingService,
     ) { }
 
-    /** The price list, and which plans can be bought in which currency. */
+    /** The price list, and which plans can be bought, paid monthly or yearly, in which currency. */
     plans() {
+        const rules = billingRules(this.config);
         return {
             plans: PLANS,
             gstPercent: GST_PERCENT,
+            yearlyMonthsFree: YEARLY_MONTHS_FREE,
+            // What each plan has beyond its volumes, and the plan each gated
+            // feature starts on, for "Available on Growth".
+            features: Object.fromEntries(PLANS.map((p) => [p.id, planFeatures(p.id)])),
+            gatePlans: GATE_PLAN,
             checkout: Object.fromEntries(
-                PLANS.filter((p) => p.selfServe).map((p) => [p.id, BILLING_CURRENCIES.filter((c) => razorpayPlanId(this.config, p.id, c))]),
+                PLANS.filter((p) => p.selfServe).map((p) => [
+                    p.id,
+                    Object.fromEntries(BILLING_INTERVALS.map((i) => [i, BILLING_CURRENCIES.filter((c) => razorpayPlanId(this.config, p.id, i, c))])),
+                ]),
             ),
             salesEmail: this.config.get<string>('billing.salesEmail') ?? null,
+            demoUrl: this.config.get<string>('billing.demoUrl') ?? null,
+            // BILLING_ENFORCEMENT: trials and the payment step in onboarding are on.
+            enforcement: rules.enforced,
+            trialDays: rules.enforced ? rules.trialDays : null,
         };
+    }
+
+    /** Where a workspace stands: trialing, active, in grace or read-only. */
+    access(org: BillingAccessFields, now = new Date()): BillingAccess {
+        return billingAccess(org, now, billingRules(this.config));
+    }
+
+    /** The plan's gated features as they apply now: every one open while enforcement is off. */
+    features(plan: BillingPlan): Record<PlanGate, boolean> {
+        const enforced = billingRules(this.config).enforced;
+        return Object.fromEntries(PLAN_GATES.map((gate) => [gate, !enforced || planFeatures(plan)[gate]])) as Record<PlanGate, boolean>;
     }
 
     /**
@@ -163,17 +196,7 @@ export class BillingService {
         interval: BillingInterval,
         currency: BillingCurrency,
     ) {
-        const pricing = pricingPlan(plan);
-        if (!pricing.selfServe) {
-            throw new BadRequestException(`${pricing.name} is set up with the Collabo team. Talk to us to start it.`);
-        }
-        if (interval !== BillingInterval.MONTHLY) {
-            throw new BadRequestException('Plans are billed monthly.');
-        }
-        const planId = razorpayPlanId(this.config, plan, currency);
-        if (!planId) {
-            throw new BadRequestException(`The ${pricing.name} plan cannot be bought in ${currency} yet.`);
-        }
+        const planId = this.checkoutPlanId(plan, interval, currency);
         const user = await this.prisma.user.findUniqueOrThrow({
             where: { id: userId },
         });
@@ -187,6 +210,7 @@ export class BillingService {
         try {
             subscription = await this.razorpay.createSubscription({
                 planId,
+                totalCount: SUBSCRIPTION_CYCLES[interval],
                 notifyEmail: user.email,
                 notes: { userId, plan, interval, currency },
             });
@@ -215,6 +239,111 @@ export class BillingService {
         };
     }
 
+    /** The Razorpay plan to subscribe to; refuses a plan that is not bought at checkout, or not this way. */
+    private checkoutPlanId(plan: BillingPlan, interval: BillingInterval, currency: BillingCurrency): string {
+        const pricing = pricingPlan(plan);
+        if (!pricing.selfServe) {
+            throw new BadRequestException(`${pricing.name} is set up with the Collabo team. ${pricing.sales === 'demo' ? 'Book a demo' : 'Talk to us'} to start it.`);
+        }
+        const planId = razorpayPlanId(this.config, plan, interval, currency);
+        if (!planId) {
+            const how = interval === BillingInterval.YEARLY ? 'yearly' : 'monthly';
+            throw new BadRequestException(`The ${pricing.name} plan cannot be bought ${how} in ${currency} yet.`);
+        }
+        return planId;
+    }
+
+    /**
+     * Settings → Billing, for a workspace that already exists: a Razorpay
+     * subscription the owner pays for in Checkout.js. The workspace moves to
+     * the plan once Razorpay says it is paid (handleWebhookEvent), so leaving
+     * the payment half-way changes nothing. A workspace already paying changes
+     * plan with the Collabo team, as does one whose plan the team set up.
+     *
+     * The subscription it replaces is asked about first: a webhook may not
+     * have said yet that it was paid, and a paid one is never replaced.
+     */
+    async subscribeOrganization(
+        orgId: string,
+        userId: string,
+        plan: BillingPlan,
+        interval: BillingInterval,
+        currency: BillingCurrency,
+    ) {
+        const planId = this.checkoutPlanId(plan, interval, currency);
+        const [org, user] = await Promise.all([
+            this.prisma.organization.findUniqueOrThrow({
+                where: { id: orgId },
+                select: { billingProvider: true, externalSubscriptionId: true, subscriptionStatus: true },
+            }),
+            this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true } }),
+        ]);
+        if (org.billingProvider === BillingProvider.MANUAL) {
+            throw new BadRequestException('The Collabo team looks after this workspace’s plan. Talk to them to change it.');
+        }
+        if (org.subscriptionStatus && LIVE_SUBSCRIPTION.includes(org.subscriptionStatus)) {
+            throw new BadRequestException('This workspace already pays for a plan. Talk to us to change it.');
+        }
+
+        const earlier = org.externalSubscriptionId;
+        let earlierEnded = !earlier || (!!org.subscriptionStatus && ENDED_SUBSCRIPTION.includes(org.subscriptionStatus));
+        if (!earlierEnded) {
+            let remote: Awaited<ReturnType<typeof this.razorpay.fetchSubscription>>;
+            try {
+                remote = await this.razorpay.fetchSubscription(earlier!);
+            } catch (err) {
+                this.rethrowRazorpay('subscription check', err);
+            }
+            const status = subscriptionStatusOf(remote.status);
+            if (LIVE_SUBSCRIPTION.includes(status)) {
+                await this.upsertSubscriptionStatus(earlier!, status, remote.current_end, null, remote.plan_id);
+                throw new BadRequestException('This workspace already pays for a plan. Talk to us to change it.');
+            }
+            earlierEnded = ENDED_SUBSCRIPTION.includes(status);
+        }
+
+        let subscription: Awaited<ReturnType<typeof this.razorpay.createSubscription>>;
+        try {
+            subscription = await this.razorpay.createSubscription({
+                planId,
+                totalCount: SUBSCRIPTION_CYCLES[interval],
+                notifyEmail: user.email,
+                notes: { organizationId: orgId, userId, plan, interval, currency },
+            });
+        } catch (err) {
+            this.rethrowRazorpay('subscription creation', err);
+        }
+
+        // Only if no other checkout took the workspace meanwhile (another tab).
+        const { count } = await this.prisma.organization.updateMany({
+            where: { id: orgId, externalSubscriptionId: earlier },
+            data: {
+                externalSubscriptionId: subscription.id,
+                subscriptionStatus: SubscriptionStatus.CREATED,
+                billingProvider: BillingProvider.RAZORPAY,
+            },
+        });
+        if (!count) {
+            await this.cancelQuietly(subscription.id, orgId);
+            throw new ConflictException('Another payment was started for this workspace just now. Refresh the page and try again.');
+        }
+        // The one it replaces (left unpaid, or halted) must not be charged later.
+        if (!earlierEnded) await this.cancelQuietly(earlier!, orgId);
+        this.logger.log(`Org ${orgId}: subscription ${subscription.id} started on ${planId} by ${userId}`);
+
+        return {
+            subscriptionId: subscription.id,
+            razorpayKeyId: this.razorpay.getKeyId(),
+            currency,
+        };
+    }
+
+    private async cancelQuietly(subscriptionId: string, orgId: string): Promise<void> {
+        await this.razorpay.cancelSubscription(subscriptionId).catch((err: unknown) =>
+            this.logger.warn(`Subscription ${subscriptionId} of org ${orgId} was not cancelled: ${this.extractRazorpayError(err) ?? String(err)}`),
+        );
+    }
+
     /** Polled by the client after the Razorpay modal closes. */
     async getPendingStatus(userId: string) {
         const user = await this.prisma.user.findUniqueOrThrow({
@@ -238,10 +367,14 @@ export class BillingService {
     /**
      * Atomic helper called from inside OrganizationService.create() and
      * createPersonal()'s `$transaction`. Copies User.pending_* → Organization
-     * billing fields, clears the pending fields. Throws if no ACTIVE/AUTHENTICATED
-     * subscription — this is the server-side hard gate that prevents an org from
-     * being created without payment. The plan is the one paid for, whatever
-     * the create request said.
+     * billing fields, clears the pending fields. The plan is the one paid for,
+     * whatever the create request said.
+     *
+     * Without a payment the workspace starts on a free trial of Growth while
+     * BILLING_ENFORCEMENT is on, and on Starter while it is off: a plan is
+     * had by paying for it, or from the Collabo team, never by asking for it
+     * in the create request. A checkout left unpaid stays on the workspace,
+     * so paying it later still counts.
      */
     async applyPendingSubscriptionToOrg(
         tx: Prisma.TransactionClient,
@@ -262,37 +395,28 @@ export class BillingService {
         });
 
         const status = user.pendingSubscriptionStatus;
-
-        // TEMP: pricing/billing step is hidden from users during onboarding.
-        // Allow orgs to be created without a paid subscription. When billing
-        // ships, remove this early-return to restore the payment gate below.
-        if (!status) {
-            return;
-        }
-
-        const isPaid =
-            status === SubscriptionStatus.ACTIVE ||
-            status === SubscriptionStatus.AUTHENTICATED;
-
-        if (!isPaid) {
-            throw new ForbiddenException(
-                'Subscription payment required before creating an organization',
-            );
-        }
+        const paid = !!status && LIVE_SUBSCRIPTION.includes(status);
+        const plan = paid ? user.pendingBillingPlan : billingRules(this.config).enforced ? TRIAL_PLAN : BillingPlan.BASIC;
 
         await tx.organization.update({
             where: { id: orgId },
             data: {
-                ...(user.pendingBillingPlan ? { billingPlan: user.pendingBillingPlan } : {}),
-                ...(user.pendingBillingInterval ? { billingInterval: user.pendingBillingInterval } : {}),
-                billingCurrency: user.pendingBillingCurrency,
-                externalCustomerId: user.pendingExternalCustomerId,
-                externalSubscriptionId: user.pendingExternalSubscriptionId,
-                billingProvider: 'RAZORPAY',
-                subscriptionStatus: status,
-                currentPeriodEnd: user.pendingCurrentPeriodEnd,
+                ...(plan ? { billingPlan: plan } : {}),
+                ...(paid && user.pendingBillingInterval ? { billingInterval: user.pendingBillingInterval } : {}),
+                trialEndsAt: newTrialEnd(billingRules(this.config), new Date()),
+                ...(status
+                    ? {
+                        billingCurrency: user.pendingBillingCurrency,
+                        externalCustomerId: user.pendingExternalCustomerId,
+                        externalSubscriptionId: user.pendingExternalSubscriptionId,
+                        billingProvider: BillingProvider.RAZORPAY,
+                        subscriptionStatus: status,
+                        currentPeriodEnd: user.pendingCurrentPeriodEnd,
+                    }
+                    : {}),
             },
         });
+        if (!status) return;
 
         await tx.user.update({
             where: { id: userId },
@@ -327,7 +451,7 @@ export class BillingService {
         }
         try {
             const sub = await this.razorpay.fetchSubscription(subscriptionId);
-            if (!ENDED_SUBSCRIPTION.includes(this.mapRazorpayStatus(sub.status))) {
+            if (!ENDED_SUBSCRIPTION.includes(subscriptionStatusOf(sub.status))) {
                 await this.razorpay.cancelSubscription(subscriptionId);
             }
         } catch (err) {
@@ -361,9 +485,10 @@ export class BillingService {
                 if (!sub) return;
                 await this.upsertSubscriptionStatus(
                     sub.id,
-                    this.mapRazorpayStatus(sub.status),
+                    subscriptionStatusOf(sub.status),
                     sub.current_end,
                     sub.customer_id ?? null,
+                    sub.plan_id ?? null,
                 );
                 break;
             }
@@ -382,11 +507,15 @@ export class BillingService {
                 }
                 const periodEndUnix =
                     invoice.line_items?.[0]?.period_end ?? null;
+                // The invoice names no plan; the subscription does, and a
+                // workspace subscribed from Settings moves to it once paid.
+                const sub = this.razorpay.isConfigured() ? await this.razorpay.fetchSubscription(subId).catch(() => null) : null;
                 await this.upsertSubscriptionStatus(
                     subId,
                     SubscriptionStatus.ACTIVE,
                     periodEndUnix,
                     invoice.customer_id ?? null,
+                    sub?.plan_id ?? null,
                 );
                 break;
             }
@@ -405,25 +534,13 @@ export class BillingService {
         }
     }
 
-    private mapRazorpayStatus(raw: string): SubscriptionStatus {
-        const map: Record<string, SubscriptionStatus> = {
-            created: SubscriptionStatus.CREATED,
-            authenticated: SubscriptionStatus.AUTHENTICATED,
-            active: SubscriptionStatus.ACTIVE,
-            paused: SubscriptionStatus.PAUSED,
-            halted: SubscriptionStatus.HALTED,
-            cancelled: SubscriptionStatus.CANCELLED,
-            completed: SubscriptionStatus.COMPLETED,
-            expired: SubscriptionStatus.EXPIRED,
-        };
-        return map[raw] ?? SubscriptionStatus.CREATED;
-    }
 
     private async upsertSubscriptionStatus(
         razorpaySubId: string,
         status: SubscriptionStatus,
         currentEndUnix: number | null,
         customerId: string | null,
+        planId: string | null = null,
     ): Promise<void> {
         const periodEnd = currentEndUnix ? new Date(currentEndUnix * 1000) : null;
 
@@ -445,15 +562,27 @@ export class BillingService {
             return;
         }
 
-        // Post-org-creation: subscription is on the Organization (renewals etc.)
+        // Post-org-creation: subscription is on the Organization (renewals,
+        // and one started from Settings). The plan follows the Razorpay plan
+        // the subscription is on; one of an earlier price leaves it as it is.
+        const onPlan = planId ? planOfRazorpayId(this.config, planId) : null;
         const orgResult = await this.prisma.organization.updateMany({
             where: { externalSubscriptionId: razorpaySubId },
             data: {
                 subscriptionStatus: status,
                 currentPeriodEnd: periodEnd,
                 ...(customerId ? { externalCustomerId: customerId } : {}),
+                ...(onPlan ? { billingPlan: onPlan.plan, billingInterval: onPlan.interval, billingCurrency: onPlan.currency } : {}),
+                ...(LIVE_SUBSCRIPTION.includes(status) ? { paymentFailedAt: null } : {}),
             },
         });
+        // The grace period after a failed payment runs from the first word of it.
+        if (orgResult.count > 0 && PAYMENT_PROBLEM.includes(status)) {
+            await this.prisma.organization.updateMany({
+                where: { externalSubscriptionId: razorpaySubId, paymentFailedAt: null },
+                data: { paymentFailedAt: new Date() },
+            });
+        }
         if (orgResult.count > 0) {
             this.logger.log(`Updated sub ${razorpaySubId} on org → ${status}`);
         } else {
