@@ -27,9 +27,13 @@ enum OrganizationType {
   ORGANIZATION
 }
 
+/// Stored ids are older than the names: BASIC is Starter and ADVANCE is
+/// Enterprise. See src/billing/pricing.ts.
 enum BillingPlan {
   BASIC
   GROWTH
+  PRO
+  SCALE
   ADVANCE
 }
 
@@ -4095,7 +4099,9 @@ model UsageBill {
   status         UsageBillStatus @default(PROCESSING)
   plan           BillingPlan?
   currency       String?
-  /// The month's usage: { conversations, callingMinutes, members, instagramAccounts }.
+  /// The month's usage: { conversations, callingMinutes, members, opsSeats,
+  /// storeLocations, whatsappNumbers, instagramAccounts }. A bill made before
+  /// seats by kind, locations and numbers were counted has none of those three.
   usage          Json?           @db.JsonB
   /// Each charge: [{ key, quantity, unitPrice, amount }].
   lines          Json?           @db.JsonB

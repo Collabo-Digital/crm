@@ -1,11 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { BillingPlan, ChannelPlatform, ChannelStatus, UserRole } from '@prisma/client';
+import { BillingPlan, BillingProvider, ChannelPlatform, ChannelStatus, StockLocationKind } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { BillingCurrency, periodOf, periodRange, pricingPlan, Usage, usageCharges } from './pricing';
+import { BILLED_ROLES, seatOf } from './seats';
 
-/** Team members on the bill: people who work in Collabo. Viewers, vendors and influencers are free. */
-const BILLED_ROLES: UserRole[] = [UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.AGENT];
+/** A channel that is connected and switched on. */
+const LIVE_CHANNEL = { isEnabled: true, status: { not: ChannelStatus.DISCONNECTED } };
 
 @Injectable()
 export class UsageService {
@@ -13,26 +14,35 @@ export class UsageService {
 
     /**
      * A month's usage. Calling minutes are each answered call's talk time,
-     * rounded up to the minute. Members and Instagram accounts are counted as
-     * they are now: the organization's own Instagram accounts, not influencers'.
+     * rounded up to the minute. Seats, store locations, WhatsApp numbers and
+     * Instagram accounts are counted as they are now: active Store locations
+     * (where the till sells), and the organization's own Instagram accounts,
+     * not influencers'.
      */
     async usage(organizationId: string, period: string): Promise<Usage> {
         const { start, end } = periodRange(period);
-        const [month, calls, members, instagramAccounts] = await Promise.all([
+        const [month, calls, members, storeLocations, whatsappNumbers, instagramAccounts] = await Promise.all([
             this.prisma.usageMonth.findUnique({ where: { organizationId_period: { organizationId, period } }, select: { conversations: true } }),
             this.prisma.whatsAppCall.findMany({
                 where: { organizationId, endedAt: { gte: start, lt: end }, durationSeconds: { gt: 0 } },
                 select: { durationSeconds: true },
             }),
-            this.prisma.organizationMember.count({ where: { organizationId, isActive: true, role: { in: BILLED_ROLES } } }),
-            this.prisma.channel.count({
-                where: { organizationId, platform: ChannelPlatform.INSTAGRAM, ownerUserId: null, isEnabled: true, status: { not: ChannelStatus.DISCONNECTED } },
+            this.prisma.organizationMember.findMany({
+                where: { organizationId, isActive: true, role: { in: BILLED_ROLES } },
+                select: { role: true, permissions: true },
             }),
+            this.prisma.warehouse.count({ where: { organizationId, isActive: true, kind: StockLocationKind.STORE } }),
+            this.prisma.channel.count({ where: { organizationId, platform: ChannelPlatform.WHATSAPP, ...LIVE_CHANNEL } }),
+            this.prisma.channel.count({ where: { organizationId, platform: ChannelPlatform.INSTAGRAM, ownerUserId: null, ...LIVE_CHANNEL } }),
         ]);
+        const opsSeats = members.filter((m) => seatOf(m.role, m.permissions) === 'ops').length;
         return {
             conversations: month?.conversations ?? 0,
             callingMinutes: calls.reduce((sum, c) => sum + Math.ceil(c.durationSeconds! / 60), 0),
-            members,
+            members: members.length - opsSeats,
+            opsSeats,
+            storeLocations,
+            whatsappNumbers,
             instagramAccounts,
         };
     }
@@ -43,7 +53,9 @@ export class UsageService {
             where: { id: organizationId },
             select: {
                 billingPlan: true,
+                billingInterval: true,
                 billingCurrency: true,
+                billingProvider: true,
                 externalSubscriptionId: true,
                 subscriptionStatus: true,
                 currentPeriodEnd: true,
@@ -51,7 +63,9 @@ export class UsageService {
         });
         const period = periodOf(new Date());
         const usage = await this.usage(organizationId, period);
-        const subscribed = !!org.externalSubscriptionId && !!org.subscriptionStatus;
+        // A plan the Collabo team set up and invoices (Scale, Enterprise) has no Razorpay subscription.
+        const manual = org.billingProvider === BillingProvider.MANUAL;
+        const subscribed = manual || (!!org.externalSubscriptionId && !!org.subscriptionStatus);
         const currency = (org.billingCurrency ?? 'INR') as BillingCurrency;
         const bills = await this.prisma.usageBill.findMany({
             where: { organizationId },
@@ -65,13 +79,17 @@ export class UsageService {
             subscription: subscribed
                 ? {
                     plan: org.billingPlan,
+                    interval: org.billingInterval,
+                    manual,
+                    // Null on a manual plan.
                     status: org.subscriptionStatus,
                     currency,
                     currentPeriodEnd: org.currentPeriodEnd,
                 }
                 : null,
             // What this month would add on the current plan. None without a
-            // subscription, nor on Enterprise, which is billed by contract.
+            // plan, nor on Enterprise, which is billed by contract. On a
+            // manual plan the Collabo team invoices it.
             estimate: subscribed && org.billingPlan !== BillingPlan.ADVANCE
                 ? usageCharges(pricingPlan(org.billingPlan), currency, usage)
                 : null,

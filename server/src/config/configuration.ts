@@ -40,12 +40,23 @@ export default () => ({
     // (RAZORPAY_KEY_*). The API base is for local tests of usage billing.
     billing: {
         razorpayApiBase: process.env.RAZORPAY_API_BASE || 'https://api.razorpay.com',
-        // The Razorpay plan for each plan and currency: test and live mode have their own.
+        // The Razorpay plan for each plan, interval and currency: test and live
+        // mode have their own. Scale and Enterprise are invoiced, so have none.
         plans: {
-            BASIC: { INR: process.env.RAZORPAY_PLAN_BASIC_INR, USD: process.env.RAZORPAY_PLAN_BASIC_USD },
-            GROWTH: { INR: process.env.RAZORPAY_PLAN_GROWTH_INR, USD: process.env.RAZORPAY_PLAN_GROWTH_USD },
+            BASIC: {
+                MONTHLY: { INR: process.env.RAZORPAY_PLAN_BASIC_INR, USD: process.env.RAZORPAY_PLAN_BASIC_USD },
+                YEARLY: { INR: process.env.RAZORPAY_PLAN_BASIC_INR_YEARLY, USD: process.env.RAZORPAY_PLAN_BASIC_USD_YEARLY },
+            },
+            GROWTH: {
+                MONTHLY: { INR: process.env.RAZORPAY_PLAN_GROWTH_INR, USD: process.env.RAZORPAY_PLAN_GROWTH_USD },
+                YEARLY: { INR: process.env.RAZORPAY_PLAN_GROWTH_INR_YEARLY, USD: process.env.RAZORPAY_PLAN_GROWTH_USD_YEARLY },
+            },
+            PRO: {
+                MONTHLY: { INR: process.env.RAZORPAY_PLAN_PRO_INR, USD: process.env.RAZORPAY_PLAN_PRO_USD },
+                YEARLY: { INR: process.env.RAZORPAY_PLAN_PRO_INR_YEARLY, USD: process.env.RAZORPAY_PLAN_PRO_USD_YEARLY },
+            },
         },
-        // Where "Talk to us" on the Enterprise plan writes to.
+        // Where "Book a demo" (Scale) and "Talk to us" (Enterprise) write to.
         salesEmail: process.env.BILLING_SALES_EMAIL,
         usagePollSeconds: Number.parseInt(process.env.BILLING_USAGE_POLL_SECONDS || '3600', 10),
     },

@@ -1,11 +1,11 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BillingPlan, Prisma, SubscriptionStatus, UsageBill, UsageBillStatus, UserRole } from '@prisma/client';
+import { BillingInterval, BillingPlan, BillingProvider, Prisma, SubscriptionStatus, UsageBill, UsageBillStatus, UserRole } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { RazorpayService } from './razorpay.service';
 import { planOfRazorpayId } from './razorpay-plans';
-import { BillingCurrency, ChargeKey, Charges, GST_PERCENT, periodRange, previousPeriod, pricingPlan, Usage, usageCharges } from './pricing';
+import { BillingCurrency, ChargeKey, Charges, GST_PERCENT, NO_USAGE, periodRange, previousPeriod, pricingPlan, Usage, usageCharges } from './pricing';
 import { UsageService } from './usage.service';
 
 /** ₹1 or $1, in the smallest unit: less is not charged. */
@@ -13,21 +13,28 @@ const MIN_CHARGE = 100;
 const MAX_ATTEMPTS = 3;
 /** A bill a stopped server left mid-way is taken up again after this. */
 const STUCK_MS = 30 * 60 * 1000;
-const USAGE_PRICED: BillingPlan[] = [BillingPlan.BASIC, BillingPlan.GROWTH];
+/** The plans with Razorpay plans. Scale and Enterprise are invoiced by the Collabo team. */
+const USAGE_PRICED: BillingPlan[] = [BillingPlan.BASIC, BillingPlan.GROWTH, BillingPlan.PRO];
 
 const LINE_TEXT: Record<ChargeKey, (n: string, one: boolean) => string> = {
-    conversations: (n, one) => `${n} conversation${one ? '' : 's'} over the plan`,
+    conversations: (n, one) => `${n} chat${one ? '' : 's'} over the plan`,
     callingMinutes: (n, one) => `${n} calling minute${one ? '' : 's'} over the plan`,
-    members: (n, one) => `${n} extra team member${one ? '' : 's'}`,
+    members: (n, one) => `${n} extra team seat${one ? '' : 's'}`,
+    opsSeats: (n, one) => `${n} packing or till seat${one ? '' : 's'}`,
+    storeLocations: (n, one) => `${n} extra store location${one ? '' : 's'}`,
+    whatsappNumbers: (n, one) => `${n} extra WhatsApp number${one ? '' : 's'}`,
     instagram: (n, one) => `${n} Instagram account${one ? '' : 's'}`,
 };
 
 /**
  * Usage billing: once a month is over, each organization with an active
- * subscription on a usage-priced plan is charged for what it used over the
- * plan's allowances. Razorpay takes add-ons only on subscriptions paid by
- * card, so a card subscription gets one on its next renewal, and one paid by
- * UPI or e-mandate is sent a payment link by email instead.
+ * Razorpay subscription on a usage-priced plan is charged for what it used
+ * over the plan's allowances. Razorpay takes add-ons only on subscriptions
+ * paid by card, and puts them on the next invoice, so a monthly card
+ * subscription gets one on its next renewal; one paid by UPI or e-mandate,
+ * and a yearly one (whose next invoice is up to a year away), is sent a
+ * payment link by email instead. Plans the Collabo team set up by hand
+ * (billing provider MANUAL) are invoiced by the team, not here.
  *
  * One bill per organization and month (unique). A retry first looks for the
  * add-on or link an earlier attempt may have made, so a timeout never charges twice.
@@ -71,6 +78,7 @@ export class UsageBillingService implements OnModuleInit, OnModuleDestroy {
         const orgs = await this.prisma.organization.findMany({
             where: {
                 deletedAt: null,
+                billingProvider: BillingProvider.RAZORPAY,
                 externalSubscriptionId: { not: null },
                 subscriptionStatus: SubscriptionStatus.ACTIVE,
                 billingPlan: { in: USAGE_PRICED },
@@ -164,7 +172,7 @@ export class UsageBillingService implements OnModuleInit, OnModuleDestroy {
         if (!onPlan) return { status: UsageBillStatus.SKIPPED, note: 'The subscription is on a plan without usage prices.' };
 
         // The month's usage is fixed on the first attempt, so a retry charges the same.
-        const usage = (bill.usage as Usage | null) ?? (await this.usage.usage(bill.organizationId, bill.period));
+        const usage: Usage = bill.usage ? { ...NO_USAGE, ...(bill.usage as Partial<Usage>) } : await this.usage.usage(bill.organizationId, bill.period);
         const charges = usageCharges(pricingPlan(onPlan.plan), onPlan.currency, usage);
         const priced = {
             plan: onPlan.plan,
@@ -182,7 +190,7 @@ export class UsageBillingService implements OnModuleInit, OnModuleDestroy {
         const title = `Collabo usage, ${monthName(bill.period)}`;
         const details = describe(charges, onPlan.currency);
         const retry = bill.attempts > 1;
-        if (sub.payment_method === 'card') {
+        if (sub.payment_method === 'card' && onPlan.interval === BillingInterval.MONTHLY) {
             const since = Math.floor(bill.createdAt.getTime() / 1000) - 60;
             const earlier = retry
                 ? (await this.razorpay.addonsSince(since)).find((a) => a.subscription_id === sub.id && a.item.description?.includes(reference))

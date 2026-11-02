@@ -14,7 +14,7 @@ import {
 } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
-import { BILLING_CURRENCIES, BillingCurrency, GST_PERCENT, PLANS, pricingPlan } from './pricing';
+import { BILLING_CURRENCIES, BILLING_INTERVALS, BillingCurrency, GST_PERCENT, PLANS, pricingPlan, YEARLY_DISCOUNT_PERCENT } from './pricing';
 import { RazorpayService } from './razorpay.service';
 import { razorpayPlanId } from './razorpay-plans';
 import { UsageBillingService } from './usage-billing.service';
@@ -65,6 +65,9 @@ interface RazorpayWebhookPayload {
     };
 }
 
+/** About ten years of renewals: subscriptions end by being cancelled, not by running out. */
+const SUBSCRIPTION_CYCLES: Record<BillingInterval, number> = { MONTHLY: 120, YEARLY: 10 };
+
 /** Subscriptions Razorpay will not charge again. */
 const ENDED_SUBSCRIPTION: SubscriptionStatus[] = [
     SubscriptionStatus.CANCELLED,
@@ -104,13 +107,17 @@ export class BillingService {
         private readonly usageBilling: UsageBillingService,
     ) { }
 
-    /** The price list, and which plans can be bought in which currency. */
+    /** The price list, and which plans can be bought, paid monthly or yearly, in which currency. */
     plans() {
         return {
             plans: PLANS,
             gstPercent: GST_PERCENT,
+            yearlyDiscountPercent: YEARLY_DISCOUNT_PERCENT,
             checkout: Object.fromEntries(
-                PLANS.filter((p) => p.selfServe).map((p) => [p.id, BILLING_CURRENCIES.filter((c) => razorpayPlanId(this.config, p.id, c))]),
+                PLANS.filter((p) => p.selfServe).map((p) => [
+                    p.id,
+                    Object.fromEntries(BILLING_INTERVALS.map((i) => [i, BILLING_CURRENCIES.filter((c) => razorpayPlanId(this.config, p.id, i, c))])),
+                ]),
             ),
             salesEmail: this.config.get<string>('billing.salesEmail') ?? null,
         };
@@ -163,17 +170,7 @@ export class BillingService {
         interval: BillingInterval,
         currency: BillingCurrency,
     ) {
-        const pricing = pricingPlan(plan);
-        if (!pricing.selfServe) {
-            throw new BadRequestException(`${pricing.name} is set up with the Collabo team. Talk to us to start it.`);
-        }
-        if (interval !== BillingInterval.MONTHLY) {
-            throw new BadRequestException('Plans are billed monthly.');
-        }
-        const planId = razorpayPlanId(this.config, plan, currency);
-        if (!planId) {
-            throw new BadRequestException(`The ${pricing.name} plan cannot be bought in ${currency} yet.`);
-        }
+        const planId = this.checkoutPlanId(plan, interval, currency);
         const user = await this.prisma.user.findUniqueOrThrow({
             where: { id: userId },
         });
@@ -187,6 +184,7 @@ export class BillingService {
         try {
             subscription = await this.razorpay.createSubscription({
                 planId,
+                totalCount: SUBSCRIPTION_CYCLES[interval],
                 notifyEmail: user.email,
                 notes: { userId, plan, interval, currency },
             });
@@ -213,6 +211,20 @@ export class BillingService {
             razorpayKeyId: this.razorpay.getKeyId(),
             currency,
         };
+    }
+
+    /** The Razorpay plan to subscribe to; refuses a plan that is not bought at checkout, or not this way. */
+    private checkoutPlanId(plan: BillingPlan, interval: BillingInterval, currency: BillingCurrency): string {
+        const pricing = pricingPlan(plan);
+        if (!pricing.selfServe) {
+            throw new BadRequestException(`${pricing.name} is set up with the Collabo team. ${pricing.sales === 'demo' ? 'Book a demo' : 'Talk to us'} to start it.`);
+        }
+        const planId = razorpayPlanId(this.config, plan, interval, currency);
+        if (!planId) {
+            const how = interval === BillingInterval.YEARLY ? 'yearly' : 'monthly';
+            throw new BadRequestException(`The ${pricing.name} plan cannot be bought ${how} in ${currency} yet.`);
+        }
+        return planId;
     }
 
     /** Polled by the client after the Razorpay modal closes. */

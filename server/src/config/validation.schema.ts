@@ -12,6 +12,9 @@ const signingSecret = Joi.string().min(32).required().when('NODE_ENV', {
     then: Joi.string().pattern(PLACEHOLDER_SECRET, { name: 'placeholder', invert: true }),
 });
 
+/** A Razorpay plan id; names without _YEARLY are the monthly plans. */
+const RAZORPAY_PLAN_ID = Joi.string().pattern(/^plan_[A-Za-z0-9]+$/).optional();
+
 export const validationSchema = Joi.object({
     NODE_ENV: Joi.string().valid('development', 'production', 'test').required(),
     PORT: Joi.number().default(5000),
@@ -80,10 +83,18 @@ export const validationSchema = Joi.object({
     RAZORPAY_MERCHANT_API_BASE: Joi.string().uri().optional(),
     RAZORPAY_API_BASE: Joi.string().uri().optional(),
     MESSAGING_CHANNELS: Joi.string().pattern(/^(WHATSAPP|INSTAGRAM|FACEBOOK)(,(WHATSAPP|INSTAGRAM|FACEBOOK))*$/i).optional(),
-    RAZORPAY_PLAN_BASIC_INR: Joi.string().pattern(/^plan_[A-Za-z0-9]+$/).optional(),
-    RAZORPAY_PLAN_BASIC_USD: Joi.string().pattern(/^plan_[A-Za-z0-9]+$/).optional(),
-    RAZORPAY_PLAN_GROWTH_INR: Joi.string().pattern(/^plan_[A-Za-z0-9]+$/).optional(),
-    RAZORPAY_PLAN_GROWTH_USD: Joi.string().pattern(/^plan_[A-Za-z0-9]+$/).optional(),
+    RAZORPAY_PLAN_BASIC_INR: RAZORPAY_PLAN_ID,
+    RAZORPAY_PLAN_BASIC_USD: RAZORPAY_PLAN_ID,
+    RAZORPAY_PLAN_BASIC_INR_YEARLY: RAZORPAY_PLAN_ID,
+    RAZORPAY_PLAN_BASIC_USD_YEARLY: RAZORPAY_PLAN_ID,
+    RAZORPAY_PLAN_GROWTH_INR: RAZORPAY_PLAN_ID,
+    RAZORPAY_PLAN_GROWTH_USD: RAZORPAY_PLAN_ID,
+    RAZORPAY_PLAN_GROWTH_INR_YEARLY: RAZORPAY_PLAN_ID,
+    RAZORPAY_PLAN_GROWTH_USD_YEARLY: RAZORPAY_PLAN_ID,
+    RAZORPAY_PLAN_PRO_INR: RAZORPAY_PLAN_ID,
+    RAZORPAY_PLAN_PRO_USD: RAZORPAY_PLAN_ID,
+    RAZORPAY_PLAN_PRO_INR_YEARLY: RAZORPAY_PLAN_ID,
+    RAZORPAY_PLAN_PRO_USD_YEARLY: RAZORPAY_PLAN_ID,
     BILLING_SALES_EMAIL: Joi.string().email({ tlds: { allow: false } }).optional(),
     BILLING_USAGE_POLL_SECONDS: Joi.number().integer().min(1).max(86400).optional(),
     JUDGEME_API_BASE: Joi.string().uri().optional(),

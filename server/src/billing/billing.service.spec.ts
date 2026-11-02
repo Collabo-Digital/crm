@@ -78,3 +78,52 @@ describe('BillingService.cancelOrganizationSubscription', () => {
         expect(prisma.organization.update).not.toHaveBeenCalled();
     });
 });
+
+describe('BillingService checkout', () => {
+    const config = new ConfigService({
+        billing: {
+            plans: {
+                BASIC: { MONTHLY: { INR: 'plan_basicINR', USD: 'plan_basicUSD' }, YEARLY: { INR: 'plan_basicINRyearly' } },
+                PRO: { MONTHLY: { INR: 'plan_proINR' } },
+            },
+            salesEmail: 'sales@collabo.test',
+        },
+    });
+    function build() {
+        const prisma = {
+            user: { findUniqueOrThrow: jest.fn(() => Promise.resolve({ id: 'u_1', email: 'owner@acme.test' })), update: jest.fn(() => Promise.resolve({})) },
+        };
+        const razorpay = { createSubscription: jest.fn(() => Promise.resolve({ id: 'sub_new' })), getKeyId: jest.fn(() => 'rzp_test_1') };
+        return { prisma, razorpay, service: new BillingService(prisma as never, razorpay as never, config, {} as never) };
+    }
+
+    it('lists, for each self-serve plan, the currencies it can be bought in monthly and yearly', () => {
+        const { service } = build();
+        const catalog = service.plans();
+        expect(catalog.checkout).toEqual({
+            BASIC: { MONTHLY: ['INR', 'USD'], YEARLY: ['INR'] },
+            GROWTH: { MONTHLY: [], YEARLY: [] },
+            PRO: { MONTHLY: ['INR'], YEARLY: [] },
+        });
+        expect(catalog).toMatchObject({ gstPercent: 18, yearlyDiscountPercent: 20, salesEmail: 'sales@collabo.test' });
+        expect(catalog.plans.map((p) => p.id)).toEqual(['BASIC', 'GROWTH', 'PRO', 'SCALE', 'ADVANCE']);
+    });
+
+    it('starts a yearly subscription on the yearly Razorpay plan, for ten years of renewals', async () => {
+        const { service, prisma, razorpay } = build();
+        await expect(service.startOnboardingCheckout('u_1', 'BASIC', 'YEARLY', 'INR')).resolves.toEqual({ subscriptionId: 'sub_new', razorpayKeyId: 'rzp_test_1', currency: 'INR' });
+        expect(razorpay.createSubscription).toHaveBeenCalledWith(expect.objectContaining({ planId: 'plan_basicINRyearly', totalCount: 10 }));
+        expect(prisma.user.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ pendingBillingPlan: 'BASIC', pendingBillingInterval: 'YEARLY' }) }));
+        await service.startOnboardingCheckout('u_1', 'BASIC', 'MONTHLY', 'USD');
+        expect(razorpay.createSubscription).toHaveBeenLastCalledWith(expect.objectContaining({ planId: 'plan_basicUSD', totalCount: 120 }));
+    });
+
+    it('refuses a plan, interval or currency without a Razorpay plan, and the plans sold by the Collabo team', async () => {
+        const { service, razorpay } = build();
+        await expect(service.startOnboardingCheckout('u_1', 'BASIC', 'YEARLY', 'USD')).rejects.toThrow('The Starter plan cannot be bought yearly in USD yet.');
+        await expect(service.startOnboardingCheckout('u_1', 'GROWTH', 'MONTHLY', 'INR')).rejects.toThrow('The Growth plan cannot be bought monthly in INR yet.');
+        await expect(service.startOnboardingCheckout('u_1', 'SCALE', 'YEARLY', 'INR')).rejects.toThrow('Scale is set up with the Collabo team. Book a demo to start it.');
+        await expect(service.startOnboardingCheckout('u_1', 'ADVANCE', 'MONTHLY', 'INR')).rejects.toThrow('Enterprise is set up with the Collabo team. Talk to us to start it.');
+        expect(razorpay.createSubscription).not.toHaveBeenCalled();
+    });
+});

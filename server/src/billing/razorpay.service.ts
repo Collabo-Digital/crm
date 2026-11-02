@@ -129,7 +129,7 @@ export class RazorpayService implements OnModuleInit {
             client.subscriptions.create({
                 plan_id: input.planId,
                 customer_notify: 1,
-                // 120 monthly cycles ≈ 10 years — subscriptions end via cancel,
+                // Ten years of the plan's cycles: subscriptions end via cancel,
                 // not expiry, so this is effectively "no end".
                 total_count: input.totalCount ?? 120,
                 notes: input.notes,
