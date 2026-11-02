@@ -36,6 +36,7 @@ function fakeDb(opts: { warehousing?: boolean } = {}) {
   let seq = 0;
   const id = (prefix: string) => `${prefix}_${++seq}`;
 
+  const products: Row[] = [];
   const db: any = {
     $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(db)),
     // applyMovement's row lock, and nothing else here.
@@ -78,10 +79,23 @@ function fakeDb(opts: { warehousing?: boolean } = {}) {
         vendor: null,
         channel: { platform: 'MANUAL' },
       }),
-      findUnique: jest.fn().mockResolvedValue({ metadata: {} }),
+      findUnique: jest.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve({
+          metadata: {},
+          ...products.find((p) => p.id === where.id),
+          variants: variants.filter((v) => v.productId === where.id),
+        }),
+      ),
     },
     productVariant: {
       findFirst: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn(({ where }: { where: { productId: string } }) =>
+        Promise.resolve(variants.filter((v) => v.productId === where.productId)),
+      ),
+      createMany: jest.fn(({ data }: { data: Row[] }) => {
+        variants.push(...data.map((v) => ({ inventoryQuantity: 0, trackQuantity: true, ...v, id: id('v') })));
+        return Promise.resolve({ count: data.length });
+      }),
       findUnique: jest.fn(async ({ where }: any) => variants.find((v) => v.id === where.id) ?? null),
       create: jest.fn(async ({ data }: any) => {
         const row = { ...data, id: id('v') };
@@ -109,6 +123,9 @@ function fakeDb(opts: { warehousing?: boolean } = {}) {
         stockLevels.find(
           (l) => l.variantId === where.variantId && l.warehouseId === where.warehouseId,
         ) ?? null,
+      ),
+      findMany: jest.fn(({ where }: { where: { variantId: { in: string[] } } }) =>
+        Promise.resolve(stockLevels.filter((l) => where.variantId.in.includes(l.variantId as string))),
       ),
       create: jest.fn(async ({ data }: any) => {
         const row = { id: id('sl'), locationId: null, available: 0, reserved: 0, qc: 0, damaged: 0, ...data };
@@ -158,7 +175,7 @@ function fakeDb(opts: { warehousing?: boolean } = {}) {
       .map((l) => ({ warehouseId: l.warehouseId, available: l.available }))
       .sort((a, b) => a.warehouseId.localeCompare(b.warehouseId));
   const cacheOf = (variantId: string) => variants.find((v) => v.id === variantId)!.inventoryQuantity;
-  return { service, db, rowsOf, cacheOf, events, stockLevels };
+  return { service, db, rowsOf, cacheOf, events, stockLevels, products, variants };
 }
 
 const shirt = (variant: Record<string, unknown>) =>
@@ -345,6 +362,43 @@ describe('ProductService.createVariant — opening stock per location', () => {
       service.createVariant('p_existing', ORG, { price: 1000, stock: [{ warehouseId: CLOSED, quantity: 1 }] }),
     ).rejects.toThrow('Old godown is inactive. Choose an active location for this stock.');
     expect(db.productVariant.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProductService.generateVariantsFromOptions — stock rows', () => {
+  const PRODUCT = 'p_existing';
+
+  /** Sized S / M / L with S and M made: generating adds L. */
+  function sizedProduct() {
+    const fake = fakeDb();
+    fake.products.push({ id: PRODUCT, options: [{ name: 'Size', values: ['S', 'M', 'L'], position: 1 }] });
+    const variant = (id: string, size: string, position: number, inventoryQuantity: number) => ({
+      id, productId: PRODUCT, organizationId: ORG, option1: size, option2: null, option3: null,
+      position, price: 1000, inventoryQuantity, trackQuantity: true,
+    });
+    fake.variants.push(variant('v_s', 'S', 1, 3), variant('v_m', 'M', 2, 5));
+    return fake;
+  }
+
+  it('leaves a variant stocked only at another location as it is, so its units are not counted twice', async () => {
+    const { service, stockLevels, rowsOf, variants } = sizedProduct();
+    stockLevels.push({ id: 'sl_kochi', variantId: 'v_m', warehouseId: KOCHI, locationId: null, available: 5, reserved: 0, qc: 0, damaged: 0 });
+
+    await service.generateVariantsFromOptions(PRODUCT, ORG);
+
+    // Its cached 5 is Kochi's 5. A default-location row seeded at 5 as well
+    // makes it 10 at the next movement.
+    expect(rowsOf('v_m')).toEqual([{ warehouseId: KOCHI, available: 5 }]);
+    const largeId = variants.find((v) => v.option1 === 'L')?.id as string;
+    expect(rowsOf(largeId)).toEqual([{ warehouseId: MAIN, available: 0 }]);
+  });
+
+  it('still seeds a variant with no row anywhere at its own quantity', async () => {
+    const { service, rowsOf } = sizedProduct();
+
+    await service.generateVariantsFromOptions(PRODUCT, ORG);
+
+    expect(rowsOf('v_s')).toEqual([{ warehouseId: MAIN, available: 3 }]);
   });
 });
 

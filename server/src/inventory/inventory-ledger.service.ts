@@ -155,8 +155,19 @@ export class InventoryLedgerService {
     // flow that creates it.
     if (!warehouse) return;
 
+    // A variant stocked at any location already has its rows, and its cached
+    // quantity is the SUM over them: a default-location row seeded at that
+    // figure as well would count the same units twice.
+    const rows = await db.stockLevel.findMany({
+      where: { variantId: { in: tracked.map((v) => v.id) } },
+      select: { variantId: true },
+    });
+    const stocked = new Set(rows.map((row) => row.variantId));
+    const unstocked = tracked.filter((v) => !stocked.has(v.id));
+    if (unstocked.length === 0) return;
+
     await db.stockLevel.createMany({
-      data: tracked.map((v) => ({
+      data: unstocked.map((v) => ({
         organizationId: orgId,
         variantId: v.id,
         warehouseId: warehouse.id,
