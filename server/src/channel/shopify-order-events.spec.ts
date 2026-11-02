@@ -117,7 +117,8 @@ describe('ShopifySyncService.upsertOrder — two deliveries of a new order racin
     await service.upsertOrder(CHANNEL, ORG, paidFulfilledOrder(new Date(Date.now() - HOUR)), { live: true });
 
     const [[upsert]] = tx.order.upsert.mock.calls as Array<[{ update: unknown }]>;
-    expect(upsert.update).toEqual({});
+    // Nothing of the payload; the order's own key keeps the upsert native.
+    expect(upsert.update).toEqual({ externalId: '5550001' });
     expect(children).not.toHaveBeenCalled();
   });
 

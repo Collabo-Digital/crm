@@ -2303,7 +2303,12 @@ export class ShopifySyncService {
                         ...sourcePatch,
                     },
                     // The delivery that loses the race writes below, compare-and-set.
-                    update: {},
+                    // Not `{}`: with nothing to update Prisma emulates the
+                    // upsert (read, then insert), and a delivery racing the
+                    // insert fails on the unique key and is dropped. A no-op
+                    // write keeps it a native INSERT ... ON CONFLICT, which
+                    // waits for the other delivery instead.
+                    update: { externalId },
                     select: { id: true },
                 });
                 orderId = created.id;
