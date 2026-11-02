@@ -30,10 +30,16 @@ function harness(told?: () => Promise<string[] | void>) {
         channelContact: { findFirst: jest.fn(async () => ({ id: 'c1', externalId: '919811100021', customerId: 'cust1' })) },
         customer: { findFirst: jest.fn(async () => null) },
         automationEvent: {
-            create: jest.fn(async ({ data }: Row) => {
+            create: jest.fn(async ({ data }: { data: Row }) => {
+                if (events.some((e) => e.organizationId === data.organizationId && e.eventType === data.eventType && e.externalId === data.externalId)) {
+                    throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' });
+                }
                 events.push(data);
                 return { id: `e${events.length}` };
             }),
+            findUnique: jest.fn(({ where: { organizationId_eventType_externalId: k } }: { where: { organizationId_eventType_externalId: { organizationId: string; eventType: string; externalId: string } } }) =>
+                Promise.resolve(events.find((e) => e.organizationId === k.organizationId && e.eventType === k.eventType && e.externalId === k.externalId) ?? null),
+            ),
         },
     };
     const jobs = { event: jest.fn() };
@@ -54,7 +60,7 @@ describe('CommerceEventsService — the pack’s store events', () => {
         const h = harness();
         await h.service.order('cm3order0000000000000001', ['out_for_delivery']);
         expect(h.events).toHaveLength(1);
-        expect(h.events[0]).toMatchObject({ eventType: 'crm.order.out_for_delivery', externalId: 'cm3order0000000000000001:out_for_delivery', orderId: 'cm3order0000000000000001' });
+        expect(h.events[0]).toMatchObject({ eventType: 'crm.order.out_for_delivery', externalId: 'cm3order0000000000000001:out_for_delivery:ch_wa', orderId: 'cm3order0000000000000001' });
         const vars = h.events[0].payload.raw.vars;
         expect(readStoreLinkToken(key, 'order', vars['order.track_path'])).toBe('cm3order0000000000000001');
         // The raw tracking link stays as it was.
@@ -65,7 +71,7 @@ describe('CommerceEventsService — the pack’s store events', () => {
     it('raises one event per refund, with its amount', async () => {
         const h = harness();
         await h.service.refunded('cm3order0000000000000001', { id: 'rf_row_1', amount: '500', currency: 'INR' });
-        expect(h.events[0]).toMatchObject({ eventType: 'crm.order.refunded', externalId: 'rf_row_1:refunded', orderId: 'cm3order0000000000000001', customerId: 'cust1' });
+        expect(h.events[0]).toMatchObject({ eventType: 'crm.order.refunded', externalId: 'rf_row_1:refunded:ch_wa', orderId: 'cm3order0000000000000001', customerId: 'cust1' });
         expect(h.events[0].payload.raw).toMatchObject({ refundId: 'rf_row_1', vars: expect.objectContaining({ 'refund.amount': '₹500.00', 'order.name': '#1042' }) });
     });
 
@@ -89,6 +95,31 @@ describe('CommerceEventsService — the pack’s store events', () => {
         expect(raw.quietSince).toBe('2026-10-26T10:00:00.000Z');
         expect(readStoreLinkToken(key, 'cart', raw.vars['checkout.cart_path'])).toBe('cm3checkout00000000000001');
         expect(raw.vars['checkout.url']).toBe('https://shop.example/7001/checkouts/ctok/recover?key=k');
+    });
+});
+
+describe('CommerceEventsService — one event per store event and channel', () => {
+    const order = 'cm3order0000000000000001';
+    const both = [{ channel: { id: 'ch_wa', platform: 'WHATSAPP' } }, { channel: { id: 'ch_ig', platform: 'INSTAGRAM' } }];
+    const channelsOf = (h: ReturnType<typeof harness>) => h.events.map((e: Row) => e.channelId as string);
+
+    it('raises nothing again on a channel that had it when another channel starts or stops listening', async () => {
+        const h = harness();
+        await h.service.order(order, ['fulfilled']);
+        h.prisma.automationTrigger.findMany.mockResolvedValue(both);
+        await h.service.order(order, ['fulfilled']);
+        expect(channelsOf(h)).toEqual(['ch_wa', 'ch_ig']);
+        h.prisma.automationTrigger.findMany.mockResolvedValue([both[1]]);
+        await h.service.order(order, ['fulfilled']);
+        expect(channelsOf(h)).toEqual(['ch_wa', 'ch_ig']);
+    });
+
+    it('still knows an event stored under its order’s own id when one channel listened', async () => {
+        const h = harness();
+        h.events.push({ organizationId: 'o', channelId: 'ch_wa', eventType: 'crm.order.fulfilled', externalId: `${order}:fulfilled` });
+        h.prisma.automationTrigger.findMany.mockResolvedValue(both);
+        await h.service.order(order, ['fulfilled']);
+        expect(channelsOf(h)).toEqual(['ch_wa', 'ch_ig']);
     });
 });
 

@@ -267,8 +267,16 @@ export class CommerceEventsService {
             select: { channel: { select: { id: true, platform: true } } },
         });
         const channels = [...new Map(listening.filter((t) => t.channel).map((t) => [t.channel!.id, t.channel!])).values()];
+        // An event raised while only one channel listened may be stored under the store event's own id: that channel has it already.
+        const single = channels.length
+            ? await this.prisma.automationEvent.findUnique({
+                where: { organizationId_eventType_externalId: { organizationId: input.organizationId, eventType: input.eventType, externalId: input.externalId } },
+                select: { channelId: true },
+            })
+            : null;
         let raised = 0;
         for (const channel of channels) {
+            if (single?.channelId === channel.id) continue;
             const contact = input.contact?.channelId === channel.id
                 ? input.contact
                 : await this.contactOn(channel, input.organizationId, input.e164, input.customerId);
@@ -279,8 +287,8 @@ export class CommerceEventsService {
                         organizationId: input.organizationId,
                         channelId: channel.id,
                         eventType: input.eventType,
-                        // One event per store event and channel, however often Shopify redelivers.
-                        externalId: channels.length > 1 ? `${input.externalId}:${channel.id}` : input.externalId,
+                        // One event per store event and channel, however often Shopify redelivers and whichever other channels listen.
+                        externalId: `${input.externalId}:${channel.id}`,
                         occurredAt: new Date(),
                         contactId: contact.id,
                         customerId: input.customerId,
