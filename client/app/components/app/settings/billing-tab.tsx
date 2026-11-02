@@ -3,12 +3,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CreditCard, ExternalLink, Loader2, Mail } from "lucide-react";
 import { toast } from "sonner";
 
-import { CurrencyToggle, IntervalToggle, PlanCards } from "~/components/billing/plan-cards";
+import { CurrencyToggle, PlanCards } from "~/components/billing/plan-cards";
+import { SubscribePicker } from "~/components/billing/subscribe-picker";
 import { billingKeys, useBillingPlans, useBillingUsage } from "~/hooks/use-billing";
 import { useSubscribeMutation } from "~/hooks/use-billing-mutations";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { orgKeys } from "~/hooks/use-org-queries";
-import { formatCount, formatMinor, formatPrice, PRICING_NOTE } from "~/lib/plan-pricing";
+import { EVERY_PLAN_NOTE, formatCount, formatMinor, formatPrice, priceFor } from "~/lib/plan-pricing";
 import { formatDate } from "~/lib/format-date";
 import { loadScript } from "~/lib/load-script";
 import { cn } from "~/lib/utils";
@@ -57,13 +58,11 @@ const BILL_STATUS: Record<UsageBillStatus, string> = {
 };
 
 const LINE_LABEL: Record<UsageChargeLine["key"], string> = {
-  conversations: "Chats over the plan",
   callingMinutes: "Calling minutes over the plan",
-  members: "Extra team seats",
-  opsSeats: "Packing and till seats",
-  storeLocations: "Extra store locations",
+  members: "Extra team members",
+  opsSeats: "Packing and till staff",
+  storeLocations: "Extra stores",
   whatsappNumbers: "Extra WhatsApp numbers",
-  instagram: "Instagram accounts",
 };
 
 const LIVE: Array<SubscriptionStatus | null> = ["ACTIVE", "AUTHENTICATED"];
@@ -89,7 +88,7 @@ function Card({ title, help, action, children }: { title: string; help?: string;
 }
 
 /** One measure of this month's usage, against the plan's allowance when there is one. */
-function Meter({ label, used, allowance, currency, unit, note }: { label: string; used: number; allowance: PlanAllowance | null; currency: BillingCurrency; unit: string; note?: string }) {
+function Meter({ label, used, allowance, currency, unit, note, of = "included" }: { label: string; used: number; allowance: PlanAllowance | null; currency: BillingCurrency; unit: string; note?: string; of?: string }) {
   const included = allowance?.included ?? null;
   const over = included !== null ? Math.max(0, used - included) : 0;
   const share = included ? Math.min(1, used / included) : 0;
@@ -99,7 +98,7 @@ function Meter({ label, used, allowance, currency, unit, note }: { label: string
         <span className="font-medium text-foreground">{label}</span>
         <span className="tabular-nums text-muted-foreground">
           <span className="font-semibold text-foreground">{formatCount(used, currency)}</span>
-          {included !== null ? ` of ${formatCount(included, currency)} included` : ""}
+          {included !== null ? ` of ${formatCount(included, currency)} ${of}` : allowance ? " · unlimited" : ""}
         </span>
       </div>
       {included !== null && (
@@ -119,16 +118,27 @@ function Meter({ label, used, allowance, currency, unit, note }: { label: string
 
 function UsageMeters({ usage, plan, currency }: { usage: BillingUsageSummary["usage"]; plan: PricingPlan | null; currency: BillingCurrency }) {
   const seatsLeft = plan?.members.included != null ? Math.max(0, plan.members.included - usage.members) : null;
-  const opsNote = plan?.opsSeat
-    ? `Agents who only pack, pick, receive, dispatch or use the till. ${seatsLeft ? `They use your ${formatCount(seatsLeft, currency)} free team ${seatsLeft === 1 ? "seat" : "seats"} first, then` : "Each"} ${formatPrice(plan.opsSeat[currency], currency)} a month.`
-    : "Agents who only pack, pick, receive, dispatch or use the till.";
+  const opsNote = !plan || plan.members.included === null
+    ? "Agents who only pack, pick, receive, dispatch or use the till."
+    : plan.opsSeat
+      ? `Agents who only pack, pick, receive, dispatch or use the till. ${seatsLeft ? `They use your ${formatCount(seatsLeft, currency)} free team ${seatsLeft === 1 ? "seat" : "seats"} first, then` : "Each is"} ${formatPrice(plan.opsSeat[currency], currency)} a month.`
+      : "Agents who only pack, pick, receive, dispatch or use the till.";
+  const fairUse = plan?.fairUseChats != null ? { included: plan.fairUseChats, fee: null } : null;
   return (
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-      <Meter label="Chats" used={usage.conversations} allowance={plan?.conversations ?? null} currency={currency} unit="chats" />
+      <Meter
+        label="Chats"
+        used={usage.conversations}
+        allowance={fairUse}
+        of="under fair use"
+        currency={currency}
+        unit="chats"
+        note={fairUse ? "Chats are unlimited and never charged. Well above fair use, we'll talk to you about a custom plan." : undefined}
+      />
       <Meter label="WhatsApp calling minutes" used={usage.callingMinutes} allowance={plan?.callingMinutes ?? null} currency={currency} unit="minutes" />
-      <Meter label="Team seats" used={usage.members} allowance={plan?.members ?? null} currency={currency} unit="seats" />
-      <Meter label="Packing and till seats" used={usage.opsSeats} allowance={null} currency={currency} unit="seats" note={opsNote} />
-      <Meter label="Store locations" used={usage.storeLocations} allowance={plan?.storeLocations ?? null} currency={currency} unit="locations" />
+      <Meter label="Team members" used={usage.members} allowance={plan?.members ?? null} currency={currency} unit="members" />
+      <Meter label="Packing and till staff" used={usage.opsSeats} allowance={null} currency={currency} unit="staff" note={opsNote} />
+      <Meter label="Stores with POS" used={usage.storeLocations} allowance={plan?.storeLocations ?? null} currency={currency} unit="stores" />
       <Meter label="WhatsApp numbers" used={usage.whatsappNumbers} allowance={plan?.whatsappNumbers ?? null} currency={currency} unit="numbers" />
       {(platformOffered("INSTAGRAM") || usage.instagramAccounts > 0) && (
         <Meter label="Instagram accounts" used={usage.instagramAccounts} allowance={null} currency={currency} unit="accounts" />
@@ -156,21 +166,11 @@ function BillRow({ bill }: { bill: UsageBill }) {
   );
 }
 
-/** What the plan costs, paid the way the workspace pays it. */
-function planPriceText(plan: PricingPlan, interval: BillingInterval, currency: BillingCurrency, gstPercent: number): string | null {
-  if (!plan.price) return null;
-  const tax = currency === "INR" ? ` + ${gstPercent}% GST` : "";
-  const month = plan.price[interval][currency];
-  return interval === "YEARLY"
-    ? `${formatPrice(month * 12, currency)} a year${tax} (${formatPrice(month, currency)} a month)`
-    : `${formatPrice(month, currency)} a month${tax}`;
-}
-
 /** The plan, and where the workspace stands: trial, payment needed, read-only. */
 function PlanStatus({ summary, catalog }: { summary: BillingUsageSummary; catalog: BillingPlansResponse | undefined }) {
   const { access, subscription: sub } = summary;
   const plan = catalog?.plans.find((p) => p.id === (sub?.plan ?? summary.plan)) ?? null;
-  const price = sub && plan ? planPriceText(plan, sub.interval ?? "MONTHLY", sub.currency, catalog?.gstPercent ?? 18) : null;
+  const price = sub && plan ? priceFor(plan, sub.interval ?? "MONTHLY", sub.currency, catalog?.gstPercent ?? 18) : null;
   const alert =
     access.state === "grace"
       ? `Payment needed. The workspace turns read-only on ${formatDate(access.readOnlyFrom)}.`
@@ -226,8 +226,7 @@ export function BillingTab({ orgId }: { orgId: string }) {
   const { data: summary, isLoading, isError } = useBillingUsage(orgId);
   const subscribe = useSubscribeMutation();
   const [chosenCurrency, setChosenCurrency] = useState<BillingCurrency | null>(null);
-  const [interval, setBillingInterval] = useState<BillingInterval>("YEARLY");
-  const [picked, setPicked] = useState<BillingPlan | null>(null);
+  const [subscribing, setSubscribing] = useState(false);
   const [paying, setPaying] = useState(false);
 
   if (isLoading) return <p className="text-sm text-muted-foreground">Loading billing…</p>;
@@ -243,7 +242,6 @@ export function BillingTab({ orgId }: { orgId: string }) {
   const live = !!sub && !sub.manual && LIVE.includes(sub.status);
   const isOwner = role === "OWNER";
   const canChoose = isOwner && !live && !sub?.manual;
-  const pickedPlan = picked ? planOf(picked) : null;
   const estimate = summary.estimate;
 
   const refresh = () => {
@@ -261,7 +259,8 @@ export function BillingTab({ orgId }: { orgId: string }) {
     return false;
   }
 
-  async function pay() {
+  async function pay(planId: BillingPlan, interval: BillingInterval) {
+    const pickedPlan = planOf(planId);
     if (!pickedPlan) return;
     setPaying(true);
     const loaded = loadScript(RAZORPAY_SCRIPT_URL).then(() => true, () => false);
@@ -345,38 +344,20 @@ export function BillingTab({ orgId }: { orgId: string }) {
       </Card>
 
       {catalog && (
-        <Card
-          title="Plans"
-          help={PRICING_NOTE}
-          action={
-            <div className="flex flex-wrap gap-2">
-              <IntervalToggle value={interval} onChange={setBillingInterval} discountPercent={catalog.yearlyDiscountPercent} />
-              <CurrencyToggle value={planCurrency} onChange={setChosenCurrency} />
-            </div>
-          }
-        >
-          <PlanCards
-            catalog={catalog}
-            currency={planCurrency}
-            interval={interval}
-            current={sub ? sub.plan : summary.access.state === "trialing" ? summary.plan : null}
-            selected={canChoose ? picked : null}
-            onSelect={canChoose ? setPicked : undefined}
-          />
-          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+        <Card title="Plans" help={EVERY_PLAN_NOTE} action={<CurrencyToggle value={planCurrency} onChange={setChosenCurrency} />}>
+          <PlanCards catalog={catalog} currency={planCurrency} current={sub ? sub.plan : summary.access.state === "trialing" ? summary.plan : null} />
+          <div className="mt-5 border-t pt-4 text-xs text-muted-foreground">
             {canChoose ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void pay()}
-                  disabled={!pickedPlan || paying}
-                  className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-[#CEF17B] px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm transition hover:bg-[#BADE6F] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {paying ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <CreditCard className="size-4" aria-hidden />}
-                  {pickedPlan ? `Pay for ${pickedPlan.name}, ${interval === "YEARLY" ? "yearly" : "monthly"}` : "Pick a plan to pay for"}
+              subscribing ? (
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold text-foreground">Already spoken to us? Subscribe</p>
+                  <SubscribePicker catalog={catalog} currency={planCurrency} busy={paying} onPay={(plan, interval) => void pay(plan, interval)} />
+                </div>
+              ) : (
+                <button type="button" onClick={() => setSubscribing(true)} className="min-h-10 font-semibold text-foreground underline underline-offset-2">
+                  Already spoken to us? Subscribe
                 </button>
-                <span>Paid with Razorpay: card, UPI or e-mandate.</span>
-              </>
+              )
             ) : live || sub?.manual ? (
               catalog.salesEmail ? (
                 <a href={`mailto:${catalog.salesEmail}?subject=${encodeURIComponent("Change my Collabo plan")}`} className="inline-flex items-center gap-1.5 font-medium text-foreground hover:underline">

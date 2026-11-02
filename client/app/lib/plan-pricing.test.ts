@@ -1,138 +1,191 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import type { BillingPlansResponse, PricingPlan } from "../types/api.ts";
-import { billingBanner, billingLine, buyable, formatPrice, monthlyPrice, planBullets } from "./plan-pricing.ts";
-
-const addOns = {
-  opsSeat: { INR: 199, USD: 3 },
-  instagram: { INR: 799, USD: 9.99 },
-  extras: [],
-  selfServe: true,
-  sales: "checkout" as const,
-};
-const seat = { INR: 699, USD: 9 };
-const place = { INR: 999, USD: 12 };
+import type { BillingPlansResponse, PlanFeatures, PricingPlan } from "../types/api.ts";
+import { billingBanner, buyable, demoHref, formatPrice, gateLocked, mandateNote, monthlyLine, planBullets, planChannels, priceFor, yearlyLine } from "./plan-pricing.ts";
 
 // The server's price list (server/src/billing/pricing.ts), as GET /billing/plans sends it.
+const place = { INR: 999, USD: 12 };
 const starter: PricingPlan = {
   id: "BASIC",
   name: "Starter",
-  tagline: "",
-  price: { MONTHLY: { INR: 2499, USD: 29 }, YEARLY: { INR: 1999, USD: 23 } },
-  conversations: { included: 2_000, fee: { INR: 0.25, USD: 0.003 } },
-  members: { included: 3, fee: seat },
+  badge: null,
+  bestFor: "brands with up to about 1,000 orders a month",
+  price: { MONTHLY: { INR: 8999, USD: 109 }, YEARLY: { INR: 89990, USD: 1090 } },
+  selfServe: true,
+  sales: "demo",
+  fairUseChats: 25_000,
+  members: { included: 5, fee: { INR: 999, USD: 12 } },
+  opsSeat: { INR: 199, USD: 3 },
   storeLocations: { included: 1, fee: place },
   whatsappNumbers: { included: 1, fee: place },
-  callingMinutes: { included: 500, fee: { INR: 0.35, USD: 0.004 } },
-  ...addOns,
+  callingMinutes: { included: 1_000, fee: { INR: 0.35, USD: 0.004 } },
+  extras: [],
 };
 const growth: PricingPlan = {
   ...starter,
   id: "GROWTH",
   name: "Growth",
-  price: { MONTHLY: { INR: 6999, USD: 79 }, YEARLY: { INR: 5599, USD: 63 } },
-  conversations: { included: 15_000, fee: { INR: 0.15, USD: 0.0018 } },
-  members: { included: 8, fee: seat },
-  storeLocations: { included: 2, fee: place },
+  badge: "Recommended",
+  highlighted: true,
+  bestFor: "brands with 1,000 to 5,000 orders a month",
+  price: { MONTHLY: { INR: 12999, USD: 159 }, YEARLY: { INR: 129990, USD: 1590 } },
+  fairUseChats: 100_000,
+  members: { included: 10, fee: { INR: 799, USD: 10 } },
+  storeLocations: { included: 3, fee: place },
   whatsappNumbers: { included: 2, fee: place },
-  callingMinutes: { included: 1_500, fee: { INR: 0.3, USD: 0.0035 } },
-};
-const pro: PricingPlan = { ...starter, id: "PRO", name: "Pro", price: { MONTHLY: { INR: 12499, USD: 149 }, YEARLY: { INR: 9999, USD: 119 } }, conversations: { included: 100_000, fee: { INR: 0.1, USD: 0.0012 } } };
-const scale: PricingPlan = {
-  ...starter,
-  id: "SCALE",
-  name: "Scale",
-  price: { MONTHLY: { INR: 24999, USD: 299 }, YEARLY: { INR: 19999, USD: 239 } },
-  selfServe: false,
-  sales: "demo",
-  conversations: { included: 300_000, fee: { INR: 0.07, USD: 0.0008 } },
-  extras: ["Pay yearly by invoice and bank transfer"],
+  callingMinutes: { included: 2_000, fee: { INR: 0.25, USD: 0.003 } },
 };
 const contract = { included: null, fee: null };
+const unlimited: PricingPlan = {
+  ...starter,
+  id: "SCALE",
+  name: "Unlimited",
+  badge: "For high-volume teams",
+  bestFor: "brands with more than 5,000 orders a month",
+  price: { MONTHLY: { INR: 19999, USD: 239 }, YEARLY: { INR: 199990, USD: 2390 } },
+  fairUseChats: 300_000,
+  members: contract,
+  opsSeat: null,
+  storeLocations: { included: 10, fee: place },
+  whatsappNumbers: { included: 5, fee: place },
+  callingMinutes: { included: 5_000, fee: { INR: 0.2, USD: 0.0024 } },
+  extras: ["Priority support and custom setup"],
+};
 const enterprise: PricingPlan = {
   id: "ADVANCE",
   name: "Enterprise",
-  tagline: "",
+  badge: null,
+  bestFor: "groups of brands",
   price: null,
   selfServe: false,
   sales: "contract",
-  conversations: contract,
+  fairUseChats: null,
   members: contract,
   opsSeat: null,
   storeLocations: contract,
   whatsappNumbers: contract,
   callingMinutes: contract,
-  instagram: null,
-  extras: ["Several brands on one contract"],
+  extras: ["Several brands on one contract", "Everything in Unlimited"],
 };
+const features = (gates: [boolean, boolean, boolean, boolean], api: number, drafts: number): PlanFeatures => ({
+  packing: gates[0], messagingAnalytics: gates[1], publicApi: gates[2], storeScoping: gates[3], apiRequestsPerMinute: api, aiDraftsPerDay: drafts, invoiceBilling: false,
+});
 const catalog: BillingPlansResponse = {
-  plans: [starter, growth, pro, scale, enterprise],
+  plans: [starter, growth, unlimited, enterprise],
   gstPercent: 18,
-  yearlyDiscountPercent: 20,
-  checkout: { BASIC: { MONTHLY: ["INR", "USD"], YEARLY: ["INR"] }, GROWTH: { MONTHLY: ["INR"], YEARLY: [] }, PRO: { MONTHLY: [], YEARLY: [] } },
+  yearlyMonthsFree: 2,
+  features: {
+    BASIC: features([false, false, false, false], 600, 20),
+    GROWTH: features([true, true, true, false], 600, 50),
+    SCALE: features([true, true, true, true], 2_000, 100),
+    ADVANCE: features([true, true, true, true], 2_000, 100),
+  },
+  gatePlans: { packing: "GROWTH", messagingAnalytics: "GROWTH", publicApi: "GROWTH", storeScoping: "SCALE" },
+  checkout: { BASIC: { MONTHLY: ["INR", "USD"], YEARLY: ["INR"] }, GROWTH: { MONTHLY: ["INR"], YEARLY: ["INR"] }, SCALE: { MONTHLY: [], YEARLY: ["INR"] } },
   salesEmail: "sales@collabo.test",
+  demoUrl: null,
   enforcement: true,
   trialDays: 14,
 };
-const card = (plan: PricingPlan, interval: "MONTHLY" | "YEARLY", currency: "INR" | "USD") => {
-  const price = monthlyPrice(plan, interval, currency);
-  return price === null ? null : formatPrice(price, currency);
-};
 
 describe("plan card prices", () => {
-  it("show each plan's month, paid monthly or yearly, in rupees and dollars", () => {
+  it("show each plan's month with GST on top, and its year under it, in rupees and dollars", () => {
     assert.deepEqual(
-      catalog.plans.map((p) => [p.name, card(p, "YEARLY", "INR"), card(p, "MONTHLY", "INR"), card(p, "YEARLY", "USD"), card(p, "MONTHLY", "USD")]),
+      catalog.plans.map((p) => [p.name, monthlyLine(p, "INR"), yearlyLine(p, "INR", 2), monthlyLine(p, "USD"), yearlyLine(p, "USD", 2)]),
       [
-        ["Starter", "₹1,999", "₹2,499", "$23", "$29"],
-        ["Growth", "₹5,599", "₹6,999", "$63", "$79"],
-        ["Pro", "₹9,999", "₹12,499", "$119", "$149"],
-        ["Scale", "₹19,999", "₹24,999", "$239", "$299"],
+        ["Starter", "₹8,999 + GST / month", "or ₹89,990 a year, two months free", "$109 / month", "or $1,090 a year, two months free"],
+        ["Growth", "₹12,999 + GST / month", "or ₹1,29,990 a year, two months free", "$159 / month", "or $1,590 a year, two months free"],
+        ["Unlimited", "₹19,999 + GST / month", "or ₹1,99,990 a year, two months free", "$239 / month", "or $2,390 a year, two months free"],
         ["Enterprise", null, null, null, null],
       ],
     );
   });
 
-  it("say how the price is billed, with GST on rupees", () => {
-    assert.equal(billingLine(starter, "YEARLY", "INR", 18), "Billed yearly, ₹23,988 + 18% GST");
-    assert.equal(billingLine(scale, "YEARLY", "INR", 18), "Billed yearly, ₹2,39,988 + 18% GST");
-    assert.equal(billingLine(starter, "MONTHLY", "INR", 18), "Billed monthly + 18% GST");
-    assert.equal(billingLine(growth, "YEARLY", "USD", 18), "Billed yearly, $756");
-    assert.equal(billingLine(growth, "MONTHLY", "USD", 18), "Billed monthly in US dollars");
-    assert.equal(billingLine(enterprise, "MONTHLY", "INR", 18), null);
+  it("price what a subscription is billed, with the GST", () => {
+    assert.equal(priceFor(growth, "YEARLY", "INR", 18), "₹1,29,990 a year + 18% GST");
+    assert.equal(priceFor(starter, "MONTHLY", "INR", 18), "₹8,999 a month + 18% GST");
+    assert.equal(priceFor(unlimited, "MONTHLY", "USD", 18), "$239 a month");
+    assert.equal(formatPrice(0.0024, "USD"), "$0.0024");
   });
 
-  it("list the allowances and add-ons, with fees to four places in dollars", () => {
-    assert.deepEqual(planBullets(starter, "INR", { instagram: false, messenger: false }), [
-      "2,000 chats a month, then ₹0.25 each",
-      "3 team seats, then ₹699 a month each",
-      "Packing and till-only seats ₹199 a month each",
-      "1 store location, then ₹999 a month each",
+  it("list the allowances and the features each plan adds, in plain words", () => {
+    assert.deepEqual(planBullets(starter, catalog, "INR"), [
+      "Unlimited chats, under fair use",
+      "5 team members, then ₹999 a month each",
+      "Packing and till staff ₹199 a month each",
+      "1 store with POS, then ₹999 a month each",
       "1 WhatsApp number, then ₹999 a month each",
-      "500 calling minutes, then ₹0.35 a minute",
+      "1,000 calling minutes, then ₹0.35 a minute",
+      "20 AI template drafts a day",
     ]);
-    assert.deepEqual(planBullets(growth, "USD", { instagram: true, messenger: false }).filter((b) => /chats|calling|Instagram/.test(b)), [
-      "15,000 chats a month, then $0.0018 each",
-      "1,500 calling minutes, then $0.0035 a minute",
-      "Instagram: $9.99 a month per account",
+    assert.deepEqual(planBullets(growth, catalog, "USD"), [
+      "Unlimited chats, under fair use",
+      "10 team members, then $10 a month each",
+      "Packing and till staff $3 a month each",
+      "3 stores with POS, then $12 a month each",
+      "2 WhatsApp numbers, then $12 a month each",
+      "2,000 calling minutes, then $0.003 a minute",
+      "50 AI template drafts a day",
+      "Packing assistant",
+      "Team performance and messaging analytics",
+      "Public API and webhooks",
     ]);
-    assert.equal(planBullets(scale, "INR", { instagram: false, messenger: false })[0], "3,00,000 chats a month, then ₹0.07 each");
-    assert.equal(planBullets(scale, "INR", { instagram: false, messenger: false }).at(-1), "Pay yearly by invoice and bank transfer");
-    assert.deepEqual(planBullets(enterprise, "INR", { instagram: true, messenger: true }), [
-      "Chats, seats, store locations, numbers and calling minutes to fit your volume",
-      "Instagram included",
-      "Messenger included",
+    assert.deepEqual(planBullets(unlimited, catalog, "INR"), [
+      "Unlimited chats, under fair use",
+      "Unlimited users",
+      "10 stores with POS, then ₹999 a month each",
+      "5 WhatsApp numbers, then ₹999 a month each",
+      "5,000 calling minutes, then ₹0.20 a minute",
+      "100 AI template drafts a day",
+      "Managers and staff limited to chosen stores",
+      "2,000 API requests a minute",
+      "Priority support and custom setup",
+    ]);
+    assert.deepEqual(planBullets(enterprise, catalog, "INR"), [
+      "Chats, users, stores, numbers and calling minutes to fit your brands",
       "Several brands on one contract",
+      "Everything in Unlimited",
     ]);
   });
 
-  it("can be bought only where a Razorpay plan exists for that interval and currency", () => {
+  it("show Instagram DM among the channels only where the app offers Instagram", () => {
+    assert.deepEqual(planChannels({ instagram: false }), ["WhatsApp", "Website chat buttons"]);
+    assert.deepEqual(planChannels({ instagram: true }), ["WhatsApp", "Instagram DM", "Website chat buttons"]);
+  });
+
+  it("book a demo at the demo link when there is one, otherwise by email to sales", () => {
+    assert.equal(demoHref(catalog, "Collabo Growth demo"), "mailto:sales@collabo.test?subject=Collabo%20Growth%20demo");
+    assert.equal(demoHref({ ...catalog, demoUrl: "https://cal.example.com/collabo" }, "x"), "https://cal.example.com/collabo");
+    assert.equal(demoHref({ demoUrl: null, salesEmail: null }, "x"), null);
+  });
+});
+
+describe("subscribing", () => {
+  it("warns that a monthly charge above ₹15,000 with GST needs the customer's approval each month", () => {
+    assert.match(mandateNote(growth, "MONTHLY", "INR", 18) ?? "", /approve each monthly charge/);
+    assert.match(mandateNote(unlimited, "MONTHLY", "INR", 18) ?? "", /Pay yearly/);
+    assert.equal(mandateNote(starter, "MONTHLY", "INR", 18), null);
+    assert.equal(mandateNote(growth, "YEARLY", "INR", 18), null);
+    assert.equal(mandateNote(growth, "MONTHLY", "USD", 18), null);
+  });
+
+  it("is possible only where a Razorpay plan exists for that interval and currency", () => {
     assert.equal(buyable(catalog, starter, "YEARLY", "INR"), true);
     assert.equal(buyable(catalog, starter, "YEARLY", "USD"), false);
-    assert.equal(buyable(catalog, growth, "MONTHLY", "INR"), true);
-    assert.equal(buyable(catalog, growth, "YEARLY", "INR"), false);
-    assert.equal(buyable(catalog, scale, "YEARLY", "INR"), false);
+    assert.equal(buyable(catalog, unlimited, "MONTHLY", "INR"), false);
+    assert.equal(buyable(catalog, enterprise, "YEARLY", "INR"), false);
+  });
+});
+
+describe("plan gates", () => {
+  it("lock a feature only when the server says the plan lacks it", () => {
+    const org = { planFeatures: { packing: false, messagingAnalytics: false, publicApi: false, storeScoping: false } };
+    assert.equal(gateLocked(org, "packing"), true);
+    assert.equal(gateLocked({ planFeatures: { ...org.planFeatures, packing: true } }, "packing"), false);
+    // Still loading, or a server from before plan gates: nothing locked.
+    assert.equal(gateLocked(undefined, "packing"), false);
+    assert.equal(gateLocked({}, "publicApi"), false);
   });
 });
 

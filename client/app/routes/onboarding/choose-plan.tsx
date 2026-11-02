@@ -1,13 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { Controller, useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import {
-  ArrowRight,
-  Loader2,
-  Rocket,
-} from "lucide-react";
-import type { BillingCurrency, BillingInterval } from "~/types/api";
+import { ArrowRight, Rocket } from "lucide-react";
 import { toast } from "sonner";
 
 import { useAuthStore } from "~/stores/auth.store";
@@ -15,12 +8,9 @@ import { loadScript } from "~/lib/load-script";
 import { billingService } from "~/services/billing.service";
 import { useStartOnboardingCheckoutMutation } from "~/hooks/use-billing-mutations";
 import { useBillingPlans } from "~/hooks/use-billing";
-import { CurrencyToggle, IntervalToggle, PlanCards, PRICING_NOTE } from "~/components/billing/plan-cards";
-import { buyable } from "~/lib/plan-pricing";
-import {
-  choosePlanSchema,
-  type ChoosePlanFormValues,
-} from "~/lib/schemas/onboarding.schemas";
+import { CurrencyToggle, EVERY_PLAN_NOTE, PlanCards } from "~/components/billing/plan-cards";
+import { SubscribePicker } from "~/components/billing/subscribe-picker";
+import type { BillingCurrency, BillingInterval, BillingPlan } from "~/types/api";
 
 const RAZORPAY_SCRIPT_URL = "https://checkout.razorpay.com/v1/checkout.js";
 const POLL_INTERVAL_MS = 2_000;
@@ -31,33 +21,30 @@ export function meta() {
 }
 
 /**
- * Onboarding step 1: pricing plan selection + Razorpay checkout, or a free
- * trial. Shown only while trials and the payment step are on
- * (BILLING_ENFORCEMENT; see OnboardingGuard).
+ * Onboarding step 1, shown only while trials and the payment step are on
+ * (BILLING_ENFORCEMENT; see OnboardingGuard): the plans, each with "Book a
+ * demo", and the free trial first. A brand that has already agreed a plan
+ * with us can pay for it here.
  *
- * Flow:
- *   1. User picks a plan + interval, or starts the free trial (straight on
- *      to /onboarding/account-type; the workspace starts on Growth).
- *   2. We call POST /billing/onboarding-checkout — server creates a Razorpay
- *      Subscription and stores it as pending on the User.
- *   3. We open Razorpay Checkout.js modal with the subscription_id.
- *   4. After payment, Razorpay's webhook flips the subscription to ACTIVE.
- *      We poll GET /billing/pending-status until we see ACTIVE, then advance
- *      to /onboarding/account-type.
- *   5. The org-create transaction copies the now-ACTIVE subscription onto the
- *      new Organization (server-side hard gate).
+ * Paying:
+ *   1. The plan and interval are picked under "Already spoken to us?".
+ *   2. POST /billing/onboarding-checkout creates a Razorpay Subscription,
+ *      kept as pending on the User.
+ *   3. Razorpay Checkout.js opens on it. Its webhook flips the subscription
+ *      to ACTIVE; we poll GET /billing/pending-status until we see it, then
+ *      go on to /onboarding/account-type.
+ *   4. The org-create transaction copies the paid subscription onto the new
+ *      Organization. Without one the workspace starts on the free trial.
  */
 export default function ChoosePlanPage() {
   const navigate = useNavigate();
   const setPendingPlan = useAuthStore((state) => state.setPendingPlan);
-  const pendingPlan = useAuthStore((state) => state.pendingPlan);
-  const pendingBillingInterval = useAuthStore(
-    (state) => state.pendingBillingInterval,
-  );
   const user = useAuthStore((state) => state.user);
 
   const [scriptReady, setScriptReady] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [currency, setCurrency] = useState<BillingCurrency>("INR");
+  const [paying, setPaying] = useState(false);
   const startCheckout = useStartOnboardingCheckoutMutation();
   const { data: catalog, isError: catalogFailed } = useBillingPlans();
   const pollAbortRef = useRef<AbortController | null>(null);
@@ -70,42 +57,12 @@ export default function ChoosePlanPage() {
     return () => pollAbortRef.current?.abort();
   }, []);
 
-  const {
-    control,
-    handleSubmit,
-    watch,
-    setValue,
-    formState: { isValid },
-  } = useForm<ChoosePlanFormValues>({
-    resolver: zodResolver(choosePlanSchema),
-    mode: "onChange",
-    defaultValues: {
-      // Scale and Enterprise are set up with the Collabo team, never bought here.
-      billingPlan: pendingPlan && ["BASIC", "GROWTH", "PRO"].includes(pendingPlan) ? pendingPlan : undefined,
-      // Yearly first: it is the better price.
-      billingInterval: pendingBillingInterval ?? "YEARLY",
-      currency: "INR",
-    },
-  });
-
-  const selectedPlan = watch("billingPlan");
-  const currency = watch("currency");
-  const interval = watch("billingInterval");
-
-  /** A plan that cannot be bought the new way is unpicked. */
-  function keepBuyable(nextInterval: BillingInterval, nextCurrency: BillingCurrency) {
-    const plan = catalog?.plans.find((p) => p.id === selectedPlan);
-    if (catalog && plan && !buyable(catalog, plan, nextInterval, nextCurrency)) {
-      setValue("billingPlan", undefined as never, { shouldValidate: true });
-    }
-  }
-
   /**
    * Polls /billing/pending-status until status flips to ACTIVE/AUTHENTICATED
    * (the webhook has confirmed the payment). Times out after 30s with a
    * "still verifying" message.
    */
-  async function pollUntilActive(plan: ChoosePlanFormValues): Promise<void> {
+  async function pollUntilActive(plan: BillingPlan, interval: BillingInterval): Promise<void> {
     pollAbortRef.current?.abort();
     const ac = new AbortController();
     pollAbortRef.current = ac;
@@ -114,11 +71,8 @@ export default function ChoosePlanPage() {
     while (!ac.signal.aborted && Date.now() - start < POLL_TIMEOUT_MS) {
       try {
         const status = await billingService.getPendingStatus();
-        if (
-          status.status === "ACTIVE" ||
-          status.status === "AUTHENTICATED"
-        ) {
-          setPendingPlan(plan.billingPlan, plan.billingInterval);
+        if (status.status === "ACTIVE" || status.status === "AUTHENTICATED") {
+          setPendingPlan(plan, interval);
           toast.success("Payment successful!");
           navigate("/onboarding/account-type");
           return;
@@ -130,14 +84,12 @@ export default function ChoosePlanPage() {
     }
 
     if (!ac.signal.aborted) {
-      toast.warning(
-        "Payment is still being verified. We will email you once it is confirmed.",
-      );
+      toast.warning("Payment is still being verified. We will email you once it is confirmed.");
       setIsProcessing(false);
     }
   }
 
-  async function onSubmit(values: ChoosePlanFormValues) {
+  async function pay(plan: BillingPlan, interval: BillingInterval) {
     if (!scriptReady) {
       toast.error("Payment SDK still loading, please retry in a moment.");
       return;
@@ -145,22 +97,18 @@ export default function ChoosePlanPage() {
     setIsProcessing(true);
 
     try {
-      const checkout = await startCheckout.mutateAsync(values);
+      const checkout = await startCheckout.mutateAsync({ billingPlan: plan, billingInterval: interval, currency });
       if (!checkout.razorpayKeyId) {
         toast.error("Billing is not configured. Contact support.");
         setIsProcessing(false);
         return;
       }
-
-      const planConfig = catalog?.plans.find(
-        (p) => p.id === values.billingPlan,
-      );
-
+      const planConfig = catalog?.plans.find((p) => p.id === plan);
       const rzp = new window.Razorpay({
         key: checkout.razorpayKeyId,
         subscription_id: checkout.subscriptionId,
         name: "Collabo CRM",
-        description: `${planConfig?.name} plan — ${values.billingInterval.toLowerCase()}`,
+        description: `${planConfig?.name} plan, paid ${interval === "YEARLY" ? "yearly" : "monthly"}`,
         prefill: {
           name: `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim(),
           email: user?.email ?? "",
@@ -169,16 +117,15 @@ export default function ChoosePlanPage() {
         handler: () => {
           // Razorpay says success — but the webhook is the ground truth.
           // Poll until the server confirms.
-          void pollUntilActive(values);
+          void pollUntilActive(plan, interval);
         },
         modal: {
           ondismiss: () => {
             setIsProcessing(false);
-            toast.info("Payment cancelled. Pick a plan to continue.");
+            toast.info("Payment cancelled. You can start the free trial instead.");
           },
         },
       });
-
       rzp.open();
     } catch {
       // useStartOnboardingCheckoutMutation already toasted the error.
@@ -210,99 +157,52 @@ export default function ChoosePlanPage() {
         <h1 className="text-2xl font-bold text-gray-900">Choose your plan</h1>
         <p className="mt-1.5 text-sm text-gray-500">
           {catalog?.trialDays
-            ? `Try Collabo free for ${catalog.trialDays} days, no card needed, or pick a plan and pay now.`
-            : "Pick a plan and complete payment to continue."}
+            ? `Try Collabo free for ${catalog.trialDays} days, no card needed. Book a demo and we'll set it up with you.`
+            : "Book a demo and we'll set it up with you."}
         </p>
       </div>
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-        <div className="flex flex-wrap justify-center gap-2">
-          <Controller
-            control={control}
-            name="billingInterval"
-            render={({ field }) => (
-              <IntervalToggle
-                value={field.value}
-                discountPercent={catalog?.yearlyDiscountPercent ?? 20}
-                onChange={(next) => {
-                  field.onChange(next);
-                  keepBuyable(next, currency);
-                }}
-              />
-            )}
-          />
-          <Controller
-            control={control}
-            name="currency"
-            render={({ field }) => (
-              <CurrencyToggle
-                value={field.value}
-                onChange={(next) => {
-                  field.onChange(next);
-                  keepBuyable(interval, next);
-                }}
-              />
-            )}
-          />
+      <div className="space-y-6">
+        <div className="flex justify-center">
+          <CurrencyToggle value={currency} onChange={setCurrency} />
         </div>
 
         {catalog ? (
-          <Controller
-            control={control}
-            name="billingPlan"
-            render={({ field }) => (
-              <PlanCards
-                catalog={catalog}
-                currency={currency}
-                interval={interval}
-                selected={field.value}
-                onSelect={field.onChange}
-              />
-            )}
-          />
+          <PlanCards catalog={catalog} currency={currency} />
         ) : (
           <p className="py-10 text-center text-sm text-gray-500">
             {catalogFailed ? "The plans could not be loaded. Refresh to try again." : "Loading plans…"}
           </p>
         )}
 
-        <p className="text-center text-xs leading-relaxed text-gray-500">{PRICING_NOTE}</p>
-
-        {/* Submit */}
-        <button
-          type="submit"
-          disabled={!isValid || isProcessing || !scriptReady}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#CEF17B] px-4 py-2.5 text-sm font-semibold text-gray-900 shadow-sm transition hover:bg-[#BADE6F] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {isProcessing ? (
-            <>
-              <Loader2 className="size-4 animate-spin" />
-              Processing payment…
-            </>
-          ) : (
-            <>
-              Continue to payment <ArrowRight className="size-4" />
-            </>
-          )}
-        </button>
-
-        {!selectedPlan && (
-          <p className="text-center text-xs text-gray-400">
-            Select a plan to continue.
-          </p>
-        )}
+        <p className="text-center text-xs leading-relaxed text-gray-500">{EVERY_PLAN_NOTE}</p>
 
         {catalog?.trialDays && (
           <button
             type="button"
             onClick={() => navigate("/onboarding/account-type")}
             disabled={isProcessing}
-            className="flex w-full items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-900 transition hover:bg-gray-50 disabled:opacity-60"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#CEF17B] px-4 py-2.5 text-sm font-semibold text-gray-900 shadow-sm transition hover:bg-[#BADE6F] disabled:opacity-60"
           >
-            Start my {catalog.trialDays}-day free trial
+            Start my {catalog.trialDays}-day free trial <ArrowRight className="size-4" />
           </button>
         )}
-      </form>
+
+        {catalog && (
+          <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-gray-200">
+            {paying ? (
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-gray-900">Already spoken to us? Pay now</p>
+                <SubscribePicker catalog={catalog} currency={currency} busy={isProcessing || !scriptReady} onPay={(plan, interval) => void pay(plan, interval)} />
+              </div>
+            ) : (
+              <button type="button" onClick={() => setPaying(true)} className="min-h-10 text-sm font-semibold text-gray-900 underline underline-offset-2">
+                Already spoken to us? Pay now
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

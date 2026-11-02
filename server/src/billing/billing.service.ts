@@ -120,7 +120,9 @@ export class BillingService {
             plans: PLANS,
             gstPercent: GST_PERCENT,
             yearlyMonthsFree: YEARLY_MONTHS_FREE,
-            // The plan each gated feature starts on, for "Available on Growth".
+            // What each plan has beyond its volumes, and the plan each gated
+            // feature starts on, for "Available on Growth".
+            features: Object.fromEntries(PLANS.map((p) => [p.id, planFeatures(p.id)])),
             gatePlans: GATE_PLAN,
             checkout: Object.fromEntries(
                 PLANS.filter((p) => p.selfServe).map((p) => [

@@ -46,8 +46,17 @@ export interface User {
 /** Metric used to decide a customer's loyalty tier. */
 export type LoyaltyMetric = "ORDERS" | "TOTAL_SPENT";
 
-/** Pricing plans. Mirrors the Prisma `BillingPlan` enum: BASIC is Starter, ADVANCE is Enterprise. */
-export type BillingPlan = "BASIC" | "GROWTH" | "PRO" | "SCALE" | "ADVANCE";
+/** Pricing plans. Mirrors the Prisma `BillingPlan` enum: BASIC is Starter, SCALE is Unlimited, ADVANCE is Enterprise. */
+export type BillingPlan = "BASIC" | "GROWTH" | "SCALE" | "ADVANCE";
+
+/** Features a plan may lack (server planFeatures), refused only while plans are enforced. */
+export type PlanGate = "packing" | "messagingAnalytics" | "publicApi" | "storeScoping";
+
+export interface PlanFeatures extends Record<PlanGate, boolean> {
+  apiRequestsPerMinute: number;
+  aiDraftsPerDay: number;
+  invoiceBilling: boolean;
+}
 
 /** The currencies plans are sold in. */
 export type BillingCurrency = "INR" | "USD";
@@ -89,31 +98,33 @@ export interface PlanAllowance {
   fee: Money | null;
 }
 
-/** How a plan is bought: at checkout, after a demo (Scale), or on a contract (Enterprise). */
-export type PlanSales = "checkout" | "demo" | "contract";
+/** How a plan is sold: after a demo (then subscribed to), or on a contract (Enterprise). */
+export type PlanSales = "demo" | "contract";
 
 /** One plan from GET /billing/plans. */
 export interface PricingPlan {
   id: BillingPlan;
   name: string;
-  tagline: string;
-  /** A month, before GST, paid monthly, or a month's share when paid yearly. Null: priced per contract (Enterprise). */
+  /** "Recommended", "For high-volume teams". */
+  badge: string | null;
+  /** Follows "Best for". */
+  bestFor: string;
+  /** Before GST: a month when paid monthly, a year when paid yearly. Null: priced per contract (Enterprise). */
   price: Record<BillingInterval, Money> | null;
   highlighted?: boolean;
+  /** Can be subscribed to after the demo. */
   selfServe: boolean;
   sales: PlanSales;
-  /** Chats: 24 hours of WhatsApp with one customer. */
-  conversations: PlanAllowance;
-  /** Full team seats. */
+  /** Chats a month under fair use: never charged. Null: by contract. */
+  fairUseChats: number | null;
+  /** Full team seats. `included: null`: unlimited users. */
   members: PlanAllowance;
-  /** Each packing or till-only seat beyond the seats included. Null: by contract. */
+  /** Each packing or till-only seat beyond the seats included. Null: no seat charges. */
   opsSeat: Money | null;
   storeLocations: PlanAllowance;
   whatsappNumbers: PlanAllowance;
   callingMinutes: PlanAllowance;
-  /** Each connected Instagram account, a month. Null: included. */
-  instagram: Money | null;
-  /** What the plan has beyond its volumes. */
+  /** What the plan has beyond its volumes and features. */
   extras: string[];
 }
 
@@ -121,10 +132,17 @@ export interface PricingPlan {
 export interface BillingPlansResponse {
   plans: PricingPlan[];
   gstPercent: number;
-  yearlyDiscountPercent: number;
-  /** The currencies each self-serve plan can be bought in right now, monthly and yearly. */
+  /** A year costs twelve months less these. */
+  yearlyMonthsFree: number;
+  /** What each plan has beyond its volumes (server planFeatures). */
+  features: Record<BillingPlan, PlanFeatures>;
+  /** The plan each gated feature starts on. */
+  gatePlans: Record<PlanGate, BillingPlan>;
+  /** The currencies each plan can be subscribed to in right now, monthly and yearly. */
   checkout: Partial<Record<BillingPlan, Partial<Record<BillingInterval, BillingCurrency[]>>>>;
   salesEmail: string | null;
+  /** Where "Book a demo" goes, when set; otherwise it writes to salesEmail. */
+  demoUrl: string | null;
   /** Trials and the payment step are on (BILLING_ENFORCEMENT). */
   enforcement: boolean;
   trialDays: number | null;
@@ -156,7 +174,7 @@ export interface BillingUsage {
 }
 
 export interface UsageChargeLine {
-  key: "conversations" | "callingMinutes" | "members" | "opsSeats" | "storeLocations" | "whatsappNumbers" | "instagram";
+  key: "callingMinutes" | "members" | "opsSeats" | "storeLocations" | "whatsappNumbers";
   quantity: number;
   /** In the main unit (rupees, dollars). */
   unitPrice: number;
@@ -519,6 +537,8 @@ export interface OrgResponse {
   billingInterval: BillingInterval | null;
   /** Trialing, active, in grace or read-only. On the GET and create answers, not the PATCH one. */
   billingAccess?: BillingAccess;
+  /** The plan's gated features as they apply now: all open while plans are not enforced. */
+  planFeatures?: Record<PlanGate, boolean>;
   onboardingStatus: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "SKIPPED";
   role: UserRole;
   createdAt: string;

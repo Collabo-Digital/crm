@@ -8,7 +8,7 @@ import type { AdminUserMembership } from "~/services/admin.service";
 import type { BillingInterval, BillingPlan } from "~/types/api";
 
 /** The stored plan ids, as the app names them. */
-export const PLAN_NAME: Record<BillingPlan, string> = { BASIC: "Starter", GROWTH: "Growth", PRO: "Pro", SCALE: "Scale", ADVANCE: "Enterprise" };
+export const PLAN_NAME: Record<BillingPlan, string> = { BASIC: "Starter", GROWTH: "Growth", SCALE: "Unlimited", ADVANCE: "Enterprise" };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const field = "h-10 w-full rounded-lg border bg-background px-2 text-body";
@@ -89,7 +89,7 @@ export function OrgBillingDialog({ userId, membership, onClose }: { userId: stri
                         <span>
                             <span className="font-medium">Invoiced by the Collabo team</span>
                             <span className="block text-caption text-muted-foreground">
-                                For Scale and Enterprise deals paid by invoice and bank transfer. The workspace counts as paid, and its usage is not billed automatically.
+                                For deals paid by invoice and bank transfer, such as Enterprise. The workspace counts as paid, and its usage is not billed automatically.
                             </span>
                         </span>
                     </label>

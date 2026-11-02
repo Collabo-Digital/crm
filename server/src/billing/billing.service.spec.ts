@@ -158,6 +158,8 @@ describe('BillingService checkout', () => {
         });
         expect(catalog).toMatchObject({ gstPercent: 18, yearlyMonthsFree: 2, salesEmail: 'sales@collabo.test', demoUrl: 'https://cal.example.com/collabo-demo' });
         expect(catalog.gatePlans).toEqual({ packing: 'GROWTH', messagingAnalytics: 'GROWTH', publicApi: 'GROWTH', storeScoping: 'SCALE' });
+        expect(catalog.features.BASIC).toMatchObject({ packing: false, aiDraftsPerDay: 20, apiRequestsPerMinute: 600 });
+        expect(catalog.features.SCALE).toMatchObject({ storeScoping: true, aiDraftsPerDay: 100, apiRequestsPerMinute: 2_000 });
         expect(catalog.plans.map((p) => p.id)).toEqual(['BASIC', 'GROWTH', 'SCALE', 'ADVANCE']);
     });
 
