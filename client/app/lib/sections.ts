@@ -123,18 +123,31 @@ export interface SectionAccess {
 }
 
 /**
+ * Grants that are a whole job without any section, so a member holding one
+ * and no section opens no section at all: a Cashier holds `pos.sell` alone.
+ * Mirrors SECTIONLESS_JOBS on the server.
+ */
+const SECTIONLESS_JOBS = ["pos.sell"];
+
+/** Does this grant list say what the member opens: a section, or a section-less job? */
+export function namesAccess(grants: readonly string[]): boolean {
+  return sectionsInGrants(grants).length > 0 || SECTIONLESS_JOBS.some((key) => grants.includes(key));
+}
+
+/**
  * OWNER / ADMIN / MANAGER open everything. An AGENT / VIEWER opens what their
- * grants name — and everything when they name no section at all, which is
- * every member who joined before section access existed.
+ * grants name — and everything when they name neither a section nor a
+ * section-less job, which is every member who joined before section access
+ * existed.
  */
 export function resolveAccess(
   role: UserRole | undefined,
   grants: readonly string[],
 ): SectionAccess {
-  const sections = isSectionScopedRole(role) ? sectionsInGrants(grants) : [];
+  const scoped = isSectionScopedRole(role);
   return {
     role,
-    sections: sections.length === 0 ? "all" : new Set(sections),
+    sections: scoped && namesAccess(grants) ? new Set(sectionsInGrants(grants)) : "all",
     grants,
   };
 }

@@ -66,8 +66,8 @@ import {
   SectionAccessPicker,
 } from "~/components/app/settings/section-access-picker";
 import { TransferOwnershipDialog } from "~/components/app/settings/transfer-ownership-dialog";
-import { DEFAULT_CAPABILITIES, accessGrants, editorAccess, type JobTemplate } from "~/lib/member-access";
-import { AVAILABLE_SECTIONS, isSectionScopedRole, sectionKey, sectionsInGrants, type SectionId } from "~/lib/sections";
+import { DEFAULT_CAPABILITIES, accessGrants, canSaveAccess, editorAccess, type JobTemplate } from "~/lib/member-access";
+import { AVAILABLE_SECTIONS, isSectionScopedRole, namesAccess, sectionKey, sectionsInGrants, type SectionId } from "~/lib/sections";
 import { formatCurrency } from "~/lib/utils";
 import type { UpdateOrganizationRequest, UserRole, OrgMember, OrganizationGstin, CreateGstinRequest, StateTaxRate, ProductTypeTaxRate, CollectionTaxOverride, ShopifyCollection, LoyaltyMetric, OrgResponse, Warehouse } from "~/types/api";
 import { readAddress } from "~/lib/address";
@@ -276,7 +276,10 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
   const needsVendor = role === "VENDOR";
   const needsSections = isSectionScopedRole(role);
 
-  const canSend = !!email.trim() && (!needsVendor || !!vendorScope);
+  const canSend =
+    !!email.trim() && (!needsVendor || !!vendorScope) && (!needsSections || canSaveAccess(role, sections, capabilities));
+  // A job that is access on its own (the till) may leave every section unticked.
+  const tillOnly = needsSections && accessGrants(role, sections, capabilities).includes("pos.sell");
 
   function handleSendInvite() {
     if (!canSend) return;
@@ -335,7 +338,7 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
           <p className="text-caption font-medium text-muted-foreground">
             Sections this {role === "VIEWER" ? "viewer" : "agent"} can open — the rest show as locked
           </p>
-          <SectionAccessPicker value={sections} onChange={setSections} />
+          <SectionAccessPicker value={sections} onChange={setSections} allowNone={tillOnly} />
           <CapabilityPicker role={role} sections={sections} value={capabilities} onChange={setCapabilities} />
         </div>
       )}
@@ -350,14 +353,13 @@ const AVAILABLE_SECTION_KEYS = new Set(AVAILABLE_SECTIONS.map((s) => sectionKey(
 /** Short label for a grant list: how many of the sections it opens. */
 function sectionAccessLabel(grants: string[] | undefined) {
   const granted = sectionsInGrants(grants ?? []).filter((id) => AVAILABLE_SECTION_KEYS.has(sectionKey(id)));
-  if (sectionsInGrants(grants ?? []).length === 0) return "Full access";
+  if (!namesAccess(grants ?? [])) return "Full access";
   return `${granted.length} of ${AVAILABLE_SECTIONS.length} sections`;
 }
 
 /** Inline editor for which sections an Agent / Viewer can open. */
 function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: OrgMember; onDone: () => void }) {
   const grants = member.permissions ?? [];
-  const configured = sectionsInGrants(grants);
   const [sections, setSections] = useState<SectionId[]>(() => editorAccess(grants).sections);
   const [capabilities, setCapabilities] = useState<string[]>(() => editorAccess(grants).capabilities);
   const updatePermissions = useUpdateMemberPermissionsMutation(orgId);
@@ -392,9 +394,14 @@ function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: 
       )}
       <p className="text-caption font-medium text-muted-foreground">
         Sections {member.user.firstName} can open — the rest show as locked
-        {configured.length === 0 && " (currently full access)"}
+        {!namesAccess(grants) && " (currently full access)"}
       </p>
-      <SectionAccessPicker value={sections} onChange={setSections} disabled={updatePermissions.isPending} />
+      <SectionAccessPicker
+        value={sections}
+        onChange={setSections}
+        disabled={updatePermissions.isPending}
+        allowNone={accessGrants(member.role, sections, capabilities).includes("pos.sell")}
+      />
       <CapabilityPicker
         role={member.role}
         sections={sections}
@@ -403,7 +410,7 @@ function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: 
         disabled={updatePermissions.isPending}
       />
       <div className="flex items-center gap-2">
-        <Button type="button" onClick={handleSave} disabled={updatePermissions.isPending || sections.length === 0}>
+        <Button type="button" onClick={handleSave} disabled={updatePermissions.isPending || !canSaveAccess(member.role, sections, capabilities)}>
           {updatePermissions.isPending && <Loader2 className="animate-spin" />}
           Save access
         </Button>
@@ -2175,7 +2182,7 @@ export default function SettingsPage() {
                                     onSuccess: () => {
                                       if (
                                         isSectionScopedRole(selectedRole as UserRole) &&
-                                        sectionsInGrants(member.permissions ?? []).length === 0
+                                        !namesAccess(member.permissions ?? [])
                                       ) {
                                         setAccessMemberId(member.id);
                                       }

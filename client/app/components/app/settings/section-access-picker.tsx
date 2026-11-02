@@ -9,22 +9,25 @@ export { accessGrants, DEFAULT_CAPABILITIES } from "~/lib/member-access";
 /**
  * Checkbox grid of the app sections a member may open. Used on the invite form
  * and the per-member access editor. At least one section stays ticked — a
- * member with none would read as "not configured", which means full access.
+ * member with none would read as "not configured", which means full access —
+ * unless `allowNone`: the member's job (the till) is access on its own.
  */
 export function SectionAccessPicker({
   value,
   onChange,
   disabled,
+  allowNone = false,
 }: {
   value: SectionId[];
   onChange: (next: SectionId[]) => void;
   disabled?: boolean;
+  allowNone?: boolean;
 }) {
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
       {AVAILABLE_SECTIONS.map((section) => {
         const checked = value.includes(section.id);
-        const isLast = checked && value.length === 1;
+        const isLast = checked && value.length === 1 && !allowNone;
         return (
           <label
             key={section.id}

@@ -1,10 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { canAccessPath, firstAllowedPath, resolveAccess } from "./sections.ts";
+import { canAccessPath, firstAllowedPath, namesAccess, resolveAccess } from "./sections.ts";
 
 /** The job templates as the server serves them (server/src/auth/permissions.ts). */
-const CASHIER = ["section.products", "pos.sell"];
+const CASHIER = ["pos.sell"];
 const ACCOUNTANT = ["section.invoices", "section.analytics", "reports.finance"];
 const PACKER = ["section.products", "inventory.pack"];
 const WAREHOUSE = [
@@ -39,8 +39,10 @@ describe("a Cashier", () => {
     assert.equal(canAccessPath(access, "/orders/customers"), false);
   });
 
-  it("still looks products up", () => {
-    assert.equal(canAccessPath(access, "/products"), true);
+  it("opens no section: not Products, where an Agent can change prices", () => {
+    assert.equal(canAccessPath(access, "/products"), false);
+    assert.equal(canAccessPath(access, "/dashboard"), false);
+    assert.equal(canAccessPath(access, "/inbox"), false);
   });
 
   it("is not a way in for a vendor holding the key", () => {
@@ -104,5 +106,18 @@ describe("the other jobs", () => {
   it("keeps the messaging analytics for managers", () => {
     assert.equal(canAccessPath(resolveAccess("MANAGER", []), "/analytics/messaging"), true);
     assert.equal(canAccessPath(agent(["section.analytics"]), "/analytics/messaging"), false);
+  });
+});
+
+describe("namesAccess", () => {
+  it("counts the till as access on its own, and nothing else without a section", () => {
+    assert.equal(namesAccess(["pos.sell"]), true);
+    assert.equal(namesAccess(["section.chat"]), true);
+    assert.equal(namesAccess(["inventory.pack", "chat.view_all"]), false);
+    assert.equal(namesAccess([]), false);
+  });
+
+  it("leaves a member with no section and no such job unrestricted", () => {
+    assert.equal(canAccessPath(agent(["chat.view_all"]), "/dashboard"), true);
   });
 });

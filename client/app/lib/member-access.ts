@@ -1,5 +1,5 @@
 import type { PermissionKey } from "./permissions.ts";
-import { AVAILABLE_SECTIONS, sectionKey, sectionsInGrants, type SectionId } from "./sections.ts";
+import { AVAILABLE_SECTIONS, namesAccess, sectionKey, sectionsInGrants, type SectionId } from "./sections.ts";
 import type { UserRole } from "~/types/api";
 
 /**
@@ -89,16 +89,24 @@ export function accessGrants(role: UserRole, sections: readonly SectionId[], cap
 
 /**
  * The editor's starting point for a grant list (a member's, or a job
- * template's): the sections this build shows, and every other grant. No
- * section at all is full access, so it opens with every section ticked.
+ * template's): the sections this build shows, and every other grant. Naming
+ * neither a section nor a section-less job is full access, so it opens with
+ * every section ticked; a Cashier's till alone opens with none.
  */
 export function editorAccess(grants: readonly string[]): { sections: SectionId[]; capabilities: string[] } {
-  const configured = sectionsInGrants(grants);
   const shown = AVAILABLE_SECTIONS.map((s) => s.id);
   return {
-    sections: configured.length === 0 ? shown : configured.filter((id) => shown.includes(id)),
+    sections: namesAccess(grants) ? sectionsInGrants(grants).filter((id) => shown.includes(id)) : shown,
     capabilities: grants.filter((g) => !g.startsWith(SECTION_PREFIX)),
   };
+}
+
+/**
+ * Whether the editor may save this access. A list naming neither a section
+ * nor a section-less job would read as full access, so the server refuses it.
+ */
+export function canSaveAccess(role: UserRole, sections: readonly SectionId[], capabilities: readonly string[]): boolean {
+  return namesAccess(accessGrants(role, sections, capabilities));
 }
 
 /** A job template, as GET /organizations/:orgId/members/job-templates sends it. */

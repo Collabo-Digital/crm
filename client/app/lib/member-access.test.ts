@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { accessGrants, capabilitiesFor, editorAccess, matchingTemplate, type JobTemplate } from "./member-access.ts";
+import { accessGrants, canSaveAccess, capabilitiesFor, editorAccess, matchingTemplate, type JobTemplate } from "./member-access.ts";
 
 /** The templates as GET /organizations/:orgId/members/job-templates serves them. */
 const TEMPLATES: JobTemplate[] = [
@@ -20,7 +20,7 @@ const TEMPLATES: JobTemplate[] = [
     grants: ["section.products", "inventory.view", "inventory.receive", "inventory.pick", "inventory.pack", "inventory.dispatch", "inventory.labels"],
   },
   { id: "packer", label: "Packer", description: "", grants: ["section.products", "inventory.pack"] },
-  { id: "cashier", label: "Cashier", description: "", grants: ["section.products", "pos.sell"] },
+  { id: "cashier", label: "Cashier", description: "", grants: ["pos.sell"] },
 ];
 
 const sorted = (list: readonly string[]) => [...list].sort();
@@ -102,5 +102,21 @@ describe("editorAccess", () => {
 
   it("leaves out sections this build does not show", () => {
     assert.deepEqual(editorAccess(["section.logistics", "section.orders"]).sections, ["orders"]);
+  });
+
+  it("opens a Cashier, whose till is access on its own, with no section ticked", () => {
+    assert.deepEqual(editorAccess(["pos.sell"]), { sections: [], capabilities: ["pos.sell"] });
+  });
+});
+
+describe("canSaveAccess", () => {
+  it("saves a section, or the till alone", () => {
+    assert.equal(canSaveAccess("AGENT", ["chat"], []), true);
+    assert.equal(canSaveAccess("AGENT", [], ["pos.sell"]), true);
+  });
+
+  it("refuses neither, which would read as full access", () => {
+    assert.equal(canSaveAccess("AGENT", [], ["inventory.pack"]), false);
+    assert.equal(canSaveAccess("VIEWER", [], ["pos.sell"]), false);
   });
 });
