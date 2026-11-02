@@ -13,143 +13,126 @@ export interface Allowance {
     fee: Money | null;
 }
 
-/** How a plan is bought: at checkout, after a demo (set up and invoiced by the Collabo team), or on a contract. */
-export type PlanSales = 'checkout' | 'demo' | 'contract';
+/** How a plan is sold: after a demo (and then subscribed to), or on a contract. */
+export type PlanSales = 'demo' | 'contract';
 
 export interface PlanPricing {
     id: BillingPlan;
     name: string;
-    tagline: string;
+    /** "Recommended", "For high-volume teams". */
+    badge: string | null;
+    /** Who the plan suits, after "Best for". */
+    bestFor: string;
     /**
-     * A month, before GST: paid monthly, or the month's price when paid for a
-     * year ahead (a yearly bill is twelve of them). Null: priced per contract.
+     * Before GST: a month when paid monthly, a year when paid yearly (ten
+     * months' price, so two months free). Null: priced per contract.
      */
     price: Record<BillingInterval, Money> | null;
     highlighted?: boolean;
-    /** Bought at checkout. Scale and Enterprise are set up with the Collabo team. */
+    /** Can be subscribed to through Razorpay (after the demo). Enterprise is set up with the Collabo team. */
     selfServe: boolean;
     sales: PlanSales;
-    /** "Chats" to customers: 24 hours of WhatsApp with one person. */
-    conversations: Allowance;
-    /** Full seats: owners, admins, managers and agents. */
+    /**
+     * Chats (24 hours of WhatsApp with one person) are unlimited under fair
+     * use: never charged. Above this many in a month the Collabo team talks
+     * to the brand. Null: by contract.
+     */
+    fairUseChats: number | null;
+    /** Full seats: owners, admins, managers and agents. Included null and no fee: unlimited users. */
     members: Allowance;
-    /** Each packing or till-only seat beyond the seats included. Null: set by contract. */
+    /** Each packing or till-only seat beyond the seats included. Null: no seat charges. */
     opsSeat: Money | null;
     /** Stock locations of the Store kind, where the till sells. */
     storeLocations: Allowance;
     whatsappNumbers: Allowance;
     callingMinutes: Allowance;
-    /** Each connected Instagram account, a month. Null: included. */
-    instagram: Money | null;
-    /** What the plan has beyond its volumes. */
+    /** What the plan has beyond its volumes and plan features, in the card's words. */
     extras: string[];
 }
 
 /** On rupee bills. Dollar bills are for customers outside India and carry none. */
 export const GST_PERCENT = 18;
 
-/** Yearly prices are this much below twelve monthly ones (rounded down to the rupee or dollar). */
-export const YEARLY_DISCOUNT_PERCENT = 20;
+/** A year costs ten months. */
+export const YEARLY_MONTHS_FREE = 2;
 
-const EXTRA_SEAT: Money = { INR: 699, USD: 9 };
 const OPS_SEAT: Money = { INR: 199, USD: 3 };
-const EXTRA_LOCATION: Money = { INR: 999, USD: 12 };
-const EXTRA_NUMBER: Money = { INR: 999, USD: 12 };
-const INSTAGRAM: Money = { INR: 799, USD: 9.99 };
+const EXTRA_PLACE: Money = { INR: 999, USD: 12 };
 const CONTRACT: Allowance = { included: null, fee: null };
 
 /**
- * Collabo's plans. Every selling feature is in every plan; they differ by
- * volume, and Scale and Enterprise add controls for large teams. Merchants pay
- * Meta's WhatsApp charges to Meta directly: these are Collabo's own fees.
- * The stored ids are older than the names: BASIC is Starter, ADVANCE is Enterprise.
+ * Collabo's plans, sold after a demo. Every plan has GST invoices, the till at
+ * its store locations, the inbox, broadcasts, automations, Shopify and orders;
+ * higher plans add the features in planFeatures(). Merchants pay Meta's
+ * WhatsApp charges to Meta directly: these are Collabo's own fees. The stored
+ * ids are older than the names: BASIC is Starter, SCALE is Unlimited and
+ * ADVANCE is Enterprise.
  */
 export const PLANS: PlanPricing[] = [
     {
         id: BillingPlan.BASIC,
         name: 'Starter',
-        tagline: 'For brands starting to sell and support on WhatsApp.',
-        price: { MONTHLY: { INR: 2499, USD: 29 }, YEARLY: { INR: 1999, USD: 23 } },
+        badge: null,
+        bestFor: 'brands with up to about 1,000 orders a month',
+        price: { MONTHLY: { INR: 8999, USD: 109 }, YEARLY: { INR: 89990, USD: 1090 } },
         selfServe: true,
-        sales: 'checkout',
-        conversations: { included: 2_000, fee: { INR: 0.25, USD: 0.003 } },
-        members: { included: 3, fee: EXTRA_SEAT },
+        sales: 'demo',
+        fairUseChats: 25_000,
+        members: { included: 5, fee: { INR: 999, USD: 12 } },
         opsSeat: OPS_SEAT,
-        storeLocations: { included: 1, fee: EXTRA_LOCATION },
-        whatsappNumbers: { included: 1, fee: EXTRA_NUMBER },
-        callingMinutes: { included: 500, fee: { INR: 0.35, USD: 0.004 } },
-        instagram: INSTAGRAM,
+        storeLocations: { included: 1, fee: EXTRA_PLACE },
+        whatsappNumbers: { included: 1, fee: EXTRA_PLACE },
+        callingMinutes: { included: 1_000, fee: { INR: 0.35, USD: 0.004 } },
         extras: [],
     },
     {
         id: BillingPlan.GROWTH,
         name: 'Growth',
-        tagline: 'For brands selling every day, online and in store.',
-        price: { MONTHLY: { INR: 6999, USD: 79 }, YEARLY: { INR: 5599, USD: 63 } },
+        badge: 'Recommended',
+        bestFor: 'brands with 1,000 to 5,000 orders a month',
+        price: { MONTHLY: { INR: 12999, USD: 159 }, YEARLY: { INR: 129990, USD: 1590 } },
         highlighted: true,
         selfServe: true,
-        sales: 'checkout',
-        conversations: { included: 15_000, fee: { INR: 0.15, USD: 0.0018 } },
-        members: { included: 8, fee: EXTRA_SEAT },
+        sales: 'demo',
+        fairUseChats: 100_000,
+        members: { included: 10, fee: { INR: 799, USD: 10 } },
         opsSeat: OPS_SEAT,
-        storeLocations: { included: 2, fee: EXTRA_LOCATION },
-        whatsappNumbers: { included: 2, fee: EXTRA_NUMBER },
-        callingMinutes: { included: 1_500, fee: { INR: 0.3, USD: 0.0035 } },
-        instagram: INSTAGRAM,
-        extras: [],
-    },
-    {
-        id: BillingPlan.PRO,
-        name: 'Pro',
-        tagline: 'For busy teams with several stores and numbers.',
-        price: { MONTHLY: { INR: 12499, USD: 149 }, YEARLY: { INR: 9999, USD: 119 } },
-        selfServe: true,
-        sales: 'checkout',
-        conversations: { included: 100_000, fee: { INR: 0.1, USD: 0.0012 } },
-        members: { included: 15, fee: EXTRA_SEAT },
-        opsSeat: OPS_SEAT,
-        storeLocations: { included: 5, fee: EXTRA_LOCATION },
-        whatsappNumbers: { included: 3, fee: EXTRA_NUMBER },
-        callingMinutes: { included: 3_000, fee: { INR: 0.25, USD: 0.003 } },
-        instagram: INSTAGRAM,
+        storeLocations: { included: 3, fee: EXTRA_PLACE },
+        whatsappNumbers: { included: 2, fee: EXTRA_PLACE },
+        callingMinutes: { included: 2_000, fee: { INR: 0.25, USD: 0.003 } },
         extras: [],
     },
     {
         id: BillingPlan.SCALE,
-        name: 'Scale',
-        tagline: 'For major brands with many stores and a large team.',
-        price: { MONTHLY: { INR: 24999, USD: 299 }, YEARLY: { INR: 19999, USD: 239 } },
-        selfServe: false,
+        name: 'Unlimited',
+        badge: 'For high-volume teams',
+        bestFor: 'brands with more than 5,000 orders a month',
+        price: { MONTHLY: { INR: 19999, USD: 239 }, YEARLY: { INR: 199990, USD: 2390 } },
+        selfServe: true,
         sales: 'demo',
-        conversations: { included: 300_000, fee: { INR: 0.07, USD: 0.0008 } },
-        members: { included: 30, fee: EXTRA_SEAT },
-        opsSeat: OPS_SEAT,
-        storeLocations: { included: 10, fee: EXTRA_LOCATION },
-        whatsappNumbers: { included: 5, fee: EXTRA_NUMBER },
-        callingMinutes: { included: 6_000, fee: { INR: 0.2, USD: 0.0024 } },
-        instagram: INSTAGRAM,
-        extras: [
-            'Managers and staff limited to chosen stores',
-            'Priority support with a named contact',
-            '2,000 API requests a minute',
-            'Pay yearly by invoice and bank transfer',
-        ],
+        fairUseChats: 300_000,
+        members: CONTRACT,
+        opsSeat: null,
+        storeLocations: { included: 10, fee: EXTRA_PLACE },
+        whatsappNumbers: { included: 5, fee: EXTRA_PLACE },
+        callingMinutes: { included: 5_000, fee: { INR: 0.2, USD: 0.0024 } },
+        extras: ['Priority support and custom setup'],
     },
     {
         id: BillingPlan.ADVANCE,
         name: 'Enterprise',
-        tagline: 'For groups of brands, on a contract that fits.',
+        badge: null,
+        bestFor: 'groups of brands',
         price: null,
         selfServe: false,
         sales: 'contract',
-        conversations: CONTRACT,
+        fairUseChats: null,
         members: CONTRACT,
         opsSeat: null,
         storeLocations: CONTRACT,
         whatsappNumbers: CONTRACT,
         callingMinutes: CONTRACT,
-        instagram: null,
-        extras: ['Several brands on one contract', 'Everything in Scale'],
+        extras: ['Several brands on one contract', 'Everything in Unlimited'],
     },
 ];
 
@@ -157,26 +140,43 @@ export function pricingPlan(id: BillingPlan): PlanPricing {
     return PLANS.find((p) => p.id === id)!;
 }
 
-export interface PlanFeatures {
-    /** Managers and agents can be limited to chosen store locations. */
-    storeScoping: boolean;
+/** Features a plan may lack. Each is refused (@RequirePlanFeature) only while BILLING_ENFORCEMENT is on. */
+export type PlanGate = 'packing' | 'messagingAnalytics' | 'publicApi' | 'storeScoping';
+export const PLAN_GATES: PlanGate[] = ['packing', 'messagingAnalytics', 'publicApi', 'storeScoping'];
+
+export interface PlanFeatures extends Record<PlanGate, boolean> {
     /** Public API requests each key may make to each endpoint in a minute. */
     apiRequestsPerMinute: number;
+    /** AI template drafts the team may ask for in a day. */
+    aiDraftsPerDay: number;
     /** Paid by invoice and bank transfer, set up by the Collabo team. */
     invoiceBilling: boolean;
 }
 
-const LARGE_TEAM_PLANS: BillingPlan[] = [BillingPlan.SCALE, BillingPlan.ADVANCE];
+const FEATURES: Record<BillingPlan, PlanFeatures> = {
+    BASIC: { packing: false, messagingAnalytics: false, publicApi: false, storeScoping: false, apiRequestsPerMinute: 600, aiDraftsPerDay: 20, invoiceBilling: false },
+    GROWTH: { packing: true, messagingAnalytics: true, publicApi: true, storeScoping: false, apiRequestsPerMinute: 600, aiDraftsPerDay: 50, invoiceBilling: false },
+    SCALE: { packing: true, messagingAnalytics: true, publicApi: true, storeScoping: true, apiRequestsPerMinute: 2_000, aiDraftsPerDay: 100, invoiceBilling: false },
+    ADVANCE: { packing: true, messagingAnalytics: true, publicApi: true, storeScoping: true, apiRequestsPerMinute: 2_000, aiDraftsPerDay: 100, invoiceBilling: true },
+};
 
-/** The controls a plan adds beyond volume: Scale and Enterprise have them. */
+/** What a plan has beyond its volumes. */
 export function planFeatures(plan: BillingPlan): PlanFeatures {
-    const large = LARGE_TEAM_PLANS.includes(plan);
-    return { storeScoping: large, apiRequestsPerMinute: large ? 2_000 : 600, invoiceBilling: large };
+    return FEATURES[plan];
 }
 
+/** The plan each feature starts on, for "Available on Growth". */
+export const GATE_PLAN: Record<PlanGate, BillingPlan> = {
+    packing: BillingPlan.GROWTH,
+    messagingAnalytics: BillingPlan.GROWTH,
+    publicApi: BillingPlan.GROWTH,
+    storeScoping: BillingPlan.SCALE,
+};
+
 /**
- * What an organization used in a month. Seats, locations, numbers and
- * Instagram accounts are counted as they are when the bill is made.
+ * What an organization used in a month. Chats are counted for fair use,
+ * never charged. Seats, locations, numbers and Instagram accounts are
+ * counted as they are when the bill is made.
  */
 export interface Usage {
     conversations: number;
@@ -192,11 +192,11 @@ export interface Usage {
 
 export const NO_USAGE: Usage = { conversations: 0, callingMinutes: 0, members: 0, opsSeats: 0, storeLocations: 0, whatsappNumbers: 0, instagramAccounts: 0 };
 
-export type ChargeKey = 'conversations' | 'callingMinutes' | 'members' | 'opsSeats' | 'storeLocations' | 'whatsappNumbers' | 'instagram';
+export type ChargeKey = 'callingMinutes' | 'members' | 'opsSeats' | 'storeLocations' | 'whatsappNumbers';
 
 export interface ChargeLine {
     key: ChargeKey;
-    /** The units over the allowance, or the Instagram accounts. */
+    /** The units over the allowance. */
     quantity: number;
     /** In the main unit (rupees, dollars). */
     unitPrice: number;
@@ -211,7 +211,11 @@ export interface Charges {
     total: number;
 }
 
-/** A month's charges over the plan's allowances, in the smallest unit of the currency. */
+/**
+ * A month's charges over the plan's allowances, in the smallest unit of the
+ * currency: calling minutes, extra seats, packing and till seats, store
+ * locations and WhatsApp numbers. Chats and Instagram are never charged.
+ */
 export function usageCharges(plan: PlanPricing, currency: BillingCurrency, usage: Usage): Charges {
     const lines: ChargeLine[] = [];
     const over = (key: ChargeKey, used: number, allowance: Allowance) => {
@@ -219,7 +223,6 @@ export function usageCharges(plan: PlanPricing, currency: BillingCurrency, usage
         const quantity = Math.max(0, used - allowance.included);
         if (quantity > 0) lines.push(line(key, quantity, allowance.fee[currency]));
     };
-    over('conversations', usage.conversations, plan.conversations);
     over('callingMinutes', usage.callingMinutes, plan.callingMinutes);
     over('members', usage.members, plan.members);
     // Seats the full members leave free are taken by ops seats first; only the rest are charged, at the ops price.
@@ -229,13 +232,12 @@ export function usageCharges(plan: PlanPricing, currency: BillingCurrency, usage
     }
     over('storeLocations', usage.storeLocations, plan.storeLocations);
     over('whatsappNumbers', usage.whatsappNumbers, plan.whatsappNumbers);
-    if (plan.instagram && usage.instagramAccounts > 0) lines.push(line('instagram', usage.instagramAccounts, plan.instagram[currency]));
     const subtotal = lines.reduce((sum, l) => sum + l.amount, 0);
     const tax = currency === 'INR' ? Math.round((subtotal * GST_PERCENT) / 100) : 0;
     return { lines, subtotal, tax, total: subtotal + tax };
 }
 
-/** Fees go to four decimals ($0.0035), so the product is taken in ten-thousandths. */
+/** Fees go to four decimals ($0.0024), so the product is taken in ten-thousandths. */
 function line(key: ChargeKey, quantity: number, unitPrice: number): ChargeLine {
     return { key, quantity, unitPrice, amount: Math.round((quantity * Math.round(unitPrice * 10_000)) / 100) };
 }

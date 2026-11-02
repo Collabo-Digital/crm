@@ -16,7 +16,7 @@ import {
 
 import { PrismaService } from '../prisma/prisma.service';
 import { BillingAccess, billingAccess, BillingAccessFields, billingRules, LIVE_SUBSCRIPTION, newTrialEnd, PAYMENT_PROBLEM } from './billing-access';
-import { BILLING_CURRENCIES, BILLING_INTERVALS, BillingCurrency, GST_PERCENT, PLANS, pricingPlan, YEARLY_DISCOUNT_PERCENT } from './pricing';
+import { BILLING_CURRENCIES, BILLING_INTERVALS, BillingCurrency, GATE_PLAN, GST_PERCENT, PLAN_GATES, PlanGate, planFeatures, PLANS, pricingPlan, YEARLY_MONTHS_FREE } from './pricing';
 import { RazorpayService } from './razorpay.service';
 import { planOfRazorpayId, razorpayPlanId, subscriptionStatusOf } from './razorpay-plans';
 import { UsageBillingService } from './usage-billing.service';
@@ -119,7 +119,9 @@ export class BillingService {
         return {
             plans: PLANS,
             gstPercent: GST_PERCENT,
-            yearlyDiscountPercent: YEARLY_DISCOUNT_PERCENT,
+            yearlyMonthsFree: YEARLY_MONTHS_FREE,
+            // The plan each gated feature starts on, for "Available on Growth".
+            gatePlans: GATE_PLAN,
             checkout: Object.fromEntries(
                 PLANS.filter((p) => p.selfServe).map((p) => [
                     p.id,
@@ -127,6 +129,7 @@ export class BillingService {
                 ]),
             ),
             salesEmail: this.config.get<string>('billing.salesEmail') ?? null,
+            demoUrl: this.config.get<string>('billing.demoUrl') ?? null,
             // BILLING_ENFORCEMENT: trials and the payment step in onboarding are on.
             enforcement: rules.enforced,
             trialDays: rules.enforced ? rules.trialDays : null,
@@ -136,6 +139,12 @@ export class BillingService {
     /** Where a workspace stands: trialing, active, in grace or read-only. */
     access(org: BillingAccessFields, now = new Date()): BillingAccess {
         return billingAccess(org, now, billingRules(this.config));
+    }
+
+    /** The plan's gated features as they apply now: every one open while enforcement is off. */
+    features(plan: BillingPlan): Record<PlanGate, boolean> {
+        const enforced = billingRules(this.config).enforced;
+        return Object.fromEntries(PLAN_GATES.map((gate) => [gate, !enforced || planFeatures(plan)[gate]])) as Record<PlanGate, boolean>;
     }
 
     /**
@@ -360,10 +369,10 @@ export class BillingService {
      * whatever the create request said.
      *
      * Without a payment the workspace starts on a free trial of Growth while
-     * BILLING_ENFORCEMENT is on; with it off, on the plan asked for if it is
-     * one sold at checkout. Scale and Enterprise are only ever set by the
-     * Collabo team. A checkout left unpaid stays on the workspace, so paying
-     * it later still counts.
+     * BILLING_ENFORCEMENT is on, and on Starter while it is off: a plan is
+     * had by paying for it, or from the Collabo team, never by asking for it
+     * in the create request. A checkout left unpaid stays on the workspace,
+     * so paying it later still counts.
      */
     async applyPendingSubscriptionToOrg(
         tx: Prisma.TransactionClient,
@@ -385,11 +394,7 @@ export class BillingService {
 
         const status = user.pendingSubscriptionStatus;
         const paid = !!status && LIVE_SUBSCRIPTION.includes(status);
-        let plan = user.pendingBillingPlan;
-        if (!paid) {
-            const { billingPlan: requested } = await tx.organization.findUniqueOrThrow({ where: { id: orgId }, select: { billingPlan: true } });
-            plan = billingRules(this.config).enforced ? TRIAL_PLAN : pricingPlan(requested).selfServe ? requested : BillingPlan.BASIC;
-        }
+        const plan = paid ? user.pendingBillingPlan : billingRules(this.config).enforced ? TRIAL_PLAN : BillingPlan.BASIC;
 
         await tx.organization.update({
             where: { id: orgId },

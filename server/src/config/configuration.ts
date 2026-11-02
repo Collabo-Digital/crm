@@ -41,7 +41,7 @@ export default () => ({
     billing: {
         razorpayApiBase: process.env.RAZORPAY_API_BASE || 'https://api.razorpay.com',
         // The Razorpay plan for each plan, interval and currency: test and live
-        // mode have their own. Scale and Enterprise are invoiced, so have none.
+        // mode have their own. Enterprise is invoiced, so has none.
         plans: {
             BASIC: {
                 MONTHLY: { INR: process.env.RAZORPAY_PLAN_BASIC_INR, USD: process.env.RAZORPAY_PLAN_BASIC_USD },
@@ -51,13 +51,15 @@ export default () => ({
                 MONTHLY: { INR: process.env.RAZORPAY_PLAN_GROWTH_INR, USD: process.env.RAZORPAY_PLAN_GROWTH_USD },
                 YEARLY: { INR: process.env.RAZORPAY_PLAN_GROWTH_INR_YEARLY, USD: process.env.RAZORPAY_PLAN_GROWTH_USD_YEARLY },
             },
-            PRO: {
-                MONTHLY: { INR: process.env.RAZORPAY_PLAN_PRO_INR, USD: process.env.RAZORPAY_PLAN_PRO_USD },
-                YEARLY: { INR: process.env.RAZORPAY_PLAN_PRO_INR_YEARLY, USD: process.env.RAZORPAY_PLAN_PRO_USD_YEARLY },
+            SCALE: {
+                MONTHLY: { INR: process.env.RAZORPAY_PLAN_SCALE_INR, USD: process.env.RAZORPAY_PLAN_SCALE_USD },
+                YEARLY: { INR: process.env.RAZORPAY_PLAN_SCALE_INR_YEARLY, USD: process.env.RAZORPAY_PLAN_SCALE_USD_YEARLY },
             },
         },
-        // Where "Book a demo" (Scale) and "Talk to us" (Enterprise) write to.
+        // Where "Talk to us" writes to, and "Book a demo" when there is no demo link.
         salesEmail: process.env.BILLING_SALES_EMAIL,
+        // "Book a demo" opens this (a booking page), when set.
+        demoUrl: process.env.BILLING_DEMO_URL,
         usagePollSeconds: Number.parseInt(process.env.BILLING_USAGE_POLL_SECONDS || '3600', 10),
         // Trials, grace and read-only for workspaces without a paid plan (see
         // billing/billing-access.ts). Off until the payment step is switched

@@ -1,130 +1,132 @@
 import { BillingPlan } from '@prisma/client';
 
-import { NO_USAGE, periodOf, periodRange, planFeatures, PLANS, previousPeriod, pricingPlan, usageCharges, YEARLY_DISCOUNT_PERCENT } from './pricing';
+import { GATE_PLAN, NO_USAGE, periodOf, periodRange, planFeatures, PLANS, previousPeriod, pricingPlan, usageCharges, YEARLY_MONTHS_FREE } from './pricing';
 
 describe('plans', () => {
-    it('are Starter, Growth, Pro, Scale and Enterprise, under their stored ids', () => {
-        expect(PLANS.map((p) => [p.id, p.name])).toEqual([
-            ['BASIC', 'Starter'],
-            ['GROWTH', 'Growth'],
-            ['PRO', 'Pro'],
-            ['SCALE', 'Scale'],
-            ['ADVANCE', 'Enterprise'],
+    it('are Starter, Growth (recommended), Unlimited and Enterprise, under their stored ids', () => {
+        expect(PLANS.map((p) => [p.id, p.name, p.badge])).toEqual([
+            ['BASIC', 'Starter', null],
+            ['GROWTH', 'Growth', 'Recommended'],
+            ['SCALE', 'Unlimited', 'For high-volume teams'],
+            ['ADVANCE', 'Enterprise', null],
         ]);
         expect(PLANS.filter((p) => p.highlighted).map((p) => p.id)).toEqual(['GROWTH']);
+        expect(pricingPlan(BillingPlan.BASIC).bestFor).toBe('brands with up to about 1,000 orders a month');
+        expect(pricingPlan(BillingPlan.GROWTH).bestFor).toBe('brands with 1,000 to 5,000 orders a month');
     });
 
     it.each([
-        ['BASIC', { INR: 2499, USD: 29 }, { INR: 1999, USD: 23 }],
-        ['GROWTH', { INR: 6999, USD: 79 }, { INR: 5599, USD: 63 }],
-        ['PRO', { INR: 12499, USD: 149 }, { INR: 9999, USD: 119 }],
-        ['SCALE', { INR: 24999, USD: 299 }, { INR: 19999, USD: 239 }],
-    ] as const)('price %s a month, and a month when paid yearly, in rupees and dollars', (id, monthly, yearly) => {
+        ['BASIC', { INR: 8999, USD: 109 }, { INR: 89990, USD: 1090 }],
+        ['GROWTH', { INR: 12999, USD: 159 }, { INR: 129990, USD: 1590 }],
+        ['SCALE', { INR: 19999, USD: 239 }, { INR: 199990, USD: 2390 }],
+    ] as const)('price %s a month, or a year, in rupees and dollars', (id, monthly, yearly) => {
         expect(pricingPlan(id).price).toEqual({ MONTHLY: monthly, YEARLY: yearly });
     });
 
-    it('take 20% off for paying a year ahead, rounded down', () => {
+    it('charge ten months for a year: two months free', () => {
         for (const p of PLANS.filter((plan) => plan.price)) {
             for (const currency of ['INR', 'USD'] as const) {
-                expect(p.price!.YEARLY[currency]).toBe(Math.floor((p.price!.MONTHLY[currency] * (100 - YEARLY_DISCOUNT_PERCENT)) / 100));
+                expect(p.price!.YEARLY[currency]).toBe(p.price!.MONTHLY[currency] * (12 - YEARLY_MONTHS_FREE));
             }
         }
     });
 
-    it('have allowances that grow with the plan', () => {
+    it('have allowances that grow with the plan, Unlimited without a seat count', () => {
         const row = (id: BillingPlan) => {
             const p = pricingPlan(id);
-            return [p.conversations.included, p.members.included, p.storeLocations.included, p.whatsappNumbers.included, p.callingMinutes.included];
+            return [p.fairUseChats, p.members.included, p.storeLocations.included, p.whatsappNumbers.included, p.callingMinutes.included];
         };
-        expect(row(BillingPlan.BASIC)).toEqual([2_000, 3, 1, 1, 500]);
-        expect(row(BillingPlan.GROWTH)).toEqual([15_000, 8, 2, 2, 1_500]);
-        expect(row(BillingPlan.PRO)).toEqual([100_000, 15, 5, 3, 3_000]);
-        expect(row(BillingPlan.SCALE)).toEqual([300_000, 30, 10, 5, 6_000]);
+        expect(row(BillingPlan.BASIC)).toEqual([25_000, 5, 1, 1, 1_000]);
+        expect(row(BillingPlan.GROWTH)).toEqual([100_000, 10, 3, 2, 2_000]);
+        expect(row(BillingPlan.SCALE)).toEqual([300_000, null, 10, 5, 5_000]);
+        expect(pricingPlan(BillingPlan.SCALE).opsSeat).toBeNull();
+        expect(pricingPlan(BillingPlan.ADVANCE).price).toBeNull();
     });
 
-    it('are bought at checkout up to Pro; Scale after a demo and Enterprise on a contract', () => {
+    it('are subscribed to after a demo, Enterprise on a contract', () => {
         expect(PLANS.map((p) => [p.id, p.selfServe, p.sales])).toEqual([
-            ['BASIC', true, 'checkout'],
-            ['GROWTH', true, 'checkout'],
-            ['PRO', true, 'checkout'],
-            ['SCALE', false, 'demo'],
+            ['BASIC', true, 'demo'],
+            ['GROWTH', true, 'demo'],
+            ['SCALE', true, 'demo'],
             ['ADVANCE', false, 'contract'],
         ]);
-        expect(pricingPlan(BillingPlan.ADVANCE).price).toBeNull();
     });
 });
 
 describe('planFeatures', () => {
-    it('gives Scale and Enterprise store-limited staff, 2,000 API requests a minute and invoices', () => {
-        for (const id of [BillingPlan.SCALE, BillingPlan.ADVANCE]) {
-            expect(planFeatures(id)).toEqual({ storeScoping: true, apiRequestsPerMinute: 2_000, invoiceBilling: true });
-        }
-        for (const id of [BillingPlan.BASIC, BillingPlan.GROWTH, BillingPlan.PRO]) {
-            expect(planFeatures(id)).toEqual({ storeScoping: false, apiRequestsPerMinute: 600, invoiceBilling: false });
-        }
+    it('gives Growth and above the packing assistant, messaging analytics and the public API', () => {
+        const gates = (id: BillingPlan) => {
+            const f = planFeatures(id);
+            return [f.packing, f.messagingAnalytics, f.publicApi, f.storeScoping];
+        };
+        expect(gates(BillingPlan.BASIC)).toEqual([false, false, false, false]);
+        expect(gates(BillingPlan.GROWTH)).toEqual([true, true, true, false]);
+        expect(gates(BillingPlan.SCALE)).toEqual([true, true, true, true]);
+        expect(gates(BillingPlan.ADVANCE)).toEqual([true, true, true, true]);
+        expect(GATE_PLAN).toEqual({ packing: 'GROWTH', messagingAnalytics: 'GROWTH', publicApi: 'GROWTH', storeScoping: 'SCALE' });
+    });
+
+    it('gives Unlimited and Enterprise 2,000 API requests a minute, and each plan its AI drafts a day', () => {
+        expect([BillingPlan.BASIC, BillingPlan.GROWTH, BillingPlan.SCALE, BillingPlan.ADVANCE].map((id) => [planFeatures(id).apiRequestsPerMinute, planFeatures(id).aiDraftsPerDay]))
+            .toEqual([[600, 20], [600, 50], [2_000, 100], [2_000, 100]]);
+        expect(planFeatures(BillingPlan.ADVANCE).invoiceBilling).toBe(true);
+        expect(planFeatures(BillingPlan.SCALE).invoiceBilling).toBe(false);
     });
 });
 
 describe('usageCharges', () => {
     const starter = pricingPlan(BillingPlan.BASIC);
-    const busy = { conversations: 2_734, callingMinutes: 600, members: 4, opsSeats: 2, storeLocations: 2, whatsappNumbers: 2, instagramAccounts: 1 };
+    const busy = { conversations: 40_000, callingMinutes: 1_100, members: 6, opsSeats: 2, storeLocations: 2, whatsappNumbers: 2, instagramAccounts: 3 };
 
-    it('charges what is over each allowance, each add-on, and Instagram, with GST on rupee bills', () => {
+    it('charges calling minutes, extra seats, packing and till seats, store locations and numbers over the plan, with GST on rupee bills', () => {
         const c = usageCharges(starter, 'INR', busy);
         expect(c.lines).toEqual([
-            { key: 'conversations', quantity: 734, unitPrice: 0.25, amount: 18_350 },
             { key: 'callingMinutes', quantity: 100, unitPrice: 0.35, amount: 3_500 },
-            { key: 'members', quantity: 1, unitPrice: 699, amount: 69_900 },
+            { key: 'members', quantity: 1, unitPrice: 999, amount: 99_900 },
             { key: 'opsSeats', quantity: 2, unitPrice: 199, amount: 39_800 },
             { key: 'storeLocations', quantity: 1, unitPrice: 999, amount: 99_900 },
             { key: 'whatsappNumbers', quantity: 1, unitPrice: 999, amount: 99_900 },
-            { key: 'instagram', quantity: 1, unitPrice: 799, amount: 79_900 },
         ]);
-        expect(c.subtotal).toBe(411_250);
-        expect(c.tax).toBe(74_025);
-        expect(c.total).toBe(485_275);
+        expect(c.subtotal).toBe(343_000);
+        expect(c.tax).toBe(61_740);
+        expect(c.total).toBe(404_740);
+    });
+
+    it('never charges chats, however many, nor Instagram accounts', () => {
+        const c = usageCharges(starter, 'INR', { ...NO_USAGE, conversations: 10_000_000, instagramAccounts: 4, members: 1 });
+        expect(c).toEqual({ lines: [], subtotal: 0, tax: 0, total: 0 });
     });
 
     it('prices dollar bills in cents to the nearest cent, without GST', () => {
         const c = usageCharges(starter, 'USD', busy);
         expect(c.lines.map((l) => [l.key, l.amount])).toEqual([
-            ['conversations', 220],
             ['callingMinutes', 40],
-            ['members', 900],
+            ['members', 1_200],
             ['opsSeats', 600],
             ['storeLocations', 1_200],
             ['whatsappNumbers', 1_200],
-            ['instagram', 999],
         ]);
         expect(c.tax).toBe(0);
-        expect(c.total).toBe(5_159);
+        expect(c.total).toBe(4_240);
     });
 
     it('lets ops seats use the seats full members leave free, and charges the rest at the ops price', () => {
-        const c = usageCharges(starter, 'INR', { ...NO_USAGE, members: 1, opsSeats: 3 });
+        const c = usageCharges(starter, 'INR', { ...NO_USAGE, members: 2, opsSeats: 4 });
         expect(c.lines).toEqual([{ key: 'opsSeats', quantity: 1, unitPrice: 199, amount: 19_900 }]);
-        expect(usageCharges(starter, 'INR', { ...NO_USAGE, members: 1, opsSeats: 2 }).total).toBe(0);
+        expect(usageCharges(starter, 'INR', { ...NO_USAGE, members: 2, opsSeats: 3 }).total).toBe(0);
     });
 
-    it('charges nothing within the allowances', () => {
-        const c = usageCharges(starter, 'INR', { conversations: 2_000, callingMinutes: 500, members: 3, opsSeats: 0, storeLocations: 1, whatsappNumbers: 1, instagramAccounts: 0 });
-        expect(c).toEqual({ lines: [], subtotal: 0, tax: 0, total: 0 });
+    it('prices Growth seats at its own fee', () => {
+        const c = usageCharges(pricingPlan(BillingPlan.GROWTH), 'INR', { ...NO_USAGE, members: 12, storeLocations: 3, whatsappNumbers: 2 });
+        expect(c.lines).toEqual([{ key: 'members', quantity: 2, unitPrice: 799, amount: 159_800 }]);
     });
 
-    it.each([
-        ['GROWTH', 15_001, 0.15, 15],
-        ['PRO', 100_001, 0.1, 10],
-        ['SCALE', 300_001, 0.07, 7],
-    ] as const)('prices %s chats over its allowance at its own fee', (id, conversations, unitPrice, amount) => {
-        const c = usageCharges(pricingPlan(id), 'INR', { ...NO_USAGE, conversations });
-        expect(c.lines).toEqual([{ key: 'conversations', quantity: 1, unitPrice, amount }]);
-    });
-
-    it('prices Scale minutes and chats in dollars to four decimals', () => {
-        const c = usageCharges(pricingPlan(BillingPlan.SCALE), 'USD', { ...NO_USAGE, conversations: 310_000, callingMinutes: 6_500 });
-        expect(c.lines).toEqual([
-            { key: 'conversations', quantity: 10_000, unitPrice: 0.0008, amount: 800 },
+    it('charges Unlimited no seats of either kind, only minutes, locations and numbers over its own', () => {
+        const unlimited = pricingPlan(BillingPlan.SCALE);
+        expect(usageCharges(unlimited, 'INR', { ...NO_USAGE, members: 400, opsSeats: 90, storeLocations: 10, whatsappNumbers: 5 }).total).toBe(0);
+        expect(usageCharges(unlimited, 'USD', { ...NO_USAGE, callingMinutes: 5_500, storeLocations: 11 }).lines).toEqual([
             { key: 'callingMinutes', quantity: 500, unitPrice: 0.0024, amount: 120 },
+            { key: 'storeLocations', quantity: 1, unitPrice: 12, amount: 1_200 },
         ]);
     });
 

@@ -6,7 +6,7 @@ import { UsageBillingService } from './usage-billing.service';
 
 describe('UsageBillingService', () => {
     const NOW = new Date('2026-11-01T01:00:00Z');
-    const busy = { conversations: 2_734, callingMinutes: 600, members: 4, opsSeats: 2, storeLocations: 2, whatsappNumbers: 2, instagramAccounts: 1 };
+    const busy = { conversations: 40_000, callingMinutes: 1_100, members: 6, opsSeats: 2, storeLocations: 2, whatsappNumbers: 2, instagramAccounts: 1 };
     const config = new ConfigService({
         billing: {
             plans: {
@@ -68,14 +68,14 @@ describe('UsageBillingService', () => {
         expect(usage.usage).toHaveBeenCalledWith('org_1', '2026-10');
         expect(razorpay.addAddon).toHaveBeenCalledWith('sub_1', {
             name: 'Collabo usage, October 2026',
-            amount: 485_275,
+            amount: 404_740,
             currency: 'INR',
-            description: '734 chats over the plan, 100 calling minutes over the plan, 1 extra team seat, 2 packing or till seats, 1 extra store location, 1 extra WhatsApp number, 1 Instagram account, GST 18%. Ref collabo-usage-bill_1',
+            description: '100 calling minutes over the plan, 1 extra team seat, 2 packing or till seats, 1 extra store location, 1 extra WhatsApp number, GST 18%. Ref collabo-usage-bill_1',
         });
         expect(razorpay.addonsSince).not.toHaveBeenCalled();
         expect(finalUpdate()).toEqual({ status: UsageBillStatus.ADDED, externalId: 'ao_1', note: null });
         // The priced usage is saved before Razorpay is called.
-        expect(prisma.usageBill.update.mock.calls[0][0].data).toMatchObject({ plan: 'BASIC', currency: 'INR', subtotal: 411_250, tax: 74_025, total: 485_275 });
+        expect(prisma.usageBill.update.mock.calls[0][0].data).toMatchObject({ plan: 'BASIC', currency: 'INR', subtotal: 343_000, tax: 61_740, total: 404_740 });
     });
 
     it('looks only at active Razorpay subscriptions on plans with Razorpay plans: the Collabo team invoices manual ones', async () => {
@@ -85,7 +85,7 @@ describe('UsageBillingService', () => {
             deletedAt: null,
             billingProvider: 'RAZORPAY',
             subscriptionStatus: 'ACTIVE',
-            billingPlan: { in: ['BASIC', 'GROWTH', 'PRO'] },
+            billingPlan: { in: ['BASIC', 'GROWTH', 'SCALE'] },
         });
     });
 
@@ -94,7 +94,7 @@ describe('UsageBillingService', () => {
         await service.tick(NOW);
 
         expect(razorpay.addAddon).not.toHaveBeenCalled();
-        expect(razorpay.createPaymentLink).toHaveBeenCalledWith(expect.objectContaining({ amount: 485_275, currency: 'INR', reference_id: 'collabo-usage-bill_1' }));
+        expect(razorpay.createPaymentLink).toHaveBeenCalledWith(expect.objectContaining({ amount: 404_740, currency: 'INR', reference_id: 'collabo-usage-bill_1' }));
         expect(finalUpdate()).toEqual({ status: UsageBillStatus.LINK_SENT, externalId: 'plink_1', paymentUrl: 'https://rzp.io/i/usage', note: null });
     });
 
@@ -104,7 +104,7 @@ describe('UsageBillingService', () => {
 
         expect(razorpay.addAddon).not.toHaveBeenCalled();
         expect(razorpay.createPaymentLink).toHaveBeenCalledWith(expect.objectContaining({
-            amount: 485_275,
+            amount: 404_740,
             currency: 'INR',
             reference_id: 'collabo-usage-bill_1',
             customer: { name: 'Acme', email: 'payer@acme.test', contact: '+919800000000' },
@@ -116,7 +116,7 @@ describe('UsageBillingService', () => {
     it('bills a dollar subscription in cents, without GST', async () => {
         subscription({ plan_id: 'plan_basicUSD' });
         await service.tick(NOW);
-        expect(razorpay.addAddon).toHaveBeenCalledWith('sub_1', expect.objectContaining({ amount: 5_159, currency: 'USD' }));
+        expect(razorpay.addAddon).toHaveBeenCalledWith('sub_1', expect.objectContaining({ amount: 4_240, currency: 'USD' }));
     });
 
     it('never charges usage to a subscription on another plan, such as an earlier price', async () => {
@@ -136,19 +136,28 @@ describe('UsageBillingService', () => {
 
     it('charges nothing under ₹1', async () => {
         subscription({});
-        usage.usage.mockResolvedValue({ conversations: 2_001, callingMinutes: 0, members: 1, opsSeats: 0, storeLocations: 1, whatsappNumbers: 1, instagramAccounts: 0 });
+        usage.usage.mockResolvedValue({ conversations: 90_000, callingMinutes: 1_002, members: 1, opsSeats: 0, storeLocations: 1, whatsappNumbers: 1, instagramAccounts: 0 });
         await service.tick(NOW);
         expect(razorpay.addAddon).not.toHaveBeenCalled();
-        expect(finalUpdate()).toMatchObject({ status: UsageBillStatus.NOTHING_DUE, total: 30 });
+        expect(finalUpdate()).toMatchObject({ status: UsageBillStatus.NOTHING_DUE, total: 83 });
+    });
+
+    it('charges nothing for chats over the fair use, but tells the team', async () => {
+        subscription({});
+        usage.usage.mockResolvedValue({ conversations: 30_000, callingMinutes: 0, members: 1, opsSeats: 0, storeLocations: 1, whatsappNumbers: 1, instagramAccounts: 0 });
+        const warn = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
+        await service.tick(NOW);
+        expect(finalUpdate()).toMatchObject({ status: UsageBillStatus.NOTHING_DUE, total: 0 });
+        expect(warn).toHaveBeenCalledWith("Org org_1 had 30000 chats in 2026-10, over Starter's fair use of 25000");
     });
 
     it('prices a bill saved before seats, locations and numbers were counted as having none of them', async () => {
         prisma.usageBill.create.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' }));
         prisma.usageBill.updateMany.mockResolvedValue({ count: 1 });
-        prisma.usageBill.findUnique.mockResolvedValue({ ...newBill, attempts: 2, usage: { conversations: 2_100, callingMinutes: 0, members: 1, instagramAccounts: 0 } });
+        prisma.usageBill.findUnique.mockResolvedValue({ ...newBill, attempts: 2, usage: { conversations: 2_100, callingMinutes: 1_010, members: 7, instagramAccounts: 0 } });
         subscription({});
         await service.tick(NOW);
-        expect(firstCall(prisma.usageBill.update).data).toMatchObject({ subtotal: 2_500, total: 2_950 });
+        expect(firstCall(prisma.usageBill.update).data).toMatchObject({ subtotal: 200_150, total: 236_177 });
     });
 
     it('takes up a failed bill again without charging twice: an add-on the last try made is found', async () => {

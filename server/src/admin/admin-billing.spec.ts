@@ -74,7 +74,7 @@ describe('AdminService.setOrganizationBilling', () => {
 
     it('finds no deleted or unknown workspace', async () => {
         const { service } = build(null);
-        await expect(service.setOrganizationBilling('org_x', { billingPlan: 'PRO' }, 'u_admin')).rejects.toThrow('Organization not found');
+        await expect(service.setOrganizationBilling('org_x', { billingPlan: 'GROWTH' }, 'u_admin')).rejects.toThrow('Organization not found');
     });
 });
 

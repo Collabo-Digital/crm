@@ -13,17 +13,15 @@ const MIN_CHARGE = 100;
 const MAX_ATTEMPTS = 3;
 /** A bill a stopped server left mid-way is taken up again after this. */
 const STUCK_MS = 30 * 60 * 1000;
-/** The plans with Razorpay plans. Scale and Enterprise are invoiced by the Collabo team. */
-const USAGE_PRICED: BillingPlan[] = [BillingPlan.BASIC, BillingPlan.GROWTH, BillingPlan.PRO];
+/** The plans with Razorpay plans. Enterprise is invoiced by the Collabo team. */
+const USAGE_PRICED: BillingPlan[] = [BillingPlan.BASIC, BillingPlan.GROWTH, BillingPlan.SCALE];
 
 const LINE_TEXT: Record<ChargeKey, (n: string, one: boolean) => string> = {
-    conversations: (n, one) => `${n} chat${one ? '' : 's'} over the plan`,
     callingMinutes: (n, one) => `${n} calling minute${one ? '' : 's'} over the plan`,
     members: (n, one) => `${n} extra team seat${one ? '' : 's'}`,
     opsSeats: (n, one) => `${n} packing or till seat${one ? '' : 's'}`,
     storeLocations: (n, one) => `${n} extra store location${one ? '' : 's'}`,
     whatsappNumbers: (n, one) => `${n} extra WhatsApp number${one ? '' : 's'}`,
-    instagram: (n, one) => `${n} Instagram account${one ? '' : 's'}`,
 };
 
 /**
@@ -173,7 +171,12 @@ export class UsageBillingService implements OnModuleInit, OnModuleDestroy {
 
         // The month's usage is fixed on the first attempt, so a retry charges the same.
         const usage: Usage = bill.usage ? { ...NO_USAGE, ...(bill.usage as Partial<Usage>) } : await this.usage.usage(bill.organizationId, bill.period);
-        const charges = usageCharges(pricingPlan(onPlan.plan), onPlan.currency, usage);
+        const pricing = pricingPlan(onPlan.plan);
+        // Chats are never charged: over the fair use, the team talks to the brand.
+        if (pricing.fairUseChats !== null && usage.conversations > pricing.fairUseChats) {
+            this.logger.warn(`Org ${bill.organizationId} had ${usage.conversations} chats in ${bill.period}, over ${pricing.name}'s fair use of ${pricing.fairUseChats}`);
+        }
+        const charges = usageCharges(pricing, onPlan.currency, usage);
         const priced = {
             plan: onPlan.plan,
             currency: onPlan.currency,

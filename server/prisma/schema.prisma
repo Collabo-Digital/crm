@@ -27,12 +27,11 @@ enum OrganizationType {
   ORGANIZATION
 }
 
-/// Stored ids are older than the names: BASIC is Starter and ADVANCE is
-/// Enterprise. See src/billing/pricing.ts.
+/// Stored ids are older than the names: BASIC is Starter, SCALE is
+/// Unlimited and ADVANCE is Enterprise. See src/billing/pricing.ts.
 enum BillingPlan {
   BASIC
   GROWTH
-  PRO
   SCALE
   ADVANCE
 }

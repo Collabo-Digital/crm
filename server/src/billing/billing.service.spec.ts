@@ -32,18 +32,12 @@ describe('BillingService.applyPendingSubscriptionToOrg', () => {
         expect(t.user.update.mock.calls[0][0].data).toMatchObject({ pendingBillingPlan: null, pendingBillingCurrency: null, pendingExternalSubscriptionId: null });
     });
 
-    it('leaves an organization made without a subscription on the plan asked for, with no trial, while enforcement is off', async () => {
-        const t = tx({ pendingSubscriptionStatus: null }, 'GROWTH');
-        await service.applyPendingSubscriptionToOrg(t as never, 'u_1', 'org_1');
-        expect(t.organization.update).toHaveBeenCalledWith({ where: { id: 'org_1' }, data: { billingPlan: 'GROWTH', trialEndsAt: null } });
-        expect(t.user.update).not.toHaveBeenCalled();
-    });
-
-    it('never lets the create request choose a plan the Collabo team sets up', async () => {
-        for (const requested of ['SCALE', 'ADVANCE']) {
+    it('puts an organization made without paying on Starter, with no trial, while enforcement is off, whatever the create request asked for', async () => {
+        for (const requested of ['BASIC', 'GROWTH', 'SCALE', 'ADVANCE']) {
             const t = tx({ pendingSubscriptionStatus: null }, requested);
             await service.applyPendingSubscriptionToOrg(t as never, 'u_1', 'org_1');
             expect(t.organization.update).toHaveBeenCalledWith({ where: { id: 'org_1' }, data: { billingPlan: 'BASIC', trialEndsAt: null } });
+            expect(t.user.update).not.toHaveBeenCalled();
         }
     });
 
@@ -60,7 +54,7 @@ describe('BillingService.applyPendingSubscriptionToOrg', () => {
 
     it('keeps a checkout left unpaid on the trial workspace, so paying it later counts there', async () => {
         const t = tx({
-            pendingBillingPlan: 'PRO',
+            pendingBillingPlan: 'SCALE',
             pendingBillingInterval: 'YEARLY',
             pendingBillingCurrency: 'INR',
             pendingExternalCustomerId: null,
@@ -84,6 +78,10 @@ describe('BillingService.applyPendingSubscriptionToOrg', () => {
         expect(enforcing.plans()).toMatchObject({ enforcement: true, trialDays: 14 });
         expect(service.plans()).toMatchObject({ enforcement: false, trialDays: null });
         expect(enforcing.access({ billingProvider: 'MANUAL', subscriptionStatus: null, trialEndsAt: null, currentPeriodEnd: null, paymentFailedAt: null })).toMatchObject({ state: 'active', enforced: true });
+        // Gates apply only while enforcement is on.
+        expect(enforcing.features('BASIC')).toEqual({ packing: false, messagingAnalytics: false, publicApi: false, storeScoping: false });
+        expect(enforcing.features('GROWTH')).toEqual({ packing: true, messagingAnalytics: true, publicApi: true, storeScoping: false });
+        expect(service.features('BASIC')).toEqual({ packing: true, messagingAnalytics: true, publicApi: true, storeScoping: true });
     });
 });
 
@@ -136,9 +134,10 @@ describe('BillingService checkout', () => {
         billing: {
             plans: {
                 BASIC: { MONTHLY: { INR: 'plan_basicINR', USD: 'plan_basicUSD' }, YEARLY: { INR: 'plan_basicINRyearly' } },
-                PRO: { MONTHLY: { INR: 'plan_proINR' } },
+                SCALE: { MONTHLY: { INR: 'plan_unlimitedINR' } },
             },
             salesEmail: 'sales@collabo.test',
+            demoUrl: 'https://cal.example.com/collabo-demo',
         },
     });
     function build() {
@@ -155,10 +154,11 @@ describe('BillingService checkout', () => {
         expect(catalog.checkout).toEqual({
             BASIC: { MONTHLY: ['INR', 'USD'], YEARLY: ['INR'] },
             GROWTH: { MONTHLY: [], YEARLY: [] },
-            PRO: { MONTHLY: ['INR'], YEARLY: [] },
+            SCALE: { MONTHLY: ['INR'], YEARLY: [] },
         });
-        expect(catalog).toMatchObject({ gstPercent: 18, yearlyDiscountPercent: 20, salesEmail: 'sales@collabo.test' });
-        expect(catalog.plans.map((p) => p.id)).toEqual(['BASIC', 'GROWTH', 'PRO', 'SCALE', 'ADVANCE']);
+        expect(catalog).toMatchObject({ gstPercent: 18, yearlyMonthsFree: 2, salesEmail: 'sales@collabo.test', demoUrl: 'https://cal.example.com/collabo-demo' });
+        expect(catalog.gatePlans).toEqual({ packing: 'GROWTH', messagingAnalytics: 'GROWTH', publicApi: 'GROWTH', storeScoping: 'SCALE' });
+        expect(catalog.plans.map((p) => p.id)).toEqual(['BASIC', 'GROWTH', 'SCALE', 'ADVANCE']);
     });
 
     it('starts a yearly subscription on the yearly Razorpay plan, for ten years of renewals', async () => {
@@ -174,7 +174,7 @@ describe('BillingService checkout', () => {
         const { service, razorpay } = build();
         await expect(service.startOnboardingCheckout('u_1', 'BASIC', 'YEARLY', 'USD')).rejects.toThrow('The Starter plan cannot be bought yearly in USD yet.');
         await expect(service.startOnboardingCheckout('u_1', 'GROWTH', 'MONTHLY', 'INR')).rejects.toThrow('The Growth plan cannot be bought monthly in INR yet.');
-        await expect(service.startOnboardingCheckout('u_1', 'SCALE', 'YEARLY', 'INR')).rejects.toThrow('Scale is set up with the Collabo team. Book a demo to start it.');
+        await expect(service.startOnboardingCheckout('u_1', 'SCALE', 'YEARLY', 'INR')).rejects.toThrow('The Unlimited plan cannot be bought yearly in INR yet.');
         await expect(service.startOnboardingCheckout('u_1', 'ADVANCE', 'MONTHLY', 'INR')).rejects.toThrow('Enterprise is set up with the Collabo team. Talk to us to start it.');
         expect(razorpay.createSubscription).not.toHaveBeenCalled();
     });
@@ -253,7 +253,7 @@ describe('BillingService.subscribeOrganization', () => {
 });
 
 describe('BillingService.handleWebhookEvent', () => {
-    const config = new ConfigService({ billing: { plans: { PRO: { YEARLY: { USD: 'plan_proUSDyearly' } } } } });
+    const config = new ConfigService({ billing: { plans: { SCALE: { YEARLY: { USD: 'plan_unlimitedUSDyearly' } } } } });
 
     it('moves a workspace to the plan its subscription is on once Razorpay activates it', async () => {
         const prisma = {
@@ -262,7 +262,7 @@ describe('BillingService.handleWebhookEvent', () => {
         };
         const service = new BillingService(prisma as never, {} as never, config, {} as never);
         await service.handleWebhookEvent('subscription.activated', {
-            subscription: { entity: { id: 'sub_1', status: 'active', current_end: 1_800_000_000, customer_id: 'cust_1', plan_id: 'plan_proUSDyearly' } },
+            subscription: { entity: { id: 'sub_1', status: 'active', current_end: 1_800_000_000, customer_id: 'cust_1', plan_id: 'plan_unlimitedUSDyearly' } },
         });
         expect(prisma.organization.updateMany).toHaveBeenCalledWith({
             where: { externalSubscriptionId: 'sub_1' },
@@ -270,7 +270,7 @@ describe('BillingService.handleWebhookEvent', () => {
                 subscriptionStatus: 'ACTIVE',
                 currentPeriodEnd: new Date(1_800_000_000_000),
                 externalCustomerId: 'cust_1',
-                billingPlan: 'PRO',
+                billingPlan: 'SCALE',
                 billingInterval: 'YEARLY',
                 billingCurrency: 'USD',
                 paymentFailedAt: null,
@@ -300,9 +300,9 @@ describe('BillingService.handleWebhookEvent', () => {
             user: { updateMany: jest.fn(() => Promise.resolve({ count: 0 })) },
             organization: { updateMany: jest.fn(() => Promise.resolve({ count: 1 })) },
         };
-        const razorpay = { isConfigured: () => true, fetchSubscription: jest.fn(() => Promise.resolve({ id: 'sub_1', status: 'active', plan_id: 'plan_proUSDyearly' })) };
+        const razorpay = { isConfigured: () => true, fetchSubscription: jest.fn(() => Promise.resolve({ id: 'sub_1', status: 'active', plan_id: 'plan_unlimitedUSDyearly' })) };
         const service = new BillingService(prisma as never, razorpay as never, config, {} as never);
         await service.handleWebhookEvent('invoice.paid', { invoice: { entity: { id: 'inv_1', subscription_id: 'sub_1', status: 'paid' } } });
-        expect(dataOf(prisma.organization.updateMany)).toMatchObject({ subscriptionStatus: 'ACTIVE', billingPlan: 'PRO', billingInterval: 'YEARLY', billingCurrency: 'USD' });
+        expect(dataOf(prisma.organization.updateMany)).toMatchObject({ subscriptionStatus: 'ACTIVE', billingPlan: 'SCALE', billingInterval: 'YEARLY', billingCurrency: 'USD' });
     });
 });
