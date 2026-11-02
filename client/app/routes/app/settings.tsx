@@ -25,7 +25,7 @@ import { ModalFrame, ModalTitle } from "~/components/app/order-dialog-primitives
 import { cn } from "~/lib/utils";
 import { useAuthStore } from "~/stores/auth.store";
 import { useThemeStore } from "~/stores/theme.store";
-import { useCurrentOrg, useOrgMembers, useOrgInvites } from "~/hooks/use-org-queries";
+import { useCurrentOrg, useJobTemplates, useOrgMembers, useOrgInvites } from "~/hooks/use-org-queries";
 import {
   useUpdateOrganizationMutation,
   useDeleteOrganizationMutation,
@@ -62,12 +62,10 @@ import { StoreProfileTab } from "~/components/app/settings/store-profile-tab";
 import { UpgradeOrganizationDialog } from "~/components/app/settings/upgrade-organization-dialog";
 import {
   CapabilityPicker,
-  DEFAULT_CAPABILITIES,
   JobPresetPicker,
-  MANAGED_CAPABILITY_KEYS,
   SectionAccessPicker,
-  accessGrants,
 } from "~/components/app/settings/section-access-picker";
+import { DEFAULT_CAPABILITIES, accessGrants, editorAccess, type JobTemplate } from "~/lib/member-access";
 import { AVAILABLE_SECTIONS, isSectionScopedRole, sectionKey, sectionsInGrants, type SectionId } from "~/lib/sections";
 import { formatCurrency } from "~/lib/utils";
 import type { UpdateOrganizationRequest, UserRole, OrgMember, OrganizationGstin, CreateGstinRequest, StateTaxRate, ProductTypeTaxRate, CollectionTaxOverride, ShopifyCollection, LoyaltyMetric, OrgResponse, Warehouse } from "~/types/api";
@@ -266,6 +264,13 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
   const [sections, setSections] = useState<SectionId[]>(() => AVAILABLE_SECTIONS.map((s) => s.id));
   const [capabilities, setCapabilities] = useState<string[]>(DEFAULT_CAPABILITIES);
   const sendInvite = useSendInviteMutation(orgId);
+  const { data: templates = [] } = useJobTemplates(orgId);
+
+  function pickTemplate(template: JobTemplate) {
+    const access = editorAccess(template.grants);
+    setSections(access.sections);
+    setCapabilities(access.capabilities);
+  }
 
   const needsVendor = role === "VENDOR";
   const needsSections = isSectionScopedRole(role);
@@ -321,14 +326,7 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
       {needsVendor && <VendorPicker value={vendorScope} onChange={setVendorScope} />}
 
       {role === "AGENT" && (
-        <JobPresetPicker
-          sections={sections}
-          capabilities={capabilities}
-          onPick={(preset) => {
-            setSections([...preset.sections]);
-            setCapabilities([...preset.capabilities]);
-          }}
-        />
+        <JobPresetPicker templates={templates} sections={sections} capabilities={capabilities} onPick={pickTemplate} />
       )}
 
       {needsSections && (
@@ -359,19 +357,21 @@ function sectionAccessLabel(grants: string[] | undefined) {
 function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: OrgMember; onDone: () => void }) {
   const grants = member.permissions ?? [];
   const configured = sectionsInGrants(grants);
-  // Not configured yet = full access, so the editor opens with everything ticked.
-  const [sections, setSections] = useState<SectionId[]>(() =>
-    configured.length === 0
-      ? AVAILABLE_SECTIONS.map((s) => s.id)
-      : configured.filter((id) => AVAILABLE_SECTION_KEYS.has(sectionKey(id))),
-  );
-  const [capabilities, setCapabilities] = useState<string[]>(() => grants.filter((g) => MANAGED_CAPABILITY_KEYS.has(g)));
+  const [sections, setSections] = useState<SectionId[]>(() => editorAccess(grants).sections);
+  const [capabilities, setCapabilities] = useState<string[]>(() => editorAccess(grants).capabilities);
   const updatePermissions = useUpdateMemberPermissionsMutation(orgId);
+  const { data: templates = [] } = useJobTemplates(orgId);
+
+  function pickTemplate(template: JobTemplate) {
+    const access = editorAccess(template.grants);
+    setSections(access.sections);
+    setCapabilities(access.capabilities);
+  }
 
   function handleSave() {
-    // The endpoint replaces the whole list: keep every grant this editor does
-    // not manage (inventory.*, and sections this build does not show).
-    const kept = grants.filter((g) => !AVAILABLE_SECTION_KEYS.has(g) && !MANAGED_CAPABILITY_KEYS.has(g));
+    // The endpoint replaces the whole list: keep the sections this build does
+    // not show. Every other grant is in `capabilities`.
+    const kept = grants.filter((g) => g.startsWith("section.") && !AVAILABLE_SECTION_KEYS.has(g));
     updatePermissions.mutate(
       { memberId: member.id, data: { grants: [...kept, ...accessGrants(member.role, sections, capabilities)] } },
       { onSuccess: onDone },
@@ -382,13 +382,11 @@ function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: 
     <div className="space-y-3 rounded-lg border border-dashed border-brand bg-brand/5 p-3">
       {member.role === "AGENT" && (
         <JobPresetPicker
+          templates={templates}
           sections={sections}
           capabilities={capabilities}
           disabled={updatePermissions.isPending}
-          onPick={(preset) => {
-            setSections([...preset.sections]);
-            setCapabilities([...preset.capabilities]);
-          }}
+          onPick={pickTemplate}
         />
       )}
       <p className="text-caption font-medium text-muted-foreground">

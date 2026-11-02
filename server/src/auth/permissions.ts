@@ -143,7 +143,7 @@ export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
     id: 'warehouse',
     label: 'Warehouse',
     description:
-      'Receives stock, prints labels and packs orders, from Products and the Packing list. Cannot correct stock counts. No orders, customers or sales figures.',
+      'Receives stock, prints labels and packs orders, from Products and the Packing list. Cannot adjust stock counts. No orders, customers or sales figures.',
     // No inventory.adjust: it is not an ops-seat grant. Ticking "Adjust stock
     // counts" on the member adds it, and makes theirs a full seat.
     grants: [

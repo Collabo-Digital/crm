@@ -14,6 +14,7 @@ import type {
   InfluencerRow,
   OrgInvite,
 } from "~/types/api";
+import type { JobTemplate } from "~/lib/member-access";
 
 /**
  * Service layer for organization, member, and invite API endpoints.
@@ -55,6 +56,10 @@ export const orgService = {
 
   listMembers: (orgId: string) =>
     apiClient.get<OrgMember[]>(`/organizations/${orgId}/members`).then((response) => response.data),
+
+  /** The access editor's "Start from a job" templates. Owners and admins only. */
+  jobTemplates: (orgId: string) =>
+    apiClient.get<JobTemplate[]>(`/organizations/${orgId}/members/job-templates`).then((response) => response.data),
 
   updateMemberRole: (orgId: string, memberId: string, data: UpdateMemberRoleRequest) =>
     apiClient
