@@ -65,6 +65,7 @@ import {
   JobPresetPicker,
   SectionAccessPicker,
 } from "~/components/app/settings/section-access-picker";
+import { TransferOwnershipDialog } from "~/components/app/settings/transfer-ownership-dialog";
 import { DEFAULT_CAPABILITIES, accessGrants, editorAccess, type JobTemplate } from "~/lib/member-access";
 import { AVAILABLE_SECTIONS, isSectionScopedRole, sectionKey, sectionsInGrants, type SectionId } from "~/lib/sections";
 import { formatCurrency } from "~/lib/utils";
@@ -1681,6 +1682,11 @@ export default function SettingsPage() {
   // Only an Owner / Admin may change someone's access (the server enforces it).
   const myRole = members?.find((m) => m.user.id === authUser?.id)?.role;
   const canManageAccess = myRole === "OWNER" || myRole === "ADMIN";
+  // The owner may hand the workspace to an admin; a personal one has no team to hand it to.
+  const canTransferOwnership = myRole === "OWNER" && org?.type !== "PERSONAL";
+  const admins = staffMembers.filter((m) => m.role === "ADMIN" && m.user.id !== authUser?.id);
+  // The transfer-ownership dialog, open while the owner picks an admin and confirms.
+  const [transferring, setTransferring] = useState(false);
 
   // General: the workspace's details and region, one form saved together.
   const [orgName, setOrgName] = useState<string | null>(null);
@@ -2223,6 +2229,27 @@ export default function SettingsPage() {
 
                 {vendorMember && canManageTeam && currentOrgId && (
                   <VendorRoleDialog orgId={currentOrgId} member={vendorMember} onClose={() => setVendorMember(null)} />
+                )}
+
+                {canTransferOwnership && !membersLoading && (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-foreground">Transfer ownership</p>
+                      <p className="text-caption text-muted-foreground">
+                        {admins.length > 0
+                          ? "Hand this workspace to one of its admins. You stay on as an admin."
+                          : "To hand this workspace to a teammate, make them an admin first."}
+                      </p>
+                    </div>
+                    {admins.length > 0 && (
+                      <Button type="button" variant="outline" onClick={() => setTransferring(true)}>
+                        Transfer ownership
+                      </Button>
+                    )}
+                  </div>
+                )}
+                {transferring && canTransferOwnership && currentOrgId && (
+                  <TransferOwnershipDialog orgId={currentOrgId} admins={admins} onClose={() => setTransferring(false)} />
                 )}
               </Section>
 

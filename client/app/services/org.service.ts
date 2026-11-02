@@ -52,6 +52,12 @@ export const orgService = {
   delete: (orgId: string, confirm: DeleteOrganizationRequest) =>
     apiClient.delete<{ message: string }>(`/organizations/${orgId}`, { data: confirm }).then((response) => response.data),
 
+  /** Owner only: hands the workspace to an admin, checked with the owner's password. */
+  transferOwnership: (orgId: string, data: { newOwnerId: string; password: string }) =>
+    apiClient
+      .post<{ ownerId: string }>(`/organizations/${orgId}/transfer-ownership`, data)
+      .then((response) => response.data),
+
   // ─── Members ───
 
   listMembers: (orgId: string) =>

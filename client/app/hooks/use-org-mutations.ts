@@ -195,6 +195,28 @@ export function useDeleteOrganizationMutation() {
   });
 }
 
+/**
+ * The owner hands the workspace to an admin and becomes an admin. Their own
+ * role changes too, so the memberships are re-read at once rather than on the
+ * next minute's sync.
+ */
+export function useTransferOwnershipMutation(orgId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: { newOwnerId: string; password: string; newOwnerName: string }) =>
+      orgService.transferOwnership(orgId, { newOwnerId: data.newOwnerId, password: data.password }),
+    onSuccess: (_result, { newOwnerName }) => {
+      queryClient.invalidateQueries({ queryKey: orgKeys.members(orgId) });
+      queryClient.invalidateQueries({ queryKey: orgKeys.detail(orgId) });
+      queryClient.invalidateQueries({ queryKey: orgKeys.list() });
+      queryClient.invalidateQueries({ queryKey: ["users", "me"] });
+      toast.success(`${newOwnerName} now owns this workspace. You are an admin.`);
+    },
+    onError: (error) => handleMutationError(error, "Could not pass ownership on."),
+  });
+}
+
 // ─── Member Mutations ───────────────────────────────────────────────────────
 
 /** Mutation hook for changing a member's role within an organization. */
