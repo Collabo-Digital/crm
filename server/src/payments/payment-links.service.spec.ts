@@ -24,6 +24,9 @@ function build(
         cancelledAt?: Date | null;
         earlier?: ReturnType<typeof link> | null;
         siblings?: Array<ReturnType<typeof link>>;
+        draft?: Record<string, unknown> | null;
+        /** The message of the order's 'paid' timeline event, when it has one. */
+        paidVia?: string;
     } = {},
 ) {
     const updates: any[] = [];
@@ -47,8 +50,11 @@ function build(
             }),
         },
         order: { findUnique: jest.fn(async () => ({ name: '#1801', financialStatus: opts.financialStatus ?? 'PENDING', cancelledAt: opts.cancelledAt ?? null })) },
-        draftOrder: { findUnique: jest.fn(async () => null) },
-        orderTimelineEvent: { create: jest.fn(async () => ({})) },
+        draftOrder: { findUnique: jest.fn(() => Promise.resolve(opts.draft ?? null)) },
+        orderTimelineEvent: {
+            create: jest.fn(async () => ({})),
+            findFirst: jest.fn(({ where }: { where: { message?: string } }) => Promise.resolve(opts.paidVia && where.message === opts.paidVia ? { id: 'ev_paid' } : null)),
+        },
     };
     const razorpay = {
         cancel: jest.fn(async (_keys: unknown, id: string) => ({ id, status: 'cancelled', amount: 239800, amount_paid: 0, currency: 'INR' })),
@@ -57,10 +63,13 @@ function build(
     const orders = { markPaid: jest.fn(async () => ({})) };
     const store = { actorFor: jest.fn(async () => 'u_owner'), tagOrder: jest.fn(async () => ({ tags: [] })) };
     const events = { paymentReceived: jest.fn(async () => undefined) };
-    const drafts = { complete: jest.fn() };
+    const drafts = { complete: jest.fn(() => Promise.resolve({ draftId: 'draft_1', order: { id: 'order_9' } })) };
     const service = new PaymentLinksService(prisma as any, accounts as any, razorpay as any, orders as any, drafts as any, store as any, events as any);
-    return { service, prisma, orders, store, events, updates, razorpay };
+    return { service, prisma, orders, store, events, updates, razorpay, drafts };
 }
+
+const followUpErrorOf = (updates: unknown[]) =>
+    (updates as Array<{ data?: { followUpError?: string } }>).find((u) => u.data?.followUpError)?.data?.followUpError;
 
 const paidBody = (amountPaid = 239800, id = 'plink_1') =>
     Buffer.from(JSON.stringify({
@@ -100,8 +109,8 @@ describe('PaymentLinksService webhook', () => {
         expect(updates.at(-1).data.followUpError).toMatch(/not marked paid/);
     });
 
-    it('does not mark an order paid twice when it already is', async () => {
-        const { service, orders, events } = build({ link: link(), financialStatus: 'PAID' });
+    it('does not mark an order paid twice when this link already did, and its follow-up runs again', async () => {
+        const { service, orders, events } = build({ link: link(), financialStatus: 'PAID', paidVia: 'Paid online with a Razorpay payment link (pay_1)' });
         const body = paidBody();
         await service.webhook('tok_1', body, sign(body));
         await service.idle();
@@ -136,6 +145,18 @@ describe('PaymentLinksService webhook', () => {
         expect(prisma.orderTimelineEvent.create).toHaveBeenCalledWith(
             expect.objectContaining({ data: expect.objectContaining({ orderId: 'order_1', action: 'payment_refund_needed' }) }),
         );
+    });
+
+    it('flags a payment on an order already paid another way for a refund, and does not act on it', async () => {
+        const { service, orders, store, events, updates, prisma } = build({ link: link(), financialStatus: 'PAID', paidVia: 'Order marked as paid' });
+        const body = paidBody();
+        await service.webhook('tok_1', body, sign(body));
+        await service.idle();
+        expect(orders.markPaid).not.toHaveBeenCalled();
+        expect(store.tagOrder).not.toHaveBeenCalled();
+        expect(events.paymentReceived).not.toHaveBeenCalled();
+        expect(followUpErrorOf(updates)).toBe('Order #1801 was already paid before this payment came in. Refund ₹2,398.00 to the customer from your Razorpay dashboard.');
+        expect(prisma.orderTimelineEvent.create).toHaveBeenCalledTimes(1);
     });
 
     it('flags a payment that lands after the order was cancelled', async () => {
@@ -187,5 +208,60 @@ describe('PaymentLinksService webhook', () => {
         const body = Buffer.from(JSON.stringify({ event: 'payment_link.expired', payload: { payment_link: { entity: { id: 'plink_1', status: 'expired', amount: 239800, amount_paid: 0, currency: 'INR' } } } }));
         await service.webhook('tok_1', body, sign(body));
         expect(updates).toHaveLength(0);
+    });
+});
+
+describe('PaymentLinksService draft links', () => {
+    const draftLink = () => link({ orderId: null, draftOrderId: 'draft_1', amount: new Prisma.Decimal('1000.00'), tagOnPaid: null });
+    const openDraft = (totalPrice: string) => ({ totalPrice: new Prisma.Decimal(totalPrice), currency: 'INR', status: 'OPEN', deletedAt: null, completedOrderId: null });
+
+    it('completes the draft as paid when it still totals what the link asked for', async () => {
+        const { service, drafts, events } = build({ link: draftLink(), draft: openDraft('1000') });
+        const body = paidBody(100000);
+        await service.webhook('tok_1', body, sign(body));
+        await service.idle();
+        expect(drafts.complete).toHaveBeenCalledWith('draft_1', ORG, 'u_owner', { paymentPending: false, paymentMethod: 'UPI', generateInvoice: true });
+        expect(events.paymentReceived).toHaveBeenCalledWith(expect.objectContaining({ linkId: 'pl_1', orderId: 'order_9' }));
+    });
+
+    it('does not complete a draft edited to another total after the link went out', async () => {
+        const { service, drafts, updates } = build({ link: draftLink(), draft: openDraft('1500.00') });
+        const body = paidBody(100000);
+        await service.webhook('tok_1', body, sign(body));
+        await service.idle();
+        expect(drafts.complete).not.toHaveBeenCalled();
+        expect(followUpErrorOf(updates)).toBe('The draft order now totals ₹1,500.00, but ₹1,000.00 was paid on this link, so the draft was not completed. Settle the difference with the customer, then complete the draft.');
+    });
+
+    it('flags a payment on a draft already completed another way for a refund', async () => {
+        const completed = { ...openDraft('1000'), name: 'Draft-AB12CD', status: 'COMPLETED', completedAt: new Date(Date.now() - 60_000), completedOrderId: 'order_cash' };
+        const { service, drafts, events, updates, prisma } = build({ link: draftLink(), draft: completed });
+        const body = paidBody(100000);
+        await service.webhook('tok_1', body, sign(body));
+        await service.idle();
+        expect(drafts.complete).not.toHaveBeenCalled();
+        expect(events.paymentReceived).not.toHaveBeenCalled();
+        expect(followUpErrorOf(updates)).toBe('Draft order Draft-AB12CD was already completed before this payment came in. Refund ₹1,000.00 to the customer from your Razorpay dashboard.');
+        expect(prisma.orderTimelineEvent.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('flags a payment on a deleted draft for a refund', async () => {
+        const { service, drafts, updates, prisma } = build({ link: draftLink(), draft: { ...openDraft('1000'), name: 'Draft-AB12CD', deletedAt: new Date() } });
+        const body = paidBody(100000);
+        await service.webhook('tok_1', body, sign(body));
+        await service.idle();
+        expect(drafts.complete).not.toHaveBeenCalled();
+        expect(followUpErrorOf(updates)).toBe('Draft order Draft-AB12CD was deleted before this payment came in. Refund ₹1,000.00 to the customer from your Razorpay dashboard.');
+        expect(prisma.orderTimelineEvent.create).not.toHaveBeenCalled();
+    });
+
+    it('does not flag a draft completed after this payment came in: its own follow-up, run again', async () => {
+        // Later than the paid-at this mock reports, which is now.
+        const completed = { ...openDraft('1000'), status: 'COMPLETED', completedAt: new Date(Date.now() + 60_000), completedOrderId: 'order_9' };
+        const { service, drafts } = build({ link: draftLink(), draft: completed });
+        const body = paidBody(100000);
+        await service.webhook('tok_1', body, sign(body));
+        await service.idle();
+        expect(drafts.complete).toHaveBeenCalled();
     });
 });
