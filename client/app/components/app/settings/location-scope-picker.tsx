@@ -75,7 +75,7 @@ export function LocationScopePicker({
                   disabled={disabled || (checked && value.length === 1)}
                   onCheckedChange={(next) => onChange(toggleLocation(value, option.id, next === true))}
                 />
-                <span className="min-w-0 truncate">
+                <span className="min-w-0 truncate" title={option.name}>
                   {option.name}
                   {!option.isActive && <span className="text-muted-foreground"> (switched off)</span>}
                 </span>
