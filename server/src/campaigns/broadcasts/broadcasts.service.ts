@@ -470,20 +470,19 @@ export class BroadcastsService {
             },
         });
 
-        if (!(await this.prisma.broadcastRecipient.count({ where: { broadcastId: b.id } }))) {
-            const evaluated = await this.evaluate(b.organizationId, b, audience, template.category, params, vars, 'send', mediaId);
-            for (let i = 0; i < evaluated.length; i += 1000) {
-                await this.prisma.broadcastRecipient.createMany({
-                    data: evaluated.slice(i, i + 1000).map((e) => ({
-                        organizationId: b.organizationId,
-                        broadcastId: b.id,
-                        contactId: e.id,
-                        status: e.reason ? R.SKIPPED : R.PENDING,
-                        skipReason: e.reason,
-                    })),
-                    skipDuplicates: true,
-                });
-            }
+        // Every run writes the whole audience, since an earlier run may have stopped partway; rows it wrote stay as they are.
+        const evaluated = await this.evaluate(b.organizationId, b, audience, template.category, params, vars, 'send', mediaId);
+        for (let i = 0; i < evaluated.length; i += 1000) {
+            await this.prisma.broadcastRecipient.createMany({
+                data: evaluated.slice(i, i + 1000).map((e) => ({
+                    organizationId: b.organizationId,
+                    broadcastId: b.id,
+                    contactId: e.id,
+                    status: e.reason ? R.SKIPPED : R.PENDING,
+                    skipReason: e.reason,
+                })),
+                skipDuplicates: true,
+            });
         }
         const pending = await this.prisma.broadcastRecipient.findMany({
             where: { broadcastId: b.id, status: R.PENDING },

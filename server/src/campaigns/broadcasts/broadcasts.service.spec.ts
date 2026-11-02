@@ -5,7 +5,7 @@ import { BroadcastsService } from './broadcasts.service';
 
 const approved = { id: 'tpl_1', name: 'diwali', language: 'en', category: 'MARKETING', status: 'APPROVED', wabaId: 'waba_1', parameterFormat: 'POSITIONAL', components: [{ type: 'BODY', text: 'Hi' }] };
 
-function setup(over: { broadcast?: Record<string, unknown>; template?: Record<string, unknown> | null } = {}) {
+function setup(over: { broadcast?: Record<string, unknown>; template?: Record<string, unknown> | null; sender?: object } = {}) {
     const broadcast = { id: 'b_1', organizationId: 'org_1', channelId: 'ch_1', name: 'Diwali', campaign: null, status: BroadcastStatus.SENDING, templateId: 'tpl_1', variables: null, audience: null, startedAt: new Date(), ...over.broadcast };
     const template = over.template === undefined ? approved : over.template;
     const recipientUpdates: any[] = [];
@@ -27,6 +27,7 @@ function setup(over: { broadcast?: Record<string, unknown>; template?: Record<st
             }),
             count: jest.fn(async () => 0),
             groupBy: jest.fn(async () => []),
+            findUnique: jest.fn(() => Promise.resolve<{ messageId: string | null } | null>(null)),
         },
         message: {
             updateMany: jest.fn(async (args: any) => {
@@ -35,11 +36,13 @@ function setup(over: { broadcast?: Record<string, unknown>; template?: Record<st
             }),
             // m_2 was picked up by the sender before the stop.
             findMany: jest.fn(async () => [{ id: 'm_1' }]),
+            findUnique: jest.fn(() => Promise.resolve<{ id: string } | null>(null)),
         },
+        channel: { findUnique: jest.fn(() => Promise.resolve({ credentials: {} })) },
     };
     const queue = { add: jest.fn(async (...args: unknown[]) => queued.push(args)), remove: jest.fn(), addBulk: jest.fn() };
     const templates = { view: (t: unknown) => t, load: jest.fn(), channelFor: jest.fn() };
-    const service = new BroadcastsService(prisma as any, templates as any, {} as any, {} as any, {} as any, queue as any);
+    const service = new BroadcastsService(prisma as any, templates as any, {} as any, (over.sender ?? {}) as never, {} as any, queue as any);
     return { service, prisma, broadcast, recipientUpdates, messageUpdates, queued };
 }
 
@@ -144,6 +147,54 @@ describe('who a broadcast leaves out', () => {
         // A message that failed after Meta accepted it still has sentAt; status says whether it arrived.
         expect(received.where).toMatchObject({ contactId: { in: ['911', '912', '913'] }, broadcastId: { in: ['b_0'] }, status: { in: [R.SENT, R.DELIVERED, R.READ] } });
         expect(received.where.sentAt).toBeUndefined();
+    });
+});
+
+const member = (id: string) => ({ id, externalId: id, waId: id, phone: `+${id}`, displayName: null, addressBookName: null, username: null, attributes: null, blockedAt: null, optedOutAt: null, optInAt: null, customer: null });
+
+describe('starting a broadcast', () => {
+    /** An audience of `size` people, and a recipients table whose writes fail from the `failFrom`th chunk on. */
+    function starting(size: number) {
+        const audience = Array.from({ length: size }, (_, i) => member(`9198${String(i).padStart(8, '0')}`));
+        const rows = new Map<string, { id: string; status: R }>();
+        const state = { failFrom: Infinity, chunks: 0 };
+        const prisma = {
+            broadcast: {
+                findUnique: jest.fn(() => Promise.resolve({ id: 'b_1', organizationId: 'org_1', channelId: 'ch_1', status: BroadcastStatus.SCHEDULED, templateId: 'tpl_1', variables: null, audience: { everyone: true }, startedAt: null })),
+                update: jest.fn(() => Promise.resolve({})),
+            },
+            messageTemplate: { findUnique: jest.fn(() => Promise.resolve(approved)) },
+            channelContact: { findMany: jest.fn(() => Promise.resolve(audience)) },
+            broadcastRecipient: {
+                count: jest.fn(() => Promise.resolve(rows.size)),
+                createMany: jest.fn(({ data }: { data: Array<{ contactId: string; status: R }> }) => {
+                    if (state.chunks++ >= state.failFrom) return Promise.reject(new Error('Connection terminated'));
+                    for (const d of data) if (!rows.has(d.contactId)) rows.set(d.contactId, { id: `r_${d.contactId}`, status: d.status });
+                    return Promise.resolve({ count: data.length });
+                }),
+                findMany: jest.fn(({ where }: { where: { status: R } }) => Promise.resolve([...rows.values()].filter((r) => r.status === where.status).map((r) => ({ id: r.id })))),
+            },
+            channel: { findUnique: jest.fn(() => Promise.resolve({ credentials: {} })) },
+        };
+        const queue = { add: jest.fn(() => Promise.resolve({})), addBulk: jest.fn((jobs: Array<{ data: { recipientIds: string[] } }>) => Promise.resolve(jobs)) };
+        const service = new BroadcastsService(prisma as never, {} as never, {} as never, {} as never, {} as never, queue as never);
+        const queuedIds = () => queue.addBulk.mock.calls.flatMap(([jobs]) => jobs.flatMap((j) => j.data.recipientIds));
+        return { service, rows, state, queuedIds };
+    }
+
+    it('a start run again after writing part of the audience writes the rest and queues each person once', async () => {
+        const h = starting(1500);
+        h.state.failFrom = 1;
+        await expect(h.service.start('b_1')).rejects.toThrow('Connection terminated');
+        expect(h.rows.size).toBe(1000);
+        expect(h.queuedIds()).toEqual([]);
+
+        // BullMQ runs the job again.
+        h.state.failFrom = Infinity;
+        await h.service.start('b_1');
+        expect(h.rows.size).toBe(1500);
+        expect(h.queuedIds()).toHaveLength(1500);
+        expect(new Set(h.queuedIds()).size).toBe(1500);
     });
 });
 
