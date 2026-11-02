@@ -110,6 +110,7 @@ describe('SectionOrPermission', () => {
     sell() {}
     settings() {}
   }
+  const till = Till.prototype as unknown as Record<'sell' | 'settings', () => void>;
   const guard = new SectionAccessGuard(new Reflector());
   const run = (handler: () => void, user: Record<string, unknown>) => {
     const context = {
@@ -126,19 +127,19 @@ describe('SectionOrPermission', () => {
   };
 
   it('opens the route to a member holding the permission without the section', () => {
-    expect(run(Till.prototype.sell, { role: UserRole.AGENT, permissions: ['section.products', 'pos.sell'] })).toBe(true);
+    expect(run(till.sell, { role: UserRole.AGENT, permissions: ['section.products', 'pos.sell'] })).toBe(true);
   });
 
   it('still opens it to the section, as before', () => {
-    expect(run(Till.prototype.sell, { role: UserRole.AGENT, permissions: ['section.orders'] })).toBe(true);
+    expect(run(till.sell, { role: UserRole.AGENT, permissions: ['section.orders'] })).toBe(true);
   });
 
   it('opens nothing else in the section', () => {
-    expect(run(Till.prototype.settings, { role: UserRole.AGENT, permissions: ['section.products', 'pos.sell'] })).toBe(false);
+    expect(run(till.settings, { role: UserRole.AGENT, permissions: ['section.products', 'pos.sell'] })).toBe(false);
   });
 
   it('refuses a member with neither', () => {
-    expect(run(Till.prototype.sell, { role: UserRole.AGENT, permissions: ['section.products', 'inventory.pack'] })).toBe(false);
+    expect(run(till.sell, { role: UserRole.AGENT, permissions: ['section.products', 'inventory.pack'] })).toBe(false);
   });
 });
 

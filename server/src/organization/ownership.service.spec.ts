@@ -44,7 +44,7 @@ function build(members: Member[], counts: { stepDown?: number; stepUp?: number }
         },
         $transaction: jest.fn((fn: (tx: unknown) => Promise<unknown>) => fn({ organizationMember: { updateMany } })),
     };
-    const redis = { deleteSession: jest.fn((_userId: string) => Promise.resolve()) };
+    const redis = { deleteSession: jest.fn(() => Promise.resolve()) };
     const email = { sendOwnershipTransferred: jest.fn(() => Promise.resolve()) };
     const service = new OwnershipService(prisma as never, redis as never, email as never);
     return { service, prisma, updateMany, redis, email };
@@ -70,7 +70,7 @@ describe('OwnershipService.transfer', () => {
 
         await service.transfer('org_1', 'u_owner', TO_ADMIN);
 
-        expect(redis.deleteSession.mock.calls.map(([userId]) => userId).sort()).toEqual(['u_admin', 'u_owner']);
+        expect((redis.deleteSession.mock.calls as unknown as string[][]).map(([userId]) => userId).sort()).toEqual(['u_admin', 'u_owner']);
     });
 
     it('emails both of them', async () => {
@@ -161,8 +161,9 @@ describe('POST /organizations/:orgId/transfer-ownership', () => {
     });
 
     it('allows a few tries a minute, so the password cannot be guessed through it', () => {
-        expect(Reflect.getMetadata('THROTTLER:LIMITdefault', OrganizationController.prototype.transferOwnership)).toBe(5);
-        expect(Reflect.getMetadata('THROTTLER:TTLdefault', OrganizationController.prototype.transferOwnership)).toBe(60_000);
+        const handler = (OrganizationController.prototype as unknown as Record<string, () => unknown>).transferOwnership;
+        expect(Reflect.getMetadata('THROTTLER:LIMITdefault', handler)).toBe(5);
+        expect(Reflect.getMetadata('THROTTLER:TTLdefault', handler)).toBe(60_000);
     });
 
     it('refuses a body without the new owner and the password', async () => {

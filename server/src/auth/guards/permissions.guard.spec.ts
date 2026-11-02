@@ -100,6 +100,7 @@ describe('PermissionsGuard with @RequireAnyPermission', () => {
     @RequireAnyPermission('inventory.adjust', 'inventory.receive')
     both() {}
   }
+  const stock = Stock.prototype as unknown as Record<'adjust' | 'both', () => void>;
   const guard = new PermissionsGuard(new Reflector());
   const run = (handler: () => void, user: Record<string, unknown>) =>
     guard.canActivate({
@@ -109,23 +110,23 @@ describe('PermissionsGuard with @RequireAnyPermission', () => {
     } as unknown as ExecutionContext);
 
   it('passes on any one of the keys', () => {
-    expect(run(Stock.prototype.adjust, { role: UserRole.AGENT, permissions: ['inventory.receive'] })).toBe(true);
-    expect(run(Stock.prototype.adjust, { role: UserRole.AGENT, permissions: ['inventory.adjust'] })).toBe(true);
+    expect(run(stock.adjust, { role: UserRole.AGENT, permissions: ['inventory.receive'] })).toBe(true);
+    expect(run(stock.adjust, { role: UserRole.AGENT, permissions: ['inventory.adjust'] })).toBe(true);
   });
 
   it('refuses none of them, naming both', () => {
-    expect(() => run(Stock.prototype.adjust, { role: UserRole.AGENT, permissions: ['inventory.view'] })).toThrow(
+    expect(() => run(stock.adjust, { role: UserRole.AGENT, permissions: ['inventory.view'] })).toThrow(
       new ForbiddenException('Missing permission: inventory.adjust or inventory.receive'),
     );
   });
 
   it('still asks for every key of @RequirePermissions beside it', () => {
-    expect(() => run(Stock.prototype.both, { role: UserRole.AGENT, permissions: ['inventory.receive'] })).toThrow(ForbiddenException);
-    expect(run(Stock.prototype.both, { role: UserRole.AGENT, permissions: ['inventory.view', 'inventory.receive'] })).toBe(true);
+    expect(() => run(stock.both, { role: UserRole.AGENT, permissions: ['inventory.receive'] })).toThrow(ForbiddenException);
+    expect(run(stock.both, { role: UserRole.AGENT, permissions: ['inventory.view', 'inventory.receive'] })).toBe(true);
   });
 
   it('lets managers through and keeps vendors out', () => {
-    expect(run(Stock.prototype.adjust, { role: UserRole.MANAGER, permissions: [] })).toBe(true);
-    expect(() => run(Stock.prototype.adjust, { role: UserRole.VENDOR, permissions: ['inventory.receive'] })).toThrow(ForbiddenException);
+    expect(run(stock.adjust, { role: UserRole.MANAGER, permissions: [] })).toBe(true);
+    expect(() => run(stock.adjust, { role: UserRole.VENDOR, permissions: ['inventory.receive'] })).toThrow(ForbiddenException);
   });
 });
