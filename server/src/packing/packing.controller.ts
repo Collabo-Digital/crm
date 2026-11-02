@@ -4,6 +4,7 @@ import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { ORG_OPERATORS, Roles } from '../auth/decorators/roles.decorator';
+import { RequirePlanFeature } from '../billing/require-plan-feature.decorator';
 import { PackingService } from './packing.service';
 import {
     AccuracyQuerySchema,
@@ -27,6 +28,8 @@ const ORG_MEMBERS: UserRole[] = [...ORG_OPERATORS, UserRole.VIEWER];
  * stay out: their guards are deny-by-default and nothing here opts in.
  */
 @RequirePermissions('inventory.pack')
+// The packing assistant is on Growth and above (only while plans are enforced).
+@RequirePlanFeature('packing')
 @Controller('packing')
 export class PackingController {
     constructor(private readonly packing: PackingService) { }

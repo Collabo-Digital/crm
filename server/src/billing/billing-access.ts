@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { BillingProvider, Organization, SubscriptionStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { PlanGate, planFeatures } from './pricing';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -138,5 +139,12 @@ export class BillingAccessService {
     /** Expired: writes are refused, and nothing is sent for the workspace. */
     async isReadOnly(organizationId: string): Promise<boolean> {
         return (await this.forOrg(organizationId)).state === 'expired';
+    }
+
+    /** Does the workspace's plan have this feature? Every one is open while enforcement is off. */
+    async allows(organizationId: string, gate: PlanGate): Promise<boolean> {
+        if (!this.rules.enforced) return true;
+        const org = await this.prisma.organization.findUnique({ where: { id: organizationId }, select: { billingPlan: true } });
+        return !org || planFeatures(org.billingPlan)[gate];
     }
 }

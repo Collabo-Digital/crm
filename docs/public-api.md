@@ -4,7 +4,9 @@ For other systems to send WhatsApp messages, add contacts, and hear about
 messages, orders and payments as they happen. Everything belongs to one
 organization: the one whose API key or webhook it is.
 
-Owners and admins manage both under **Settings → Developers**.
+Owners and admins manage both under **Settings → Developers**. Once plans are
+enforced (`BILLING_ENFORCEMENT`), making keys and webhooks is on Growth and above;
+ones already made keep working. See docs/billing.md.
 
 ## Authentication
 
@@ -32,8 +34,8 @@ wrapped as `{ "success": true, "data": … }`; errors carry `message`.
 
 ## Rate limits
 
-Each key may call each endpoint 600 times a minute, or 2,000 on the Scale and
-Enterprise plans. Past that the answer is
+Each key may call each endpoint 600 times a minute, or 2,000 on the Unlimited
+and Enterprise plans. Past that the answer is
 `429` with a `Retry-After` header (seconds); wait that long and send again,
 with the same `Idempotency-Key` for `POST /messages`. Every answer carries
 `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`

@@ -6,6 +6,7 @@ import type { SessionPayload } from '../auth/interfaces/jwt-payload.interface';
 import { API_SCOPES, ApiKeysService } from './api-keys.service';
 import { CreateApiKeyDto, CreateWebhookDto, UpdateWebhookDto } from './dto/developer.dto';
 import { WEBHOOK_EVENTS, WebhooksService } from './webhooks.service';
+import { RequirePlanFeature } from '../billing/require-plan-feature.decorator';
 
 /** Keys and webhooks act for the whole organization: owners and admins. */
 const OWNERS: UserRole[] = [UserRole.OWNER, UserRole.ADMIN];
@@ -29,7 +30,9 @@ export class DeveloperController {
         return this.keys.list(user.orgId!);
     }
 
+    // Making keys and webhooks is on Growth and above; ones already made keep working.
     @Post('keys')
+    @RequirePlanFeature('publicApi')
     createKey(@CurrentUser() user: SessionPayload, @Body() dto: CreateApiKeyDto) {
         return this.keys.create(user.orgId!, user.sub, dto);
     }
@@ -46,6 +49,7 @@ export class DeveloperController {
     }
 
     @Post('webhooks')
+    @RequirePlanFeature('publicApi')
     createWebhook(@CurrentUser() user: SessionPayload, @Body() dto: CreateWebhookDto) {
         return this.webhooks.create(user.orgId!, { ...dto, createdById: user.sub });
     }
