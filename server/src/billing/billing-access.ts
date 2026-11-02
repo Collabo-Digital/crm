@@ -7,7 +7,10 @@ import { PrismaService } from '../prisma/prisma.service';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Paid for, or authorised and about to be. */
-const LIVE_SUBSCRIPTION: SubscriptionStatus[] = [SubscriptionStatus.ACTIVE, SubscriptionStatus.AUTHENTICATED];
+export const LIVE_SUBSCRIPTION: SubscriptionStatus[] = [SubscriptionStatus.ACTIVE, SubscriptionStatus.AUTHENTICATED];
+
+/** A payment failed (Razorpay retries, then halts) or the subscription was paused: payment is needed. */
+export const PAYMENT_PROBLEM: SubscriptionStatus[] = [SubscriptionStatus.HALTED, SubscriptionStatus.PAUSED];
 
 /**
  * BILLING_ENFORCEMENT and the dates it works from. Off (the default), every
@@ -37,8 +40,8 @@ export function billingRules(config: ConfigService): BillingRules {
 /**
  * - trialing: the free trial runs.
  * - active: a paid plan, one the Collabo team set up (MANUAL), or enforcement off.
- * - grace: the trial or the last paid period is over (a payment failed, or
- *   none was made); everything still works for BILLING_GRACE_DAYS.
+ * - grace: the trial is over, a payment failed, or a cancelled plan's last
+ *   paid period ended; everything still works for BILLING_GRACE_DAYS.
  * - expired: read-only until a plan is active.
  */
 export type BillingAccessState = 'trialing' | 'active' | 'grace' | 'expired';
@@ -56,31 +59,40 @@ export interface BillingAccess {
 }
 
 /** The organization fields its access depends on. */
-export type BillingAccessFields = Pick<Organization, 'billingProvider' | 'subscriptionStatus' | 'trialEndsAt' | 'currentPeriodEnd'>;
+export type BillingAccessFields = Pick<Organization, 'billingProvider' | 'subscriptionStatus' | 'trialEndsAt' | 'currentPeriodEnd' | 'paymentFailedAt'>;
 
-export const BILLING_ACCESS_SELECT = { billingProvider: true, subscriptionStatus: true, trialEndsAt: true, currentPeriodEnd: true } as const;
+export const BILLING_ACCESS_SELECT = { billingProvider: true, subscriptionStatus: true, trialEndsAt: true, currentPeriodEnd: true, paymentFailedAt: true } as const;
 
 const ACTIVE = (enforced: boolean): BillingAccess => ({ state: 'active', enforced, trialEndsAt: null, readOnlyFrom: null, daysLeft: null });
 
 const addDays = (at: Date, days: number) => new Date(at.getTime() + days * DAY_MS);
 const daysUntil = (at: Date, now: Date) => Math.ceil((at.getTime() - now.getTime()) / DAY_MS);
 
+/** When the workspace's trial ends: its own date, or for one made before trials, from BILLING_ENFORCE_FROM. */
+export function effectiveTrialEnd(org: Pick<BillingAccessFields, 'trialEndsAt'>, rules: BillingRules): Date | null {
+    return org.trialEndsAt ?? (rules.enforced ? addDays(rules.from, rules.trialDays) : null);
+}
+
 /**
- * Where a workspace stands. A subscription that stopped (cancelled, or a
- * payment that failed) keeps the workspace active to the end of the period it
- * paid for; the grace period runs from the later of that and the trial's end.
+ * Where a workspace stands. A cancelled subscription keeps the workspace
+ * active to the end of the period it paid for. After a failed payment the
+ * grace period runs from when Razorpay first said so (paymentFailedAt), not
+ * from the period's end, which Razorpay may already have moved on. Grace
+ * never starts before the trial's end.
  */
 export function billingAccess(org: BillingAccessFields, now: Date, rules: BillingRules): BillingAccess {
     if (!rules.enforced) return ACTIVE(false);
     if (org.billingProvider === BillingProvider.MANUAL) return ACTIVE(true);
     if (org.subscriptionStatus && LIVE_SUBSCRIPTION.includes(org.subscriptionStatus)) return ACTIVE(true);
 
-    const trialEndsAt = org.trialEndsAt ?? addDays(rules.from, rules.trialDays);
+    const trialEndsAt = effectiveTrialEnd(org, rules)!;
     if (now < trialEndsAt) return { state: 'trialing', enforced: true, trialEndsAt, readOnlyFrom: null, daysLeft: daysUntil(trialEndsAt, now) };
-    const paidUntil = org.currentPeriodEnd;
+    const failed = !!org.subscriptionStatus && PAYMENT_PROBLEM.includes(org.subscriptionStatus);
+    const paidUntil = failed ? null : org.currentPeriodEnd;
     if (paidUntil && now < paidUntil) return ACTIVE(true);
 
-    const graceFrom = paidUntil && paidUntil > trialEndsAt ? paidUntil : trialEndsAt;
+    const lapsed = failed ? (org.paymentFailedAt ?? org.currentPeriodEnd) : paidUntil;
+    const graceFrom = lapsed && lapsed > trialEndsAt ? lapsed : trialEndsAt;
     const readOnlyFrom = addDays(graceFrom, rules.graceDays);
     if (now < readOnlyFrom) return { state: 'grace', enforced: true, trialEndsAt, readOnlyFrom, daysLeft: daysUntil(readOnlyFrom, now) };
     return { state: 'expired', enforced: true, trialEndsAt, readOnlyFrom, daysLeft: null };

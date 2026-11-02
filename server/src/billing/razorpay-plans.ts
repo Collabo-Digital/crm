@@ -1,5 +1,5 @@
 import { ConfigService } from '@nestjs/config';
-import { BillingInterval, BillingPlan } from '@prisma/client';
+import { BillingInterval, BillingPlan, SubscriptionStatus } from '@prisma/client';
 
 import { BILLING_CURRENCIES, BILLING_INTERVALS, BillingCurrency, PLANS } from './pricing';
 
@@ -29,4 +29,22 @@ export function planOfRazorpayId(
         }
     }
     return null;
+}
+
+const STATUS: Record<string, SubscriptionStatus> = {
+    created: SubscriptionStatus.CREATED,
+    authenticated: SubscriptionStatus.AUTHENTICATED,
+    active: SubscriptionStatus.ACTIVE,
+    // A renewal that failed and is being retried: payment is needed, as when halted.
+    pending: SubscriptionStatus.HALTED,
+    paused: SubscriptionStatus.PAUSED,
+    halted: SubscriptionStatus.HALTED,
+    cancelled: SubscriptionStatus.CANCELLED,
+    completed: SubscriptionStatus.COMPLETED,
+    expired: SubscriptionStatus.EXPIRED,
+};
+
+/** A Razorpay subscription's status as stored. */
+export function subscriptionStatusOf(raw: string): SubscriptionStatus {
+    return STATUS[raw] ?? SubscriptionStatus.CREATED;
 }

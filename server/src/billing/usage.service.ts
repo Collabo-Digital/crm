@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { BillingPlan, BillingProvider, ChannelPlatform, ChannelStatus, StockLocationKind } from '@prisma/client';
+import { BillingPlan, BillingProvider, ChannelPlatform, ChannelStatus, StockLocationKind, SubscriptionStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { BillingAccessService } from './billing-access';
@@ -67,13 +67,15 @@ export class UsageService {
                 subscriptionStatus: true,
                 currentPeriodEnd: true,
                 trialEndsAt: true,
+                paymentFailedAt: true,
             },
         });
         const period = periodOf(new Date());
         const usage = await this.usage(organizationId, period);
-        // A plan the Collabo team set up and invoices (Scale, Enterprise) has no Razorpay subscription.
+        // A plan the Collabo team set up and invoices (Scale, Enterprise) has no
+        // Razorpay subscription. A checkout never paid (CREATED) is no plan.
         const manual = org.billingProvider === BillingProvider.MANUAL;
-        const subscribed = manual || (!!org.externalSubscriptionId && !!org.subscriptionStatus);
+        const subscribed = manual || (!!org.externalSubscriptionId && !!org.subscriptionStatus && org.subscriptionStatus !== SubscriptionStatus.CREATED);
         const currency = (org.billingCurrency ?? 'INR') as BillingCurrency;
         const bills = await this.prisma.usageBill.findMany({
             where: { organizationId },

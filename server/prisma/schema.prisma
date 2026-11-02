@@ -337,6 +337,9 @@ model Organization {
   /// When the free trial ends. Null for workspaces made before trials: theirs
   /// ends BILLING_TRIAL_DAYS after BILLING_ENFORCE_FROM. See billing-access.ts.
   trialEndsAt            DateTime?           @map("trial_ends_at")
+  /// When Razorpay first reported the subscription halted or paused, for the
+  /// grace period after a failed payment. Cleared once it is paid again.
+  paymentFailedAt        DateTime?           @map("payment_failed_at")
   lowStockThreshold      Int                 @default(10) @map("low_stock_threshold")
   gstEnabled             Boolean             @default(false) @map("gst_enabled")
   loyaltyMetric          LoyaltyMetric       @default(ORDERS) @map("loyalty_metric")

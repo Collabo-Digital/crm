@@ -17,7 +17,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const FROM = new Date('2026-12-01T00:00:00Z');
 const at = (days: number) => new Date(FROM.getTime() + days * DAY);
 const ON: BillingRules = { enforced: true, from: FROM, trialDays: 14, graceDays: 7 };
-const none: BillingAccessFields = { billingProvider: null, subscriptionStatus: null, trialEndsAt: null, currentPeriodEnd: null };
+const none: BillingAccessFields = { billingProvider: null, subscriptionStatus: null, trialEndsAt: null, currentPeriodEnd: null, paymentFailedAt: null };
 
 describe('billingAccess', () => {
     it('leaves every workspace active while enforcement is off', () => {
@@ -45,14 +45,22 @@ describe('billingAccess', () => {
         expect(billingAccess({ ...none, billingProvider: 'MANUAL' }, at(400), ON)).toMatchObject({ state: 'active' });
     });
 
-    it('keeps a stopped subscription active to the end of the period paid for, then gives the grace period from there', () => {
-        const halted: BillingAccessFields = { billingProvider: 'RAZORPAY', subscriptionStatus: 'HALTED', trialEndsAt: at(14), currentPeriodEnd: at(60) };
-        expect(billingAccess(halted, at(59), ON)).toMatchObject({ state: 'active' });
-        expect(billingAccess(halted, at(61), ON)).toMatchObject({ state: 'grace', readOnlyFrom: at(67), daysLeft: 6 });
-        expect(billingAccess(halted, at(67), ON)).toMatchObject({ state: 'expired' });
-        // A cancelled or unpaid one the same way.
-        expect(billingAccess({ ...halted, subscriptionStatus: 'CANCELLED' }, at(62), ON)).toMatchObject({ state: 'grace' });
-        expect(billingAccess({ ...halted, subscriptionStatus: 'CREATED', currentPeriodEnd: null }, at(30), ON)).toMatchObject({ state: 'expired' });
+    it('keeps a cancelled subscription active to the end of the period paid for, then gives the grace period from there', () => {
+        const cancelled: BillingAccessFields = { ...none, billingProvider: 'RAZORPAY', subscriptionStatus: 'CANCELLED', trialEndsAt: at(14), currentPeriodEnd: at(60) };
+        expect(billingAccess(cancelled, at(59), ON)).toMatchObject({ state: 'active' });
+        expect(billingAccess(cancelled, at(61), ON)).toMatchObject({ state: 'grace', readOnlyFrom: at(67), daysLeft: 6 });
+        expect(billingAccess(cancelled, at(67), ON)).toMatchObject({ state: 'expired' });
+    });
+
+    it('gives the grace period from the failed payment, whatever period end Razorpay moved on to', () => {
+        const halted: BillingAccessFields = { ...none, billingProvider: 'RAZORPAY', subscriptionStatus: 'HALTED', trialEndsAt: at(14), currentPeriodEnd: at(395), paymentFailedAt: at(50) };
+        expect(billingAccess(halted, at(51), ON)).toMatchObject({ state: 'grace', readOnlyFrom: at(57), daysLeft: 6 });
+        expect(billingAccess(halted, at(57), ON)).toMatchObject({ state: 'expired' });
+        expect(billingAccess({ ...halted, subscriptionStatus: 'PAUSED' }, at(51), ON)).toMatchObject({ state: 'grace' });
+        // Halted before the failure was recorded: from the period's end.
+        expect(billingAccess({ ...halted, currentPeriodEnd: at(40), paymentFailedAt: null }, at(45), ON)).toMatchObject({ state: 'grace', readOnlyFrom: at(47) });
+        // A checkout never paid has no paid period: grace from the trial's end.
+        expect(billingAccess({ ...halted, subscriptionStatus: 'CREATED', currentPeriodEnd: null, paymentFailedAt: null }, at(30), ON)).toMatchObject({ state: 'expired' });
     });
 
     it('reads BILLING_ENFORCEMENT and its dates from the configuration', () => {

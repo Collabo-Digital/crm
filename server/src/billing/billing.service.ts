@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ConflictException,
     Injectable,
     Logger,
     ServiceUnavailableException,
@@ -14,10 +15,10 @@ import {
 } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
-import { BillingAccess, billingAccess, BillingAccessFields, billingRules, newTrialEnd } from './billing-access';
+import { BillingAccess, billingAccess, BillingAccessFields, billingRules, LIVE_SUBSCRIPTION, newTrialEnd, PAYMENT_PROBLEM } from './billing-access';
 import { BILLING_CURRENCIES, BILLING_INTERVALS, BillingCurrency, GST_PERCENT, PLANS, pricingPlan, YEARLY_DISCOUNT_PERCENT } from './pricing';
 import { RazorpayService } from './razorpay.service';
-import { planOfRazorpayId, razorpayPlanId } from './razorpay-plans';
+import { planOfRazorpayId, razorpayPlanId, subscriptionStatusOf } from './razorpay-plans';
 import { UsageBillingService } from './usage-billing.service';
 
 /**
@@ -72,9 +73,6 @@ const TRIAL_PLAN = BillingPlan.GROWTH;
 
 /** About ten years of renewals: subscriptions end by being cancelled, not by running out. */
 const SUBSCRIPTION_CYCLES: Record<BillingInterval, number> = { MONTHLY: 120, YEARLY: 10 };
-
-/** Paid for, or authorised and about to be. */
-const LIVE_SUBSCRIPTION: SubscriptionStatus[] = [SubscriptionStatus.ACTIVE, SubscriptionStatus.AUTHENTICATED];
 
 /** Subscriptions Razorpay will not charge again. */
 const ENDED_SUBSCRIPTION: SubscriptionStatus[] = [
@@ -250,6 +248,9 @@ export class BillingService {
      * the plan once Razorpay says it is paid (handleWebhookEvent), so leaving
      * the payment half-way changes nothing. A workspace already paying changes
      * plan with the Collabo team, as does one whose plan the team set up.
+     *
+     * The subscription it replaces is asked about first: a webhook may not
+     * have said yet that it was paid, and a paid one is never replaced.
      */
     async subscribeOrganization(
         orgId: string,
@@ -273,6 +274,23 @@ export class BillingService {
             throw new BadRequestException('This workspace already pays for a plan. Talk to us to change it.');
         }
 
+        const earlier = org.externalSubscriptionId;
+        let earlierEnded = !earlier || (!!org.subscriptionStatus && ENDED_SUBSCRIPTION.includes(org.subscriptionStatus));
+        if (!earlierEnded) {
+            let remote: Awaited<ReturnType<typeof this.razorpay.fetchSubscription>>;
+            try {
+                remote = await this.razorpay.fetchSubscription(earlier!);
+            } catch (err) {
+                this.rethrowRazorpay('subscription check', err);
+            }
+            const status = subscriptionStatusOf(remote.status);
+            if (LIVE_SUBSCRIPTION.includes(status)) {
+                await this.upsertSubscriptionStatus(earlier!, status, remote.current_end, null, remote.plan_id);
+                throw new BadRequestException('This workspace already pays for a plan. Talk to us to change it.');
+            }
+            earlierEnded = ENDED_SUBSCRIPTION.includes(status);
+        }
+
         let subscription: Awaited<ReturnType<typeof this.razorpay.createSubscription>>;
         try {
             subscription = await this.razorpay.createSubscription({
@@ -285,21 +303,21 @@ export class BillingService {
             this.rethrowRazorpay('subscription creation', err);
         }
 
-        // The one it replaces (left unpaid, or halted) must not be charged later.
-        const earlier = org.externalSubscriptionId;
-        if (earlier && !(org.subscriptionStatus && ENDED_SUBSCRIPTION.includes(org.subscriptionStatus))) {
-            await this.razorpay.cancelSubscription(earlier).catch((err: unknown) =>
-                this.logger.warn(`Earlier subscription ${earlier} of org ${orgId} was not cancelled: ${this.extractRazorpayError(err) ?? String(err)}`),
-            );
-        }
-        await this.prisma.organization.update({
-            where: { id: orgId },
+        // Only if no other checkout took the workspace meanwhile (another tab).
+        const { count } = await this.prisma.organization.updateMany({
+            where: { id: orgId, externalSubscriptionId: earlier },
             data: {
                 externalSubscriptionId: subscription.id,
                 subscriptionStatus: SubscriptionStatus.CREATED,
                 billingProvider: BillingProvider.RAZORPAY,
             },
         });
+        if (!count) {
+            await this.cancelQuietly(subscription.id, orgId);
+            throw new ConflictException('Another payment was started for this workspace just now. Refresh the page and try again.');
+        }
+        // The one it replaces (left unpaid, or halted) must not be charged later.
+        if (!earlierEnded) await this.cancelQuietly(earlier!, orgId);
         this.logger.log(`Org ${orgId}: subscription ${subscription.id} started on ${planId} by ${userId}`);
 
         return {
@@ -307,6 +325,12 @@ export class BillingService {
             razorpayKeyId: this.razorpay.getKeyId(),
             currency,
         };
+    }
+
+    private async cancelQuietly(subscriptionId: string, orgId: string): Promise<void> {
+        await this.razorpay.cancelSubscription(subscriptionId).catch((err: unknown) =>
+            this.logger.warn(`Subscription ${subscriptionId} of org ${orgId} was not cancelled: ${this.extractRazorpayError(err) ?? String(err)}`),
+        );
     }
 
     /** Polled by the client after the Razorpay modal closes. */
@@ -420,7 +444,7 @@ export class BillingService {
         }
         try {
             const sub = await this.razorpay.fetchSubscription(subscriptionId);
-            if (!ENDED_SUBSCRIPTION.includes(this.mapRazorpayStatus(sub.status))) {
+            if (!ENDED_SUBSCRIPTION.includes(subscriptionStatusOf(sub.status))) {
                 await this.razorpay.cancelSubscription(subscriptionId);
             }
         } catch (err) {
@@ -454,7 +478,7 @@ export class BillingService {
                 if (!sub) return;
                 await this.upsertSubscriptionStatus(
                     sub.id,
-                    this.mapRazorpayStatus(sub.status),
+                    subscriptionStatusOf(sub.status),
                     sub.current_end,
                     sub.customer_id ?? null,
                     sub.plan_id ?? null,
@@ -476,11 +500,15 @@ export class BillingService {
                 }
                 const periodEndUnix =
                     invoice.line_items?.[0]?.period_end ?? null;
+                // The invoice names no plan; the subscription does, and a
+                // workspace subscribed from Settings moves to it once paid.
+                const sub = this.razorpay.isConfigured() ? await this.razorpay.fetchSubscription(subId).catch(() => null) : null;
                 await this.upsertSubscriptionStatus(
                     subId,
                     SubscriptionStatus.ACTIVE,
                     periodEndUnix,
                     invoice.customer_id ?? null,
+                    sub?.plan_id ?? null,
                 );
                 break;
             }
@@ -499,19 +527,6 @@ export class BillingService {
         }
     }
 
-    private mapRazorpayStatus(raw: string): SubscriptionStatus {
-        const map: Record<string, SubscriptionStatus> = {
-            created: SubscriptionStatus.CREATED,
-            authenticated: SubscriptionStatus.AUTHENTICATED,
-            active: SubscriptionStatus.ACTIVE,
-            paused: SubscriptionStatus.PAUSED,
-            halted: SubscriptionStatus.HALTED,
-            cancelled: SubscriptionStatus.CANCELLED,
-            completed: SubscriptionStatus.COMPLETED,
-            expired: SubscriptionStatus.EXPIRED,
-        };
-        return map[raw] ?? SubscriptionStatus.CREATED;
-    }
 
     private async upsertSubscriptionStatus(
         razorpaySubId: string,
@@ -551,8 +566,16 @@ export class BillingService {
                 currentPeriodEnd: periodEnd,
                 ...(customerId ? { externalCustomerId: customerId } : {}),
                 ...(onPlan ? { billingPlan: onPlan.plan, billingInterval: onPlan.interval, billingCurrency: onPlan.currency } : {}),
+                ...(LIVE_SUBSCRIPTION.includes(status) ? { paymentFailedAt: null } : {}),
             },
         });
+        // The grace period after a failed payment runs from the first word of it.
+        if (orgResult.count > 0 && PAYMENT_PROBLEM.includes(status)) {
+            await this.prisma.organization.updateMany({
+                where: { externalSubscriptionId: razorpaySubId, paymentFailedAt: null },
+                data: { paymentFailedAt: new Date() },
+            });
+        }
         if (orgResult.count > 0) {
             this.logger.log(`Updated sub ${razorpaySubId} on org → ${status}`);
         } else {
