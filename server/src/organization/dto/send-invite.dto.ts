@@ -1,4 +1,4 @@
-import { IsArray, IsEmail, IsEnum, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsEmail, IsEnum, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { UserRole } from '@prisma/client';
 import { PERMISSION_KEYS, PermissionKey } from '../../auth/permissions';
@@ -37,4 +37,13 @@ export class SendInviteDto {
     @IsArray()
     @IsIn(PERMISSION_KEYS as readonly string[], { each: true })
     grants?: PermissionKey[];
+
+    // For MANAGER / AGENT invites: the stock locations they will work at,
+    // copied onto the membership on accept. Omitted or empty = every location.
+    @IsOptional()
+    @IsArray()
+    @ArrayMaxSize(200)
+    @IsString({ each: true })
+    @MaxLength(40, { each: true })
+    locationScope?: string[];
 }
