@@ -73,9 +73,9 @@ function profitRow(over: Partial<SalesProfitRow> = {}): SalesProfitRow {
 }
 
 /**
- * `getSalesAndProfit` issues three raw queries in a fixed order: this window's
- * sales rows, this window's new customers, then the preceding window's sales
- * rows for the trend.
+ * `getSalesAndProfit` issues four raw queries in a fixed order: this window's
+ * sales rows, this window's new customers, the preceding window's sales rows
+ * for the trend, then this window's in-store / online split.
  */
 function build(opts: {
   rows?: SalesProfitRow[];
@@ -88,12 +88,15 @@ function build(opts: {
   currency?: string;
   /** Orders excluded from the totals because their FX rate never resolved. */
   unconvertedOrders?: number;
+  /** Rows behind `inStoreVsOnline`, grouped by `pos_sale`. */
+  split?: Array<{ pos_sale: boolean; sales: number; orders: number }>;
 } = {}) {
   const $queryRaw = jest
     .fn()
     .mockResolvedValueOnce(opts.rows ?? [profitRow()])
     .mockResolvedValueOnce(opts.customers ?? [])
-    .mockResolvedValueOnce(opts.previous ?? []);
+    .mockResolvedValueOnce(opts.previous ?? [])
+    .mockResolvedValueOnce(opts.split ?? []);
 
   const groupBy = jest
     .fn()
@@ -466,6 +469,90 @@ describe('DashboardService.getSalesAndProfit', () => {
         ]),
       );
     });
+  });
+});
+
+/**
+ * The in-store vs online card. It is an extra query beside the sales figures,
+ * never a change to them: every number the dashboard showed before must come
+ * back exactly as it did.
+ */
+describe('DashboardService.getSalesAndProfit in-store vs online', () => {
+  const rows = [
+    profitRow({ bucket: new Date('2026-08-01T00:00:00.000Z') }),
+    profitRow({ bucket: new Date('2026-09-01T00:00:00.000Z'), gross_sales: 590, orders: 1 }),
+  ];
+  const previous = [profitRow({ gross_sales: 400 })];
+  const customers = [{ bucket: new Date('2026-09-01T00:00:00.000Z'), count: 3 }];
+
+  it('leaves every existing figure exactly as it was', async () => {
+    const withoutPos = build({ rows, previous, customers });
+    const withPos = build({
+      rows,
+      previous,
+      customers,
+      split: [
+        { pos_sale: true, sales: 590, orders: 1 },
+        { pos_sale: false, sales: 1180, orders: 2 },
+      ],
+    });
+
+    // Explicit dates: a preset ends at each call's own `new Date()`.
+    const window = { dateFrom: '2026-08-01', dateTo: '2026-09-30' };
+    const { inStoreVsOnline: _none, ...before } = await withoutPos.service.getSalesAndProfit(ORG, window);
+    const { inStoreVsOnline, ...after } = await withPos.service.getSalesAndProfit(ORG, window);
+
+    expect(after).toEqual(before);
+    expect(inStoreVsOnline).toEqual({
+      inStore: { sales: 590, orders: 1 },
+      online: { sales: 1180, orders: 2 },
+    });
+    // The queries behind those figures are untouched too.
+    for (const i of [0, 1, 2]) {
+      expect(sqlOf(withPos.$queryRaw.mock.calls[i])).toBe(sqlOf(withoutPos.$queryRaw.mock.calls[i]));
+    }
+  });
+
+  it('reports zero for both halves when the window sold nothing', async () => {
+    const { service } = build({ rows: [] });
+    const { inStoreVsOnline } = await service.getSalesAndProfit(ORG, {});
+
+    expect(inStoreVsOnline).toEqual({
+      inStore: { sales: 0, orders: 0 },
+      online: { sales: 0, orders: 0 },
+    });
+  });
+
+  it('splits the same orders the headline counts, so the halves add up to it', async () => {
+    const { service, $queryRaw } = build({ currency: 'USD' });
+    const { period } = await service.getSalesAndProfit(ORG, { channelId: 'ch_1', range: '30d' });
+
+    const sales = sqlOf($queryRaw.mock.calls[0]);
+    const split = sqlOf($queryRaw.mock.calls[3]);
+    expect(split).toContain('GROUP BY o."pos_sale"');
+    for (const clause of [
+      'o."deleted_at"   IS NULL',
+      'o."cancelled_at" IS NULL',
+      'o."exchange_rate" IS NOT NULL',
+      'AND UPPER(o."base_currency") =',
+      'o."financial_status"::text IN (',
+      'COALESCE(o."external_created_at", o."created_at") >=',
+      'COALESCE(o."external_created_at", o."created_at") <',
+    ]) {
+      expect(sales).toContain(clause);
+      expect(split).toContain(clause);
+    }
+    expect(split).toContain('o."total_price" * o."exchange_rate"');
+
+    // Same organisation, currency and window — and the same channel filter.
+    const binds = bindsOf($queryRaw.mock.calls[3]);
+    expect(binds).toContain(ORG);
+    expect(binds).toContain('USD');
+    expect(datesOf($queryRaw.mock.calls[3])).toEqual([new Date(period.from), new Date(period.to)]);
+    const fragment = binds.find(
+      (b: any) => b && typeof b === 'object' && Array.isArray(b.values) && b.values.includes('ch_1'),
+    );
+    expect(fragment).toBeDefined();
   });
 });
 

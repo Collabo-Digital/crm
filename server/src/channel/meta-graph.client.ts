@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { RateLimiterService } from '../rate-limit/rate-limiter.service';
 import {
   META_AUTH_CODE,
+  META_PAIR_RATE_LIMIT_CODE,
+  META_THROTTLE_SUBCODES,
   META_TRANSIENT_CODES,
   MetaUsage,
   isMetaThrottleError,
@@ -20,6 +22,8 @@ import {
 const DEFAULT_TIMEOUT_MS = 15_000;
 const TRANSIENT_RETRIES = 3;
 const TRANSIENT_BACKOFF_MS = 1_000;
+/// Meta's pair rate limit allows about one message every 6 seconds to the same customer.
+const PAIR_RATE_LIMIT_WAIT_MS = 10_000;
 
 /**
  * The one door every Meta Graph API call goes through: WhatsApp Cloud API,
@@ -31,8 +35,10 @@ const TRANSIENT_BACKOFF_MS = 1_000;
  *    percentage, so pacing is driven by Meta's own numbers.
  *  - Classifies Meta's error codes: 190 is a dead token, 4/17/32/613 and the
  *    WhatsApp / ads throughput subcodes open a breaker and surface as
- *    `RateLimitedError` (the queue parks the job), 1/2 and 5xx are retried
- *    with jitter, everything else is a `MetaGraphError` for the caller.
+ *    `RateLimitedError` (the queue parks the job; 131056, one customer's
+ *    pair limit, parks only that job), 1/2 and 5xx are retried with jitter
+ *    (a bodiless 5xx is not, for a non-idempotent call), everything else is
+ *    a `MetaGraphError` for the caller.
  *  - Tokens travel in the Authorization header, never the query string.
  */
 @Injectable()
@@ -40,6 +46,7 @@ export class MetaGraphClient {
   private readonly logger = new Logger(MetaGraphClient.name);
   private readonly appId: string;
   private readonly graphVersion: string;
+  private readonly graphBaseUrl: string;
 
   constructor(
     private readonly config: ConfigService,
@@ -47,6 +54,7 @@ export class MetaGraphClient {
   ) {
     this.appId = this.config.get<string>('meta.appId') ?? '';
     this.graphVersion = this.config.get<string>('meta.graphVersion') ?? 'v21.0';
+    this.graphBaseUrl = (this.config.get<string>('meta.graphBaseUrl') ?? 'https://graph.facebook.com').replace(/\/$/, '');
   }
 
   /** The app-level wallet every merchant shares. Empty id = unconfigured app. */
@@ -61,7 +69,7 @@ export class MetaGraphClient {
   }
 
   graphUrl(path: string, version?: string): string {
-    return `https://graph.facebook.com/${version ?? this.graphVersion}${path}`;
+    return `${this.graphBaseUrl}/${version ?? this.graphVersion}${path}`;
   }
 
   async request<T = unknown>(req: MetaRequest): Promise<MetaResponse<T>> {
@@ -97,20 +105,28 @@ export class MetaGraphClient {
         try {
           res = await fetch(url, {
             method: req.method,
+            // multipart sets no Content-Type: fetch adds it with the boundary.
             headers: {
-              ...(req.accessToken ? { Authorization: `Bearer ${req.accessToken}` } : {}),
-              ...(req.form !== undefined
-                ? { 'Content-Type': 'application/x-www-form-urlencoded' }
-                : req.body !== undefined
-                  ? { 'Content-Type': 'application/json' }
-                  : {}),
+              ...(req.accessToken ? { Authorization: `${req.authScheme ?? 'Bearer'} ${req.accessToken}` } : {}),
+              ...req.headers,
+              ...(req.multipart !== undefined || req.binary !== undefined
+                ? {}
+                : req.form !== undefined
+                  ? { 'Content-Type': 'application/x-www-form-urlencoded' }
+                  : req.body !== undefined
+                    ? { 'Content-Type': 'application/json' }
+                    : {}),
             },
             body:
-              req.form !== undefined
-                ? new URLSearchParams(req.form).toString()
-                : req.body !== undefined
-                  ? JSON.stringify(req.body)
-                  : undefined,
+              req.multipart !== undefined
+                ? req.multipart
+                : req.binary !== undefined
+                  ? new Blob([new Uint8Array(req.binary)])
+                  : req.form !== undefined
+                  ? new URLSearchParams(req.form).toString()
+                  : req.body !== undefined
+                    ? JSON.stringify(req.body)
+                    : undefined,
             signal: AbortSignal.timeout(req.timeoutMs ?? DEFAULT_TIMEOUT_MS),
           });
         } catch (err) {
@@ -163,6 +179,12 @@ export class MetaGraphClient {
             : Number.isFinite(retryAfterS) && retryAfterS > 0
               ? retryAfterS * 1000
               : undefined;
+          const metaCode = subcode !== undefined && META_THROTTLE_SUBCODES.has(subcode) ? subcode : code;
+          if (metaCode === META_PAIR_RATE_LIMIT_CODE) {
+            // Too many messages to one customer: only this call waits. The
+            // number keeps sending to everyone else, so no breaker opens.
+            throw new RateLimitedError(specific ?? metaScope.phone('unknown'), Date.now() + (hintMs ?? PAIR_RATE_LIMIT_WAIT_MS), 'BREAKER', metaCode);
+          }
           const scope = this.throttleScope(usage, specific);
           await this.limiter.recordThrottled(scope, {
             channelId: req.channelId,
@@ -174,9 +196,12 @@ export class MetaGraphClient {
             reason: `META_${code}${subcode ? `_${subcode}` : ''}`,
             channelId: req.channelId,
           });
-          throw new RateLimitedError(scope, until, 'BREAKER');
+          throw new RateLimitedError(scope, until, 'BREAKER', metaCode);
         }
 
+        if (req.idempotent === false && !error && res.status >= 500) {
+          throw new MetaGraphError(message, 'HTTP_ERROR', undefined, undefined, res.status, body);
+        }
         if (META_TRANSIENT_CODES.has(code) || res.status >= 500) {
           if (--transientLeft < 0) {
             throw new MetaGraphError(message, 'RETRY_EXHAUSTED', code, subcode, res.status, error);

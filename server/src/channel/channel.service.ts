@@ -4,15 +4,19 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { ChannelPlatform, ChannelStatus, SyncStatus, UserRole, Prisma } from '@prisma/client';
+import { Channel, ChannelPlatform, ChannelStatus, SyncStatus, UserRole, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { describeRateLimit } from '../rate-limit/rate-limit-state.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { InstagramOAuthService } from './instagram-oauth.service';
+import { MetaPagesOAuthService, FACEBOOK_LOGIN_FLOW } from './meta-pages-oauth.service';
+import { WhatsAppAccountService } from './whatsapp-account.service';
+import { EncryptionService } from './encryption.service';
 import { UpdateChannelDto } from './dto/update-channel.dto';
 import { UpdateSyncSettingsDto } from './dto/update-sync-settings.dto';
 import {
   describeAccount,
+  describeMessagingStatus,
   deriveConnectionState,
   readTokenExpiry,
 } from './channel-connection.util';
@@ -36,6 +40,9 @@ export class ChannelService {
     private readonly prisma: PrismaService,
     private readonly shopifyOAuth: ShopifyOAuthService,
     private readonly instagramOAuth: InstagramOAuthService,
+    private readonly metaPages: MetaPagesOAuthService,
+    private readonly whatsappAccount: WhatsAppAccountService,
+    private readonly encryption: EncryptionService,
   ) { }
 
   /**
@@ -76,6 +83,7 @@ export class ChannelService {
         new Date(),
       ),
       account: describeAccount(channel.platform, credentials, metadata),
+      messaging: describeMessagingStatus(channel.platform, credentials, metadata),
       tokenExpiresAt,
       disconnectedAt,
     };
@@ -253,7 +261,7 @@ export class ChannelService {
     //
     // Mirrors ShopifyPushService.isAlreadySynced: only the exact string
     // 'SYNCED' counts as done, so a FAILED or absent marker is still pending.
-    const countPending = async (table: 'orders' | 'products') => {
+    const countPending = async (table: 'orders' | 'products', extra = Prisma.empty) => {
       const rows = await this.prisma.$queryRaw<Array<{ count: bigint }>>`
         SELECT count(*) AS count
         FROM ${Prisma.raw(`"${table}"`)} t
@@ -261,12 +269,18 @@ export class ChannelService {
           AND t.channel_id = ${manual.id}
           AND t.deleted_at IS NULL
           AND coalesce(t.metadata->'shopifySync'->>'status', '') <> 'SYNCED'
+          ${extra}
       `;
       return Number(rows[0]?.count ?? 0);
     };
 
     const [orders, products] = await Promise.all([
-      countPending('orders'),
+      // Mirrors PUSHABLE_ORDER_WHERE: cancelled, refunded and voided sales
+      // are never pushed, so they are not pending either.
+      countPending(
+        'orders',
+        Prisma.sql`AND t.cancelled_at IS NULL AND t.financial_status::text NOT IN ('REFUNDED', 'VOIDED')`,
+      ),
       countPending('products'),
     ]);
     return { orders, products };
@@ -296,8 +310,9 @@ export class ChannelService {
       );
       return {
         entityType,
-        // Absent row => enabled. Only an explicit `false` turns something off.
-        enabled: row?.enabled ?? true,
+        // Absent row: pull is on, push is off. Same rule as runSync's
+        // `enabledEntities` — a push writes to the live store, so it is opt-in.
+        enabled: row?.enabled ?? direction === 'pull',
         backfillDone: row?.backfillDone ?? false,
         watermark: row?.watermark ?? null,
       };
@@ -414,17 +429,79 @@ export class ChannelService {
       return { message: 'Channel already disconnected' };
     }
 
+    await this.release(channel);
+    return { message: 'Channel disconnected' };
+  }
+
+  /**
+   * Disconnect every connected channel of a workspace that is being deleted,
+   * so its WhatsApp number and Shopify store stop receiving and sending, and
+   * can be connected again in another workspace. The caller has already
+   * checked that the deleting user owns the workspace.
+   */
+  async disconnectAllForOrg(orgId: string): Promise<void> {
+    const channels = await this.prisma.channel.findMany({
+      where: {
+        organizationId: orgId,
+        platform: { not: ChannelPlatform.MANUAL },
+        status: { not: ChannelStatus.DISCONNECTED },
+      },
+    });
+    for (const channel of channels) await this.release(channel);
+  }
+
+  /**
+   * Disconnect what an influencer connected in these workspaces when they
+   * leave them. Their Instagram is their own account, not the workspace's:
+   * the workspace keeps its conversations but stops receiving and sending on
+   * it, and no longer holds their token.
+   */
+  async disconnectOwnedBy(orgIds: string[], userId: string): Promise<void> {
+    if (orgIds.length === 0) return;
+    const channels = await this.prisma.channel.findMany({
+      where: {
+        organizationId: { in: orgIds },
+        ownerUserId: userId,
+        platform: { not: ChannelPlatform.MANUAL },
+        status: { not: ChannelStatus.DISCONNECTED },
+      },
+    });
+    for (const channel of channels) await this.release(channel);
+  }
+
+  /** Revoke what we can remotely, then clear the grant and the account claim. */
+  private async release(channel: Channel): Promise<void> {
+    const { id: channelId, organizationId: orgId } = channel;
+
     // Remote cleanup is best-effort throughout — the grant may already be dead
     // on the provider's side, and that must not block us from clearing it here.
     if (channel.credentials) {
       try {
+        const creds = channel.credentials as Record<string, unknown>;
         if (channel.platform === ChannelPlatform.SHOPIFY) {
           await this.shopifyOAuth.unregisterWebhooks(channelId);
-        } else if (channel.platform === ChannelPlatform.INSTAGRAM) {
+        } else if (channel.platform === ChannelPlatform.INSTAGRAM && creds.authFlow !== FACEBOOK_LOGIN_FLOW) {
           await this.instagramOAuth.revokeWebhookSubscription(channel);
+        } else if (channel.platform === ChannelPlatform.FACEBOOK || channel.platform === ChannelPlatform.INSTAGRAM) {
+          // One Page subscription carries both the Page's Messenger and its
+          // linked Instagram account, so it goes only when neither is left.
+          const pageId = typeof creds.pageId === 'string' ? creds.pageId : null;
+          const stillUsed = pageId
+            ? await this.prisma.channel.count({
+                where: {
+                  id: { not: channelId },
+                  organizationId: orgId,
+                  status: { not: ChannelStatus.DISCONNECTED },
+                  credentials: { path: ['pageId'], equals: pageId },
+                },
+              })
+            : 0;
+          if (pageId && stillUsed === 0) await this.metaPages.unsubscribePage(pageId, creds.pageAccessToken);
+        } else if (channel.platform === ChannelPlatform.WHATSAPP) {
+          const wabaId = typeof creds.wabaId === 'string' ? creds.wabaId : null;
+          const token = typeof creds.accessToken === 'string' ? this.encryption.decrypt(creds.accessToken) : null;
+          if (wabaId && token) await this.whatsappAccount.unsubscribeApp(wabaId, token);
         }
-        // WhatsApp subscribes nothing at connect time, so there is nothing to
-        // revoke; the token simply stops being used.
       } catch {
         // Ignored by design.
       }
@@ -462,8 +539,6 @@ export class ChannelService {
         } as Prisma.InputJsonValue,
       },
     });
-
-    return { message: 'Channel disconnected' };
   }
 
   async getSyncLogs(channelId: string, orgId: string) {

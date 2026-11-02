@@ -23,7 +23,7 @@ function toDay(date: Date): string {
 }
 
 const optionClass =
-  "flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-caption hover:bg-accent focus-visible:bg-accent focus-visible:outline-none";
+  "flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-caption hover:bg-accent focus-visible:bg-accent focus-visible:outline-none max-md:min-h-11 max-md:text-label pointer-coarse:min-h-11";
 
 /**
  * Date filter for a page header: the page's presets plus a custom from/to.
@@ -93,7 +93,7 @@ export function DateRangeFilter<T extends string>({
         type="button"
         aria-haspopup="dialog"
         aria-expanded={open}
-        className="flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full bg-transparent pl-2.5 pr-2 text-label focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+        className="flex h-11 items-center gap-1.5 whitespace-nowrap rounded-full bg-transparent pl-3 pr-2 text-label focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:h-7 md:pl-2.5 pointer-coarse:h-11"
       >
         <CalendarDays className="size-3.5" />
         <span className="font-medium">Date:</span>
@@ -104,7 +104,7 @@ export function DateRangeFilter<T extends string>({
       <button
         type="button"
         className={cn(
-          "flex h-8 items-center gap-1.5 rounded-lg border border-input bg-card px-2.5 text-caption font-medium whitespace-nowrap shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50",
+          "flex h-8 items-center gap-1.5 rounded-lg border border-input bg-card px-2.5 text-caption font-medium whitespace-nowrap shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring max-md:h-11 max-md:rounded-xl max-md:px-3 max-md:text-label pointer-coarse:h-11",
           className,
         )}
       >
@@ -121,7 +121,7 @@ export function DateRangeFilter<T extends string>({
         // applied, a separate clear button — never a button inside a button.
         <div
           className={cn(
-            "inline-flex h-7 items-center rounded-full text-label",
+            "inline-flex h-11 shrink-0 items-center rounded-full text-label md:h-7 pointer-coarse:h-11",
             active ? "bg-brand/30 text-brand-strong" : "bg-card text-foreground ring-1 ring-border",
             className,
           )}
@@ -133,7 +133,7 @@ export function DateRangeFilter<T extends string>({
               onClick={onClear}
               aria-label="Clear date range"
               title="Clear date range"
-              className="mr-0.5 flex size-6 items-center justify-center rounded-full hover:bg-brand-strong/10"
+              className="flex size-11 items-center justify-center rounded-full hover:bg-brand-strong/10 md:mr-0.5 md:size-6 pointer-coarse:mr-0 pointer-coarse:size-11"
             >
               <X className="size-3" strokeWidth={2.5} />
             </button>

@@ -9,6 +9,8 @@ export const invoiceKeys = {
     [...invoiceKeys.all, "list", params] as const,
   detail: (id: string) =>
     [...invoiceKeys.all, "detail", id] as const,
+  pdf: (id: string) =>
+    [...invoiceKeys.all, "pdf", id] as const,
   stats: (params?: { financialYear?: string }) =>
     [...invoiceKeys.all, "stats", params] as const,
   gstReturn: (params: GstReturnParams) =>
@@ -33,6 +35,20 @@ export function useInvoice(id?: string | null) {
     queryKey: invoiceKeys.detail(id!),
     queryFn: () => invoiceService.get(id!),
     enabled: !!id,
+  });
+}
+
+/**
+ * The invoice as the PDF customers are sent, for drawing on screen and
+ * printing. Under `invoiceKeys.all`, so an edit or a cancellation redraws it.
+ */
+export function useInvoicePdf(id?: string | null) {
+  return useQuery({
+    queryKey: invoiceKeys.pdf(id!),
+    queryFn: () => invoiceService.pdf(id!).then((blob) => blob.arrayBuffer()),
+    enabled: !!id,
+    // Each refetch redraws every page; nothing about the file changes on focus.
+    refetchOnWindowFocus: false,
   });
 }
 

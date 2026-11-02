@@ -1,5 +1,8 @@
 import { NotFoundException } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { AuthService } from './auth.service';
+
+const stored = (token: string) => 'sha256:' + createHash('sha256').update(token).digest('hex');
 
 interface TokenRow {
   id: string;
@@ -12,7 +15,7 @@ interface TokenRow {
 interface TokenWhere {
   id?: string;
   userId?: string;
-  token?: string;
+  token?: { in: string[] };
   usedAt?: null;
   expiresAt?: { gt: Date };
 }
@@ -29,16 +32,18 @@ describe('AuthService.resetPassword — a reset link works exactly once', () => 
     // A tiny in-memory stand-in for the two tables, with all-or-nothing
     // transactions, so the conditional claim is exercised for real.
     let tokens: TokenRow[] = [
-      { id: 't1', userId: 'u1', token: 'link-1', usedAt: null, expiresAt: new Date(Date.now() + hour) },
-      { id: 't2', userId: 'u1', token: 'link-older', usedAt: null, expiresAt: new Date(Date.now() + hour) },
-      { id: 't3', userId: 'u2', token: 'link-other-user', usedAt: null, expiresAt: new Date(Date.now() + hour) },
+      { id: 't1', userId: 'u1', token: stored('link-1'), usedAt: null, expiresAt: new Date(Date.now() + hour) },
+      { id: 't2', userId: 'u1', token: stored('link-older'), usedAt: null, expiresAt: new Date(Date.now() + hour) },
+      { id: 't3', userId: 'u2', token: stored('link-other-user'), usedAt: null, expiresAt: new Date(Date.now() + hour) },
+      // Written before tokens were hashed.
+      { id: 't4', userId: 'u3', token: 'link-legacy', usedAt: null, expiresAt: new Date(Date.now() + hour) },
     ];
     const passwords: string[] = [];
 
     const matches = (row: TokenRow, where: TokenWhere) =>
       (where.id === undefined || row.id === where.id) &&
       (where.userId === undefined || row.userId === where.userId) &&
-      (where.token === undefined || row.token === where.token) &&
+      (where.token === undefined || where.token.in.includes(row.token)) &&
       (where.usedAt === undefined || row.usedAt === null) &&
       (where.expiresAt === undefined || row.expiresAt > where.expiresAt.gt);
 
@@ -99,7 +104,7 @@ describe('AuthService.resetPassword — a reset link works exactly once', () => 
 
     expect(passwords).toHaveLength(1);
     expect(usedAt('t1')).toBeInstanceOf(Date);
-    expect(redis.deleteAllAuthSessions).toHaveBeenCalledWith('u1');
+    expect(redis.deleteAllAuthSessions).toHaveBeenCalledWith('u1', undefined);
   });
 
   it('lets only one of two concurrent requests with the same link change the password', async () => {
@@ -174,5 +179,24 @@ describe('AuthService.resetPassword — a reset link works exactly once', () => 
       jest.useRealTimers();
     }
     expect(passwords).toHaveLength(0);
+  });
+
+  // The table holds only hashes, so reading it yields no working link.
+  it('refuses the stored hash presented as a link', async () => {
+    const { service, passwords } = build();
+
+    await expect(service.resetPassword({ token: stored('link-1'), newPassword: 'New-password-1' })).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(passwords).toHaveLength(0);
+  });
+
+  it('still honours a link stored before hashing began', async () => {
+    const { service, passwords, usedAt } = build();
+
+    await service.resetPassword({ token: 'link-legacy', newPassword: 'New-password-1' });
+
+    expect(passwords).toHaveLength(1);
+    expect(usedAt('t4')).toBeInstanceOf(Date);
   });
 });

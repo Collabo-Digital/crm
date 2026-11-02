@@ -1,5 +1,6 @@
 import { AlertTriangle, Check, Cloud, CloudOff, Loader2 } from "lucide-react";
 import type { ShopifySyncState, ShopifySyncSummary } from "~/lib/shopify-sync";
+import { toneClasses } from "~/lib/status-tone";
 
 /**
  * A table's Shopify column: a status pill with a one-line reason under it.
@@ -8,16 +9,16 @@ import type { ShopifySyncState, ShopifySyncSummary } from "~/lib/shopify-sync";
  * summary once and hands it to both.
  */
 
-const PILL_CLASS: Record<ShopifySyncState, string> = {
-  synced: "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300",
-  out_of_sync: "bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300",
-  syncing: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
-  failed: "bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300",
-  stuck: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-  not_on_shopify: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
+const PILL_CLASS = toneClasses<ShopifySyncState>({
+  synced: "success",
+  out_of_sync: "attention",
+  syncing: "info",
+  failed: "critical",
+  stuck: "attention",
+  not_on_shopify: "neutral",
   // Neutral on purpose: green over "not pushed yet" read as a contradiction.
-  unstamped: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
-};
+  unstamped: "neutral",
+});
 
 function PillIcon({ state }: { state: ShopifySyncState }) {
   switch (state) {
@@ -32,6 +33,11 @@ function PillIcon({ state }: { state: ShopifySyncState }) {
     default:
       return <AlertTriangle className="size-3" />;
   }
+}
+
+/** Whether someone has to act on it; a phone card shows the sync line only then. */
+export function syncNeedsAttention(summary: ShopifySyncSummary<string>): boolean {
+  return summary.state === "failed" || summary.state === "stuck" || summary.state === "out_of_sync";
 }
 
 export function ShopifySyncCell({
@@ -54,7 +60,7 @@ export function ShopifySyncCell({
       {/* `truncate` keeps the cell at least as wide as a short reason, so
           "Synced 2h ago" is never cut; a failure message can be a sentence,
           so it is capped and shown whole on hover. */}
-      <span title={summary.reason} className="max-w-56 truncate text-[11px] text-muted-foreground">
+      <span title={summary.reason} className="max-w-56 truncate text-caption text-muted-foreground">
         {summary.reason}
       </span>
     </div>

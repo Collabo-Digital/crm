@@ -25,7 +25,17 @@ describe('TaxSettings', () => {
       // The built-in series. An org that never configures one keeps issuing
       // INV-… exactly as before.
       invoicePrefix: 'INV',
+      // Not chosen: the store's Shopify orders decide until the merchant does.
+      pricesIncludeTax: null,
+      // A regular taxpayer below the e-invoicing limit until told otherwise.
+      composition: false,
+      eInvoicing: false,
     });
+  });
+
+  it('patches the composition and e-invoicing switches without resetting anything else', () => {
+    expect(UpdateTaxSettingsSchema.parse({ composition: true })).toEqual({ composition: true });
+    expect(UpdateTaxSettingsSchema.parse({ eInvoicing: true })).toEqual({ eInvoicing: true });
   });
 
   describe('invoicePrefix', () => {
@@ -52,6 +62,20 @@ describe('TaxSettings', () => {
       expect(() => UpdateTaxSettingsSchema.parse({ invoicePrefix: 'CN' })).toThrow();
       expect(() => UpdateTaxSettingsSchema.parse({ invoicePrefix: 'cn' })).toThrow();
     });
+  });
+
+  it('takes an explicit catalogue-prices choice and keeps it through a later patch', () => {
+    const chosen = TaxSettingsSchema.parse({
+      ...parseTaxSettings(null),
+      ...UpdateTaxSettingsSchema.parse({ pricesIncludeTax: false }),
+    });
+    expect(chosen.pricesIncludeTax).toBe(false);
+
+    const patched = TaxSettingsSchema.parse({
+      ...chosen,
+      ...UpdateTaxSettingsSchema.parse({ taxShipping: true }),
+    });
+    expect(patched.pricesIncludeTax).toBe(false);
   });
 
   it('does not inject a default for an omitted key on the patch schema', () => {

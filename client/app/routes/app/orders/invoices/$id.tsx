@@ -17,22 +17,23 @@ import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
 import { Skeleton } from "~/components/ui/skeleton";
 import { QueryErrorState } from "~/components/app/query-error-state";
-import { InvoiceDocument } from "~/components/app/invoice-document";
+import { PdfPages } from "~/components/app/pdf-pages";
 import { CancelInvoiceDialog } from "~/components/app/cancel-invoice-dialog";
 import { CreditNoteDialog } from "~/components/app/credit-note-dialog";
-import { useInvoice } from "~/hooks/use-invoice-queries";
+import { useInvoice, useInvoicePdf } from "~/hooks/use-invoice-queries";
 import { useUpdateInvoiceMutation } from "~/hooks/use-invoice-mutations";
 import { useInvoiceActionGates } from "~/hooks/use-invoice-action-gates";
-import { useIndianStates } from "~/hooks/use-gst-queries";
 import { isString, useSessionState } from "~/hooks/use-session-state";
 import { downloadInvoicePdf } from "~/lib/invoice-pdf";
 import {
   INVOICE_STATUS_CLASSES,
   INVOICE_STATUS_LABELS,
+  documentLabel,
   resolveDisplayStatus,
 } from "~/lib/invoice-status";
 import { cn } from "~/lib/utils";
 import type { InvoiceDetail, UpdateInvoiceRequest } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Invoice | Collabo CRM" }];
@@ -84,36 +85,6 @@ function draftFrom(invoice: InvoiceDetail): Draft {
   };
 }
 
-/** The invoice as it would look if the draft were saved — drives the preview. */
-function applyDraft(
-  invoice: InvoiceDetail,
-  d: Draft,
-  stateName: (code: string) => string,
-): InvoiceDetail {
-  const gstin = d.buyerGstin.trim() || null;
-  // The server derives the buyer's state from a valid GSTIN's first two
-  // digits; the preview must show the same so Save holds no surprise.
-  const stateCode =
-    gstin && GSTIN_PATTERN.test(gstin) ? gstin.slice(0, 2) : invoice.buyerStateCode;
-  return {
-    ...invoice,
-    buyerName: d.buyerName.trim() || invoice.buyerName,
-    buyerGstin: gstin,
-    buyerStateCode: stateCode,
-    buyerStateName:
-      stateCode === invoice.buyerStateCode ? invoice.buyerStateName : stateName(stateCode),
-    buyerAddress: {
-      address1: d.address1,
-      address2: d.address2,
-      city: d.city,
-      province: d.province,
-      zip: d.zip,
-      country: d.country,
-    },
-    notes: d.notes.trim() || null,
-  };
-}
-
 function toRequest(d: Draft): UpdateInvoiceRequest {
   return {
     buyerName: d.buyerName.trim(),
@@ -134,7 +105,8 @@ export default function InvoicePage() {
   const { id } = useParams<{ id: string }>();
   const { data: invoice, isLoading, isError, refetch } = useInvoice(id);
   const { canCancel } = useInvoiceActionGates();
-  const { data: states = [] } = useIndianStates();
+  const pdf = useInvoicePdf(id);
+  const [pdfFailed, setPdfFailed] = useState(false);
   // The list mirrors its filters to the session; go back to the same view.
   const [savedListParams] = useSessionState("invoices.params", "", isString);
   const listPath = `/orders/invoices${savedListParams ? `?${savedListParams}` : ""}`;
@@ -162,13 +134,7 @@ export default function InvoicePage() {
 
   const current = invoice;
   const editing = draft !== null;
-  const shown = draft
-    ? applyDraft(
-        current,
-        draft,
-        (code) => states.find((s) => s.code === code)?.name ?? code,
-      )
-    : current;
+  const label = documentLabel(current);
   const displayStatus = resolveDisplayStatus(current);
   const gstinInvalid =
     !!draft && draft.buyerGstin !== "" && !GSTIN_PATTERN.test(draft.buyerGstin);
@@ -200,14 +166,22 @@ export default function InvoicePage() {
 
   return (
     <div className="space-y-4">
+      <title>{pageTitle(`${label} ${current.invoiceNumber}`)}</title>
+      {/* The number shows in the breadcrumb; this is the page's heading. */}
+      <h1 className="sr-only">
+        {label} {current.invoiceNumber}
+      </h1>
       {/* Breadcrumb + actions */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption">
-          <Link to={listPath} className="text-muted-foreground hover:text-foreground">
+          {/* On a phone the app bar's back arrow replaces the link. */}
+          <Link to={listPath} className="text-muted-foreground hover:text-foreground max-md:hidden">
             Invoices
           </Link>
-          <ChevronRight className="size-3 text-muted-foreground" />
+          <ChevronRight className="size-3 text-muted-foreground max-md:hidden" />
           <span className="font-medium text-foreground">{current.invoiceNumber}</span>
+          {/* A credit note's pill already says so. */}
+          {label !== INVOICE_STATUS_LABELS[displayStatus] && <span className="text-muted-foreground">· {label}</span>}
           <span
             className={cn(
               "ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-micro font-medium",
@@ -284,10 +258,11 @@ export default function InvoicePage() {
                   placeholder="Buyer name"
                   aria-label="Buyer name"
                   aria-invalid={nameMissing}
+                  aria-describedby={nameMissing ? "invoice-buyer-name-error" : undefined}
                   {...field("buyerName")}
                 />
                 {nameMissing && (
-                  <p className="mt-1 text-micro text-danger">Buyer name is required.</p>
+                  <p id="invoice-buyer-name-error" className="mt-1 text-micro text-danger">Buyer name is required.</p>
                 )}
               </div>
               <div>
@@ -297,6 +272,7 @@ export default function InvoicePage() {
                   maxLength={15}
                   className="font-mono"
                   aria-invalid={gstinInvalid}
+                  aria-describedby={gstinInvalid ? "invoice-buyer-gstin-error" : undefined}
                   value={draft.buyerGstin}
                   onChange={(e) =>
                     setDraft((d) =>
@@ -305,7 +281,7 @@ export default function InvoicePage() {
                   }
                 />
                 {gstinInvalid && (
-                  <p className="mt-1 text-micro text-danger">
+                  <p id="invoice-buyer-gstin-error" className="mt-1 text-micro text-danger">
                     That isn't a valid 15-character GSTIN.
                   </p>
                 )}
@@ -384,9 +360,32 @@ export default function InvoicePage() {
           )}
         </aside>
 
-        {/* Document preview — live while editing */}
-        <section className="min-w-0 flex-1 overflow-x-auto rounded-xl border bg-white">
-          <InvoiceDocument invoice={shown} />
+        {/* The PDF customers are sent, as the server renders it. */}
+        <section className="min-w-0 flex-1 space-y-3">
+          {editing && (
+            <p className="rounded-lg bg-muted px-3 py-2 text-caption text-muted-foreground">
+              This is the saved {label.toLowerCase()}. It changes when you save.
+            </p>
+          )}
+          {pdf.isError || pdfFailed ? (
+            <div className="rounded-xl bg-card ring-1 ring-border">
+              <QueryErrorState
+                resource={`this ${label.toLowerCase()}'s PDF`}
+                onRetry={() => {
+                  setPdfFailed(false);
+                  void pdf.refetch();
+                }}
+              />
+            </div>
+          ) : (
+            <PdfPages
+              data={pdf.data}
+              label={`${label} ${current.invoiceNumber}`}
+              onRendered={() => setPdfFailed(false)}
+              onError={() => setPdfFailed(true)}
+              className="mx-auto max-w-3xl"
+            />
+          )}
         </section>
       </div>
 

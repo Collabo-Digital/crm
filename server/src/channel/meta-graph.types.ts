@@ -43,11 +43,23 @@ export interface MetaRequest {
   /// Sent as application/x-www-form-urlencoded instead of a JSON `body` —
   /// Instagram Login's code exchange accepts nothing else.
   form?: Record<string, string>;
+  /// Sent as multipart/form-data: media and attachment uploads.
+  multipart?: FormData;
+  /// Sent as the raw request body: the Resumable Upload API's file data.
+  binary?: Uint8Array;
+  /// Extra request headers, e.g. the upload's `file_offset`.
+  headers?: Record<string, string>;
+  /// The Resumable Upload API wants `Authorization: OAuth <token>`; everything else `Bearer`.
+  authScheme?: 'Bearer' | 'OAuth';
   /// Wallets this call draws from, broad to specific: app, then business
   /// use case / ad account / page, then phone number.
   scopes: RateLimitScope[];
   priority?: Priority;
   channelId?: string;
+  /// False for a POST that must not be repeated blindly (a message send): a
+  /// 5xx without Meta's error object may have been processed, so it is thrown
+  /// at once as HTTP_ERROR instead of being sent again.
+  idempotent?: boolean;
   timeoutMs?: number;
   graphVersion?: string;
   /// Ids the usage headers do not carry themselves.

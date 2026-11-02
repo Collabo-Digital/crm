@@ -11,6 +11,9 @@
 // images via repeated rows. Cost-per-item rides on the variant. Out of scope:
 // per-variant tax overrides, gift-card flag.
 
+import { sanitizeProductHtml } from '../../common/utils/sanitize-product-html.util';
+import { neutraliseCsvFormula, restoreCsvFormulaText } from '../../common/utils/csv-formula.util';
+
 export const SHOPIFY_CSV_HEADERS = [
   'Handle',
   'Title',
@@ -49,10 +52,14 @@ export type ShopifyCsvRow = Record<(typeof SHOPIFY_CSV_HEADERS)[number], string>
 
 // ─── Encode (CSV writer) ───────────────────────────────────────────────────
 
-/** Quote a value if it contains a comma, quote, or newline. RFC 4180 escaping. */
+/**
+ * Quote a value if it contains a comma, quote, or newline. RFC 4180 escaping.
+ * A value that would run as a spreadsheet formula gets a leading apostrophe,
+ * which `parseShopifyCsv` takes off again.
+ */
 function csvEscape(value: string | null | undefined): string {
   if (value === null || value === undefined) return '';
-  const s = String(value);
+  const s = neutraliseCsvFormula(String(value));
   if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
     return `"${s.replace(/"/g, '""')}"`;
   }
@@ -144,7 +151,7 @@ export function buildShopifyCsv(
 
       if (isFirstRow) {
         row['Title'] = p.title;
-        row['Body (HTML)'] = p.bodyHtml ?? '';
+        row['Body (HTML)'] = sanitizeProductHtml(p.bodyHtml ?? '');
         row['Vendor'] = p.vendor ?? '';
         row['Type'] = p.productType ?? '';
         row['Tags'] = (p.tags ?? []).join(', ');
@@ -281,7 +288,7 @@ export function parseShopifyCsv(text: string): Array<Record<string, string>> {
     const obj: Record<string, string> = {};
     for (let c = 0; c < headers.length; c++) {
       const key = headers[c];
-      const val = row[c] ?? '';
+      const val = restoreCsvFormulaText(row[c] ?? '');
       if (val !== '') obj[key] = val;
     }
     out.push(obj);
@@ -330,6 +337,29 @@ const numOrUndef = (v: string | undefined): number | undefined => {
   return Number.isFinite(n) ? n : undefined;
 };
 
+/// One of our own uploads by path alone: /uploads/products/<orgId>/<file>.
+const OWN_UPLOAD_PATH = /^\/uploads\/products\/[\w-]+\/[\w-]+(\.[\w-]+)?$/;
+/// A path segment of only dots, plain or percent-encoded.
+const DOT_SEGMENT = /(^|[/\\])(\.|%2e){1,2}([/\\?#]|$)/i;
+
+/**
+ * An Image Src an import may keep: an http(s) address, or the path of one of
+ * our own uploads. Anything else is left out, '..' in a path above all:
+ * removing the image later deletes the file its address names.
+ */
+export function importableImageSrc(raw: string): string | null {
+  const src = raw.trim();
+  if (src.startsWith('/')) return OWN_UPLOAD_PATH.test(src) ? src : null;
+  // URL parsing drops tabs and line breaks, which could hide a '..' from the check.
+  if (/[\t\n\r]/.test(src) || DOT_SEGMENT.test(src)) return null;
+  try {
+    const { protocol } = new URL(src);
+    return protocol === 'http:' || protocol === 'https:' ? src : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Group raw header-mapped rows by `Handle` and assemble each handle's
  * variants + images + product-level fields into a single create-ready
@@ -356,7 +386,7 @@ export function groupRowsIntoProducts(
       p = {
         handle,
         title: (r['Title'] ?? handle).trim(),
-        bodyHtml: r['Body (HTML)'] || undefined,
+        bodyHtml: sanitizeProductHtml(r['Body (HTML)'] ?? '') || undefined,
         vendor: r['Vendor'] || undefined,
         productType: r['Type'] || undefined,
         tags: (r['Tags'] ?? '')
@@ -445,11 +475,16 @@ export function groupRowsIntoProducts(
 
     // Image row (any row with Image Src adds an image to the product)
     if (r['Image Src']) {
-      p.images.push({
-        src: r['Image Src'],
-        alt: r['Image Alt Text'] || undefined,
-        position: numOrUndef(r['Image Position']) ?? p.images.length + 1,
-      });
+      const src = importableImageSrc(r['Image Src']);
+      if (src) {
+        p.images.push({
+          src,
+          alt: r['Image Alt Text'] || undefined,
+          position: numOrUndef(r['Image Position']) ?? p.images.length + 1,
+        });
+      } else {
+        errors.push({ row: idx + 2, handle, message: 'Image Src is not a web address (http:// or https://), so that image was left out.' });
+      }
     }
   });
 

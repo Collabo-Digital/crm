@@ -17,6 +17,7 @@ import { TaxResolverService } from './tax-resolver.service';
 describe('TaxResolverService', () => {
   let service: TaxResolverService;
   let prisma: {
+    organizationSettings: { findUnique: jest.Mock };
     productCollection: { findMany: jest.Mock };
     product: { findMany: jest.Mock };
     productTypeTaxRate: { findMany: jest.Mock };
@@ -25,6 +26,7 @@ describe('TaxResolverService', () => {
 
   beforeEach(async () => {
     prisma = {
+      organizationSettings: { findUnique: jest.fn().mockResolvedValue(null) },
       productCollection: { findMany: jest.fn().mockResolvedValue([]) },
       product: { findMany: jest.fn().mockResolvedValue([]) },
       productTypeTaxRate: { findMany: jest.fn().mockResolvedValue([]) },
@@ -287,7 +289,7 @@ describe('TaxResolverService', () => {
       expect(prisma.product.findMany.mock.calls[0][0].where.id.in).toEqual(['p1']);
     });
 
-    it('issues NO queries when every line is answered outright', async () => {
+    it('issues NO rate queries when every line is answered outright', async () => {
       const rates = await service.resolveLineGstRates('org1', '27', [
         { productId: 'p1', productGstRate: 18 },
         { productId: 'p2', productGstRate: 0 },
@@ -303,6 +305,7 @@ describe('TaxResolverService', () => {
       // outside the caller's Serializable snapshot, so an invoice could be
       // priced with rates its own transaction cannot see.
       const tx = {
+        organizationSettings: { findUnique: jest.fn().mockResolvedValue(null) },
         productCollection: { findMany: jest.fn().mockResolvedValue([]) },
         product: { findMany: jest.fn().mockResolvedValue([]) },
         productTypeTaxRate: { findMany: jest.fn().mockResolvedValue([]) },
@@ -321,6 +324,53 @@ describe('TaxResolverService', () => {
       expect(rates).toEqual([28]);
       expect(tx.stateTaxRate.findFirst).toHaveBeenCalledTimes(1);
       expect(prisma.stateTaxRate.findFirst).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * A composition taxpayer cannot collect tax on any supply (CGST Act section
+   * 10), and every path that charges tax prices its lines here — offline
+   * orders and the till, drafts, invoices.
+   */
+  describe('composition scheme', () => {
+    it('gives every line 0%, whatever the product, variant or state says', async () => {
+      prisma.organizationSettings.findUnique.mockResolvedValue({ taxSettings: { composition: true } });
+      prisma.stateTaxRate.findFirst.mockResolvedValue({ gstRate: '18.00' });
+
+      const rates = await service.resolveLineGstRates('org1', '29', [
+        { productId: 'p1', productGstRate: 18 },
+        { productId: 'p2', variantGstRate: 12, productGstRate: 5 },
+        { productId: 'p3', productGstRate: null },
+      ]);
+
+      expect(rates).toEqual([0, 0, 0]);
+      // Nothing of the chain is even read.
+      expect(prisma.stateTaxRate.findFirst).not.toHaveBeenCalled();
+      expect(prisma.productCollection.findMany).not.toHaveBeenCalled();
+    });
+
+    it('reads the switch on the caller transaction, for its own organization', async () => {
+      const tx = {
+        organizationSettings: {
+          findUnique: jest.fn().mockResolvedValue({ taxSettings: { composition: true } }),
+        },
+      };
+
+      await expect(
+        service.resolveLineGstRates('org1', '29', [{ productId: 'p1', productGstRate: 18 }], tx as never),
+      ).resolves.toEqual([0]);
+      expect(tx.organizationSettings.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { organizationId: 'org1' } }),
+      );
+      expect(prisma.organizationSettings.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('charges the usual rates once the switch is off', async () => {
+      prisma.organizationSettings.findUnique.mockResolvedValue({ taxSettings: { composition: false } });
+
+      await expect(
+        service.resolveLineGstRates('org1', '29', [{ productId: 'p1', productGstRate: 18 }]),
+      ).resolves.toEqual([18]);
     });
   });
 });

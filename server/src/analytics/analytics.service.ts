@@ -11,6 +11,7 @@ import {
   QueryAnalyticsDto,
   rangeToDays,
 } from './dto/query-analytics.dto';
+import { dayMonthLabel } from '../common/utils/day-label.util';
 
 // ─── DTOs returned to the client ─────────────────────────────────────────
 
@@ -244,7 +245,7 @@ export class AnalyticsService {
           revenue: 0,
           sessions: 0,
           orders: 0,
-          label: key.slice(5), // "MM-DD"
+          label: dayMonthLabel(d),
         });
       }
     }

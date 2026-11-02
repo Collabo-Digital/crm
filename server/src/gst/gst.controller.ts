@@ -19,14 +19,21 @@ import { CreateProductTypeTaxRateDto } from './dto/create-product-type-tax-rate.
 import { UpdateProductTypeTaxRateDto } from './dto/update-product-type-tax-rate.dto';
 import { INDIAN_STATES } from './constants/indian-states';
 import { ORG_MANAGERS, Roles } from '../auth/decorators/roles.decorator';
+import { RequireSection } from '../auth/decorators/require-section.decorator';
 
+// The registrations and tax rates are read by the order form, invoices,
+// package slips, warehouses and Settings › Tax & GST — not by Chat or
+// Campaigns, whose members are kept out of them.
 @Controller('gst')
+@RequireSection('orders', 'products', 'invoices')
 export class GstController {
   constructor(private readonly gstService: GstService) {}
 
   // ─── STATES ───
 
+  // A fixed list every address form uses.
   @Get('states')
+  @RequireSection()
   getStates() {
     return INDIAN_STATES;
   }

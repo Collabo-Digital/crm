@@ -84,6 +84,54 @@ describe('GstCalculatorService', () => {
     });
   });
 
+  describe('calculateInclusiveLineItem', () => {
+    it('backs the tax out of a price that already includes it', () => {
+      const result = calculator.calculateInclusiveLineItem(
+        { unitPrice: 1180, quantity: 1, discount: 0, gstRate: 18 },
+        true,
+      );
+
+      expect(result.taxableValue).toBe(1000);
+      expect(result.cgstAmount).toBe(90);
+      expect(result.sgstAmount).toBe(90);
+      expect(result.totalTax).toBe(180);
+      expect(result.totalAmount).toBe(1180);
+    });
+
+    it('keeps taxable value plus tax equal to the amount charged when it does not divide evenly', () => {
+      const result = calculator.calculateInclusiveLineItem(
+        { unitPrice: 999, quantity: 3, discount: 100, gstRate: 18 },
+        false,
+      );
+
+      expect(result.taxableValue).toBe(2455.08);
+      expect(result.igstAmount).toBe(441.92);
+      expect(result.taxableValue + result.totalTax).toBeCloseTo(2897, 2);
+      expect(result.totalAmount).toBe(2897);
+    });
+
+    it('splits the remainder between CGST and SGST so they still add up', () => {
+      const result = calculator.calculateInclusiveLineItem(
+        { unitPrice: 999, quantity: 1, discount: 0, gstRate: 18 },
+        true,
+      );
+
+      expect(result.taxableValue).toBe(846.61);
+      expect(result.totalTax).toBe(152.39);
+      expect([result.cgstAmount, result.sgstAmount]).toEqual([76.19, 76.2]);
+    });
+
+    it('leaves an exempt line untouched', () => {
+      const result = calculator.calculateInclusiveLineItem(
+        { unitPrice: 500, quantity: 2, discount: 0, gstRate: 0 },
+        true,
+      );
+
+      expect(result.taxableValue).toBe(1000);
+      expect(result.totalTax).toBe(0);
+    });
+  });
+
   describe('calculateInvoiceTotals', () => {
     const intraLines = () => [
       calculator.calculateLineItem(

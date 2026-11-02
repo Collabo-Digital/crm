@@ -120,14 +120,24 @@ export function Gstr1B2bPanel({ data, currency }: PanelProps) {
                         }
                       >
                         <TableCell className="font-mono text-caption">
-                          <span className="inline-flex items-center gap-1.5">
+                          {/* The keyboard way in; the row stays clickable. */}
+                          <button
+                            type="button"
+                            aria-expanded={isOpen}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setOpenBuyer(isOpen ? null : entry.buyerGstin);
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-sm"
+                          >
                             {isOpen ? (
                               <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
                             ) : (
                               <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
                             )}
+                            <span className="sr-only">Invoices for </span>
                             {entry.buyerGstin}
-                          </span>
+                          </button>
                         </TableCell>
                         <TableCell>{entry.buyerName}</TableCell>
                         <TableCell className="text-right tabular-nums">

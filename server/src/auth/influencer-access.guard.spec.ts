@@ -42,6 +42,7 @@ describe('InfluencerAccessGuard', () => {
   // profile, and the channel routes that let them connect their Instagram.
   const open: Array<[string, (...a: any[]) => any, any]> = [
     ['AuthController.switchOrg', AuthController.prototype.switchOrg, AuthController],
+    ['AuthController.logout', AuthController.prototype.logout, AuthController],
     ['UserController.getProfile', UserController.prototype.getProfile, UserController],
     ['UserController.updateProfile', UserController.prototype.updateProfile, UserController],
     ['UserController.changePassword', UserController.prototype.changePassword, UserController],

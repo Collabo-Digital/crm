@@ -13,8 +13,9 @@ const WHATSAPP_CONCURRENCY =
 
 /**
  * BullMQ worker for the WhatsApp messaging queue.
- * Jobs are enqueued by WhatsAppTriggerService; this worker dispatches them to
- * Meta's Cloud API via WhatsAppMessagingService.
+ * Nothing enqueues here any more: order messages come from automations
+ * (commerce events). The worker stays to finish jobs queued before that
+ * change; it dispatches them to Meta's Cloud API via WhatsAppMessagingService.
  *
  * Failures thrown from the service bubble up to BullMQ, which retries with
  * exponential backoff per the `attempts` + `backoff` options set at enqueue time.

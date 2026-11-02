@@ -75,6 +75,17 @@ export class PrismaExceptionFilter implements ExceptionFilter {
                 break;
             }
 
+            // No free database connection in time (pool timeout, or a
+            // transaction that could not start). Transient: retrying shortly works.
+            case 'P2024':
+            case 'P2028': {
+                statusCode = HttpStatus.SERVICE_UNAVAILABLE;
+                message = 'The server is busy right now. Please try again in a few seconds.';
+                response.setHeader('Retry-After', '5');
+                this.logger.warn(`Database busy (${exception.code}) on ${request.method} ${request.url}`);
+                break;
+            }
+
             default: {
                 statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
                 message = 'An unexpected database error occurred';

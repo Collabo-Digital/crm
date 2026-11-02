@@ -27,9 +27,8 @@ describe('warehouseGstinMismatch', () => {
   });
 
   it('reports a cross-state link and names both states', () => {
-    const message = warehouseGstinMismatch({ provinceCode: 'KA' }, MH);
-    expect(message).toContain('29');
-    expect(message).toContain('Maharashtra');
-    expect(message).toContain('own GST registration');
+    expect(warehouseGstinMismatch({ provinceCode: 'KA' }, MH)).toBe(
+      'This GSTIN is for Maharashtra but the location is in Karnataka.',
+    );
   });
 });

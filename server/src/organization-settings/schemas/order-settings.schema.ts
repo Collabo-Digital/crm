@@ -39,6 +39,19 @@ export const OrderSettingsSchema = z.object({
    * in the sequence that gets filed.
    */
   autoInvoiceOnPayment: z.boolean().default(false),
+
+  /**
+   * When TRUE, a cash-on-delivery order is invoiced when it ships, instead of
+   * waiting for payment. GST wants the tax invoice issued by the time the
+   * goods leave, and a COD order is only paid after delivery, so invoicing it
+   * on payment issues the invoice late (or never, if nobody marks it paid).
+   * Its payment later finds the invoice and issues nothing more.
+   *
+   * Default FALSE for the same reason as above: it consumes serials, so an
+   * org opts in. Applies to live Shopify fulfilments and to shipments made
+   * in Collabo.
+   */
+  autoInvoiceCodOnShipping: z.boolean().default(false),
 });
 
 export type OrderSettings = z.infer<typeof OrderSettingsSchema>;
@@ -55,6 +68,7 @@ export type OrderSettings = z.infer<typeof OrderSettingsSchema>;
 export const UpdateOrderSettingsSchema = z.object({
   autoSyncToShopify: z.boolean().optional(),
   autoInvoiceOnPayment: z.boolean().optional(),
+  autoInvoiceCodOnShipping: z.boolean().optional(),
 });
 export type UpdateOrderSettingsInput = z.infer<typeof UpdateOrderSettingsSchema>;
 

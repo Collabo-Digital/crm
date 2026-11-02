@@ -1,14 +1,19 @@
 import { useState } from "react";
 import { oneOf, useSessionState } from "~/hooks/use-session-state";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
+import { useStartChatMutation } from "~/hooks/use-inbox-mutations";
+import { useSectionAccess } from "~/hooks/use-section-access";
 import {
   ChevronLeft,
   ChevronRight,
+  Link2,
   Loader2,
+  MessageCircle,
   MoreHorizontal,
   Pencil,
   Plus,
   Receipt,
+  Unlink,
   X,
 } from "lucide-react";
 
@@ -24,15 +29,20 @@ import { ChannelBadge } from "~/components/app/channel-badge";
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { CustomerGstDialog } from "~/components/app/customer-gst-dialog";
+import { CustomerAddressDialog, CustomerPhoneDialog } from "~/components/app/customer-contact-dialogs";
 import { CustomerOrdersPanel } from "~/components/app/customer-orders-panel";
-import { NotYet } from "~/components/app/not-yet";
+import { ContactSearchDialog, PlatformIcon, chatHandle } from "~/components/app/inbox/contact-search-dialog";
 import { useCustomer } from "~/hooks/use-customer-queries";
-import { useUpdateCustomerMutation } from "~/hooks/use-customer-mutations";
+import { useLinkChatMutation, useUnlinkChatMutation, useUpdateCustomerMutation } from "~/hooks/use-customer-mutations";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { VIP_CLASSES, VIP_LABELS } from "~/lib/customer-status";
+import { formatDateTime } from "~/lib/inbox-format";
 import { mapsEmbedUrl, mapsUrl, readAddress } from "~/lib/address";
+import { STATUS_TONE_CLASSES } from "~/lib/status-tone";
 import { cn, formatCurrency } from "~/lib/utils";
 import type { CustomerDetail } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Customer | Collabo CRM" }];
@@ -74,6 +84,10 @@ export default function CustomerDetailPage() {
   const [gstOpen, setGstOpen] = useState(false);
 
   const { data: customer, isLoading, isError, refetch } = useCustomer(id);
+  const navigate = useNavigate();
+  const startChat = useStartChatMutation();
+  const { canAccess } = useSectionAccess();
+  const { role } = useCurrentRole();
   const { data: org } = useCurrentOrg();
   const gstEnabled = org?.gstEnabled ?? false;
   const orgCurrency = org?.currency ?? "USD";
@@ -99,18 +113,43 @@ export default function CustomerDetailPage() {
     customer.email ||
     "—";
   const isActive = customer.state !== "DISABLED";
-  // No numeric customer number exists — ids are cuids. Shopify's own id is the
-  // closest thing to the mockup's "#56578"; the cuid tail is the fallback.
-  const displayId = customer.externalId || customer.id.slice(-8);
+
+  // A linked WhatsApp chat opens as it is (latest first), even when the
+  // customer record has no phone; otherwise the inbox starts one on the
+  // customer's number. Viewers can read a chat but not start one.
+  const linkedChat = customer.chats.find((chat) => chat.platform === "WHATSAPP" && chat.conversationId);
+  const canStartChat = role !== "VIEWER" && Boolean(customer.phone);
+  const messageBlocked = !canAccess("/inbox")
+    ? "You do not have access to the inbox."
+    : linkedChat || canStartChat
+      ? null
+      : customer.phone
+        ? "Viewers can open a chat but not start one."
+        : "Add a phone number to message this customer.";
+  function sendMessage() {
+    if (linkedChat) {
+      navigate(`/inbox?c=${linkedChat.conversationId}`);
+      return;
+    }
+    startChat.mutate(
+      {
+        phone: customer!.phone!,
+        customerId: customer!.id,
+        name: [customer!.firstName, customer!.lastName].filter(Boolean).join(" ") || undefined,
+      },
+      { onSuccess: (r) => navigate(`/inbox?c=${r.conversationId}`) },
+    );
+  }
 
   return (
     // `items-start` is load-bearing: without it the grid stretches both columns
     // to equal height and the sticky rail has nothing to scroll against.
-    <div className="flex gap-6 ">
-      <div className="space-y-5 flex-2">
+    <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+      <title>{pageTitle(name === "—" ? null : name, "Customer")}</title>
+      <div className="min-w-0 space-y-5 lg:flex-2">
         {/* Header: identity + tabs */}
         <header className="rounded-xl bg-card p-5 shadow-sm ring-1 ring-border">
-          <div className="flex justify-between gap-4">
+          <div className="flex flex-wrap justify-between gap-4">
             {/* <div className="flex flex-1 items-center gap-3"> */}
 
             {/* <Button asChild variant="outline" size="icon-sm">
@@ -119,7 +158,7 @@ export default function CustomerDetailPage() {
                 </Link>
               </Button> */}
 
-            <div className="flex  gap-3">
+            <div className="flex min-w-0 gap-3">
               <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-brand text-body font-semibold text-brand-foreground">
                 {getInitials(customer.firstName, customer.lastName)}
               </span>
@@ -132,9 +171,7 @@ export default function CustomerDetailPage() {
                   <span
                     className={cn(
                       "inline-flex items-center rounded-full px-2 py-0.5 text-micro font-medium",
-                      isActive
-                        ? "bg-brand/30 text-brand-strong"
-                        : "bg-muted text-muted-foreground",
+                      isActive ? STATUS_TONE_CLASSES.success : STATUS_TONE_CLASSES.neutral,
                     )}
                   >
                     {isActive ? "Active" : "Disabled"}
@@ -148,13 +185,16 @@ export default function CustomerDetailPage() {
                     {VIP_LABELS[customer.vipLevel]}
                   </span>
                 </div>
-                <p className="mt-0.5 text-caption text-muted-foreground">
-                  Customer ID {displayId}
-                </p>
+                {/* Shopify's id helps find them there; Collabo's own id is for developers. */}
+                {customer.externalId && (
+                  <p className="mt-0.5 text-caption text-muted-foreground">
+                    Shopify customer {customer.externalId}
+                  </p>
+                )}
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <DropdownMenu>
                 {/* 38px is the measured height of a `size="action"` pill, so the
                     circle sits flush beside Send Message. The stock icon size
@@ -180,11 +220,22 @@ export default function CustomerDetailPage() {
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              <NotYet title="Messaging customers isn't wired up yet">
-                <Button variant="brand" size="action" disabled>
-                  Send Message
-                </Button>
-              </NotYet>
+              <Button
+                variant="brand"
+                size="action"
+                disabled={Boolean(messageBlocked) || startChat.isPending}
+                title={messageBlocked ?? undefined}
+                onClick={sendMessage}
+              >
+                {startChat.isPending && <Loader2 className="size-3.5 animate-spin" />}
+                Send Message
+              </Button>
+              {/* Touch screens never show the hover reason, so it is written out. */}
+              {messageBlocked && (
+                <p className="hidden basis-full text-right text-caption text-muted-foreground max-md:block pointer-coarse:block">
+                  {messageBlocked}
+                </p>
+              )}
 
               {/* <NotYet title="Stepping between customers isn't available yet">
                 <Button
@@ -266,7 +317,7 @@ export default function CustomerDetailPage() {
         </div>
       </div>
 
-      <aside className="space-y-4 lg:sticky lg:top-6 flex-1">
+      <aside className="space-y-4 lg:sticky lg:top-6 lg:flex-1">
         {/* One card, internally divided — not four SectionCards. */}
         <div className="divide-y rounded-xl bg-card shadow-sm ring-1 ring-border">
           <CustomerDetailsSection customer={customer} currency={orgCurrency} />
@@ -274,6 +325,7 @@ export default function CustomerDetailPage() {
           <ContactSection customer={customer} />
           <TagsSection customer={customer} />
         </div>
+        <ChatsCard customer={customer} />
       </aside>
 
       {gstOpen && (
@@ -333,14 +385,18 @@ function RailRow({
   );
 }
 
-/** Pencil affordance for a field the API cannot update. */
-function DisabledPencil({ title }: { title: string }) {
+/** Customer edits go through PATCH /customers/:id, which is ORG_OPERATORS. */
+function useCanEditCustomer(): boolean {
+  const { role } = useCurrentRole();
+  return role === "OWNER" || role === "ADMIN" || role === "MANAGER" || role === "AGENT";
+}
+
+/** The pencil beside a rail section's title. */
+function EditPencil({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <NotYet title={title}>
-      <Button variant="ghost" size="icon-xs" disabled aria-label={title}>
-        <Pencil className="size-3.5" />
-      </Button>
-    </NotYet>
+    <Button variant="ghost" size="icon-xs" aria-label={label} title={label} onClick={onClick}>
+      <Pencil className="size-3.5" />
+    </Button>
   );
 }
 
@@ -383,6 +439,8 @@ function CustomerDetailsSection({
 }
 
 function ShippingAddressSection({ customer }: { customer: CustomerDetail }) {
+  const canEdit = useCanEditCustomer();
+  const [editing, setEditing] = useState(false);
   const address = readAddress(
     customer.defaultAddress ?? customer.addresses?.[0],
   );
@@ -393,8 +451,9 @@ function ShippingAddressSection({ customer }: { customer: CustomerDetail }) {
   return (
     <RailSection
       title="Shipping Address"
-      action={<DisabledPencil title="Editing addresses isn't supported yet" />}
+      action={canEdit && <EditPencil label="Edit shipping address" onClick={() => setEditing(true)} />}
     >
+      {editing && <CustomerAddressDialog customer={customer} onClose={() => setEditing(false)} />}
       {address.hasAddress ? (
         <>
           {/* The muted box sits behind the iframe, so a blank or throttled embed
@@ -444,16 +503,17 @@ function ShippingAddressSection({ customer }: { customer: CustomerDetail }) {
 }
 
 function ContactSection({ customer }: { customer: CustomerDetail }) {
+  const canEdit = useCanEditCustomer();
+  const [editing, setEditing] = useState(false);
   const chip =
     "inline-flex w-fit items-center rounded-full bg-brand/20 px-3 py-1 text-caption text-brand-strong hover:bg-brand/35";
 
   return (
     <RailSection
       title="Contact Information"
-      action={
-        <DisabledPencil title="Editing contact details isn't supported yet" />
-      }
+      action={canEdit && <EditPencil label="Edit phone number" onClick={() => setEditing(true)} />}
     >
+      {editing && <CustomerPhoneDialog customer={customer} onClose={() => setEditing(false)} />}
       {/* Stacked one per row, matching the design rather than wrapping inline. */}
       <div className="flex flex-col items-start gap-2">
         {customer.email && (
@@ -473,6 +533,92 @@ function ContactSection({ customer }: { customer: CustomerDetail }) {
         )}
       </div>
     </RailSection>
+  );
+}
+
+/**
+ * Every WhatsApp number and Instagram or Messenger profile linked to the
+ * customer. Each stays its own chat: the reply window and opt-in belong to
+ * the number. Linking needs the inbox, and is not for viewers.
+ */
+function ChatsCard({ customer }: { customer: CustomerDetail }) {
+  const { canAccess } = useSectionAccess();
+  const { role } = useCurrentRole();
+  const inbox = canAccess("/inbox");
+  const canEdit = inbox && role !== "VIEWER";
+  const link = useLinkChatMutation(customer.id);
+  const unlink = useUnlinkChatMutation(customer.id);
+  const [linking, setLinking] = useState(false);
+  const name = [customer.firstName, customer.lastName].filter(Boolean).join(" ") || "this customer";
+
+  return (
+    <div className="rounded-xl bg-card shadow-sm ring-1 ring-border">
+      <RailSection
+        title="Chats"
+        action={
+          canEdit && (
+            <Button variant="outline" size="xs" onClick={() => setLinking(true)}>
+              <Link2 />
+              Link a chat
+            </Button>
+          )
+        }
+      >
+        {customer.chats.length === 0 ? (
+          <p className="text-caption text-muted-foreground">No chats are linked to this customer yet.</p>
+        ) : (
+          <ul className="divide-y">
+            {customer.chats.map((chat) => {
+              const handle = chatHandle(chat);
+              return (
+                <li key={chat.contactId} className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0">
+                  <span className="mt-0.5">
+                    <PlatformIcon platform={chat.platform} size={16} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-caption font-medium text-foreground">{handle}</p>
+                    <p className="truncate text-micro text-muted-foreground">
+                      {[handle !== chat.name ? chat.name : null, chat.channel.name, chat.lastMessageAt ? `Last message ${formatDateTime(chat.lastMessageAt)}` : "No messages yet"]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                    {inbox && (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {chat.conversationId && (
+                          <Button asChild variant="outline" size="xs">
+                            <Link to={`/inbox?c=${chat.conversationId}`}>
+                              <MessageCircle />
+                              Open chat
+                            </Link>
+                          </Button>
+                        )}
+                        {canEdit && (
+                          <Button variant="ghost" size="xs" disabled={unlink.isPending} onClick={() => unlink.mutate(chat.contactId)}>
+                            <Unlink />
+                            Unlink
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </RailSection>
+      {canEdit && (
+        <ContactSearchDialog
+          open={linking}
+          onOpenChange={setLinking}
+          title="Link a chat"
+          description={`Find a chat by name, number or username to link it to ${name}. A chat linked to another customer has to be unlinked there first.`}
+          excludeIds={customer.chats.map((chat) => chat.contactId)}
+          isPending={link.isPending}
+          onPick={(contact) => link.mutate(contact.id, { onSuccess: () => setLinking(false) })}
+        />
+      )}
+    </div>
   );
 }
 
@@ -536,14 +682,14 @@ function TagsSection({ customer }: { customer: CustomerDetail }) {
               }
             }}
             placeholder="Tag name"
-            className="h-7 w-24 rounded-full border border-border bg-background px-2.5 text-caption outline-none focus:ring-1 focus:ring-brand"
+            className="h-7 w-24 rounded-full border border-border bg-background px-2.5 text-caption outline-none focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         ) : (
           <button
             type="button"
             onClick={() => setAdding(true)}
             disabled={mutation.isPending}
-            className="inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-caption font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+            className="inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-caption font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:min-h-11 max-md:px-3 pointer-coarse:min-h-11"
           >
             <Plus className="size-3" />
             Add

@@ -1,5 +1,6 @@
 import { ChannelPlatform, ChannelStatus } from '@prisma/client';
 import {
+    describeMessagingStatus,
     assertCanConnect,
     resolveConnectTarget,
     deriveConnectionState,
@@ -7,6 +8,7 @@ import {
     readTokenExpiry,
     classifyMetaCallbackError,
     isActive,
+    pickRoutingChannel,
     CONNECTION_POLICY,
     type ChannelRowLite,
 } from './channel-connection.util';
@@ -231,6 +233,42 @@ describe('resolveConnectTarget', () => {
     });
 });
 
+describe('pickRoutingChannel', () => {
+    const claim = (id: string, status: ChannelStatus, connectedAt: string | null) => ({
+        id,
+        status,
+        connectedAt: connectedAt ? new Date(connectedAt) : null,
+    });
+
+    it('sends a webhook to the connected row, never an errored or disconnected one claiming the same account', () => {
+        const rows = [
+            claim('ch_err', ChannelStatus.ERROR, '2026-01-01T00:00:00Z'),
+            claim('ch_gone', ChannelStatus.DISCONNECTED, '2025-01-01T00:00:00Z'),
+            claim('ch_live', ChannelStatus.CONNECTED, '2026-06-01T00:00:00Z'),
+        ];
+        expect(pickRoutingChannel(rows)?.id).toBe('ch_live');
+    });
+
+    it('picks the longest-connected of several connected rows, whatever order they come in', () => {
+        const older = claim('ch_b', ChannelStatus.CONNECTED, '2026-02-01T00:00:00Z');
+        const newer = claim('ch_a', ChannelStatus.CONNECTED, '2026-09-01T00:00:00Z');
+        const unknown = claim('ch_0', ChannelStatus.CONNECTED, null);
+        expect(pickRoutingChannel([newer, unknown, older])?.id).toBe('ch_b');
+        expect(pickRoutingChannel([older, newer, unknown])?.id).toBe('ch_b');
+    });
+
+    it('breaks a tie on the row id', () => {
+        const at = '2026-02-01T00:00:00Z';
+        expect(pickRoutingChannel([claim('ch_z', ChannelStatus.CONNECTED, at), claim('ch_m', ChannelStatus.CONNECTED, at)])?.id).toBe('ch_m');
+    });
+
+    it('still routes to an errored row when it is the only claim, and to nothing when every claim is disconnected', () => {
+        expect(pickRoutingChannel([claim('ch_err', ChannelStatus.ERROR, null)])?.id).toBe('ch_err');
+        expect(pickRoutingChannel([claim('ch_gone', ChannelStatus.DISCONNECTED, '2026-01-01T00:00:00Z')])).toBeNull();
+        expect(pickRoutingChannel([])).toBeNull();
+    });
+});
+
 describe('deriveConnectionState', () => {
     const now = new Date('2026-09-08T00:00:00.000Z');
     const past = '2026-09-01T00:00:00.000Z';
@@ -351,8 +389,14 @@ describe('describeAccount', () => {
             handle: '+91 98765 43210',
             displayName: 'Acme',
             avatarUrl: null,
-            detail: 'Acme Business · quality green',
+            detail: 'Acme Business',
         });
+    });
+
+    it('notes when the WhatsApp number is also on the Business app', () => {
+        expect(
+            describeAccount(ChannelPlatform.WHATSAPP, { wabaId: 'w', wabaName: 'Acme Business', isOnBizApp: true })?.detail,
+        ).toBe('Acme Business · also on the WhatsApp Business app');
     });
 
     it('summarises Shopify by shop domain', () => {
@@ -468,5 +512,66 @@ describe('classifyMetaCallbackError', () => {
     it('falls back to a generic failure', () => {
         expect(classifyMetaCallbackError({}, new Error('socket hang up'))).toBe('connect_failed');
         expect(classifyMetaCallbackError({})).toBe('connect_failed');
+    });
+});
+
+describe('describeMessagingStatus', () => {
+    it('summarises a coexistence number mid history import, without exposing secrets', () => {
+        const summary = describeMessagingStatus(
+            ChannelPlatform.WHATSAPP,
+            { isOnBizApp: true, qualityRating: 'GREEN', accessToken: 'enc-secret', registrationPin: null },
+            {
+                health: {
+                    number: { quality_rating: 'YELLOW', throughput: { level: 'STANDARD' }, name_status: 'APPROVED' },
+                    quality: { current_limit: 'TIER_2K' },
+                },
+                coexistence: { state: 'connected', sendsPaused: false },
+                historySync: { status: 'importing', progress: 55, messagesReceived: 1200 },
+                setup: { webhooks: 'ok', registration: 'not_needed' },
+            },
+        );
+        expect(summary).toEqual({
+            isOnBizApp: true,
+            quality: 'YELLOW',
+            messagingLimit: 'TIER_2K',
+            throughput: 'STANDARD',
+            nameStatus: 'APPROVED',
+            coexistence: { state: 'connected', sendsPaused: false },
+            historySync: { status: 'importing', progress: 55, messagesReceived: 1200, error: null },
+            setup: { webhooks: 'ok', registration: 'not_needed' },
+            webhooksOk: null,
+            sending: null,
+        });
+        expect(JSON.stringify(summary)).not.toContain('enc-secret');
+    });
+
+    it('reports what Meta says blocks sending, leaving out calling-only problems', () => {
+        const summary = describeMessagingStatus(ChannelPlatform.WHATSAPP, {}, {
+            health: {
+                number: {
+                    health_status: {
+                        can_send_message: 'BLOCKED',
+                        entities: [
+                            { entity_type: 'PHONE_NUMBER', can_send_message: 'AVAILABLE', errors: [{ error_code: 138024, error_description: 'SIP not enabled' }] },
+                            { entity_type: 'WABA', can_send_message: 'BLOCKED', errors: [{ error_code: 141006, error_description: 'There is an error with the payment method.', possible_solution: 'Add a new payment method.' }] },
+                        ],
+                    },
+                },
+            },
+        });
+        expect(summary?.sending).toEqual({
+            state: 'BLOCKED',
+            problems: [{ description: 'There is an error with the payment method.', solution: 'Add a new payment method.' }],
+        });
+    });
+
+    it('reports a Page whose webhook subscription failed', () => {
+        const summary = describeMessagingStatus(ChannelPlatform.FACEBOOK, { pageId: 'p1' }, { webhookSubscription: { ok: false } });
+        expect(summary?.webhooksOk).toBe(false);
+        expect(summary?.isOnBizApp).toBe(false);
+    });
+
+    it('is null for non-messaging platforms', () => {
+        expect(describeMessagingStatus(ChannelPlatform.SHOPIFY, {}, {})).toBeNull();
     });
 });

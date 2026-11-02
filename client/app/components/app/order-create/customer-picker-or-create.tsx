@@ -75,7 +75,7 @@ export function CustomerPickerOrCreate({
               {selectedCustomer.email}
               {selectedCustomer.phone ? ` • ${selectedCustomer.phone}` : ""}
             </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-caption">
               <span className="rounded-full bg-gray-100 dark:bg-gray-800 px-2 py-0.5 text-gray-700 dark:text-gray-300">
                 {selectedCustomer.ordersCount} prior order
                 {selectedCustomer.ordersCount === 1 ? "" : "s"}
@@ -94,7 +94,8 @@ export function CustomerPickerOrCreate({
           <button
             type="button"
             onClick={clear}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-gray-100 dark:hover:bg-gray-800"
+            aria-label="Change customer"
+            className="-m-1.5 flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-gray-100 dark:hover:bg-gray-800 md:m-0 md:size-auto md:p-1.5 pointer-coarse:size-11"
           >
             <X className="size-4" />
           </button>
@@ -127,7 +128,7 @@ export function CustomerPickerOrCreate({
           placeholder="Search customer by name, email or phone…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-900 pl-8 pr-3 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+          className="h-9 w-full rounded-lg border border-input bg-white dark:bg-gray-900 pl-8 pr-3 text-xs placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
         />
       </div>
 
@@ -150,7 +151,7 @@ export function CustomerPickerOrCreate({
                 <p className="text-xs font-medium text-gray-900 dark:text-gray-100 truncate">
                   {c.firstName} {c.lastName}
                 </p>
-                <p className="text-[10px] text-muted-foreground truncate">
+                <p className="text-caption text-muted-foreground truncate">
                   {c.email || c.phone || "—"} • {c.ordersCount} order
                   {c.ordersCount === 1 ? "" : "s"} •{" "}
                   {formatCurrency(c.totalSpent, currency)}
@@ -164,7 +165,7 @@ export function CustomerPickerOrCreate({
       <button
         type="button"
         onClick={() => setMode("new")}
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 max-md:min-h-11 max-md:text-label pointer-coarse:min-h-11"
       >
         <UserPlus className="size-3.5" />
         New customer
@@ -188,14 +189,14 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+      <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
         {label}
       </span>
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={`mt-1 h-8 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#CEF17B]/60 ${
+        className={`mt-1 h-8 w-full rounded-lg border border-input bg-white dark:bg-gray-800 px-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring ${
           mono ? "font-mono" : ""
         }`}
       />
@@ -242,7 +243,7 @@ function NewCustomerForm({
         <button
           type="button"
           onClick={onCancel}
-          className="text-[10px] text-muted-foreground hover:text-gray-900 dark:hover:text-gray-100"
+          className="text-caption text-muted-foreground hover:text-gray-900 dark:hover:text-gray-100 max-md:-my-3 max-md:min-h-11 pointer-coarse:min-h-11"
         >
           Search instead
         </button>
@@ -277,7 +278,7 @@ function NewCustomerForm({
           mono
         />
         <label className="block">
-          <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400">
+          <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
             Billing state (optional)
           </span>
           <Select
@@ -306,7 +307,7 @@ function NewCustomerForm({
           </Select>
         </label>
       </div>
-      <p className="text-[10px] text-muted-foreground">
+      <p className="text-caption text-muted-foreground">
         Provide at least a name (or phone / email) so this customer can be
         matched on a future visit. State list is pulled from your registered
         GSTINs.

@@ -7,15 +7,15 @@ import { Type } from 'class-transformer';
  * For SHOPIFY orders, the service looks up the order's authorize transaction
  * and calls orderCapture against it.
  *
- * For MANUAL orders this is a degenerate no-op — there's no payment processor
- * involved — so the service simply flips financialStatus to PAID and records
- * a timeline event. Pass `amount` to override the captured amount; omitting it
- * captures the full outstanding balance.
+ * MANUAL orders have no authorize/capture cycle and are refused; they use
+ * mark-paid. Pass `amount` (in the customer's currency) to capture part of the
+ * balance; omitting it captures everything Shopify still holds.
  */
 export class CapturePaymentDto {
-  @IsOptional() @Type(() => Number) @IsNumber() @Min(0)
+  @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01)
   amount?: number;
 
+  /** Must be the order's presentment currency when given. */
   @IsOptional() @IsString()
   currency?: string;
 

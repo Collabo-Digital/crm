@@ -1,4 +1,6 @@
+import { Prisma } from '@prisma/client';
 import { extractStateFromAddress } from '../gst/place-of-supply.util';
+import { getStateName } from '../gst/constants/indian-states';
 
 /**
  * A warehouse can be declared an ADDITIONAL PLACE OF BUSINESS (APOB) of one GST
@@ -27,9 +29,43 @@ export function warehouseGstinMismatch(
 
   if (addressState === gstin.stateCode) return null;
 
-  return (
-    `This address is in state ${addressState}, but the GST registration is for ` +
-    `${gstin.stateName} (${gstin.stateCode}). A place of business in another ` +
-    `state needs its own GST registration.`
-  );
+  return `This GSTIN is for ${gstin.stateName} but the location is in ${stateLabel(addressState)}.`;
+}
+
+/**
+ * The workspace's GST registration for a state, when it has one: the default
+ * registration if it is in that state, else the oldest. What a location with
+ * no GSTIN of its own operates under.
+ */
+export async function findStateGstin(
+  db: Pick<Prisma.TransactionClient, 'organizationGstin'>,
+  orgId: string,
+  stateCode: string | null,
+): Promise<{ id: string } | null> {
+  if (!stateCode) return null;
+  return db.organizationGstin.findFirst({
+    where: { organizationId: orgId, stateCode, isActive: true },
+    orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    select: { id: true },
+  });
+}
+
+/**
+ * What to tell the merchant about a location GST invoices cannot be issued
+ * from: GST is on, the location is in a known state, and no active
+ * registration covers that state. Null otherwise.
+ */
+export function locationGstWarning(
+  location: { address: unknown; gstinId: string | null },
+  gst: { enabled: boolean; activeGstins: Array<{ id: string; stateCode: string }> },
+): string | null {
+  if (!gst.enabled) return null;
+  if (location.gstinId && gst.activeGstins.some((g) => g.id === location.gstinId)) return null;
+  const stateCode = extractStateFromAddress(location.address);
+  if (!stateCode || gst.activeGstins.some((g) => g.stateCode === stateCode)) return null;
+  return `Add a GSTIN for ${stateLabel(stateCode)} to issue GST invoices for sales from here.`;
+}
+
+function stateLabel(stateCode: string): string {
+  return getStateName(stateCode) ?? `state ${stateCode}`;
 }

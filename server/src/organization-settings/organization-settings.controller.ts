@@ -1,8 +1,19 @@
-import { Body, Controller, Get, Patch } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Patch,
+  Post,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ZodValidationPipe } from './zod-validation.pipe';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { OrganizationSettingsService } from './organization-settings.service';
+import type { SettingsImageUpload } from './organization-settings.service';
 import { UpdateProductSettingsSchema } from './schemas/product-settings.schema';
 import type { UpdateProductSettingsInput } from './schemas/product-settings.schema';
 import { UpdateOrderSettingsSchema } from './schemas/order-settings.schema';
@@ -13,7 +24,15 @@ import type { UpdateTaxSettingsInput } from './schemas/tax-settings.schema';
 import type { UpdateInventorySettingsInput } from './schemas/inventory-settings.schema';
 import { UpdateStoreProfileSettingsSchema } from './schemas/store-profile-settings.schema';
 import type { UpdateStoreProfileSettingsInput } from './schemas/store-profile-settings.schema';
+import { UpdateInvoiceSettingsSchema } from './schemas/invoice-settings.schema';
+import type { UpdateInvoiceSettingsInput } from './schemas/invoice-settings.schema';
 import { Roles, ORG_MANAGERS } from '../auth/decorators/roles.decorator';
+import { RequireSection } from '../auth/decorators/require-section.decorator';
+
+// Multer buffers the whole file in memory before the service sees it, so this
+// cap bounds that. The service holds the logo (1 MB) and the signature
+// (300 KB) to their own limits, with a message that names them.
+const IMAGE_UPLOAD_LIMIT = 5 * 1024 * 1024;
 
 /**
  * Org-scoped settings, organized by domain. All endpoints implicitly target
@@ -26,8 +45,13 @@ import { Roles, ORG_MANAGERS } from '../auth/decorators/roles.decorator';
  * unknown fields on the JwtPayload, leaving `user.orgId` undefined and
  * tripping the service's assertOrgId. The parameter-level form keeps the
  * pipe scoped to the body where it belongs.
+ *
+ * Read by the order form, products, invoices and package slips, and by their
+ * Settings tabs; a member kept to Chat or Campaigns has no use for the tax,
+ * invoice and store set-up.
  */
 @Controller('organization/settings')
+@RequireSection('orders', 'products', 'invoices')
 export class OrganizationSettingsController {
   constructor(private readonly service: OrganizationSettingsService) {}
 
@@ -39,7 +63,11 @@ export class OrganizationSettingsController {
   }
 
   // PATCH /api/v1/organization/settings/products
+  // Role-gated like orders: autoSyncToShopify pushes CRM products into the live
+  // store, allowOversellGlobally changes what can be sold, and the vendor
+  // metafield decides which products and orders each Vendor member sees.
   @Patch('products')
+  @Roles(...ORG_MANAGERS)
   updateProducts(
     @CurrentUser() user: JwtPayload,
     @Body(new ZodValidationPipe(UpdateProductSettingsSchema))
@@ -112,5 +140,58 @@ export class OrganizationSettingsController {
     body: UpdateStoreProfileSettingsInput,
   ) {
     return this.service.updateStoreProfileSettings(user.orgId!, body);
+  }
+
+  // POST /api/v1/organization/settings/store-profile/logo
+  // Multipart `file`, PNG or JPEG. Role-gated with the store profile it
+  // writes: the logo prints on every invoice, receipt and packing slip.
+  @Post('store-profile/logo')
+  @Roles(...ORG_MANAGERS)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: IMAGE_UPLOAD_LIMIT } }))
+  uploadLogo(
+    @CurrentUser() user: JwtPayload,
+    @UploadedFile() file: SettingsImageUpload | undefined,
+  ) {
+    return this.service.uploadLogo(user.orgId!, file);
+  }
+
+  // DELETE /api/v1/organization/settings/store-profile/logo
+  @Delete('store-profile/logo')
+  @Roles(...ORG_MANAGERS)
+  removeLogo(@CurrentUser() user: JwtPayload) {
+    return this.service.removeLogo(user.orgId!);
+  }
+
+  // PATCH /api/v1/organization/settings/invoice
+  // Role-gated like the store profile: this decides what every customer's
+  // invoice, bill and receipt prints.
+  @Patch('invoice')
+  @Roles(...ORG_MANAGERS)
+  updateInvoice(
+    @CurrentUser() user: JwtPayload,
+    @Body(new ZodValidationPipe(UpdateInvoiceSettingsSchema))
+    body: UpdateInvoiceSettingsInput,
+  ) {
+    return this.service.updateInvoiceSettings(user.orgId!, body);
+  }
+
+  // POST /api/v1/organization/settings/invoice/signature
+  // Multipart `file`, PNG or JPEG: the image printed above "Authorised
+  // Signatory" on credit notes, and on invoices in the `image` mode.
+  @Post('invoice/signature')
+  @Roles(...ORG_MANAGERS)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: IMAGE_UPLOAD_LIMIT } }))
+  uploadSignature(
+    @CurrentUser() user: JwtPayload,
+    @UploadedFile() file: SettingsImageUpload | undefined,
+  ) {
+    return this.service.uploadSignature(user.orgId!, file);
+  }
+
+  // DELETE /api/v1/organization/settings/invoice/signature
+  @Delete('invoice/signature')
+  @Roles(...ORG_MANAGERS)
+  removeSignature(@CurrentUser() user: JwtPayload) {
+    return this.service.removeSignature(user.orgId!);
   }
 }

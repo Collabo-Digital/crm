@@ -59,6 +59,22 @@ export const PERMISSION_KEYS = [
    */
   'campaigns.view',
   'campaigns.manage',
+  /**
+   * Inbox (the Chat section). An AGENT / VIEWER without `chat.view_all` sees
+   * the conversations assigned to them or to their teams, plus the unassigned
+   * queue when they hold `chat.view_unassigned`. `chat.assign` lets them hand a
+   * conversation to someone else; taking an unassigned one needs no grant.
+   */
+  'chat.view_all',
+  'chat.view_unassigned',
+  'chat.assign',
+  /**
+   * The two campaign actions with consequences outside the CRM — a broadcast
+   * reaches customers and is billed by Meta, a template goes to Meta's review —
+   * so they are granted apart from `campaigns.manage`.
+   */
+  'broadcasts.send',
+  'templates.manage',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
@@ -140,6 +156,71 @@ export const IMPLICIT_ALL_ROLES: UserRole[] = [
 ];
 
 /**
+ * May this member read the order LIST with this filter?
+ *
+ * `GET /orders` is shared: customer detail shows that customer's orders and
+ * product detail the orders containing that product. Without the Orders (or
+ * Logistics) section, the list is only served through one of those filters —
+ * otherwise a Customers-only member could page through every order by calling
+ * the endpoint bare.
+ */
+export function canListOrders(
+  role: UserRole,
+  grants: readonly string[],
+  filter: { customerId?: string; productId?: string },
+): boolean {
+  const sections = resolveSections(role, grants);
+  if (sections === 'all') return true;
+  if (sections.has('section.orders') || sections.has('section.logistics')) return true;
+  return (
+    (sections.has('section.customers') && !!filter.customerId) ||
+    (sections.has('section.products') && !!filter.productId)
+  );
+}
+
+/**
+ * May this member search the store's customers? The same sections
+ * `GET /customers` asks for: Customers, or Orders for the order form's
+ * customer picker. The inbox's "Find customer" asks this too, so a member
+ * given only the Chat section cannot read the customer list through it.
+ */
+export function canBrowseCustomers(role: UserRole, grants: readonly string[]): boolean {
+  const sections = resolveSections(role, grants);
+  return sections === 'all' || sections.has('section.customers') || sections.has('section.orders');
+}
+
+/** Roles whose section access is chosen per member (the invite checkboxes). */
+export const SECTION_SCOPED_ROLES: UserRole[] = [UserRole.AGENT, UserRole.VIEWER];
+
+export function sectionGrants(grants: readonly string[]): SectionKey[] {
+  const known = new Set<string>(SECTION_KEYS);
+  return grants.filter((g): g is SectionKey => known.has(g));
+}
+
+/**
+ * Which sections a member may open: `'all'`, or the granted set.
+ *
+ * An AGENT / VIEWER with no `section.*` key at all is unrestricted. That is
+ * the state of every member who joined before section access existed, so
+ * nobody is locked out by a deploy and no backfill is needed. New data cannot
+ * drift back into it by accident: the invite and the member PATCH both refuse
+ * a grant list that names no section.
+ *
+ * VENDOR resolves to `'all'` here on purpose — VendorAccessGuard and the
+ * vendor scope already decide what a vendor reaches. INFLUENCER is not section
+ * scoped either: an influencer's reach is decided by their grants
+ * (`campaigns.view`) and the client's influencer allow list.
+ */
+export function resolveSections(
+  role: UserRole,
+  grants: readonly string[],
+): 'all' | Set<SectionKey> {
+  if (!SECTION_SCOPED_ROLES.includes(role)) return 'all';
+  const sections = sectionGrants(grants);
+  return sections.length === 0 ? 'all' : new Set(sections);
+}
+
+/**
  * What a member of a given role starts with, written onto
  * `OrganizationMember.permissions` when the membership is created.
  *
@@ -179,58 +260,4 @@ export function hasPermission(
   if (role === UserRole.VENDOR) return false;
   if (IMPLICIT_ALL_ROLES.includes(role)) return true;
   return (grants ?? []).includes(key);
-}
-
-/**
- * May this member read the order LIST with this filter?
- *
- * `GET /orders` is shared: customer detail shows that customer's orders and
- * product detail the orders containing that product. Without the Orders (or
- * Logistics) section, the list is only served through one of those filters —
- * otherwise a Customers-only member could page through every order by calling
- * the endpoint bare.
- */
-export function canListOrders(
-  role: UserRole,
-  grants: readonly string[],
-  filter: { customerId?: string; productId?: string },
-): boolean {
-  const sections = resolveSections(role, grants);
-  if (sections === 'all') return true;
-  if (sections.has('section.orders') || sections.has('section.logistics')) return true;
-  return (
-    (sections.has('section.customers') && !!filter.customerId) ||
-    (sections.has('section.products') && !!filter.productId)
-  );
-}
-
-/** Roles whose section access is chosen per member (the invite checkboxes). */
-export const SECTION_SCOPED_ROLES: UserRole[] = [UserRole.AGENT, UserRole.VIEWER];
-
-export function sectionGrants(grants: readonly string[]): SectionKey[] {
-  const known = new Set<string>(SECTION_KEYS);
-  return grants.filter((g): g is SectionKey => known.has(g));
-}
-
-/**
- * Which sections a member may open: `'all'`, or the granted set.
- *
- * An AGENT / VIEWER with no `section.*` key at all is unrestricted. That is
- * the state of every member who joined before section access existed, so
- * nobody is locked out by a deploy and no backfill is needed. New data cannot
- * drift back into it by accident: the invite and the member PATCH both refuse
- * a grant list that names no section.
- *
- * VENDOR resolves to `'all'` here on purpose — VendorAccessGuard and the
- * vendor scope already decide what a vendor reaches. INFLUENCER is not section
- * scoped either: an influencer's reach is decided by their grants
- * (`campaigns.view`) and the client's influencer allow list.
- */
-export function resolveSections(
-  role: UserRole,
-  grants: readonly string[],
-): 'all' | Set<SectionKey> {
-  if (!SECTION_SCOPED_ROLES.includes(role)) return 'all';
-  const sections = sectionGrants(grants);
-  return sections.length === 0 ? 'all' : new Set(sections);
 }

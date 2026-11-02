@@ -11,7 +11,9 @@ import {
 import { Link } from "react-router";
 import { TrendingUp, TrendingDown, Loader2 } from "lucide-react";
 import { useSalesAndProfit } from "~/hooks/use-dashboard-queries";
+import { QueryErrorState } from "~/components/app/query-error-state";
 import { cn, formatCurrency } from "~/lib/utils";
+import { unconvertedNote } from "~/lib/unconverted";
 import type { DashboardQueryParams } from "~/types/api";
 
 const SERIES_LABEL: Record<string, string> = {
@@ -85,7 +87,7 @@ export function ProfitBarChart({
   currency: string;
   params?: DashboardQueryParams;
 }) {
-  const { data: sales, isLoading, isPlaceholderData } = useSalesAndProfit(params);
+  const { data: sales, isLoading, isError, refetch, isPlaceholderData } = useSalesAndProfit(params);
 
   const chartData = sales?.data ?? [];
   const totals = sales?.totals;
@@ -129,6 +131,8 @@ export function ProfitBarChart({
         <div className="flex items-center justify-center py-16">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
+      ) : isError && !sales ? (
+        <QueryErrorState resource="sales" onRetry={() => void refetch()} />
       ) : (
         // Dimmed while a new range loads: the previous window's figures stay
         // readable instead of being replaced by a spinner.
@@ -159,7 +163,7 @@ export function ProfitBarChart({
                 <span
                   className={cn(
                     "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-caption font-semibold",
-                    isUp ? "bg-ink text-brand" : "bg-danger-subtle text-danger"
+                    isUp ? "bg-ink text-brand" : "bg-danger-subtle text-danger-text"
                   )}
                 >
                   {isUp ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
@@ -193,9 +197,8 @@ export function ProfitBarChart({
                 <Term label="COGS" value={totals.cogs} currency={reportingCurrency} sign="minus" />
               )}
               {unconvertedOrders > 0 && (
-                <span className="whitespace-nowrap text-warning">
-                  excludes {unconvertedOrders} order
-                  {unconvertedOrders === 1 ? "" : "s"} with no exchange rate
+                <span className="whitespace-nowrap text-warning-text">
+                  {unconvertedNote(unconvertedOrders)}
                 </span>
               )}
             </div>
@@ -223,11 +226,11 @@ export function ProfitBarChart({
 
           <div className="mb-3 flex items-center gap-4 text-caption text-muted-foreground">
             <span className="flex items-center gap-1.5">
-              <span className="inline-block size-2 rounded-full bg-border" />
+              <span className="inline-block size-2 rounded-full bg-chart-2" />
               Net Sales
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="inline-block size-2 rounded-full bg-brand" />
+              <span className="inline-block size-2 rounded-full bg-chart-1" />
               Gross Profit
             </span>
           </div>
@@ -239,7 +242,7 @@ export function ProfitBarChart({
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                   <XAxis
                     dataKey="bucket"
-                    tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
+                    tick={{ fontSize: 12, fill: "var(--muted-foreground)" }}
                     axisLine={false}
                     tickLine={false}
                   />
@@ -249,10 +252,10 @@ export function ProfitBarChart({
                   <YAxis hide domain={["auto", "auto"]} />
                   <ReferenceLine y={0} stroke="var(--border)" />
                   <Tooltip content={<CustomTooltip currency={reportingCurrency} />} cursor={{ fill: "rgba(0,0,0,0.04)" }} />
-                  <Bar dataKey="netSales" fill="var(--border)" radius={[4, 4, 0, 0]} animationDuration={300} />
+                  <Bar dataKey="netSales" fill="var(--chart-2)" radius={[4, 4, 0, 0]} animationDuration={300} />
                   {/* Recharts skips null, so a month with no cost data draws a
                       sales bar and no profit bar — which is the truth. */}
-                  <Bar dataKey="grossProfit" fill="var(--brand)" radius={[4, 4, 0, 0]} animationDuration={300} />
+                  <Bar dataKey="grossProfit" fill="var(--chart-1)" radius={[4, 4, 0, 0]} animationDuration={300} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

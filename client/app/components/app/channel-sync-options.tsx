@@ -84,7 +84,7 @@ export function ChannelSyncOptions({ channel }: { channel: Channel }) {
         <DropdownMenuContent align="end" className="w-64">
           <p className="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
             Couldn&apos;t load this channel&apos;s sync settings. Syncing still
-            works — it falls back to syncing everything.
+            works and uses the settings you saved last.
           </p>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -174,6 +174,10 @@ export function ChannelSyncOptions({ channel }: { channel: Channel }) {
         <DropdownMenuLabel className="text-[11px]">
           Push to Shopify
         </DropdownMenuLabel>
+        <p className="px-2 pb-1 text-[10px] leading-snug text-muted-foreground">
+          Off until you switch it on. What you tick is sent on your next Sync,
+          and orders created in Shopify cannot be taken back.
+        </p>
         {settings.push.map((row) => {
           const pending = pendingFor(row.entityType);
           return (

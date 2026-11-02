@@ -23,6 +23,12 @@ export class BillingController {
         return { razorpayKeyId: this.razorpay.getKeyId() };
     }
 
+    /** The plans and their prices, in rupees and dollars. */
+    @Get('plans')
+    getPlans() {
+        return this.billing.plans();
+    }
+
     /** Called when the user clicks Continue on /onboarding/choose-plan. */
     @Post('onboarding-checkout')
     startOnboardingCheckout(
@@ -33,6 +39,7 @@ export class BillingController {
             user.sub,
             dto.billingPlan,
             dto.billingInterval,
+            dto.currency ?? 'INR',
         );
     }
 

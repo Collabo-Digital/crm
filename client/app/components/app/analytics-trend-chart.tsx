@@ -27,28 +27,34 @@ export function AnalyticsTrendChart({ trend }: { trend: DashboardTrendPoint[] })
   return (
     <ResponsiveContainer width="100%" height={ANALYTICS_TREND_CHART_HEIGHT}>
       <LineChart data={trend} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
         <XAxis
           dataKey="label"
-          tick={{ fontSize: 11, fill: "#6b7280" }}
+          tick={{ fontSize: 12, fill: "var(--muted-foreground)" }}
           axisLine={false}
           tickLine={false}
         />
         <YAxis
-          tick={{ fontSize: 11, fill: "#6b7280" }}
+          tick={{ fontSize: 12, fill: "var(--muted-foreground)" }}
           axisLine={false}
           tickLine={false}
           allowDecimals={false}
         />
         <Tooltip
-          contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e5e7eb" }}
+          contentStyle={{
+            fontSize: 12,
+            borderRadius: 8,
+            border: "1px solid var(--border)",
+            background: "var(--popover)",
+            color: "var(--popover-foreground)",
+          }}
         />
         <Legend wrapperStyle={{ fontSize: 12 }} />
         <Line
           type="monotone"
           dataKey="addToCart"
           name="Add to Cart"
-          stroke="#CEF17B"
+          stroke="var(--chart-1)"
           strokeWidth={2}
           dot={false}
           animationDuration={300}
@@ -57,7 +63,7 @@ export function AnalyticsTrendChart({ trend }: { trend: DashboardTrendPoint[] })
           type="monotone"
           dataKey="reachedCheckout"
           name="Reached Checkout"
-          stroke="#6366f1"
+          stroke="var(--chart-3)"
           strokeWidth={2}
           dot={false}
           animationDuration={300}
@@ -66,7 +72,7 @@ export function AnalyticsTrendChart({ trend }: { trend: DashboardTrendPoint[] })
           type="monotone"
           dataKey="completedOrders"
           name="Completed Orders"
-          stroke="#f59e0b"
+          stroke="var(--chart-4)"
           strokeWidth={2}
           dot={false}
           animationDuration={300}

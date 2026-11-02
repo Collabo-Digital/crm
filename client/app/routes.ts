@@ -3,6 +3,14 @@ import { type RouteConfig, index, layout, route } from "@react-router/dev/routes
 export default [
   index("routes/home.tsx"),
 
+  // The bill a customer opens from the link sent after a counter sale. Public:
+  // outside the app layout and its sign-in.
+  route("b/:token", "routes/public/bill.tsx"),
+  // The order tracking and cart links in Collabo's recommended WhatsApp
+  // templates. Public, like the bill.
+  route("t/:token", "routes/public/track.tsx"),
+  route("c/:token", "routes/public/cart.tsx"),
+
   layout("routes/auth/_layout.tsx", [
     route("auth/login", "routes/auth/login.tsx"),
     route("auth/signup", "routes/auth/signup.tsx"),
@@ -34,9 +42,21 @@ export default [
     route("orders/invoices", "routes/app/orders/invoices.tsx"),
     route("orders/invoices/:id", "routes/app/orders/invoices/$id.tsx"),
     route("orders/invoices/:id/print", "routes/app/orders/invoices/print.tsx"),
+    // Point of sale. Static "pos" outranks ":id"; the receipt ends in /print
+    // so it renders without the app chrome.
+    route("orders/pos", "routes/app/orders/pos.tsx"),
+    route("orders/pos/settings", "routes/app/orders/pos/settings.tsx"),
+    route("orders/pos/receipts/:orderId/print", "routes/app/orders/pos/receipt-print.tsx"),
     // Batch package slips, N-up. Static "slips" outranks ":id", and ending in
     // /print is what makes the app layout render it chrome-free.
     route("orders/slips/print", "routes/app/orders/slips-print.tsx"),
+    // Point-of-sale store reports. Managers only — see lib/sections.ts.
+    route("orders/pos/reports", "routes/app/orders/pos/reports.tsx"),
+    // Packing. Opened by the inventory.pack permission rather than the Orders
+    // section, so a Packer reaches it — see lib/sections.ts.
+    route("orders/packing", "routes/app/orders/packing.tsx"),
+    route("orders/packing/accuracy", "routes/app/orders/packing/accuracy.tsx"),
+    route("orders/packing/:orderId", "routes/app/orders/packing/$orderId.tsx"),
     route("orders/:id", "routes/app/orders/$id.tsx"),
     route("orders/:id/packing-slip", "routes/app/orders/packing-slip.tsx"),
     route("orders/:id/pick-slip", "routes/app/orders/pick-slip.tsx"),
@@ -61,18 +81,46 @@ export default [
     // packing-slip / pick-slip / invoice print).
     route("products/inventory/labels/print", "routes/app/products/inventory/labels-print.tsx"),
     route("products/:id", "routes/app/products/$id.tsx"),
-    // Chat, Campaigns and Logistics are not on this branch. Their old URLs
-    // fall through legacy-redirect to /dashboard rather than the bare 404.
+    // Inbox section: WhatsApp, Messenger and Instagram conversations, and the
+    // contacts behind them. The old preview lived at /conversation.
+    route("inbox", "routes/app/inbox.tsx"),
+    route("inbox/contacts", "routes/app/inbox/contacts.tsx"),
+    route("inbox/groups", "routes/app/inbox/groups.tsx"),
+    route("conversation/*", "routes/app/legacy-redirect.tsx", { id: "legacy-conversation" }),
+    // Campaigns section: WhatsApp broadcasts, templates and segments. Static
+    // segments ("new") outrank ":id".
+    route("campaigns", "routes/app/campaigns.tsx"),
+    route("campaigns/broadcasts", "routes/app/campaigns/broadcasts.tsx"),
+    route("campaigns/broadcasts/new", "routes/app/campaigns/broadcasts/new.tsx"),
+    route("campaigns/broadcasts/:id", "routes/app/campaigns/broadcasts/$id.tsx"),
+    route("campaigns/templates", "routes/app/campaigns/templates.tsx"),
+    route("campaigns/templates/new", "routes/app/campaigns/templates/new.tsx"),
+    route("campaigns/templates/:id", "routes/app/campaigns/templates/$id.tsx"),
+    route("campaigns/segments", "routes/app/campaigns/segments.tsx"),
+    route("campaigns/segments/new", "routes/app/campaigns/segments/$id.tsx", { id: "campaigns-segment-new" }),
+    route("campaigns/segments/:id", "routes/app/campaigns/segments/$id.tsx"),
+    route("campaigns/catalog", "routes/app/campaigns/catalog.tsx"),
+    route("campaigns/growth", "routes/app/campaigns/growth.tsx"),
+    route("campaigns/ads", "routes/app/campaigns/ads.tsx"),
+    route("campaigns/reviews", "routes/app/campaigns/reviews.tsx"),
+    route("campaigns/automations", "routes/app/campaigns/automations.tsx"),
+    route("campaigns/automations/starters", "routes/app/campaigns/automations/starters.tsx"),
+    route("campaigns/automations/sheets", "routes/app/campaigns/automations/sheets.tsx"),
+    route("campaigns/automations/:id", "routes/app/campaigns/automations/$id.tsx"),
+    // Logistics is not on this branch. Its old URLs fall through
+    // legacy-redirect to the landing page rather than the bare 404.
     route("logistics/*", "routes/app/legacy-redirect.tsx", { id: "removed-logistics" }),
-    route("campaigns/*", "routes/app/legacy-redirect.tsx", { id: "removed-campaigns" }),
-    route("conversation/*", "routes/app/legacy-redirect.tsx", { id: "removed-conversation" }),
     // A visual preview with no backend yet.
     route("analytics", "routes/app/analytics.tsx"),
+    route("analytics/messaging", "routes/app/analytics/messaging.tsx"),
     route("profile", "routes/app/profile.tsx"),
     route("settings", "routes/app/settings.tsx"),
     route("settings/:tab", "routes/app/settings.tsx", { id: "settings-tab" }),
     // Super admin (Collabo team only) — guarded inside the route components.
     route("admin/users", "routes/app/admin/users.tsx"),
     route("admin/users/:userId", "routes/app/admin/user-detail.tsx"),
+    // Any other URL: a not-found page that keeps the navbar, rather than the
+    // root error page with nowhere to go.
+    route("*", "routes/app/not-found.tsx"),
   ]),
 ] satisfies RouteConfig;

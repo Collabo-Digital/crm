@@ -91,7 +91,7 @@ export function CustomerGstDialog({
               onChange={(e) => setGstin(e.target.value.toUpperCase())}
               placeholder="29AABCT1332L1ZN"
               maxLength={15}
-              className="mt-1 h-8 w-full rounded-lg border border-input bg-transparent px-3 font-mono text-caption placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand/50"
+              className="mt-1 h-8 w-full rounded-lg border border-input bg-transparent px-3 font-mono text-caption placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <p className="mt-1 text-caption text-muted-foreground">
               Leave empty for B2C (unregistered) customers. Required for B2B GST

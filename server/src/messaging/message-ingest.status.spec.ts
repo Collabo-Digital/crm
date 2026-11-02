@@ -1,0 +1,109 @@
+import { ChannelPlatform, MessageStatus } from '@prisma/client';
+import { MessageIngestService, StatusBeforeMessage, statusAdvances } from './message-ingest.service';
+
+const channel = { id: 'ch1', organizationId: 'org1', platform: ChannelPlatform.WHATSAPP, address: 'PN1' };
+const secondsAgo = (s: number) => new Date(Date.now() - s * 1000);
+
+function build(found: unknown, inFlight: unknown) {
+    const prisma = {
+        message: {
+            findFirst: jest.fn().mockResolvedValueOnce(found).mockResolvedValueOnce(inFlight),
+            update: jest.fn().mockResolvedValue({}),
+        },
+    };
+    const events = { publish: jest.fn() };
+    const tracker = { onStatus: jest.fn() };
+    const service = new MessageIngestService(prisma as never, {} as never, {} as never, {} as never, events as never, {} as never, tracker as never, {} as never, {} as never);
+    return { service, prisma, events, tracker };
+}
+
+describe('MessageIngestService.applyStatus', () => {
+    it('asks for the delivery to run again when a fresh status beats its send to the database', async () => {
+        const { service } = build(null, { id: 'm1' });
+        await expect(service.applyStatus(channel, 'wamid.1', { status: MessageStatus.FAILED, at: secondsAgo(3) })).rejects.toBeInstanceOf(StatusBeforeMessage);
+    });
+
+    it('drops a status for a message that is not ours once nothing is being sent', async () => {
+        const { service } = build(null, null);
+        expect(await service.applyStatus(channel, 'wamid.1', { status: MessageStatus.DELIVERED, at: secondsAgo(3) })).toBe(false);
+    });
+
+    it('drops an old status for an unknown message instead of retrying for ever', async () => {
+        const { service, prisma } = build(null, { id: 'm1' });
+        expect(await service.applyStatus(channel, 'wamid.1', { status: MessageStatus.DELIVERED, at: secondsAgo(180) })).toBe(false);
+        expect(prisma.message.findFirst).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not tell open inboxes about a pricing-only update', async () => {
+        const { service, events, prisma } = build(
+            { id: 'm1', status: MessageStatus.DELIVERED, conversationId: 'c1', contactId: null, organizationId: 'org1', sentAt: new Date() },
+            null,
+        );
+        await service.applyStatus(channel, 'wamid.1', { status: MessageStatus.SENT, at: secondsAgo(3), pricing: { billable: true } });
+        expect(prisma.message.update).toHaveBeenCalled();
+        expect(events.publish).not.toHaveBeenCalled();
+    });
+});
+
+describe('MessageIngestService.applyStatus, failures that pause automations to a person', () => {
+    const sent = { id: 'm1', status: MessageStatus.SENT, conversationId: 'c1', contactId: 'ct1', organizationId: 'org1', sentAt: new Date() };
+    function withContact() {
+        const built = build(sent, null);
+        const prisma = built.prisma as typeof built.prisma & Record<string, unknown>;
+        prisma.contactDailyStat = { upsert: jest.fn().mockResolvedValue({}) };
+        const channelContact = { update: jest.fn().mockResolvedValue({ consecutiveFailures: 1 }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) };
+        prisma.channelContact = channelContact;
+        return { ...built, channelContact };
+    }
+
+    it('counts a number that cannot receive WhatsApp against the person', async () => {
+        const { service, channelContact } = withContact();
+        await service.applyStatus(channel, 'wamid.1', { status: MessageStatus.FAILED, at: secondsAgo(3), error: { code: '131026', message: 'Message undeliverable' } });
+        expect(channelContact.update.mock.calls.map((c) => c[0].data)).toEqual([{ outboundFailedCount: { increment: 1 } }, { consecutiveFailures: { increment: 1 } }]);
+    });
+
+    it('does not count a failure that is the account’s, such as its payment method', async () => {
+        const { service, channelContact } = withContact();
+        await service.applyStatus(channel, 'wamid.1', { status: MessageStatus.FAILED, at: secondsAgo(3), error: { code: '131042', message: 'Payment issue' } });
+        expect(channelContact.update.mock.calls.map((c) => c[0].data)).toEqual([{ outboundFailedCount: { increment: 1 } }]);
+    });
+
+    it.each([MessageStatus.DELIVERED, MessageStatus.READ])('clears earlier failures when a message is %s', async (status) => {
+        const { service, channelContact } = withContact();
+        await service.applyStatus(channel, 'wamid.1', { status, at: secondsAgo(3) });
+        expect(channelContact.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: 'ct1' }), data: { consecutiveFailures: 0, mutedUntil: null } }));
+        expect(channelContact.update).not.toHaveBeenCalled();
+    });
+});
+
+describe('a played voice message', () => {
+    const { QUEUED, SENT, DELIVERED, READ, PLAYED, FAILED } = MessageStatus;
+
+    it('ranks above read and never goes back', () => {
+        expect(statusAdvances(READ, PLAYED)).toBe(true);
+        expect(statusAdvances(DELIVERED, PLAYED)).toBe(true);
+        for (const later of [QUEUED, SENT, DELIVERED, READ, FAILED, PLAYED]) expect(statusAdvances(PLAYED, later)).toBe(false);
+    });
+
+    const sent = { id: 'm1', conversationId: 'c1', contactId: null, organizationId: 'org1', sentAt: new Date() };
+
+    it('also counts as read when the read receipt never came', async () => {
+        const { service, prisma, tracker } = build({ ...sent, status: DELIVERED }, null);
+        const at = secondsAgo(3);
+        expect(await service.applyStatus(channel, 'wamid.1', { status: PLAYED, at })).toBe(true);
+        expect(prisma.message.update.mock.calls[0][0].data).toEqual({ status: PLAYED, readAt: at });
+        expect(tracker.onStatus).toHaveBeenCalledWith('m1', PLAYED, at, undefined);
+    });
+
+    it('keeps the time it was read when it was read first', async () => {
+        const { service, prisma } = build({ ...sent, status: READ }, null);
+        await service.applyStatus(channel, 'wamid.1', { status: PLAYED, at: secondsAgo(3) });
+        expect(prisma.message.update.mock.calls[0][0].data).toEqual({ status: PLAYED });
+    });
+
+    it('stays played when a late read receipt arrives', async () => {
+        const { service, prisma } = build({ ...sent, status: PLAYED }, null);
+        expect(await service.applyStatus(channel, 'wamid.1', { status: READ, at: secondsAgo(3) })).toBe(false);
+        expect(prisma.message.update).not.toHaveBeenCalled();
+    });
+});

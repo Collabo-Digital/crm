@@ -127,6 +127,12 @@ export function RichTextEditor({
 
   return (
     <ReactQuill
+      // Quill gives its text-style picker no name of its own.
+      ref={(editor) => {
+        editor?.getEditor().container.parentElement
+          ?.querySelector(".ql-header .ql-picker-label")
+          ?.setAttribute("aria-label", "Text style");
+      }}
       theme="snow"
       value={value}
       onChange={handleChange}

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -13,6 +13,7 @@ import {
   useStartImportMutation,
 } from "~/hooks/use-product-mutations";
 import type { ProductImportJob } from "~/types/api";
+import { ModalFrame, ModalTitle } from "~/components/app/order-dialog-primitives";
 
 type WizardStep = "upload" | "preview" | "running" | "done";
 
@@ -33,6 +34,7 @@ export function CsvImportWizard({ onClose }: { onClose: () => void }) {
 
   const startMutation = useStartImportMutation();
   const confirmMutation = useConfirmImportMutation();
+  const descriptionId = useId();
 
   function handleFileChosen(f: File) {
     setFile(f);
@@ -60,20 +62,17 @@ export function CsvImportWizard({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
+    <ModalFrame
+      onClose={onClose}
+      describedBy={descriptionId}
+      className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl bg-white dark:bg-gray-900 shadow-xl outline-none"
     >
-      <div
-        className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl bg-white dark:bg-gray-900 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
         <header className="flex items-center justify-between border-b px-6 py-4">
           <div>
-            <h2 className="text-sm font-bold text-gray-900 dark:text-gray-100">
+            <ModalTitle className="text-sm font-bold text-gray-900 dark:text-gray-100">
               Import products from CSV
-            </h2>
-            <p className="text-[10px] text-muted-foreground">
+            </ModalTitle>
+            <p id={descriptionId} className="text-[10px] text-muted-foreground">
               Shopify-format CSV. Each Handle becomes a product; multiple rows
               with the same Handle become variants of that product.
             </p>
@@ -81,6 +80,7 @@ export function CsvImportWizard({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close"
             className="rounded-md p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800"
           >
             <X className="size-4" />
@@ -298,8 +298,7 @@ export function CsvImportWizard({ onClose }: { onClose: () => void }) {
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </ModalFrame>
   );
 }
 

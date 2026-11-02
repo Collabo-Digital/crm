@@ -15,6 +15,7 @@ import {
  *   2. Construct `S3Client` from env in the constructor
  *   3. Implement `upload()` via `PutObjectCommand` + return CDN URL
  *   4. Implement `delete()` via `DeleteObjectCommand`
+ *   5. Implement `read()` via `GetObjectCommand`
  */
 @Injectable()
 export class S3ImageStorage implements IImageStorage {
@@ -28,5 +29,14 @@ export class S3ImageStorage implements IImageStorage {
 
   async delete(_storageKey: string): Promise<void> {
     this.logger.warn('S3 delete not implemented — orphaned object will remain.');
+  }
+
+  read(storageKey: string): Promise<Buffer> {
+    return Promise.reject(
+      new NotImplementedException(
+        `S3 image storage is not configured, so ${storageKey} cannot be read. ` +
+          'Set UPLOAD_STORAGE=local or wire up S3.',
+      ),
+    );
   }
 }

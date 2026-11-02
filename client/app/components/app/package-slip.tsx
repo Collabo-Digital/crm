@@ -1,6 +1,9 @@
 import { useLayoutEffect, useRef } from "react";
 import { Flame, Mail, MessageCircle, Phone, Recycle, Umbrella } from "lucide-react";
+import { BarcodeSvg } from "~/components/app/labels/label-artwork";
 import { readAddress } from "~/lib/address";
+import { planBarcode } from "~/lib/barcode";
+import { SLIP_REF_W_MM } from "~/lib/slip-stock";
 import type { OrderSlipData } from "~/types/api";
 
 /**
@@ -40,10 +43,15 @@ export interface PackageSlipProps {
   /**
    * Reserve the blank strip captioned "Barcode :". It is intentionally EMPTY —
    * that space is where the courier's own shipping label gets stuck, so
-   * printing our own symbol there would be covered up. `barcode.ts` is
-   * deliberately not used by this component.
+   * printing our own symbol there would be covered up. The order's own
+   * barcode (for the packing screen) sits under the brand row instead.
    */
   showBarcodeZone?: boolean;
+  /**
+   * The slip's printable width in mm, which the order barcode must fit. The
+   * reference box at this scale when not given.
+   */
+  contentWidthMm?: number;
   /** Optional contents list. Off by default — the reference design has none. */
   showItems?: boolean;
   /**
@@ -207,6 +215,7 @@ export function PackageSlip({
   showBarcodeZone = true,
   showItems = false,
   highlight = null,
+  contentWidthMm,
 }: PackageSlipProps) {
   /** Font size in points, scaled to the stock. */
   const pt = (base: number) => `${(base * scale).toFixed(2)}pt`;
@@ -228,6 +237,16 @@ export function PackageSlip({
   const careIconPx = Math.round(11 * scale);
 
   const hairline = `${Math.max(0.18, 0.22 * scale).toFixed(2)}mm solid ${INK}`;
+
+  // Code 128 of the order id: scanning it on the packing queue opens the
+  // order. Two dots at 203 dpi (0.25 mm) so a thermal roll prints it crisply.
+  const orderBarcode = planBarcode({
+    value: order.id,
+    availableMm: contentWidthMm ?? (SLIP_REF_W_MM - 6) * scale,
+    dpi: 203,
+    preferDots: 2,
+    maxBarHeightMm: 7 * scale,
+  });
 
   return (
     <div
@@ -298,6 +317,12 @@ export function PackageSlip({
           <p style={{ margin: 0 }}>{order.name}</p>
         </div>
       </div>
+
+      {orderBarcode.quality !== "unfit" && (
+        <div style={{ paddingBottom: mm(2.2) }}>
+          <BarcodeSvg plan={orderBarcode} maxHeightMm={orderBarcode.barHeightMm} />
+        </div>
+      )}
 
       {/* From | To. flex:1 + minHeight:0 gives the address blocks a definite
           height, which is what AutoFitText measures against. */}

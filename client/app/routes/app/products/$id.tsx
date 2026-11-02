@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -41,7 +42,8 @@ import { useOrganizationSettings } from "~/hooks/use-settings-queries";
 import { useInventoryStatus } from "~/hooks/use-inventory-queries";
 import { STOCK_TERMS } from "~/lib/inventory-vocabulary";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
-import { calcMargin, cn, formatCurrency } from "~/lib/utils";
+import { toneClasses } from "~/lib/status-tone";
+import { calcMargin, cn, formatCurrency, NO_COST_MARGIN } from "~/lib/utils";
 import { formatDate, formatDateTime } from "~/lib/format-date";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import {
@@ -130,16 +132,17 @@ import { Switch } from "~/components/ui/switch";
 import { Separator } from "~/components/ui/separator";
 import { Item, ItemMedia } from "~/components/ui/item";
 import { motion } from "framer-motion";
+import { pageTitle } from "~/lib/page-title";
 
 export function meta() {
   return [{ title: "Product Detail | Collabo CRM" }];
 }
 
-const STATUS_CLASS: Record<string, string> = {
-  ACTIVE: "bg-[#CEF17B]/30 text-[#084734]",
-  DRAFT: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
-  ARCHIVED: "bg-orange-100 text-orange-700",
-};
+const STATUS_CLASS: Record<string, string> = toneClasses({
+  ACTIVE: "success",
+  DRAFT: "neutral",
+  ARCHIVED: "neutral",
+});
 
 const STATUS_OPTIONS = ["Active", "Draft", "Archived"] as const;
 
@@ -1075,7 +1078,8 @@ export default function ProductDetailPage() {
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <Breadcrumb>
+          {/* On a phone the app bar's back arrow does this job. */}
+          <Breadcrumb className="max-md:hidden">
             <BreadcrumbList>
               <BreadcrumbItem>
                 <BreadcrumbLink asChild>
@@ -1105,32 +1109,33 @@ export default function ProductDetailPage() {
 
             <div className="min-w-0 flex-1 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
+                <title>{pageTitle(product.title, "Product")}</title>
                 <h1 className="text-[24px] font-bold text-gray-900 dark:text-gray-100">
                   {product.title}
                 </h1>
                 <span
                   className={cn(
-                    "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                    "rounded-full px-2 py-0.5 text-micro font-medium",
                     STATUS_CLASS[product.status] ?? "bg-gray-100 text-gray-600",
                   )}
                 >
                   {product.status}
                 </span>
                 {isManual ? (
-                  <span className="inline-flex items-center rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300">
+                  <span className="inline-flex items-center rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-micro font-medium text-blue-700 dark:text-blue-300">
                     CRM (Manual)
                   </span>
                 ) : (
                   // Source only — the sync state is its own pill below. This
                   // used to read "Synced from SHOPIFY" in green even while the
                   // product had unpushed edits or a failed push.
-                  <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-gray-800 px-2 py-0.5 text-[10px] font-medium text-gray-700 dark:text-gray-300">
+                  <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-gray-800 px-2 py-0.5 text-micro font-medium text-gray-700 dark:text-gray-300">
                     From {product.channel?.platform === "SHOPIFY" ? "Shopify" : product.channel?.platform}
                   </span>
                 )}
                 <ShopifySyncStatusPill sync={sync} />
                 {product.status === "DRAFT" && product.publishedAt && new Date(product.publishedAt) > new Date() && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-micro font-medium text-blue-700 dark:text-blue-300">
                     <Calendar className="size-3" />
                     Publishes on {formatDateTime(product.publishedAt)}
                   </span>
@@ -1176,7 +1181,7 @@ export default function ProductDetailPage() {
               aria-controls="product-tabpanel"
               onClick={() => setActiveTab(id)}
               className={cn(
-                "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none",
+                "relative flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm select-none max-md:min-h-11 pointer-coarse:min-h-11",
                 isActive
                   ? "font-semibold text-gray-900 dark:text-gray-900"
                   : "font-medium text-background hover:text-background/70 dark:text-gray-400 dark:hover:text-gray-200",
@@ -1386,7 +1391,9 @@ export default function ProductDetailPage() {
                           <span className="text-[12px] font-medium text-muted-foreground">
                             {pricingMargin
                               ? `${pricingMargin.marginPct.toFixed(0)}%`
-                              : "—"}
+                              : dv?.cost?.trim()
+                                ? "—"
+                                : NO_COST_MARGIN}
                           </span>
                         </div>
                         <div className="flex flex-col flex-1 gap-1 bg-[#f5f5f5] p-2 rounded-lg dark:bg-gray-800/60">
@@ -1406,7 +1413,7 @@ export default function ProductDetailPage() {
                           <FieldLabel className="text-[13px]" htmlFor="product-taxable">
                             Charge tax on this product
                           </FieldLabel>
-                          <FieldDescription className="text-[10px]">
+                          <FieldDescription className="text-caption">
                             Applies your store&apos;s default tax rate.
                           </FieldDescription>
                         </FieldContent>
@@ -1465,7 +1472,7 @@ export default function ProductDetailPage() {
                             Track quantity
                           </FieldLabel>
                           {trackForced && (
-                            <FieldDescription className="text-[11px] text-amber-700 dark:text-amber-300">
+                            <FieldDescription className="text-caption text-amber-700 dark:text-amber-300">
                               Forced ON for all products in{" "}
                               <Link to="/settings" className="underline">Settings → Sync</Link>.
                             </FieldDescription>
@@ -1488,7 +1495,7 @@ export default function ProductDetailPage() {
                             Continue selling when out of stock
                           </FieldLabel>
                           {oversellForced && (
-                            <FieldDescription className="text-[11px] text-amber-700 dark:text-amber-300">
+                            <FieldDescription className="text-caption text-amber-700 dark:text-amber-300">
                               Forced ON for all products in{" "}
                               <Link to="/settings" className="underline">Settings → Sync</Link>.
                               Shopify receives "continue" regardless of this switch.
@@ -1565,7 +1572,7 @@ export default function ProductDetailPage() {
                         <FieldLabel className="text-[13px]" htmlFor="product-physical">
                           This is a physical product
                         </FieldLabel>
-                        <FieldDescription className="text-[11px]">
+                        <FieldDescription className="text-caption">
                           Off for digital downloads, services, etc.
                         </FieldDescription>
                       </FieldContent>
@@ -1610,7 +1617,7 @@ export default function ProductDetailPage() {
                             value={dv?.weightUnit ?? "kg"}
                             onChange={(e) => setDv({ weightUnit: e.target.value })}
                             disabled={!defaultVariant}
-                            className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                            className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                           >
                             <option value="g">g</option>
                             <option value="kg">kg</option>
@@ -1661,7 +1668,7 @@ export default function ProductDetailPage() {
                         }
                         disabled={!defaultVariant}
                       />
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-caption text-muted-foreground">
                         Two-letter ISO code
                       </span>
                     </div>
@@ -1746,7 +1753,7 @@ export default function ProductDetailPage() {
                           <p className="text-xs font-medium text-gray-900 dark:text-gray-100">
                             {o.name}
                           </p>
-                          <p className="text-[10px] text-muted-foreground">
+                          <p className="text-caption text-muted-foreground">
                             {o.customer
                               ? `${o.customer.firstName ?? ""} ${o.customer.lastName ?? ""}`.trim() || "Guest"
                               : "Guest"}{" "}
@@ -1801,9 +1808,6 @@ export default function ProductDetailPage() {
                   value={product.tags?.length ? product.tags.join(", ") : "—"}
                 />
               </dl>
-              <p className="mt-3 text-xs text-muted-foreground italic">
-                Advanced SEO fields coming soon.
-              </p>
             </Section>
           )}
         </div>
@@ -1886,7 +1890,7 @@ export default function ProductDetailPage() {
                   value={gstRate}
                   onChange={(e) => setGstRate(e.target.value)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Not set</option>
                   {GST_RATE_OPTIONS.map((rate) => (
@@ -1908,7 +1912,7 @@ export default function ProductDetailPage() {
                   value={unitOfMeasure}
                   onChange={(e) => setUnitOfMeasure(e.target.value)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   <option value="">Default (NOS)</option>
                   {COMMON_UQC.map((u) => (
@@ -1930,7 +1934,7 @@ export default function ProductDetailPage() {
                   value={supplyType}
                   onChange={(e) => setSupplyType(e.target.value as GstSupplyType)}
                   disabled={isVendor}
-                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+                  className="h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-[12px] focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
                 >
                   {GST_SUPPLY_TYPES.map((t) => (
                     <option key={t.value} value={t.value}>
@@ -1939,12 +1943,12 @@ export default function ProductDetailPage() {
                   ))}
                 </select>
               </div>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-caption text-muted-foreground">
                 Applies to every variant unless a variant sets its own override
                 in the variant editor.
               </p>
               {isVendor && (
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-caption text-muted-foreground">
                   Tax fields are managed by the store owner.
                 </p>
               )}
@@ -1952,7 +1956,7 @@ export default function ProductDetailPage() {
           </Section>
 
           <Section title="Product Organization">
-            <dl className="space-y-3 text-xs">
+            <div className="space-y-3 text-xs">
               <ComboboxField
                 label="Product Type"
                 items={typeItems}
@@ -1975,7 +1979,7 @@ export default function ProductDetailPage() {
                 onChange={setTags}
               />
 
-            </dl>
+            </div>
           </Section>
 
 
@@ -2059,7 +2063,7 @@ export default function ProductDetailPage() {
 }
 
 const PILL_BASE =
-  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium";
+  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-micro font-medium";
 
 /** Title-row pill for the states that need attention; nothing otherwise. */
 function ShopifySyncStatusPill({
@@ -2196,7 +2200,7 @@ function ShopifySyncCard({
         <span className={cn(PILL_BASE, "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300")}>
           Not synced yet
         </span>
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-caption text-muted-foreground">
           Use Sync to Shopify at the top of the page to push this product.
         </p>
       </div>
@@ -2210,7 +2214,7 @@ function ShopifySyncCard({
           Synced
         </span>
         {sync.shopifyProductId && (
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-caption text-muted-foreground">
             Shopify ID: <span className="font-mono">{sync.shopifyProductId}</span>
           </p>
         )}
@@ -2221,7 +2225,7 @@ function ShopifySyncCard({
     return (
       <div className="space-y-2 text-xs">
         <ShopifySyncStatusPill sync={sync} />
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-caption text-muted-foreground">
           This sync never finished. Use Retry sync at the top of the page.
         </p>
       </div>
@@ -2239,7 +2243,7 @@ function ShopifySyncCard({
     return (
       <div className="space-y-2 text-xs">
         <ShopifySyncStatusPill sync={sync} />
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-caption text-muted-foreground">
           Saved edits haven't been pushed yet. Use Sync to Shopify at the top of the page.
         </p>
       </div>
@@ -2248,7 +2252,7 @@ function ShopifySyncCard({
   return (
     <div className="space-y-2 text-xs">
       <ShopifySyncStatusPill sync={sync} />
-      {sync.error && <p className="text-[10px] text-red-700 dark:text-red-400">{sync.error}</p>}
+      {sync.error && <p className="text-caption text-red-700 dark:text-red-400">{sync.error}</p>}
     </div>
   );
 }
@@ -2278,6 +2282,7 @@ function TagsComboboxField({
   placeholder?: string;
 }) {
   const anchor = useComboboxAnchor();
+  const labelId = useId();
   const createInputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [createMode, setCreateMode] = useState(false);
@@ -2321,7 +2326,7 @@ function TagsComboboxField({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
-        <dt className="text-muted-foreground text-[12px]">{label}</dt>
+        <span id={labelId} className="text-muted-foreground text-[12px]">{label}</span>
         <button
           type="button"
           onMouseDown={(e) => {
@@ -2354,7 +2359,7 @@ function TagsComboboxField({
           </svg>
         </button>
       </div>
-      <dd>
+      <div>
         <Combobox
           multiple
           autoHighlight
@@ -2371,7 +2376,7 @@ function TagsComboboxField({
                   {values.map((tag: string) => (
                     <ComboboxChip key={tag}>{tag}</ComboboxChip>
                   ))}
-                  <ComboboxChipsInput placeholder={placeholder} />
+                  <ComboboxChipsInput placeholder={placeholder} aria-labelledby={labelId} />
                 </>
               )}
             </ComboboxValue>
@@ -2418,7 +2423,7 @@ function TagsComboboxField({
             </ComboboxList>
           </ComboboxContent>
         </Combobox>
-      </dd>
+      </div>
     </div>
   );
 }
@@ -2440,6 +2445,7 @@ function ComboboxField({
   disabled?: boolean;
   hideAddButton?: boolean;
 }) {
+  const labelId = useId();
   const createInputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [createMode, setCreateMode] = useState(false);
@@ -2484,7 +2490,7 @@ function ComboboxField({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
-        <dt className="text-muted-foreground text-[12px]">{label}</dt>
+        <span id={labelId} className="text-muted-foreground text-[12px]">{label}</span>
         {!hideAddButton && !disabled && (
           <button
             type="button"
@@ -2519,7 +2525,7 @@ function ComboboxField({
           </button>
         )}
       </div>
-      <dd>
+      <div>
         <Combobox
           items={items}
           value={value || null}
@@ -2528,7 +2534,7 @@ function ComboboxField({
           open={open}
           onOpenChange={handleOpenChange}
         >
-          <ComboboxInput placeholder={placeholder} />
+          <ComboboxInput placeholder={placeholder} aria-labelledby={labelId} />
           <ComboboxContent>
             {createMode && (
               <div
@@ -2571,7 +2577,7 @@ function ComboboxField({
             </ComboboxList>
           </ComboboxContent>
         </Combobox>
-      </dd>
+      </div>
     </div>
   );
 }

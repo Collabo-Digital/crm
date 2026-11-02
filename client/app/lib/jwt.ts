@@ -11,6 +11,17 @@
  * onboarding that carry no org yet.
  */
 export function readTokenOrgId(token: string | null | undefined): string | null {
+  const claims = readClaims(token);
+  return typeof claims?.orgId === "string" && claims.orgId ? claims.orgId : null;
+}
+
+/** When a JWT expires, in milliseconds since the epoch; null when unreadable. Not verified either. */
+export function readTokenExpiry(token: string | null | undefined): number | null {
+  const exp = readClaims(token)?.exp;
+  return typeof exp === "number" ? exp * 1000 : null;
+}
+
+function readClaims(token: string | null | undefined): { orgId?: unknown; exp?: unknown } | null {
   if (!token) return null;
 
   const payload = token.split(".")[1];
@@ -23,8 +34,7 @@ export function readTokenOrgId(token: string | null | undefined): string | null 
       base64.length + ((4 - (base64.length % 4)) % 4),
       "=",
     );
-    const claims = JSON.parse(atob(padded)) as { orgId?: unknown };
-    return typeof claims.orgId === "string" && claims.orgId ? claims.orgId : null;
+    return JSON.parse(atob(padded)) as { orgId?: unknown; exp?: unknown };
   } catch {
     return null;
   }

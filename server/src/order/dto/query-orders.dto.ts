@@ -12,12 +12,16 @@ export class QueryOrdersDto {
     @IsOptional() @IsEnum(OrderFulfillmentStatus) fulfillmentStatus?: OrderFulfillmentStatus;
     @IsOptional() @IsString() channelId?: string;
 
+    // Payment as the list's Payment column shows it. `cod` and `pending` are
+    // both unpaid: cash to collect on delivery, or a prepaid payment still due.
+    @IsOptional() @IsIn(['paid', 'pending', 'cod', 'refunded']) payment?: 'paid' | 'pending' | 'cod' | 'refunded';
+
     // Filter to orders that contain a line item from the given product
     // (used by the product detail page to show "Recent sales").
     @IsOptional() @IsString() productId?: string;
     @IsOptional() @IsString() customerId?: string;
 
-    // Search (by order number, customer name, or customer email)
+    // Search (by order number, customer name, email or phone)
     @IsOptional() @IsString() search?: string;
 
     // Sort. Whitelisted: the service spreads this straight into Prisma's

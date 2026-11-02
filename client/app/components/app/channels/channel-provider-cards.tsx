@@ -24,12 +24,15 @@ export function ChannelProviderCards({
   channels,
   canManage,
   onConnect,
+  extra,
 }: {
   /** Which providers to offer. Defaults to all; narrowed by role at the call site. */
   providers?: ChannelProvider[];
   channels: Channel[] | undefined;
   canManage: boolean;
   onConnect: (provider: ChannelProvider) => void;
+  /** Anything one provider adds to its card for its connected accounts. */
+  extra?: (provider: ChannelProvider, active: Channel[]) => React.ReactNode;
 }) {
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -77,6 +80,7 @@ export function ChannelProviderCards({
                   </span>
                 ))}
               </div>
+              {extra?.(provider, active)}
             </div>
 
             {canManage && (

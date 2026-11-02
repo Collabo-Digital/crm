@@ -4,8 +4,8 @@ import type { AutomationViewer } from "../../automation.service";
 import { PrismaService } from "../../../prisma/prisma.service";
 import { deletionCutoff, IG_MEDIA_FIELDS, IgMediaPage, isMediaSyncStale, mapIgMedia, MappedMedia, MEDIA_PAGE_SIZE, MEDIA_SYNC_LIMIT, mediaSyncedAt } from "./instagram-media.util";
 import { isRateLimitedError, Priority } from "../../../rate-limit/rate-limit.types";
-import { MetaGraphError, metaScope, type MetaResponse } from "../../../channel/meta-graph.types";
-import { InstagramOAuthService } from "../../../channel/instagram-oauth.service";
+import { MetaGraphError, type MetaResponse } from "../../../channel/meta-graph.types";
+import { ChannelAccessService } from "../../../messaging/channel-access.service";
 import { MetaGraphClient } from "../../../channel/meta-graph.client";
 import { ConfigService } from "@nestjs/config";
 
@@ -63,7 +63,7 @@ export class InstagramMediaService {
         private readonly prisma: PrismaService,
         private readonly config: ConfigService,
         private readonly metaGraph: MetaGraphClient,
-        private readonly instagramOAuth: InstagramOAuthService,
+        private readonly access: ChannelAccessService,
     ) {
         this.graphVersion = this.config.get<string>('instagram.graphVersion') ?? 'v21.0';
     }
@@ -226,20 +226,25 @@ export class InstagramMediaService {
 
     /** GET /me/media, following paging.next until the cap. */
     private async fetchRecent(channelId: string, priority: Priority) {
-        const { token, igUserId } = await this.instagramOAuth.getAccessToken(channelId)
-        const scopes = [...this.metaGraph.baseScopes(), metaScope.igUser(igUserId)];
+        // Instagram Login accounts read graph.instagram.com/me/media with their
+        // own token; Page-linked accounts read /{ig-user-id}/media on the Graph
+        // API with the Page's token.
+        const access = await this.access.get(channelId);
+        let next: { url: string } | { path: string } | null = access.baseUrl
+            ? { url: `${IG_GRAPH_HOST}/${this.graphVersion}/me/media` }
+            : { path: `/${access.address}/media` };
 
         const nodes: IgMediaPage['data'] = []
-        let url: string | undefined = `${IG_GRAPH_HOST}/${this.graphVersion}/me/media`;
         let query: Record<string, string | number> | undefined = { fields: IG_MEDIA_FIELDS, limit: MEDIA_PAGE_SIZE };
 
-        while (url && nodes.length < MEDIA_SYNC_LIMIT) {
+        while (next && nodes.length < MEDIA_SYNC_LIMIT) {
             const res: MetaResponse<IgMediaPage> = await this.metaGraph.request<IgMediaPage>({
                 method: 'GET',
-                url,
+                ...next,
                 query,
-                accessToken: token,
-                scopes,
+                accessToken: access.token,
+                scopes: access.scopes,
+                pageId: access.pageId ?? undefined,
                 priority,
                 channelId,
                 timeoutMs: MEDIA_FETCH_TIMEOUT_MS,
@@ -247,7 +252,7 @@ export class InstagramMediaService {
 
             nodes.push(...(res.data.data ?? []))
             // paging.next is a complete URL carrying fields, limit and cursor.
-            url = res.data.paging?.next;
+            next = res.data.paging?.next ? { url: res.data.paging.next } : null;
             query = undefined;
         }
         return nodes.slice(0, MEDIA_SYNC_LIMIT);

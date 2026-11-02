@@ -18,7 +18,12 @@ export type PermissionKey =
   | "inventory.reports"
   | "reports.finance"
   | "campaigns.view"
-  | "campaigns.manage";
+  | "campaigns.manage"
+  | "chat.view_all"
+  | "chat.view_unassigned"
+  | "chat.assign"
+  | "broadcasts.send"
+  | "templates.manage";
 
 /** Roles that implicitly hold every key. Mirrors IMPLICIT_ALL_ROLES. */
 const IMPLICIT_ALL_ROLES: UserRole[] = ["OWNER", "ADMIN", "MANAGER"];
@@ -55,6 +60,15 @@ export function hasPermission(
   if (role === "VENDOR") return false;
   if (IMPLICIT_ALL_ROLES.includes(role)) return true;
   return (grants ?? defaultGrantsForRole(role)).includes(key);
+}
+
+/**
+ * May edit automations and conversation starters: the server's EDITORS
+ * (owners, admins, managers, influencers) holding campaigns.manage. Agents and
+ * viewers only read them, even with that grant.
+ */
+export function canEditAutomations(role: UserRole | undefined, grants: readonly string[] | undefined): boolean {
+  return role !== "AGENT" && role !== "VIEWER" && hasPermission(role, grants, "campaigns.manage");
 }
 
 /**

@@ -7,14 +7,23 @@ import { TableSkeleton } from "~/components/app/table-skeleton";
 import { EmptyState } from "~/components/app/empty-state";
 import { QueryErrorState } from "~/components/app/query-error-state";
 import { ShopifyConnectDialog } from "~/components/app/shopify-connect-dialog";
+import { ShopifyLocationsDialog } from "~/components/app/shopify-locations-dialog";
+import { Button } from "~/components/ui/button";
 import { WhatsAppConnectDialog } from "~/components/app/whatsapp-connect-dialog";
+import { MessengerConnectDialog } from "~/components/app/channels/messenger-connect-dialog";
 import { ChannelProviderCards } from "~/components/app/channels/channel-provider-cards";
 import { ConnectedAccountsTable } from "~/components/app/channels/connected-accounts-table";
 import { ChannelManageDialog } from "~/components/app/channels/channel-manage-dialog";
 import { ChannelDisconnectDialog } from "~/components/app/channels/channel-disconnect-dialog";
 import { InstagramConnectDialog } from "~/components/app/channels/instagram-connect-dialog";
 import { InstagramAccountPickerDialog } from "~/components/app/channels/instagram-account-picker-dialog";
-import { useChannels, useRefreshAfterChannelSync, channelKeys } from "~/hooks/use-channel-queries";
+import { WhatsAppMessagesCard } from "~/components/app/settings/whatsapp-messages-card";
+import {
+  useChannels,
+  usePendingShopifyLocations,
+  useRefreshAfterChannelSync,
+  channelKeys,
+} from "~/hooks/use-channel-queries";
 import { orgKeys } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { CHANNEL_PROVIDERS, connectErrorMessage, type ChannelProvider } from "~/lib/channel-providers";
@@ -38,6 +47,7 @@ export function ChannelSettingsTab() {
   const [shopifyOpen, setShopifyOpen] = useState(false);
   const [instagramOpen, setInstagramOpen] = useState(false);
   const [whatsappOpen, setWhatsappOpen] = useState(false);
+  const [messengerOpen, setMessengerOpen] = useState(false);
   /** Set when a dialog is re-authorizing an existing row rather than adding one. */
   const [reconnectChannelId, setReconnectChannelId] = useState<string | undefined>();
   const [manageChannel, setManageChannel] = useState<Channel | null>(null);
@@ -46,6 +56,8 @@ export function ChannelSettingsTab() {
   // Pre-fills the Shopify dialog when arriving from the embedded Shopify
   // app's "Open CRM" button (?install_shop=my-store.myshopify.com)
   const [installDomain, setInstallDomain] = useState<string | undefined>();
+  /** The Shopify store whose locations are being linked. */
+  const [linkingChannelId, setLinkingChannelId] = useState<string | null>(null);
 
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -59,9 +71,8 @@ export function ChannelSettingsTab() {
     : CHANNEL_PROVIDERS;
 
   const { data: channels, isLoading, isError, refetch } = useChannels();
-  // Keeps the sync status column live while a run is in progress; the table
-  // itself owns the Sync button and the disconnect dialog owns its mutation.
   useRefreshAfterChannelSync(channels);
+  const pendingStores = usePendingShopifyLocations();
 
   // Everything an OAuth round trip can hand back arrives as query params, since
   // the provider redirects the browser rather than returning to our code.
@@ -74,20 +85,30 @@ export function ChannelSettingsTab() {
 
     if (connected) {
       const refreshed = searchParams.get("note") === "refreshed";
+      // Nothing syncs for a Shopify location until the merchant says what it
+      // does, so that question comes straight after connecting.
+      const shopifyChannelId = searchParams.get("channelId");
+      const locationsPending =
+        connected === "shopify" && searchParams.get("locations") === "pending" && !!shopifyChannelId;
       toast.success(
         refreshed
           ? "That account was already connected — its access has been refreshed."
+          : locationsPending
+            ? "Shopify store connected. Now choose what each of its locations does."
           : connected === "shopify"
             ? "Shopify store connected — initial sync started"
             : connected === "instagram"
               ? "Instagram account connected"
               : connected === "whatsapp"
                 ? "WhatsApp Business connected"
+                : connected === "messenger"
+                  ? "Facebook Pages connected"
                 : "Channel connected",
       );
       queryClient.invalidateQueries({ queryKey: channelKeys.all });
       // Org currency is auto-synced from the Shopify shop on connect
       queryClient.invalidateQueries({ queryKey: orgKeys.all });
+      if (locationsPending) setLinkingChannelId(shopifyChannelId);
       setSearchParams({}, { replace: true });
     } else if (error) {
       const platform = error.replace(/_connect_failed$/, "");
@@ -115,6 +136,7 @@ export function ChannelSettingsTab() {
     if (provider.platform === "SHOPIFY") setShopifyOpen(true);
     if (provider.platform === "INSTAGRAM") setInstagramOpen(true);
     if (provider.platform === "WHATSAPP") setWhatsappOpen(true);
+    if (provider.platform === "FACEBOOK") setMessengerOpen(true);
   }
 
   function reconnect(channel: Channel) {
@@ -136,6 +158,10 @@ export function ChannelSettingsTab() {
     if (channel.platform === "WHATSAPP") {
       setReconnectChannelId(channel.id);
       setWhatsappOpen(true);
+    }
+    if (channel.platform === "FACEBOOK") {
+      // One popup re-shares every Page; reconnecting re-authorizes in place.
+      setMessengerOpen(true);
     }
   }
 
@@ -166,6 +192,38 @@ export function ChannelSettingsTab() {
         channels={channels}
         canManage={canManage}
         onConnect={(provider) => startConnect(provider)}
+        extra={(provider, active) =>
+          provider.platform === "SHOPIFY" && canManage && active.length > 0 ? (
+            <div className="mt-4 space-y-3 border-t border-border pt-3">
+              {active.map((channel) => {
+                const pending = pendingStores.some((c) => c.id === channel.id);
+                return (
+                  <div key={channel.id} className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-caption font-medium text-foreground">
+                        {active.length > 1 ? `Locations in ${channel.name}` : "Shopify locations"}
+                      </p>
+                      <p className={pending ? "text-caption text-warning" : "text-caption text-muted-foreground"}>
+                        {pending
+                          ? "Some need linking. Their stock doesn't sync yet."
+                          : "Which Collabo location each one shares stock with."}
+                      </p>
+                    </div>
+                    <Button
+                      variant={pending ? "brand" : "outline"}
+                      size="sm"
+                      onClick={() => setLinkingChannelId(channel.id)}
+                    >
+                      {pending ? "Link locations" : "Review"}
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : provider.platform === "WHATSAPP" && active.length > 0 ? (
+            <WhatsAppMessagesCard />
+          ) : null
+        }
       />
 
       {/* Error first, and deliberately so: this page's empty state invites the
@@ -201,6 +259,12 @@ export function ChannelSettingsTab() {
           }
         }}
         initialDomain={installDomain}
+        onConnected={setLinkingChannelId}
+      />
+
+      <ShopifyLocationsDialog
+        channelId={linkingChannelId}
+        onOpenChange={(open) => !open && setLinkingChannelId(null)}
       />
 
       <InstagramConnectDialog
@@ -210,7 +274,17 @@ export function ChannelSettingsTab() {
           if (!open) setReconnectChannelId(undefined);
         }}
         reconnectChannelId={reconnectChannelId}
+        onUseFacebook={
+          isInfluencer
+            ? undefined
+            : () => {
+                setInstagramOpen(false);
+                setMessengerOpen(true);
+              }
+        }
       />
+
+      <MessengerConnectDialog open={messengerOpen} onOpenChange={setMessengerOpen} />
 
       {/* WhatsApp Embedded Signup dialog */}
       <WhatsAppConnectDialog

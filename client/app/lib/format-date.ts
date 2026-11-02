@@ -14,6 +14,18 @@ export function formatDate(value?: string | null): string {
 }
 
 /**
+ * "21 Oct": day first, short month, for compact places where the year is
+ * plain from context (a list of recent orders, a chart axis). Never the
+ * month-first "Oct 21" or "10-21", which read as another day in India.
+ */
+export function formatDayMonth(value?: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString(DATE_LOCALE, { day: "numeric", month: "short" });
+}
+
+/**
  * "just now", "5m ago", "2h ago", "3d ago"; past a month it hands over to
  * {@link formatDate}, because "47d ago" is harder to place than a date.
  * Empty string for a missing or invalid value so a caller can fall back to

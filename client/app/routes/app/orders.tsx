@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   type DateRangePreset,
   type OrderRangePreset,
@@ -8,7 +8,7 @@ import { useListUrlState } from "~/hooks/use-list-url-state";
 import { Link, useNavigate } from "react-router";
 import {
   Download, Upload, ShoppingBag, Package, Loader2,
-  Target, Box, Plus, Printer, FileText,
+  Target, Box, Plus, Printer, FileText, MoreHorizontal,
 } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import {
@@ -18,24 +18,39 @@ import {
   PageHeaderDescription,
   PageHeaderActions,
 } from "~/components/ui/page-header";
-import { StatCard } from "~/components/app/stat-card";
+import { STAT_STRIP, StatCard } from "~/components/app/stat-card";
 import { MoneyTotal } from "~/components/app/money-total";
-import { DataTable, useDataTableState } from "~/components/app/data-table";
-import { OrderRowActions, useOrderColumns } from "~/components/app/orders-table";
+import { DataTable, useDataTableState, type FilterDef } from "~/components/app/data-table";
+import { OrderMobileSummary, OrderRowActions, useOrderColumns } from "~/components/app/orders-table";
+import { ShopifySyncCell, syncNeedsAttention } from "~/components/app/shopify-sync-cell";
+import { AppBarActions } from "~/components/app/app-bar-actions";
+import { describeOrderShopifySync } from "~/lib/shopify-sync";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
 import { DockButton, FloatingDock } from "~/components/app/floating-dock";
 import { BulkInvoiceDialog } from "~/components/app/bulk-invoice-dialog";
 import { useInvoiceActionGates } from "~/hooks/use-invoice-action-gates";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Separator } from "~/components/ui/separator";
-import { formatCurrency } from "~/lib/utils";
+import { cn, formatCurrency } from "~/lib/utils";
 import { useExclusiveDownload } from "~/hooks/use-exclusive-download";
 import { reportingTimeZone, todayIn } from "~/lib/reporting-date";
 import { useOrders, useOrderStats } from "~/hooks/use-order-queries";
+import { useChannels } from "~/hooks/use-channel-queries";
+import { FULFILLMENT_FILTER_OPTIONS, PAYMENT_FILTER_OPTIONS } from "~/lib/order-status";
+import { comparedChange, comparedLabel, type TrendGoodWhen } from "~/lib/trend";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { orderService } from "~/services/order.service";
 import { dashboardService } from "~/services/dashboard.service";
-import type { Order, OrderListParams, DashboardQueryParams, OrderStatsResponse } from "~/types/api";
+import type {
+  ChannelPlatform,
+  DashboardQueryParams,
+  FulfillmentStatus,
+  Order,
+  OrderListParams,
+  OrderPaymentFilter,
+  OrderStatsResponse,
+} from "~/types/api";
 
 export function meta() {
   return [
@@ -59,12 +74,17 @@ const STAT_CARDS: ReadonlyArray<{
   icon: React.ReactNode;
   /** Renders the value through formatCurrency instead of toLocaleString. */
   currency?: boolean;
+  /** A growing backlog is bad news, so its rise is red. */
+  goodWhen?: TrendGoodWhen;
 }> = [
   { key: "totalNewOrders", label: "Total New Orders", icon: <ShoppingBag className="size-4" /> },
-  { key: "pendingOrders", label: "Pending Orders", icon: <Package className="size-4" /> },
+  { key: "pendingOrders", label: "Pending Orders", icon: <Package className="size-4" />, goodWhen: "down" },
   { key: "totalSales", label: "Total Sales", icon: <Target className="size-4" />, currency: true },
   { key: "totalProductsSold", label: "Products Sold", icon: <Box className="size-4" /> },
 ];
+
+/** Chat channels never hold orders, so the Channel filter leaves them out. */
+const CHAT_PLATFORMS: ReadonlyArray<ChannelPlatform> = ["WHATSAPP", "INSTAGRAM", "FACEBOOK"];
 
 export default function OrdersPage() {
   // The whole view — page, search, date range, sort, page size — lives in the
@@ -87,11 +107,33 @@ export default function OrdersPage() {
   const canOperate = canManage || role === "AGENT";
   const showShopifyColumn = !isVendor;
 
-  const columns = useOrderColumns({ currency: orgCurrency, showShopifyColumn });
+  const columns = useOrderColumns({ currency: orgCurrency, showShopifyColumn, showPaymentColumn: !isVendor });
+  const { data: channels } = useChannels();
+  // A vendor's rows carry neither payment nor channel, so they filter by
+  // fulfilment only.
+  const filters = useMemo<FilterDef[]>(
+    () => [
+      ...(isVendor ? [] : [{ key: "payment", label: "Payment", options: PAYMENT_FILTER_OPTIONS }]),
+      { key: "fulfillment", label: "Fulfilment", options: FULFILLMENT_FILTER_OPTIONS },
+      ...(isVendor
+        ? []
+        : [
+          {
+            key: "channel",
+            label: "Channel",
+            options: channels
+              ?.filter((c) => !CHAT_PLATFORMS.includes(c.platform))
+              .map((c) => ({ value: c.id, label: c.name })),
+          },
+        ]),
+    ],
+    [channels, isVendor],
+  );
   const table = useDataTableState({
     key: "orders",
     list,
     columns,
+    filters,
     sort: { default: { field: "externalCreatedAt", dir: "desc" } },
     // Opens on 7 days rather than All Time: all-time stats scan every order.
     date: {
@@ -112,12 +154,22 @@ export default function OrdersPage() {
     ? `${dateFilter.custom.from}-to-${dateFilter.custom.to}`
     : dateFilter.preset;
 
+  // A search looks through every date unless a range was picked on purpose.
+  // Searching inside the 7-day default answered "No orders match" for last
+  // month's order, or anyone's phone number.
+  const searchAllDates = table.debouncedSearch.trim() !== "" && table.isDefaultDate;
+  const payment = table.filters.payment?.[0] as OrderPaymentFilter | undefined;
+  const fulfillmentStatus = table.filters.fulfillment?.[0] as FulfillmentStatus | undefined;
+  const channelId = table.filters.channel?.[0];
+
   const params: OrderListParams = {
     page: table.page,
     limit: table.limit,
     search: table.debouncedSearch || undefined,
-    dateFrom,
-    dateTo,
+    ...(searchAllDates ? {} : { dateFrom, dateTo }),
+    payment,
+    fulfillmentStatus,
+    channelId,
     sortBy: table.sort?.field,
     sortOrder: table.sort?.dir,
   };
@@ -139,7 +191,7 @@ export default function OrdersPage() {
   const sortDir = table.sort?.dir;
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [table.page, table.limit, table.debouncedSearch, dateFrom, dateTo, sortField, sortDir]);
+  }, [table.page, table.limit, table.debouncedSearch, dateFrom, dateTo, sortField, sortDir, payment, fulfillmentStatus, channelId]);
 
   function toggleRow(order: Order, checked: boolean) {
     setSelectedIds((prev) => {
@@ -172,95 +224,113 @@ export default function OrdersPage() {
         )
       : undefined;
 
-  function formatChange(direction: "up" | "down" | "same", percentage: number) {
-    return direction === "down" ? -percentage : percentage;
-  }
+  const downloadReport = () => startDownload(
+    "report",
+    () => dashboardService.exportCsv(statsParams),
+    `orders-report-${fileTag}.csv`,
+    "Couldn't download the report. Please try again.",
+  );
+  const exportOrders = () => startDownload(
+    "json",
+    () => orderService.exportJson({ dateFrom, dateTo }),
+    `orders-${fileTag}.json`,
+    "Couldn't export the orders. Please try again.",
+  );
 
   return (
     // Bottom padding while the bulk-action dock is up, so it never covers the
     // pagination row.
-    <div className={slipHref ? "space-y-6 pb-24" : "space-y-6"}>
+    <div className={cn("space-y-4 md:space-y-6", slipHref && "pb-24")}>
       {/* Page header */}
-      <PageHeader>
+      {/* On a phone its buttons live in the app bar, so it takes no room. */}
+      <PageHeader className="max-md:contents">
         <PageHeaderContent>
           <PageHeaderTitle>Orders</PageHeaderTitle>
           <PageHeaderDescription>
-            An overview of recent data of customers info, products details and analysis.
+            Track sales, payments and fulfilment.
           </PageHeaderDescription>
         </PageHeaderContent>
-        <PageHeaderActions>
-          {/* "Download Report" is the dashboard's order CSV for the chosen
-              date range. "Export JSON" is the same orders as a JSON file via
-              the orders export route. Both take the date range only — the
-              search box is deliberately not applied, so the request does not
-              claim a filter the file lacks.
+        <PageHeaderActions className="max-md:hidden">
+          {/* "Download report" is the dashboard's order CSV for the chosen
+              date range; the JSON file is the same orders for developers,
+              via the orders export route, so it waits in the menu. Both
+              take the date range only — the search box is deliberately not
+              applied, so the request does not claim a filter the file lacks.
               Both lock while either runs; the clicked one shows progress
               until its file arrives or fails. */}
           {!isVendor && (
-            <>
-              <Button
-                variant="brand"
-                size="action"
-                disabled={activeDownload !== null}
-                aria-busy={activeDownload === "report"}
-                onClick={() => startDownload(
-                  "report",
-                  () => dashboardService.exportCsv(statsParams),
-                  `orders-report-${fileTag}.csv`,
-                  "Couldn't download the report. Please try again.",
-                )}
-              >
-                {activeDownload === "report" ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Download className="size-3.5" />
-                )}
-                {activeDownload === "report" ? "Preparing…" : "Download Report"}
-              </Button>
-              <Button
-                variant="outline"
-                size="action"
-                disabled={activeDownload !== null}
-                aria-busy={activeDownload === "json"}
-                onClick={() => startDownload(
-                  "json",
-                  () => orderService.exportJson({ dateFrom, dateTo }),
-                  `orders-${fileTag}.json`,
-                  "Couldn't export the orders. Please try again.",
-                )}
-              >
-                {activeDownload === "json" ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Upload className="size-3.5" />
-                )}
-                {activeDownload === "json" ? "Exporting…" : "Export JSON"}
-              </Button>
-            </>
+            <Button
+              variant="outline"
+              size="action"
+              disabled={activeDownload !== null}
+              aria-busy={activeDownload === "report"}
+              onClick={downloadReport}
+            >
+              {activeDownload === "report" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Download className="size-3.5" />
+              )}
+              {activeDownload === "report" ? "Preparing…" : "Download report"}
+            </Button>
           )}
-          <Button asChild variant="brand" size="action">
+          {!isVendor && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="size-9 rounded-full" aria-label="More order actions">
+                  <MoreHorizontal className="size-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={exportOrders} disabled={activeDownload !== null}><Upload /> {activeDownload === "json" ? "Preparing…" : "Raw data for developers (JSON)"}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          <Button asChild variant="brand" size="action" className="h-8 rounded-lg px-3">
             <Link to="/orders/new">
               <Plus className="size-3.5" />
-              Create Order
+              Create order
             </Link>
           </Button>
         </PageHeaderActions>
       </PageHeader>
+      {/* Phones: the actions sit in the app bar, so the list starts higher. */}
+      <AppBarActions>
+        {!isVendor && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="rounded-full" aria-label="More order actions">
+                <MoreHorizontal className="size-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={downloadReport} disabled={activeDownload !== null}><Download /> Download report</DropdownMenuItem>
+              <DropdownMenuItem onSelect={exportOrders} disabled={activeDownload !== null}><Upload /> {activeDownload === "json" ? "Preparing…" : "Raw data for developers (JSON)"}</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        <Button asChild variant="brand" size="sm" className="rounded-full px-3.5">
+          <Link to="/orders/new">
+            <Plus className="size-4" />
+            Create order
+          </Link>
+        </Button>
+      </AppBarActions>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 bg-white dark:bg-gray-900 p-3 rounded-xl gap-5">
+      <div className={cn("grid grid-cols-2 gap-4 rounded-3xl bg-card p-4 md:gap-5 md:rounded-xl md:p-3 lg:grid-cols-4", STAT_STRIP)}>
         {statsLoading ? (
           Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="p-5">
+            <div key={i} className="min-w-0 p-1 md:p-5">
               <Skeleton className="h-3 w-24 mb-4" />
               <Skeleton className="h-7 w-20" />
             </div>
           ))
         ) : stats ? (
-          STAT_CARDS.map(({ key, label, icon, currency }, i, arr) => {
+          STAT_CARDS.map(({ key, label, icon, currency, goodWhen }, i, arr) => {
             const metric = stats[key];
             return (
-              <div key={key} className="flex items-center gap-4">
+              <div key={key} className="flex min-w-0 items-center gap-4">
                 <StatCard
                   variant="inline"
                   label={label}
@@ -276,12 +346,9 @@ export default function OrdersPage() {
                       Number(metric.current).toLocaleString()
                     )
                   }
-                  {...(metric.change
-                    ? {
-                      change: formatChange(metric.change.direction, metric.change.percentage),
-                      changeLabel: "vs previous period",
-                    }
-                    : {})}
+                  change={comparedChange(metric)}
+                  goodWhen={goodWhen}
+                  changeLabel={comparedLabel(metric)}
                   icon={icon}
                   className="flex-1"
                 />
@@ -292,9 +359,7 @@ export default function OrdersPage() {
             );
           })
         ) : (
-          /* No `change` here — passing 0 renders a GREEN "0%" up-trend badge
-             (the card treats `change >= 0` as positive), so a failed stats
-             request comes out looking like four healthy metrics. */
+          /* No `change` here: a failed stats request has no trend to show. */
           STAT_CARDS.map(({ key, label, icon }) => (
             <StatCard key={key} variant="inline" label={label} value="—" icon={icon} />
           ))
@@ -308,8 +373,17 @@ export default function OrdersPage() {
         meta={data?.meta}
         status={{ isLoading, isError, isPlaceholderData, refetch }}
         noun="orders"
-        searchPlaceholder="Search order #, customer or email…"
+        searchPlaceholder="Search order #, customer, email or phone…"
+        dateLabel={searchAllDates ? "All dates while searching" : undefined}
         onRowClick={(order) => navigate(`/orders/${order.id}`)}
+        mobileRow={(order) => (
+          <>
+            <OrderMobileSummary order={order} currency={orgCurrency} />
+            {showShopifyColumn && syncNeedsAttention(describeOrderShopifySync(order)) && (
+              <div className="mt-2"><ShopifySyncCell summary={describeOrderShopifySync(order)} /></div>
+            )}
+          </>
+        )}
         selection={{
           isSelected: (order) => selectedIds.has(order.id),
           onToggle: toggleRow,
@@ -327,10 +401,24 @@ export default function OrdersPage() {
           />
         )}
         actionsWidth={canOperate && showShopifyColumn ? 128 : 56}
-        emptyState={{
-          title: "No orders yet",
-          description: "Orders will appear here once synced from your channels.",
-        }}
+        // The default 7 days is not a filter, so a quiet week used to read
+        // "No orders yet" while older orders existed.
+        emptyState={
+          dateFilter.preset === "all" && !dateFilter.custom
+            ? {
+              title: "No orders yet",
+              description: "Orders will appear here once synced from your channels.",
+            }
+            : {
+              title: "No orders in this period",
+              description: "Older orders are still here. Show all dates, or search by order number, name or phone.",
+              action: (
+                <Button variant="outline" size="sm" onClick={() => table.setDatePreset("all")}>
+                  Show all dates
+                </Button>
+              ),
+            }
+        }
       />
 
       {slipHref && (

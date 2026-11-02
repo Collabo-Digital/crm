@@ -6,7 +6,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { ArrowDown, ArrowUp, ChevronsUpDown, Search, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, ChevronsUpDown, Search, X } from "lucide-react";
 
 import { DateRangeFilter } from "~/components/app/date-range-filter";
 import { SegmentedTabs } from "~/components/app/segmented-tabs";
@@ -91,10 +91,17 @@ export interface DataTableProps<Row> {
   selection?: DataTableSelection<Row>;
   /** Fixed right-hand column — a ⋯ menu, a Sync button. Stops the row click. */
   rowActions?: (row: Row) => ReactNode;
+  /** A focused card body on phones. Other lists use labelled column values. */
+  mobileRow?: (row: Row) => ReactNode;
   actionsWidth?: number;
   emptyState: EmptyStateSpec;
   /** Right of Sort / Columns — an export button, a secondary action. */
   toolbarEnd?: ReactNode;
+  /**
+   * Replaces the date chip's wording while the page is not applying the
+   * range, e.g. a search that looks through every date.
+   */
+  dateLabel?: string;
   className?: string;
 }
 
@@ -131,9 +138,11 @@ export function DataTable<Row>({
   onRowClick,
   selection,
   rowActions,
+  mobileRow,
   actionsWidth = 56,
   emptyState,
   toolbarEnd,
+  dateLabel: dateLabelOverride,
   className,
 }: DataTableProps<Row>) {
   const { config } = state;
@@ -184,6 +193,20 @@ export function DataTable<Row>({
     const el = scrollerRef.current;
     if (el) setScrolledX(el.scrollLeft > 0);
   }
+
+  // A table taller or wider than its box is a Tab stop, so keyboard users can
+  // scroll it with the arrow keys even when no row inside takes focus.
+  const [scrollable, setScrollable] = useState(false);
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const measure = () =>
+      setScrollable(el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth);
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, []);
 
   const stickyLeft = hasSelection ? SELECT_WIDTH : 0;
   function cellClass(column: ColumnDef<Row>, index: number): string {
@@ -250,8 +273,8 @@ export function DataTable<Row>({
   const searchControls = (
     <>
       {searchable && (
-        <div className="relative min-w-55 max-w-110 flex-[1_1_280px]">
-          <Search className="pointer-events-none absolute left-2.5 top-2 size-4 text-muted-foreground" />
+        <div className="relative min-w-[60%] flex-1 md:min-w-55 md:max-w-110 md:flex-[1_1_280px]">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground md:left-2.5" />
           <Input
             ref={searchRef}
             type="search"
@@ -262,7 +285,7 @@ export function DataTable<Row>({
             }}
             placeholder={searchPlaceholder}
             aria-label={searchPlaceholder}
-            className="h-8 pl-8 pr-8 text-label [&::-webkit-search-cancel-button]:hidden"
+            className="h-11 rounded-xl bg-muted/50 pl-10 pr-10 text-base md:h-8 md:rounded-lg md:bg-transparent md:pl-8 md:pr-8 md:text-label pointer-coarse:h-11 [&::-webkit-search-cancel-button]:hidden"
           />
           {state.search ? (
             <button
@@ -270,7 +293,7 @@ export function DataTable<Row>({
               onClick={() => state.setSearch("")}
               aria-label="Clear search"
               title="Clear search"
-              className="absolute right-1 top-1 flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="absolute right-0 top-1/2 flex size-11 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground md:right-1 md:size-6 pointer-coarse:right-0 pointer-coarse:size-11"
             >
               <X className="size-3.5" />
             </button>
@@ -278,7 +301,7 @@ export function DataTable<Row>({
             <kbd
               aria-hidden
               title="Press / to search"
-              className="pointer-events-none absolute right-2 top-[7px] flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] font-mono text-[11px] text-muted-foreground ring-1 ring-border"
+              className="pointer-events-none absolute right-2 top-1/2 hidden h-[18px] min-w-[18px] -translate-y-1/2 items-center justify-center rounded-[4px] font-mono text-caption text-muted-foreground ring-1 ring-border md:flex"
             >
               /
             </kbd>
@@ -318,12 +341,12 @@ export function DataTable<Row>({
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-col rounded-xl bg-card text-card-foreground shadow-sm ring-1 ring-border",
+        "flex min-w-0 flex-col rounded-3xl bg-card text-card-foreground shadow-sm ring-1 ring-border/60 md:rounded-xl md:ring-border",
         className,
       )}
     >
       {/* Row 1 — tabs (or, without tabs, the search and scopes), Sort, Columns */}
-      <div className="flex flex-wrap items-center gap-2 px-2.5 pt-2.5">
+      <div className="flex flex-wrap items-center gap-2 px-4 pt-4 md:px-2.5 md:pt-2.5">
         {hasTabs && tabs ? (
           <SegmentedTabs
             variant="table"
@@ -332,28 +355,35 @@ export function DataTable<Row>({
             items={tabs.items}
             value={state.tab}
             onChange={state.setTab}
-            className="max-w-full flex-nowrap overflow-x-auto"
+            className="max-w-full basis-full flex-nowrap overflow-x-auto md:basis-auto"
           />
         ) : (
           searchControls
         )}
-        <div className="flex-1" />
-        <SortMenu state={state} />
-        <ColumnsMenu state={state} />
+        <div className="flex-1 max-md:hidden" />
+        <div className={hasTabs ? "max-md:hidden" : undefined}>
+          <SortMenu state={state} />
+        </div>
+        <div className={mobileRow ? "hidden md:block" : undefined}>
+          <ColumnsMenu state={state} />
+        </div>
         {toolbarEnd}
       </div>
 
       {/* Row 2 — search, scopes (only when tabs took row 1) */}
       {hasTabs && hasSearchControls && (
-        <div className="flex flex-wrap items-center gap-2 px-2.5 pb-1.5 pt-2">
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-2 pt-2 md:px-2.5 md:pb-1.5">
           {searchControls}
+          <div className="md:hidden">
+            <SortMenu state={state} />
+          </div>
         </div>
       )}
       {!hasTabs && hasSearchControls && <div className="pb-1.5" />}
 
       {/* Row 3 — date chip, filter chips, + Filter, Clear all */}
       {hasChipRow && (
-        <div className="flex flex-wrap items-center gap-1.5 px-2.5 pb-2.5">
+        <div className="flex items-center gap-2 overflow-x-auto px-4 pb-3 [scrollbar-width:none] md:flex-wrap md:gap-1.5 md:overflow-visible md:px-2.5 md:pb-2.5 [&::-webkit-scrollbar]:hidden">
           {dateConfig && state.date && (
             <DateRangeFilter
               variant="chip"
@@ -361,7 +391,7 @@ export function DataTable<Row>({
               presets={dateConfig.presets}
               preset={state.date.preset}
               custom={state.date.custom}
-              label={dateLabel}
+              label={dateLabelOverride ?? dateLabel}
               today={dateConfig.today ?? localToday()}
               onPresetChange={state.setDatePreset}
               onCustomApply={state.setDateCustom}
@@ -398,7 +428,7 @@ export function DataTable<Row>({
                 setPendingKey(null);
                 state.clearAll();
               }}
-              className="h-7 px-2 text-label font-medium text-brand-strong underline-offset-3 hover:underline"
+              className="h-11 shrink-0 whitespace-nowrap px-2 text-label font-medium text-brand-strong underline-offset-3 hover:underline md:h-7 pointer-coarse:h-11"
             >
               Clear all
             </button>
@@ -407,8 +437,93 @@ export function DataTable<Row>({
       )}
       {!hasChipRow && <div className={searchable ? "pb-1" : "pb-2.5"} />}
 
-      {/* The grid */}
-      <div className="relative border-t border-border">
+      {/* Phone lists use one vertical reading path instead of sideways tables. */}
+      <div
+        className={cn("border-t border-border/60 md:hidden", dimmed && "opacity-50")}
+        aria-label={noun}
+        aria-busy={status.isLoading || status.isPlaceholderData || undefined}
+      >
+        {selection && hasRows && (allOnPage || someOnPage) && (
+          <label className="flex min-h-12 items-center gap-3 border-b border-border/60 px-4 text-caption font-medium text-muted-foreground">
+            <Checkbox
+              checked={allOnPage ? true : someOnPage ? "indeterminate" : false}
+              onCheckedChange={() => selection.onToggleAll(rows, !allOnPage)}
+              aria-label={allOnPage ? "Deselect all on this page" : "Select all on this page"}
+            />
+            {rows.filter((row) => selection.isSelected(row)).length} selected on this page
+            <span className="ml-auto tabular-nums">{meta?.total?.toLocaleString()} {noun}</span>
+          </label>
+        )}
+        {showSkeleton && (
+          <div className="divide-y divide-border/60" aria-label={`Loading ${noun}`}>
+            {Array.from({ length: 4 }, (_, index) => (
+              <div key={index} className="space-y-3 p-4 motion-safe:animate-pulse">
+                <div className="h-4 w-3/5 rounded bg-muted" />
+                <div className="h-3 w-2/5 rounded bg-muted" />
+                <div className="h-7 w-full rounded-lg bg-muted/70" />
+              </div>
+            ))}
+          </div>
+        )}
+        {rows.map((row) => {
+          const selected = selection?.isSelected(row) ?? false;
+          return (
+            <div
+              key={rowKey(row)}
+              tabIndex={onRowClick ? 0 : undefined}
+              onClick={(event) => handleRowClick(row, event)}
+              onKeyDown={(event) => handleRowKey(row, event)}
+              className={cn(
+                "group/row border-b border-border/60 p-4 last:border-b-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                selected && "bg-brand/15",
+                onRowClick && "cursor-pointer active:bg-muted/60",
+              )}
+            >
+              <div className="flex items-start gap-3">
+                {selection && (
+                  <label className="-my-2 -ml-2 flex size-10 shrink-0 items-center justify-center" data-row-stop>
+                    <Checkbox
+                      checked={selected}
+                      onCheckedChange={(checked) => selection.onToggle(row, checked === true)}
+                      aria-label={selection.label?.(row) ?? (selected ? "Deselect row" : "Select row")}
+                    />
+                  </label>
+                )}
+                <div className="min-w-0 flex-1">
+                  {mobileRow ? mobileRow(row) : (
+                    <>
+                      {columns[0] && <div className="min-w-0 text-sm font-semibold">{columns[0].cell(row)}</div>}
+                      <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2">
+                        {columns.slice(1).map((column) => (
+                          <div
+                            key={column.key}
+                            // A field with nothing in it (a DashCell) is left off the card.
+                            className={cn("min-w-0 [&:has(>dd>[data-empty]:only-child)]:hidden", column.minWidth && column.minWidth > 160 && "col-span-2")}
+                          >
+                            <dt className="text-caption font-medium text-muted-foreground">{column.label}</dt>
+                            <dd className="flex min-w-0 flex-wrap text-sm [overflow-wrap:anywhere]">{column.cell(row)}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </>
+                  )}
+                </div>
+                {/* The row's menu sits in the card's top corner rather than on a line of its own. */}
+                {rowActions ? (
+                  <div data-row-stop className="-my-2.5 -mr-2 flex shrink-0 items-center">
+                    {rowActions(row)}
+                  </div>
+                ) : (
+                  onRowClick && <ChevronRight aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground/60" />
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop grid */}
+      <div className="relative hidden border-t border-border md:block">
         {dimmed && (
           <div
             aria-hidden
@@ -420,6 +535,9 @@ export function DataTable<Row>({
         <div
           ref={scrollerRef}
           onScroll={onScroll}
+          tabIndex={scrollable ? 0 : undefined}
+          role={scrollable ? "region" : undefined}
+          aria-label={scrollable ? `${noun} table` : undefined}
           className="max-h-[min(64vh,720px)] overflow-auto [overscroll-behavior-x:contain]"
         >
           <div
@@ -440,7 +558,7 @@ export function DataTable<Row>({
               style={{ gridTemplateColumns: template }}
             >
               {hasSelection && selection && (
-                <div className="sticky left-0 z-30 flex items-center justify-center bg-inherit">
+                <div role="columnheader" className="sticky left-0 z-30 flex items-center justify-center bg-inherit">
                   <Checkbox
                     checked={allOnPage ? true : someOnPage ? "indeterminate" : false}
                     disabled={rows.length === 0}
@@ -492,7 +610,7 @@ export function DataTable<Row>({
                           );
                         }}
                         className={cn(
-                          "-mx-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50",
+                          "-mx-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-foreground/5 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
                           column.align === "right" && "flex-row-reverse",
                           active && "text-foreground",
                         )}
@@ -512,7 +630,11 @@ export function DataTable<Row>({
                   </div>
                 );
               })}
-              {hasActions && <div />}
+              {hasActions && (
+                <div role="columnheader">
+                  <span className="sr-only">Actions</span>
+                </div>
+              )}
             </div>
 
             {/* Body */}
@@ -538,7 +660,7 @@ export function DataTable<Row>({
                     onClick={(event) => handleRowClick(row, event)}
                     onKeyDown={(event) => handleRowKey(row, event)}
                     className={cn(
-                      "group/row grid min-h-14 items-center border-b border-border transition-[filter] hover:brightness-[0.982] dark:hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/50",
+                      "group/row grid min-h-14 items-center border-b border-border transition-[filter] hover:brightness-[0.982] dark:hover:brightness-110 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
                       selected
                         ? "bg-[color-mix(in_oklch,var(--brand)_15%,var(--card))]"
                         : "bg-card",
@@ -547,7 +669,7 @@ export function DataTable<Row>({
                     style={{ gridTemplateColumns: template }}
                   >
                     {hasSelection && selection && (
-                      <div className="sticky left-0 z-10 flex items-center justify-center bg-inherit">
+                      <div role="cell" className="sticky left-0 z-10 flex items-center justify-center bg-inherit">
                         <Checkbox
                           checked={selected}
                           onCheckedChange={(checked) => selection.onToggle(row, checked === true)}

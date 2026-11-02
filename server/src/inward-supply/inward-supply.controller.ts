@@ -9,11 +9,14 @@ import {
 } from '@nestjs/common';
 import { OrgId } from '../auth/decorators/org-id.decorator';
 import { ORG_MANAGERS, Roles } from '../auth/decorators/roles.decorator';
+import { RequireSection } from '../auth/decorators/require-section.decorator';
 import { InwardSupplyService } from './inward-supply.service';
 import { UpsertInwardSupplyDto } from './dto/upsert-inward-supply.dto';
 import { QueryInwardSuppliesDto } from './dto/query-inward-supplies.dto';
 
+// Part of the GST return, on the Invoices page.
 @Controller('payment-fees')
+@RequireSection('invoices')
 export class InwardSupplyController {
   constructor(private readonly paymentFees: InwardSupplyService) {}
 

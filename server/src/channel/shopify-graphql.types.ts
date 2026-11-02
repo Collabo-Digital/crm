@@ -70,6 +70,8 @@ export interface OrderLineItemNode {
   variantTitle: string | null;
   sku: string | null;
   quantity: number;
+  /** `quantity` less units taken off by order edits or refunded. */
+  currentQuantity?: number;
   /**
    * Units on this line NOT yet fulfilled. The only per-line shipping signal the
    * GraphQL order query exposes — there is no flat `fulfillment_status` — and a
@@ -142,6 +144,8 @@ export interface OrderNode {
   sourceName: string | null;
   /** The app that created the order — "Online Store", "Point of Sale", … */
   app: { name: string } | null;
+  /** What tells a cash-on-delivery order from a prepaid one. */
+  paymentGatewayNames: string[];
   createdAt: string;
   updatedAt: string;
   currencyCode: string;
@@ -190,6 +194,7 @@ export const ORDER_LINE_ITEMS_PAGE_QUERY = /* GraphQL */ `
           variantTitle
           sku
           quantity
+          currentQuantity
           unfulfilledQuantity
           originalUnitPriceSet { shopMoney { amount currencyCode } }
           totalDiscountSet { shopMoney { amount currencyCode } }
@@ -260,6 +265,7 @@ export const ORDERS_LIST_QUERY = /* GraphQL */ `
         sourceIdentifier
         sourceName
         app { name }
+        paymentGatewayNames
         createdAt
         updatedAt
         currencyCode
@@ -289,6 +295,7 @@ export const ORDERS_LIST_QUERY = /* GraphQL */ `
             variantTitle
             sku
             quantity
+            currentQuantity
             unfulfilledQuantity
             originalUnitPriceSet { shopMoney { amount currencyCode } }
             totalDiscountSet { shopMoney { amount currencyCode } }
@@ -360,6 +367,29 @@ export interface OrderRefundsVariables {
   id: string;
 }
 
+/**
+ * The checkout each order came from, which is what lets a recovered order
+ * complete its checkout. `Order.checkoutToken` exists only from Admin API
+ * 2026-10, so this is sent at that version on its own rather than moving
+ * ORDERS_LIST_QUERY to it.
+ */
+export const ORDER_CHECKOUT_TOKENS_QUERY = /* GraphQL */ `
+  query OrderCheckoutTokens($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Order { id checkoutToken }
+    }
+  }
+`;
+
+export interface OrderCheckoutTokensResponse {
+  /** Null for an id that no longer resolves (a deleted order). */
+  nodes: Array<{ id: string; checkoutToken: string | null } | null>;
+}
+
+export interface OrderCheckoutTokensVariables {
+  ids: string[];
+}
+
 // ─── Common shapes for Phase 1 mutations ────────────────────────────────────
 
 /**
@@ -415,6 +445,30 @@ export interface OrderUpdateVariables {
 export interface OrderUpdateResponse {
   orderUpdate: {
     order: { id: string; updatedAt: string } | null;
+    userErrors: ShopifyUserError[];
+  };
+}
+
+// ─── tagsAdd on a customer ──────────────────────────────────────────────────
+// Adds tags without replacing the ones Shopify already has. Needs write_customers.
+
+export const CUSTOMER_TAGS_ADD_MUTATION = /* GraphQL */ `
+  mutation CustomerTagsAdd($id: ID!, $tags: [String!]!) {
+    tagsAdd(id: $id, tags: $tags) {
+      node { id }
+      userErrors { field message }
+    }
+  }
+`;
+
+export interface CustomerTagsAddVariables {
+  id: string;
+  tags: string[];
+}
+
+export interface CustomerTagsAddResponse {
+  tagsAdd: {
+    node: { id: string } | null;
     userErrors: ShopifyUserError[];
   };
 }
@@ -552,6 +606,8 @@ export interface OrderCapturableTransactionNode {
   kind: string;
   status: string;
   amountSet: MoneyBag;
+  /** What is still capturable on this authorization. Null once nothing is. */
+  totalUnsettledSet: MoneyBag | null;
 }
 
 export interface OrderCapturableTransactionsResponse {
@@ -569,7 +625,8 @@ export const ORDER_CAPTURABLE_TRANSACTIONS_QUERY = /* GraphQL */ `
         id
         kind
         status
-        amountSet { shopMoney { amount currencyCode } }
+        amountSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+        totalUnsettledSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
       }
     }
   }
@@ -592,6 +649,7 @@ export interface OrderCaptureResponse {
       kind: string;
       status: string;
       amountSet: MoneyBag;
+      order: { displayFinancialStatus: string | null } | null;
     } | null;
     userErrors: ShopifyUserError[];
   };
@@ -605,6 +663,7 @@ export const ORDER_CAPTURE_MUTATION = /* GraphQL */ `
         kind
         status
         amountSet { shopMoney { amount currencyCode } }
+        order { displayFinancialStatus }
       }
       userErrors { field message }
     }
@@ -1928,6 +1987,18 @@ export const PRODUCT_UPDATE_MUTATION = /* GraphQL */ `
     productUpdate(input: $input) {
       product { id }
       userErrors { field message }
+    }
+  }
+`;
+
+export interface ProductDescriptionResponse {
+  product: { descriptionHtml: string | null } | null;
+}
+
+export const PRODUCT_DESCRIPTION_QUERY = /* GraphQL */ `
+  query ProductDescriptionForPush($id: ID!) {
+    product(id: $id) {
+      descriptionHtml
     }
   }
 `;

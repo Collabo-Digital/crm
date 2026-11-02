@@ -2,9 +2,12 @@ import {
     Injectable,
     ConflictException,
     BadRequestException,
+    NotFoundException,
     UnauthorizedException,
     Logger,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { ConfigService } from '@nestjs/config';
 import { ChannelPlatform, ChannelStatus, SyncStatus, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
@@ -21,6 +24,15 @@ import {
     describeAccount,
     type ChannelAccountSummary,
 } from './channel-connection.util';
+import { PhoneNumberDetails, WhatsAppAccountService } from './whatsapp-account.service';
+import { patchChannelMetadataSql } from './channel-metadata.util';
+import {
+    COEXISTENCE_SYNC_JOB_OPTS,
+    CoexistenceSyncJobData,
+    WHATSAPP_ONBOARDING_QUEUE,
+    coexistenceSyncJobId,
+} from './whatsapp-onboarding.queue';
+import { TEMPLATE_PACK_QUEUE, TemplatePackJobData, startPackOnConnect } from '../campaigns/templates/pack/template-pack.queue';
 
 interface MetaTokenResponse {
     access_token: string;
@@ -40,12 +52,24 @@ interface MetaDebugTokenResponse {
     };
 }
 
-interface WabaPhoneNumber {
-    id: string;
-    display_phone_number: string;
-    verified_name: string;
-    code_verification_status?: string;
-    quality_rating?: string;
+/** What Embedded Signup posted to the page when the business finished. */
+export interface WhatsAppSignupSession {
+    phoneNumberId?: string;
+    /** v4 `waba_id`, or the first of v5 `messaging_account_ids`. */
+    wabaId?: string;
+    /** v5: the business onboarded its WhatsApp Business app number (coexistence). */
+    isOnBizApp?: boolean;
+    businessId?: string;
+}
+
+const TAKEN_ELSEWHERE =
+    'This WhatsApp Business account is already connected to another organization. Disconnect it there first.';
+
+export interface WhatsAppSetupOutcome {
+    webhooks: 'ok' | 'failed';
+    webhooksError?: string;
+    registration: 'ok' | 'failed' | 'not_needed';
+    registrationError?: string;
 }
 
 @Injectable()
@@ -63,16 +87,15 @@ export class WhatsAppOAuthService {
         private readonly encryption: EncryptionService,
         private readonly redis: RedisService,
         private readonly metaGraph: MetaGraphClient,
+        private readonly account: WhatsAppAccountService,
+        @InjectQueue(WHATSAPP_ONBOARDING_QUEUE) private readonly onboardingQueue: Queue<CoexistenceSyncJobData>,
+        @InjectQueue(TEMPLATE_PACK_QUEUE) private readonly packQueue: Queue<TemplatePackJobData>,
     ) {
         this.appId = this.config.get<string>('whatsapp.appId')!;
         this.appSecret = this.config.get<string>('whatsapp.appSecret')!;
         this.configId = this.config.get<string>('whatsapp.configId')!;
         this.graphVersion = this.config.get<string>('whatsapp.graphVersion')!;
         this.frontendUrl = this.config.get<string>('frontendUrl')!;
-    }
-
-    private graphUrl(path: string): string {
-        return `https://graph.facebook.com/${this.graphVersion}${path}`;
     }
 
     /**
@@ -104,6 +127,15 @@ export class WhatsAppOAuthService {
                 error: err instanceof Error ? err.message : String(err),
             };
         }
+    }
+
+    /** Whether a channel of another organization holds this WABA. */
+    private async heldByAnotherOrg(wabaId: string, orgId: string): Promise<boolean> {
+        const holder = await this.prisma.channel.findFirst({
+            where: { platform: ChannelPlatform.WHATSAPP, externalStoreId: wabaId, organizationId: { not: orgId } },
+            select: { id: true },
+        });
+        return !!holder;
     }
 
     /** The org's WhatsApp rows, in the shape the decision helpers want. */
@@ -152,16 +184,23 @@ export class WhatsAppOAuthService {
         return { configId: this.configId, state };
     }
 
-    // Step 2: Frontend calls this with the `code` Meta's popup returned.
+    // Step 2: Frontend calls this with the `code` Meta's popup returned, plus
+    // the session info Embedded Signup posted to the page (which account and
+    // number the business picked, and whether it is a WhatsApp Business app
+    // number). The code lives for 30 seconds, so nothing slow runs before the
+    // exchange.
     async handleSignupCallback(
         code: string,
         state: string,
         callerOrgId: string,
         callerUserId: string,
+        session: WhatsAppSignupSession = {},
     ): Promise<{
         channelId: string;
         redirectUrl: string;
         account: ChannelAccountSummary | null;
+        isOnBizApp: boolean;
+        setup: WhatsAppSetupOutcome;
     }> {
         // 1. Validate CSRF state
         const stateKey = `${REDIS_KEYS.OAUTH_WHATSAPP}${state}`;
@@ -180,7 +219,9 @@ export class WhatsAppOAuthService {
         }
         await this.redis.del(stateKey);
 
-        // 2. Exchange the short-lived code for an access token.
+        // 2. Exchange the code. Embedded Signup issues a business integration
+        // system user token, which does not expire; there is no long-lived
+        // exchange to make, and `expires_in` is normally absent.
         const tokenRes = await this.graphGet<MetaTokenResponse>('/oauth/access_token', {
             client_id: this.appId,
             client_secret: this.appSecret,
@@ -188,87 +229,91 @@ export class WhatsAppOAuthService {
         });
         if (!tokenRes.ok) {
             this.logger.error(`WhatsApp token exchange failed: ${tokenRes.error}`);
-            throw new BadRequestException('Failed to exchange authorization code');
+            throw new BadRequestException(
+                'Meta did not accept the signup code. It expires after 30 seconds — please try connecting again.',
+            );
         }
-        const tokenData = tokenRes.data;
-
-        // 3. Upgrade to a long-lived token (~60 days).
-        const longLivedRes = await this.graphGet<MetaTokenResponse>('/oauth/access_token', {
-            grant_type: 'fb_exchange_token',
-            client_id: this.appId,
-            client_secret: this.appSecret,
-            fb_exchange_token: tokenData.access_token,
-        });
-        if (!longLivedRes.ok) {
-            this.logger.error(`WhatsApp long-lived token exchange failed: ${longLivedRes.error}`);
-            throw new BadRequestException('Failed to get long-lived token');
-        }
-        const longLivedData = longLivedRes.data;
-        const longLivedToken = longLivedData.access_token;
-        // Null, NOT a fabricated 60 days: Embedded Signup issues a
-        // business-integration system-user token, which does not expire and so
-        // reports no `expires_in`. Inventing a date here made the channels page
-        // brand a perfectly healthy connection "Expired" two months in.
-        const tokenExpiresAt = longLivedData.expires_in
-            ? new Date(Date.now() + longLivedData.expires_in * 1000)
+        const token = tokenRes.data.access_token;
+        const tokenExpiresAt = tokenRes.data.expires_in
+            ? new Date(Date.now() + tokenRes.data.expires_in * 1000)
             : null;
 
-        // 4. Inspect the token to find which WABA(s) the merchant authorized.
+        // 3. Which account. Session info names the one the business picked
+        // (v4 `waba_id`, v5 `messaging_account_ids`), but it comes from the
+        // browser, and webhooks are routed by WABA id: only an account the
+        // token was granted may be connected.
         const debugRes = await this.graphGet<MetaDebugTokenResponse>(
             '/debug_token',
-            { input_token: longLivedToken },
+            { input_token: token },
             `${this.appId}|${this.appSecret}`,
         );
         if (!debugRes.ok) {
             this.logger.error(`WhatsApp debug_token failed: ${debugRes.error}`);
             throw new BadRequestException('Failed to inspect access token');
         }
-        const debugData = debugRes.data;
-
-        const wabaId = this.extractWabaId(debugData);
+        const granted = this.grantedWabaIds(debugRes.data);
+        const wabaId = session.wabaId ?? granted[0];
         if (!wabaId) {
             throw new BadRequestException(
                 'No WhatsApp Business Account granted. Please retry and select a WABA in the popup.',
             );
         }
+        if (!granted.includes(wabaId)) {
+            this.logger.warn(`WhatsApp signup for org ${stateData.orgId} named WABA ${wabaId}, which its token was not granted`);
+            throw new BadRequestException(
+                'Meta did not give Collabo access to that WhatsApp Business account. Please connect again and select it in the popup.',
+            );
+        }
 
-        // 5. Fetch display metadata for the WABA (name, business owner).
-        let wabaName: string | undefined;
-        let businessId: string | undefined;
+        // 4. Which number, and what it is. It must be on that account: the
+        // number read below would succeed for any number the token can see.
+        let numberIds: string[];
         try {
-            const wabaRes = await this.graphGet<{
-                id: string;
-                name?: string;
-                owner_business_info?: { id?: string; name?: string };
-            }>(`/${wabaId}`, { fields: 'id,name,owner_business_info' }, longLivedToken);
-            if (wabaRes.ok) {
-                wabaName = wabaRes.data.name;
-                businessId = wabaRes.data.owner_business_info?.id;
-            }
+            numberIds = await this.account.numberIds(wabaId, token);
         } catch (err) {
             if (isRateLimitedError(err)) throw err;
-            this.logger.warn(`Non-fatal: could not fetch WABA metadata for ${wabaId}`);
+            this.logger.error(`WhatsApp numbers of WABA ${wabaId} read failed: ${err instanceof Error ? err.message : err}`);
+            throw new BadRequestException('Failed to read the WhatsApp phone numbers from Meta');
         }
-
-        // 6. Fetch the phone number(s) registered on this WABA — take the first.
-        const phonesRes = await this.graphGet<{ data?: WabaPhoneNumber[] }>(
-            `/${wabaId}/phone_numbers`,
-            {},
-            longLivedToken,
-        );
-        if (!phonesRes.ok) {
-            this.logger.error(`WhatsApp phone_numbers fetch failed: ${phonesRes.error}`);
-            throw new BadRequestException('Failed to fetch phone numbers for the WABA');
-        }
-        const phonesData = phonesRes.data;
-        const phoneNumber = phonesData.data?.[0];
-        if (!phoneNumber) {
+        const phoneNumberId = session.phoneNumberId ?? numberIds[0];
+        if (!phoneNumberId) {
             throw new BadRequestException(
                 'No phone number found on this WhatsApp Business Account. Please add one in WhatsApp Manager first.',
             );
         }
+        if (!numberIds.includes(phoneNumberId)) {
+            this.logger.warn(`WhatsApp signup for org ${stateData.orgId} named number ${phoneNumberId}, which is not on WABA ${wabaId}`);
+            throw new BadRequestException(
+                'That phone number is not on the WhatsApp Business account Meta granted. Please connect again and select it in the popup.',
+            );
+        }
+        let number: PhoneNumberDetails;
+        try {
+            number = await this.account.fetchNumber(wabaId, phoneNumberId, token);
+        } catch (err) {
+            if (isRateLimitedError(err)) throw err;
+            this.logger.error(`WhatsApp number ${phoneNumberId} read failed: ${err instanceof Error ? err.message : err}`);
+            throw new BadRequestException('Failed to read the WhatsApp phone number from Meta');
+        }
+        const isOnBizApp = session.isOnBizApp ?? number.is_on_biz_app === true;
 
-        // 7. Persist the Channel row with encrypted token.
+        // 5. Display metadata for the account (name, owning business). Optional.
+        let wabaName: string | undefined;
+        let businessId: string | undefined = session.businessId;
+        const wabaRes = await this.graphGet<{
+            id: string;
+            name?: string;
+            owner_business_info?: { id?: string; name?: string };
+        }>(`/${wabaId}`, { fields: 'id,name,owner_business_info' }, token);
+        if (wabaRes.ok) {
+            wabaName = wabaRes.data.name;
+            // Meta's answer for the granted account before the browser's.
+            businessId = wabaRes.data.owner_business_info?.id ?? businessId;
+        } else {
+            this.logger.warn(`Non-fatal: could not fetch WABA metadata for ${wabaId}`);
+        }
+
+        // 6. Persist the Channel row.
         //
         // Decided again here, not before the popup: the merchant spent the
         // intervening seconds inside Meta and may have picked a WABA that
@@ -283,44 +328,52 @@ export class WhatsAppOAuthService {
         if (decision.kind === 'blocked') {
             throw new ConflictException(decision.message);
         }
+        // Webhooks are routed by WABA id alone, so it may belong to one
+        // organization only. Checked here rather than left to the unique
+        // index, which a database with older duplicates does not have.
+        if (await this.heldByAnotherOrg(wabaId, stateData.orgId)) {
+            throw new ConflictException(TAKEN_ELSEWHERE);
+        }
 
         // Reconnect UPDATES an existing row, so merge into its metadata rather
         // than replacing it — the same rule ChannelService.disconnect follows.
-        const existingMeta =
-            decision.kind === 'reconnect'
-                ? ((rows.find((r) => r.id === decision.channelId)?.metadata ??
-                    {}) as Record<string, unknown>)
-                : {};
+        const existing = decision.kind === 'reconnect' ? rows.find((r) => r.id === decision.channelId) : undefined;
+        const existingMeta = (existing?.metadata ?? {}) as Record<string, unknown>;
+        // A reconnected number keeps the PIN it was registered with; a new
+        // one would fail re-registration against the PIN already set.
+        const existingPin = await this.existingPin(decision.kind === 'reconnect' ? decision.channelId : undefined);
+        const pin = isOnBizApp ? null : existingPin ?? WhatsAppAccountService.newPin();
 
+        const connectedAt = new Date();
         const credentials = {
             wabaId,
             wabaName,
             businessId,
-            phoneNumberId: phoneNumber.id,
-            displayPhoneNumber: phoneNumber.display_phone_number,
-            verifiedName: phoneNumber.verified_name,
-            codeVerificationStatus: phoneNumber.code_verification_status,
-            qualityRating: phoneNumber.quality_rating,
-            accessToken: this.encryption.encrypt(longLivedToken),
+            phoneNumberId,
+            displayPhoneNumber: number.display_phone_number,
+            verifiedName: number.verified_name,
+            codeVerificationStatus: number.code_verification_status,
+            qualityRating: number.quality_rating,
+            platformType: number.platform_type,
+            isOnBizApp,
+            accessToken: this.encryption.encrypt(token),
+            registrationPin: pin ? this.encryption.encrypt(pin) : null,
             // Kept as a key even when null, so the shape stays stable for
             // readTokenExpiry and for the migration's backfill of connected_at.
             tokenExpiresAt: tokenExpiresAt ? tokenExpiresAt.toISOString() : null,
+            tokenType: 'business_integration_system_user',
             scopes: 'whatsapp_business_management,whatsapp_business_messaging',
-            connectedAt: new Date().toISOString(),
+            connectedAt: connectedAt.toISOString(),
         };
         const account = describeAccount(ChannelPlatform.WHATSAPP, credentials, null);
 
         const data = {
-            name:
-                phoneNumber.verified_name ||
-                phoneNumber.display_phone_number ||
-                wabaName ||
-                'WhatsApp',
+            name: number.verified_name || number.display_phone_number || wabaName || 'WhatsApp',
             status: ChannelStatus.CONNECTED,
             isEnabled: true,
             credentials: credentials as unknown as Prisma.InputJsonValue,
             externalStoreId: wabaId,
-            connectedAt: new Date(),
+            connectedAt,
             lastError: null,
             syncStatus: SyncStatus.IDLE,
             metadata: {
@@ -330,6 +383,9 @@ export class WhatsAppOAuthService {
                 // Live again — a stale disconnect date would have the UI label
                 // a connected account "Disconnected <date>".
                 disconnectedAt: null,
+                health: { number: { ...number, checkedAt: connectedAt.toISOString() } },
+                coexistence: isOnBizApp ? { state: 'connected', reason: null, sendsPaused: false } : null,
+                historySync: isOnBizApp ? { status: 'pending', onboardedAt: connectedAt.toISOString() } : null,
             } as unknown as Prisma.InputJsonValue,
         };
 
@@ -356,29 +412,143 @@ export class WhatsAppOAuthService {
                 // (platform, external_store_id) is unique table-wide, so this
                 // WABA belongs to another organization. The per-org partial
                 // unique should already have been caught by resolveConnectTarget.
-                throw new ConflictException(
-                    'This WhatsApp Business account is already connected to another organization. Disconnect it there first.',
-                );
+                throw new ConflictException(TAKEN_ELSEWHERE);
             }
             throw error;
         }
 
+        // Collabo's recommended templates, created in the background on this
+        // account. Not awaited, and never failing the connect. A reconnected
+        // row is an account that existed before: its automations wait for the
+        // merchant.
+        const newChannel = decision.kind !== 'reconnect';
+        void startPackOnConnect(this.prisma, this.packQueue, { organizationId: stateData.orgId, channelId: channel.id, wabaId, newChannel }).catch((err) =>
+            this.logger.error(`Could not start the recommended templates on WABA ${wabaId}: ${err instanceof Error ? err.message : err}`),
+        );
+
+        // 7. Subscribe, register, start the coexistence sync. Each outcome is
+        // recorded on the row; a failure leaves a connected channel with a
+        // Retry setup action instead of a lost signup.
+        const setup = await this.completeSetup(channel.id, { wabaId, phoneNumberId, token, pin, isOnBizApp });
+
         this.logger.log(
             `WhatsApp ${decision.kind === 'reconnect' ? 'reconnected' : 'connected'}: ` +
-            `WABA ${wabaId} (${phoneNumber.verified_name || phoneNumber.display_phone_number}) → org ${stateData.orgId}`,
+            `WABA ${wabaId} (${number.verified_name || number.display_phone_number}${isOnBizApp ? ', Business app number' : ''}) → org ${stateData.orgId}`,
         );
 
         const redirectUrl = `${this.frontendUrl}/settings/channels?connected=whatsapp&channelId=${channel.id}`;
 
-        return { channelId: channel.id, redirectUrl, account };
+        return { channelId: channel.id, redirectUrl, account, isOnBizApp, setup };
     }
 
-    // Pull the first WABA ID out of debug_token's granular_scopes.
-    private extractWabaId(debug: MetaDebugTokenResponse): string | undefined {
-        const scopes = debug.data.granular_scopes ?? [];
-        const wabaScope = scopes.find((s) =>
-            ['whatsapp_business_management', 'whatsapp_business_messaging'].includes(s.scope),
+    /**
+     * Re-run the post-connect steps for a channel whose setup partly failed:
+     * subscribe the app, register a Cloud API number, re-read its health.
+     */
+    async retrySetup(channelId: string, orgId: string): Promise<WhatsAppSetupOutcome> {
+        const row = await this.prisma.channel.findFirst({
+            where: { id: channelId, organizationId: orgId, platform: ChannelPlatform.WHATSAPP },
+            select: { id: true },
+        });
+        if (!row) throw new NotFoundException('WhatsApp channel not found');
+        const { creds, token } = await this.account.load(channelId);
+        let pin: string | null = null;
+        if (!creds.isOnBizApp) {
+            pin = await this.existingPin(channelId);
+            if (!pin) {
+                pin = WhatsAppAccountService.newPin();
+                // Stored before registering, so the PIN the number ends up
+                // with is never lost to a crash between the two.
+                await this.prisma.channel.update({
+                    where: { id: channelId },
+                    data: {
+                        credentials: { ...creds, registrationPin: this.encryption.encrypt(pin) } as unknown as Prisma.InputJsonValue,
+                    },
+                });
+            }
+        }
+        const outcome = await this.completeSetup(channelId, {
+            wabaId: creds.wabaId,
+            phoneNumberId: creds.phoneNumberId,
+            token,
+            pin,
+            isOnBizApp: creds.isOnBizApp === true,
+        });
+        await this.account.refreshHealth(channelId).catch((err) => {
+            if (isRateLimitedError(err)) throw err;
+        });
+        return outcome;
+    }
+
+    private async completeSetup(
+        channelId: string,
+        args: { wabaId: string; phoneNumberId: string; token: string; pin: string | null; isOnBizApp: boolean },
+    ): Promise<WhatsAppSetupOutcome> {
+        const at = new Date().toISOString();
+        const outcome: WhatsAppSetupOutcome = { webhooks: 'ok', registration: args.isOnBizApp ? 'not_needed' : 'ok' };
+        const problems: string[] = [];
+
+        try {
+            await this.account.subscribeApp(args.wabaId, args.token);
+        } catch (err) {
+            if (isRateLimitedError(err)) throw err;
+            outcome.webhooks = 'failed';
+            outcome.webhooksError = err instanceof Error ? err.message : String(err);
+            problems.push('Collabo could not subscribe to this number’s messages');
+        }
+
+        if (!args.isOnBizApp && args.pin) {
+            try {
+                await this.account.registerNumber(args.wabaId, args.phoneNumberId, args.token, args.pin);
+            } catch (err) {
+                if (isRateLimitedError(err)) throw err;
+                outcome.registration = 'failed';
+                outcome.registrationError = err instanceof Error ? err.message : String(err);
+                problems.push('the number could not be registered for the Cloud API');
+            }
+        }
+
+        await this.prisma.$executeRaw(
+            patchChannelMetadataSql(channelId, 'setup', { ...outcome, checkedAt: at }),
         );
-        return wabaScope?.target_ids?.[0];
+        await this.prisma.channel.update({
+            where: { id: channelId },
+            data: {
+                lastError: problems.length
+                    ? `Setup is incomplete: ${problems.join(', and ')}. Use Retry setup on this channel.`
+                    : null,
+            },
+        });
+
+        if (args.isOnBizApp) {
+            await this.onboardingQueue
+                .add(
+                    'coexistence-sync',
+                    { channelId },
+                    { ...COEXISTENCE_SYNC_JOB_OPTS, jobId: coexistenceSyncJobId(channelId) },
+                )
+                .catch((err) => this.logger.error(`Could not queue coexistence sync for ${channelId}: ${err}`));
+        }
+        return outcome;
+    }
+
+    private async existingPin(channelId: string | undefined): Promise<string | null> {
+        if (!channelId) return null;
+        const row = await this.prisma.channel.findUnique({ where: { id: channelId }, select: { credentials: true } });
+        const cipher = (row?.credentials as Record<string, unknown> | null)?.registrationPin;
+        if (typeof cipher !== 'string' || !cipher) return null;
+        try {
+            return this.encryption.decrypt(cipher) || null;
+        } catch {
+            return null;
+        }
+    }
+
+    /** The WABA ids debug_token's granular_scopes say the token was granted, first one first. */
+    private grantedWabaIds(debug: MetaDebugTokenResponse): string[] {
+        const ids = (debug.data.granular_scopes ?? [])
+            .filter((s) => ['whatsapp_business_management', 'whatsapp_business_messaging'].includes(s.scope))
+            .flatMap((s) => s.target_ids ?? []);
+        return [...new Set(ids)];
     }
 }

@@ -2,7 +2,7 @@ export const WHATSAPP_MESSAGING_QUEUE = 'whatsapp-messaging';
 
 /**
  * Job payload for a single outbound WhatsApp template send.
- * Enqueued by WhatsAppTriggerService and consumed by WhatsAppMessagingProcessor.
+ * Consumed by WhatsAppMessagingProcessor. No longer enqueued (see the processor).
  */
 export interface WhatsAppMessageJobData {
     organizationId: string;

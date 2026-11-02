@@ -24,6 +24,17 @@ import { IsUqc } from '../../gst/validators/is-uqc.validator';
 export const WEIGHT_UNITS = ['g', 'kg', 'oz', 'lb'] as const;
 export type WeightUnit = (typeof WEIGHT_UNITS)[number];
 
+/** A new variant's starting quantity at one location. */
+export class OpeningStockDto {
+  @IsString()
+  @IsNotEmpty({ message: 'Choose a location for each stock line.' })
+  warehouseId: string;
+
+  @IsInt({ message: 'Stock at a location must be a whole number.' })
+  @Min(0, { message: 'Stock at a location cannot be less than 0.' })
+  quantity: number;
+}
+
 export class CreateVariantDto {
   // ── Pricing ──────────────────────────────────────────────────────────────
   // Optional (Shopify parity): when omitted on POST :id/variants the variant
@@ -67,6 +78,18 @@ export class CreateVariantDto {
   @IsOptional()
   @IsString()
   warehouseId?: string;
+
+  // Opening stock per location, for organisations that track stock per
+  // location: the variant is stocked at exactly these locations, and
+  // `inventoryQuantity` is ignored. Omitted (or empty) keeps the old seed, an
+  // empty row at the default location. Ignored by legacy orgs and by variants
+  // that do not track quantity.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => OpeningStockDto)
+  stock?: OpeningStockDto[];
 
   @IsOptional()
   @IsBoolean()

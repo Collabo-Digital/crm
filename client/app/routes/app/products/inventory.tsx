@@ -67,10 +67,10 @@ import {
 } from "~/hooks/use-inventory-queries";
 import {
   useCreateAdjustmentMutation,
-  useEnableInventoryMutation,
   useBulkAdjustmentMutation,
 } from "~/hooks/use-inventory-mutations";
 import type { StockBucket, StockLine, StockListParams } from "~/types/api";
+import { pageTitle } from "~/lib/page-title";
 
 const BUCKETS: StockBucket[] = ["AVAILABLE", "RESERVED", "QC", "DAMAGED"];
 
@@ -82,6 +82,10 @@ const STOCK_TABS = [
   { value: "oversold", label: "Oversold" },
 ] as const;
 const STOCK_TAB_VALUES = STOCK_TABS.map((t) => t.value);
+
+export function meta() {
+  return [{ title: pageTitle("Inventory") }];
+}
 
 export default function InventoryPage() {
   const status = useInventoryStatus();
@@ -102,63 +106,23 @@ export default function InventoryPage() {
       </div>
     );
   }
+  // The server sets locations up by itself and copies the stock across;
+  // `useInventoryStatus` checks back until it has.
   if (!status.data.warehousingEnabled) {
-    return <EnableInventoryCta seeding={status.data.seeding} />;
+    return (
+      <div className="space-y-4">
+        <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Inventory</h1>
+        <div className="rounded-xl bg-card px-4 py-12 shadow-sm ring-1 ring-border">
+          <EmptyState
+            icon={WarehouseIcon}
+            title="Setting up your locations…"
+            description="Your current quantities are being copied into your locations. This page updates by itself when it is done."
+          />
+        </div>
+      </div>
+    );
   }
   return <StockScreen />;
-}
-
-// ─────────────────────────── Enable CTA ───────────────────────────
-
-function EnableInventoryCta({ seeding }: { seeding: boolean }) {
-  const enable = useEnableInventoryMutation();
-
-  return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Inventory</h1>
-      <EmptyState
-        icon={WarehouseIcon}
-        title={
-          seeding
-            ? "Setting up your locations…"
-            : "Track stock location by location"
-        }
-        // Names what changes for the merchant rather than listing features. The
-        // bucket vocabulary meant nothing to anyone who had not already read
-        // the code, and "warehouse-grade" sounded like something to be scared
-        // of switching on.
-        description={
-          seeding
-            ? "Copying your current quantities across, location by location. This page refreshes itself when it is done."
-            : "Right now each product has one stock number. Turn this on and every location — including the ones synced from Shopify — keeps its own count, so you can see what is where, move stock between them, and print barcode labels. Your current quantities are carried over exactly, and nothing is lost if you turn it on."
-        }
-        action={
-          seeding ? (
-            // The seed normally finishes on its own — but if the background
-            // job died (e.g. a deploy or DB hiccup mid-seed) this state would
-            // otherwise be a dead end. Enable is idempotent: it re-enqueues
-            // the seed, which skips everything already committed.
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => enable.mutate()}
-              disabled={enable.isPending}
-            >
-              {enable.isPending ? "Restarting…" : "Taking too long? Retry setup"}
-            </Button>
-          ) : (
-            <Button
-              variant="brand"
-              onClick={() => enable.mutate()}
-              disabled={enable.isPending}
-            >
-              {enable.isPending ? "Starting…" : "Enable warehousing"}
-            </Button>
-          )
-        }
-      />
-    </div>
-  );
 }
 
 // ─────────────────────────── Stock screen ───────────────────────────

@@ -1,6 +1,7 @@
 import { Controller, Get, Logger, Post, Query } from '@nestjs/common';
 import { OrgId } from '../auth/decorators/org-id.decorator';
 import { RequireSection } from '../auth/decorators/require-section.decorator';
+import { ORG_OPERATORS, Roles } from '../auth/decorators/roles.decorator';
 import { AnalyticsService } from './analytics.service';
 import { AnalyticsDashboardService } from './analytics-dashboard.service';
 import {
@@ -55,7 +56,11 @@ export class AnalyticsController {
   // This endpoint never throws: per-channel failures are captured as
   // structured `RefreshResult` entries so a single Shopify hiccup can't
   // produce a generic "Could not refresh" toast.
+  //
+  // It calls Shopify and rewrites the snapshots, so viewers, who only read,
+  // are left out.
   @Post('refresh')
+  @Roles(...ORG_OPERATORS)
   async refresh(
     @OrgId() orgId: string,
     @Query() query: QueryAnalyticsDto,
@@ -102,7 +107,7 @@ export class AnalyticsController {
     // user sees per-product add-to-cart and conversion data without
     // waiting for the next hourly cron tick.
     try {
-      await this.cartAggregator.rollupRecentDay();
+      await this.cartAggregator.rollupRecentDay(orgId);
     } catch (err) {
       this.logger.warn(
         `[analytics] Cart aggregation failed during refresh: ${err instanceof Error ? err.message : err}`,
@@ -112,7 +117,7 @@ export class AnalyticsController {
     // Same for the last 24h of Web Pixel events — feeds the pixel-first
     // dashboard (pages, add-to-cart, abandoned carts) immediately.
     try {
-      await this.pixelAggregator.rollupRecentDay();
+      await this.pixelAggregator.rollupRecentDay(orgId);
     } catch (err) {
       this.logger.warn(
         `[analytics] Pixel aggregation failed during refresh: ${err instanceof Error ? err.message : err}`,

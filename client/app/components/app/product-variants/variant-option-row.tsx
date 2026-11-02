@@ -52,7 +52,7 @@ export function VariantOptionRow({
           id={nameId}
           value={option.name}
           onChange={(e) => onNameChange(e.target.value)}
-          placeholder="e.g. Color"
+          placeholder="e.g. Colour"
           aria-invalid={isRenamed || undefined}
           className="h-8 max-w-56 flex-1"
         />

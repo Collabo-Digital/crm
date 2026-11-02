@@ -105,6 +105,17 @@ export function useSessionState<T>(
 }
 
 /**
+ * A value saved by `useSessionState`, read once without taking it over: for a
+ * link built away from the page that owns it (the phone app bar's back arrow
+ * reading a list's `<list>.return`). Never writes, so it cannot overwrite the
+ * owner's newer value.
+ */
+export function readSessionState<T>(key: string, fallback: T, isValid: Guard<T>): T {
+  const orgId = useAuthStore.getState().currentOrgId;
+  return read("session", `${STORAGE_PREFIX}${orgId ?? ""}:${key}`, fallback, isValid);
+}
+
+/**
  * Same contract, but in localStorage: for preferences that should outlive the
  * browser session — which columns a list shows, how many rows per page. Still
  * keyed by org, so one organisation's layout never leaks into another's.

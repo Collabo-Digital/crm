@@ -8,7 +8,7 @@ import {
 } from "~/components/ui/page-header";
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
-import { StatCard } from "~/components/app/stat-card";
+import { STAT_STRIP, StatCard } from "~/components/app/stat-card";
 import {
   ChannelCell,
   DataTable,
@@ -24,14 +24,14 @@ import {
 import { useListUrlState } from "~/hooks/use-list-url-state";
 import { useCustomers, useCustomerStats } from "~/hooks/use-customer-queries";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
-import { formatCurrency } from "~/lib/utils";
+import { cn, formatCurrency } from "~/lib/utils";
 import { VIP_CLASSES, VIP_LABELS, VIP_ORDER } from "~/lib/customer-status";
+import { comparedChange, comparedLabel } from "~/lib/trend";
 import type {
   Customer,
   VipLevel,
   CustomerListParams,
   CustomerStatsResponse,
-  ChangeDirection,
 } from "~/types/api";
 
 export function meta() {
@@ -51,11 +51,6 @@ function nameOf(customer: Customer): string {
   );
 }
 
-/** A "down" direction is stored as a positive percentage — sign it for the badge. */
-function signedChange(change: { percentage: number; direction: ChangeDirection }): number {
-  return change.direction === "down" ? -change.percentage : change.percentage;
-}
-
 /**
  * Orders keys its equivalent array straight off `OrderStatsResponse` because all
  * four of its metrics share the `StatMetric` shape. `CustomerStatsResponse` is
@@ -67,13 +62,11 @@ const STAT_CARDS: ReadonlyArray<{
   label: string;
   value: (stats: CustomerStatsResponse, currency: string) => string;
   /**
-   * Omitted on every card but "New This Month". `StatCard` treats `change >= 0`
-   * as positive, so passing 0 for a metric with no comparison period renders a
-   * green up-trend badge — a failed request came out looking like four healthy
-   * metrics.
+   * Omitted on every card but "New This Month": the others have no comparison
+   * period, and a failed request must not show a trend at all.
    */
-  change?: (stats: CustomerStatsResponse) => number;
-  changeLabel?: string;
+  change?: (stats: CustomerStatsResponse) => number | undefined;
+  changeLabel?: (stats: CustomerStatsResponse) => string | undefined;
 }> = [
   { key: "total", label: "Total Customers", value: (stats) => stats.totalCustomers.toLocaleString() },
   { key: "active", label: "Active Customers", value: (stats) => stats.activeCustomers.toLocaleString() },
@@ -81,8 +74,8 @@ const STAT_CARDS: ReadonlyArray<{
     key: "new",
     label: "New This Month",
     value: (stats) => stats.newCustomers.current.toLocaleString(),
-    change: (stats) => signedChange(stats.newCustomers.change),
-    changeLabel: "vs last month",
+    change: (stats) => comparedChange(stats.newCustomers),
+    changeLabel: (stats) => comparedLabel(stats.newCustomers, "vs last month"),
   },
   {
     key: "aov",
@@ -213,7 +206,7 @@ export default function CustomersPage() {
       </PageHeader>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-1 gap-5 rounded-xl bg-card p-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className={cn("grid grid-cols-1 gap-5 rounded-xl bg-card p-3 sm:grid-cols-2 lg:grid-cols-4", STAT_STRIP)}>
         {statsLoading ? (
           Array.from({ length: STAT_CARDS.length }).map((_, i) => (
             <div key={i} className="p-5">
@@ -229,7 +222,7 @@ export default function CustomersPage() {
                 label={label}
                 value={value(stats, orgCurrency)}
                 change={change?.(stats)}
-                changeLabel={changeLabel}
+                changeLabel={changeLabel?.(stats)}
                 className="flex-1"
               />
               {i < arr.length - 1 && (

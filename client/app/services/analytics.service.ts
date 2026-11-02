@@ -13,7 +13,8 @@ export interface DashboardStat {
   key: "totalAddToCart" | "totalCheckout" | "totalAbandonedCarts";
   label: string;
   value: number;
-  change: number;
+  /** Percent change on the previous window; null when that window had none. */
+  change: number | null;
   changeLabel: string;
 }
 

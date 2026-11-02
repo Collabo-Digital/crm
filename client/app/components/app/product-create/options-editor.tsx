@@ -66,7 +66,7 @@ export function OptionsEditor({
               value={opt.name}
               onChange={(e) => patchOption(idx, { name: e.target.value })}
               placeholder="Option name (e.g. Size)"
-              className="h-8 flex-1 rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+              className="h-8 flex-1 rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
             />
             <button
               type="button"
@@ -92,7 +92,7 @@ export function OptionsEditor({
               })
             }
             placeholder="Values, comma-separated (e.g. Small, Medium, Large)"
-            className="mt-2 h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#CEF17B]/50"
+            className="mt-2 h-8 w-full rounded-md border border-input bg-white dark:bg-gray-900 px-2 text-xs focus-visible:border-ring focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-ring"
           />
         </div>
       ))}

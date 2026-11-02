@@ -1,6 +1,8 @@
 import { apiClient } from "~/lib/api-client";
 import type {
   BillingConfigResponse,
+  BillingPlansResponse,
+  BillingUsageSummary,
   PendingStatusResponse,
   StartOnboardingCheckoutRequest,
   StartOnboardingCheckoutResponse,
@@ -33,5 +35,17 @@ export const billingService = {
   getPendingStatus: () =>
     apiClient
       .get<PendingStatusResponse>("/billing/pending-status")
+      .then((response) => response.data),
+
+  /** The plans and their prices, in rupees and dollars. */
+  getPlans: () =>
+    apiClient
+      .get<BillingPlansResponse>("/billing/plans")
+      .then((response) => response.data),
+
+  /** The organization's plan, this month's usage and its usage bills. */
+  getUsage: () =>
+    apiClient
+      .get<BillingUsageSummary>("/billing/usage")
       .then((response) => response.data),
 };
