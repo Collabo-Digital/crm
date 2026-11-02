@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -12,6 +13,7 @@ describe('AdminService', () => {
                 AdminService,
                 { provide: PrismaService, useValue: {} },
                 { provide: RedisService, useValue: {} },
+                { provide: ConfigService, useValue: new ConfigService({}) },
             ],
         }).compile();
 

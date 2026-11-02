@@ -18,7 +18,9 @@ const toDay = (iso: string | null) => (iso ? new Date(new Date(iso).getTime() - 
 /** The end of that local day, as the trial's end. */
 const endOfDay = (day: string) => new Date(`${day}T23:59:59`).toISOString();
 
-/** One workspace's billing in a line: plan, how it is paid, and the trial. */
+const STANDING: Record<AdminUserMembership["billing"]["access"], string> = { trialing: "", active: "", grace: " · payment needed", expired: " · read-only" };
+
+/** One workspace's billing in a line: plan, how it is paid, the trial, and whether it needs payment or is read-only. */
 export function billingSummary(b: AdminUserMembership["billing"]): string {
     const paid = b.billingProvider === "MANUAL"
         ? "invoiced by the team"
@@ -26,7 +28,7 @@ export function billingSummary(b: AdminUserMembership["billing"]): string {
             ? `Razorpay, ${b.subscriptionStatus.toLowerCase()}`
             : "no subscription";
     const trial = b.trialEndsAt ? ` · trial ${new Date(b.trialEndsAt).getTime() > Date.now() ? "ends" : "ended"} ${formatDate(b.trialEndsAt)}` : "";
-    return `${PLAN_NAME[b.billingPlan]}${b.billingInterval ? `, ${b.billingInterval.toLowerCase()}` : ""} · ${paid}${trial}`;
+    return `${PLAN_NAME[b.billingPlan]}${b.billingInterval ? `, ${b.billingInterval.toLowerCase()}` : ""} · ${paid}${trial}${STANDING[b.access]}`;
 }
 
 /**
@@ -97,9 +99,11 @@ export function OrgBillingDialog({ userId, membership, onClose }: { userId: stri
                             <input id="trial-ends" type="date" className={`${field} w-auto`} value={trialDay} onChange={(e) => setTrialDay(e.target.value)} />
                             <Button type="button" variant="outline" size="sm" onClick={() => extendBy(7)}>+7 days</Button>
                             <Button type="button" variant="outline" size="sm" onClick={() => extendBy(14)}>+14 days</Button>
-                            {trialDay && <Button type="button" variant="ghost" size="sm" onClick={() => setTrialDay("")}>No trial</Button>}
+                            {trialDay && <Button type="button" variant="ghost" size="sm" onClick={() => setTrialDay("")}>End trial now</Button>}
                         </div>
-                        <p className="text-caption text-muted-foreground">The trial lasts to the end of that day; a grace period follows before the workspace turns read-only.</p>
+                        <p className="text-caption text-muted-foreground">
+                            The trial lasts to the end of that day. Cleared, it ends now. Either way a grace period follows before the workspace turns read-only.
+                        </p>
                     </div>
                 </div>
                 <DialogFooter>

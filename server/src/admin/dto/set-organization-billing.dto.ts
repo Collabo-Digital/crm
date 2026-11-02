@@ -10,6 +10,6 @@ export class SetOrganizationBillingDto {
     /** True: the Collabo team invoices this workspace (billing provider MANUAL). False: it no longer does. */
     @IsOptional() @IsBoolean() manual?: boolean;
 
-    /** When the trial ends: later to extend it, null to end it. */
+    /** When the trial ends: later to extend it, null to end it now. */
     @IsOptional() @IsISO8601() trialEndsAt?: string | null;
 }
