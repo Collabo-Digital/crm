@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BillingPlan } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 /** What a key may do. A key gets the ones chosen when it was made. */
@@ -10,6 +11,8 @@ export interface ApiCaller {
     keyId: string;
     organizationId: string;
     scopes: string[];
+    /** The organization's plan, which sets the key's rate limit. */
+    plan: BillingPlan;
 }
 
 const hashOf = (key: string) => createHash('sha256').update(key).digest('hex');
@@ -53,12 +56,15 @@ export class ApiKeysService {
     /** The organization and scopes behind a key, or null. Marks it used at most once a minute. */
     async authenticate(raw: string): Promise<ApiCaller | null> {
         if (!/^ck_live_[\w-]{20,64}$/.test(raw)) return null;
-        const key = await this.prisma.apiKey.findUnique({ where: { hash: hashOf(raw) }, select: { id: true, organizationId: true, scopes: true, revokedAt: true } });
+        const key = await this.prisma.apiKey.findUnique({
+            where: { hash: hashOf(raw) },
+            select: { id: true, organizationId: true, scopes: true, revokedAt: true, organization: { select: { billingPlan: true } } },
+        });
         if (!key || key.revokedAt) return null;
         await this.prisma.apiKey.updateMany({
             where: { id: key.id, OR: [{ lastUsedAt: null }, { lastUsedAt: { lt: new Date(Date.now() - 60_000) } }] },
             data: { lastUsedAt: new Date() },
         });
-        return { keyId: key.id, organizationId: key.organizationId, scopes: key.scopes };
+        return { keyId: key.id, organizationId: key.organizationId, scopes: key.scopes, plan: key.organization.billingPlan };
     }
 }

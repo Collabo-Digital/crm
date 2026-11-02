@@ -32,7 +32,8 @@ wrapped as `{ "success": true, "data": … }`; errors carry `message`.
 
 ## Rate limits
 
-Each key may call each endpoint 600 times a minute. Past that the answer is
+Each key may call each endpoint 600 times a minute, or 2,000 on the Scale and
+Enterprise plans. Past that the answer is
 `429` with a `Retry-After` header (seconds); wait that long and send again,
 with the same `Idempotency-Key` for `POST /messages`. Every answer carries
 `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`

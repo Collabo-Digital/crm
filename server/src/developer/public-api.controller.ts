@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Headers, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../auth/decorators/public.decorator';
-import { ApiKeyGuard, Caller, RequireApiScope, apiKeyTracker } from './api-key.guard';
+import { ApiKeyGuard, Caller, PUBLIC_API_CEILING, RequireApiScope, apiKeyTracker } from './api-key.guard';
 import type { ApiCaller } from './api-keys.service';
 import { PublicSendMessageDto, PublicSubscribeDto, PublicUpsertContactDto } from './dto/developer.dto';
 import { PublicApiService } from './public-api.service';
@@ -15,8 +15,10 @@ import { WEBHOOK_EVENTS, WebhooksService } from './webhooks.service';
 @Controller('public/v1')
 @Public()
 @UseGuards(ApiKeyGuard)
-// Per key and endpoint (see docs/public-api.md), not the per-address default.
-@Throttle({ default: { ttl: 60_000, limit: 600, getTracker: apiKeyTracker } })
+// Per key and endpoint (see docs/public-api.md), not the per-address default:
+// the most any plan gets, before the key is checked; ApiKeyGuard then holds
+// the key to its own plan's limit.
+@Throttle({ default: { ttl: 60_000, limit: PUBLIC_API_CEILING, getTracker: apiKeyTracker } })
 export class PublicApiController {
     constructor(
         private readonly api: PublicApiService,
