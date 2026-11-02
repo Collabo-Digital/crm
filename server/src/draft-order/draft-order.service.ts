@@ -27,6 +27,7 @@ import {
 } from '../common/utils/zoned-date.util';
 import { GstCalculatorService } from '../gst/gst-calculator.service';
 import { TaxResolverService } from '../gst/tax-resolver.service';
+import { sellerStateForSupply, type SellerRegistrations } from '../gst/seller-registration.util';
 import { OrderService } from '../order/order.service';
 import { ensureManualChannel } from '../channel/ensure-manual-channel';
 import { ShopifyGraphqlClient } from '../channel/shopify-graphql.client';
@@ -83,6 +84,26 @@ function refuseDeletedProducts(
   throw new BadRequestException(
     `"${deleted.product.title}${vt ? ` — ${vt}` : ''}" has been deleted from your products. Remove it from this draft and try again.`,
   );
+}
+
+/**
+ * Every active registration of the seller, read as the offline order path
+ * reads them: a draft is quoted from the registration its completed order is
+ * taxed from (`sellerStateForSupply`), not from the default alone.
+ */
+async function sellerRegistrations(
+  tx: Prisma.TransactionClient,
+  orgId: string,
+): Promise<SellerRegistrations> {
+  const gstins = await tx.organizationGstin.findMany({
+    where: { organizationId: orgId, isActive: true },
+    select: { stateCode: true, isDefault: true },
+  });
+  return {
+    defaultStateCode:
+      gstins.find((g) => g.isDefault)?.stateCode ?? gstins[0]?.stateCode ?? null,
+    stateCodes: gstins.map((g) => g.stateCode),
+  };
 }
 
 /** Thrown when a draft stopped being editable between the check and the write. */
@@ -416,17 +437,13 @@ export class DraftOrderService {
       });
       if (!org) throw new NotFoundException('Organization not found');
 
-      // 4. Compute pricing. Use seller-default GSTIN for state code if
-      //    we have GST enabled. Drafts don't generate invoices, so we
+      // 4. Compute pricing. A supply into a state the seller is registered
+      //    in is made from that registration, else from the default, as
+      //    completion taxes the order. Drafts don't generate invoices, so we
       //    don't need a sellerGstinId from the DTO.
-      let sellerState: string | null = null;
-      if (org.gstEnabled) {
-        const sellerGstin = await tx.organizationGstin.findFirst({
-          where: { organizationId: orgId, isDefault: true, isActive: true },
-          select: { stateCode: true },
-        });
-        sellerState = sellerGstin?.stateCode ?? null;
-      }
+      const registrations: SellerRegistrations = org.gstEnabled
+        ? await sellerRegistrations(tx, orgId)
+        : { defaultStateCode: null, stateCodes: [] };
 
       // Shared resolver, not a hand-rolled chain. The previous chain skipped
       // shipping and billing addresses entirely, so a draft shipping interstate
@@ -441,8 +458,9 @@ export class DraftOrderService {
         customerBillingStateCode:
           dto.customer?.billingStateCode ?? customer?.billingStateCode,
         buyerGstin: dto.customer?.gstin ?? customer?.gstin,
-        sellerStateCode: sellerState,
+        sellerStateCode: registrations.defaultStateCode,
       });
+      const sellerState = sellerStateForSupply(registrations, placeOfSupplyCode);
 
       const isIntraState = sellerState
         ? this.calculator.isIntraState(sellerState, placeOfSupplyCode)
@@ -773,14 +791,10 @@ export class DraftOrderService {
         select: { gstEnabled: true, currency: true },
       });
 
-      let sellerState: string | null = null;
-      if (org.gstEnabled) {
-        const sellerGstin = await tx.organizationGstin.findFirst({
-          where: { organizationId: orgId, isDefault: true, isActive: true },
-          select: { stateCode: true },
-        });
-        sellerState = sellerGstin?.stateCode ?? null;
-      }
+      // The same registration rule as create().
+      const registrations: SellerRegistrations = org.gstEnabled
+        ? await sellerRegistrations(tx, orgId)
+        : { defaultStateCode: null, stateCodes: [] };
 
       // Same shared resolver as create() and the offline order path. Falls
       // back to the STORED addresses when the patch does not carry them.
@@ -796,8 +810,9 @@ export class DraftOrderService {
           dto.customer?.billingStateCode ??
           draftMeta.customer?.billingStateCode,
         buyerGstin: dto.customer?.gstin ?? draftMeta.customer?.gstin,
-        sellerStateCode: sellerState,
+        sellerStateCode: registrations.defaultStateCode,
       });
+      const sellerState = sellerStateForSupply(registrations, placeOfSupplyCode);
       const isIntraState = sellerState
         ? this.calculator.isIntraState(sellerState, placeOfSupplyCode)
         : true;
