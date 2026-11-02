@@ -59,10 +59,10 @@ describe('packing route access', () => {
         for (const h of handlers) expect(Reflect.getMetadata(REQUIRE_SECTION_KEY, PackingController.prototype[h])).toBeUndefined();
     });
 
-    it('lets a Packer, who has no Orders section, use every packing route', () => {
-        const packer = PERMISSION_PRESETS.packer;
-        expect(packer.grants).not.toContain('section.orders');
-        expect(reachable({ role: packer.role, permissions: packer.grants })).toEqual(allButAccuracy);
+    it.each(['packer', 'warehouse'])('lets the %s job, which has no Orders section, use every packing route', (id) => {
+        const job = PERMISSION_PRESETS.find((p) => p.id === id)!;
+        expect(job.grants).not.toContain('section.orders');
+        expect(reachable({ role: UserRole.AGENT, permissions: job.grants })).toEqual(allButAccuracy);
     });
 
     it('lets owners, admins and managers use everything, accuracy included', () => {
@@ -80,9 +80,8 @@ describe('packing route access', () => {
         expect(reachable({ role: UserRole.AGENT, permissions: ['section.orders'] })).toEqual([]);
     });
 
-    it('opens accuracy on inventory.reports alone (the Accounts preset)', () => {
-        const accounts = PERMISSION_PRESETS.accounts;
-        expect(reachable({ role: accounts.role, permissions: accounts.grants })).toEqual(['accuracy']);
+    it('opens accuracy on inventory.reports alone', () => {
+        expect(reachable({ role: UserRole.VIEWER, permissions: ['section.products', 'inventory.reports', 'reports.finance'] })).toEqual(['accuracy']);
     });
 
     it('lets a viewer holding inventory.pack read but not pack', () => {

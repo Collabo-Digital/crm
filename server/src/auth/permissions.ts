@@ -4,10 +4,10 @@ import { UserRole } from '@prisma/client';
  * Fine-grained capability keys stored in `OrganizationMember.permissions`
  * (JSONB, shape: `{ grants: PermissionKey[], preset?: string }`).
  *
- * Design: warehouse-floor "roles" (Receiver, Picker, Packer, Dispatch,
- * Accounts) are NOT UserRole enum values — they are capability sets granted to
- * existing roles, surfaced in the team UI as named presets. A Picker is an
- * AGENT holding only `inventory.pick`. This avoids a Postgres enum migration,
+ * Design: jobs (Packer, Warehouse, Cashier, Accountant, Marketing) are NOT
+ * UserRole enum values — they are capability sets granted to existing roles,
+ * surfaced in the team UI as job templates (PERMISSION_PRESETS). A Cashier is
+ * an AGENT holding `pos.sell`. This avoids a Postgres enum migration,
  * keeps the RolesGuard→VendorAccessGuard ordering intact, and lets merchants
  * tweak per-user capabilities without new roles.
  *
@@ -92,55 +92,78 @@ export interface MemberPermissions {
   preset?: string;
 }
 
+/** A job template for the Agent role, as the team screen offers it. */
+export interface PermissionPreset {
+  id: string;
+  label: string;
+  /** What the job can do and what it leaves out, shown under the buttons. */
+  description: string;
+  grants: PermissionKey[];
+}
+
 /**
- * Named grant bundles for the team UI. Purely templates — assigning one copies
- * its grants onto the member; nothing references the preset afterwards, so
- * merchants can tweak individual grants freely.
+ * The job templates on the team screen (Settings › Team members, "Start from a
+ * job"), served to the client by `GET /organizations/:orgId/members/job-templates`
+ * so this is the only list. Purely templates — picking one fills the member's
+ * sections and abilities, which stay editable; nothing references the template
+ * afterwards.
+ *
+ * Every template names a section: a member with none is unrestricted (see
+ * `resolveSections`). The Packer, Warehouse and Cashier stay within the grants
+ * billed as an ops seat. The Accountant has no Orders section, because Agents
+ * can change orders.
  */
-export const PERMISSION_PRESETS: Record<
-  string,
-  { label: string; role: UserRole; grants: PermissionKey[] }
-> = {
-  warehouse_manager: {
-    label: 'Warehouse Manager',
-    role: UserRole.MANAGER,
+export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
+  {
+    id: 'support',
+    label: 'Support agent',
+    description: 'Answers chats in the Inbox, including new ones nobody has picked up yet. Nothing else.',
+    grants: ['section.chat', 'chat.view_unassigned'],
+  },
+  {
+    id: 'marketing',
+    label: 'Marketing',
+    description:
+      'Creates and sends broadcasts, submits message templates to Meta and builds segments in Campaigns. Can see automations but not change them. No orders, chats or customers.',
+    grants: ['section.campaigns', 'campaigns.view', 'campaigns.manage', 'broadcasts.send', 'templates.manage'],
+  },
+  {
+    id: 'accountant',
+    label: 'Accountant',
+    description:
+      'Sees and downloads invoices, GST returns and payment fees, and opens Analytics. Cannot issue, cancel or change anything. No orders, chats or customers.',
+    grants: ['section.invoices', 'section.analytics', 'reports.finance'],
+  },
+  {
+    id: 'warehouse',
+    label: 'Warehouse',
+    description:
+      'Receives stock, prints labels and packs orders, from Products and the Packing list. Cannot correct stock counts. No orders, customers or sales figures.',
+    // No inventory.adjust: it is not an ops-seat grant. Ticking "Adjust stock
+    // counts" on the member adds it, and makes theirs a full seat.
     grants: [
+      'section.products',
       'inventory.view',
       'inventory.receive',
-      'inventory.adjust',
       'inventory.pick',
       'inventory.pack',
       'inventory.dispatch',
       'inventory.labels',
-      'inventory.reports',
     ],
   },
-  receiver: {
-    label: 'Receiver',
-    role: UserRole.AGENT,
-    grants: ['section.products', 'inventory.view', 'inventory.receive', 'inventory.labels'],
-  },
-  picker: {
-    label: 'Picker',
-    role: UserRole.AGENT,
-    grants: ['section.products', 'inventory.view', 'inventory.pick'],
-  },
-  packer: {
+  {
+    id: 'packer',
     label: 'Packer',
-    role: UserRole.AGENT,
-    grants: ['section.products', 'inventory.view', 'inventory.pack'],
+    description: 'Packs orders with the Packing list and scanner, and can look products up. No orders, customers or sales figures.',
+    grants: ['section.products', 'inventory.pack'],
   },
-  dispatch: {
-    label: 'Dispatch',
-    role: UserRole.AGENT,
-    grants: ['section.products', 'inventory.view', 'inventory.dispatch'],
+  {
+    id: 'cashier',
+    label: 'Cashier',
+    description: 'Sells at the till in Point of sale, and can look products up. No orders, store reports or till settings.',
+    grants: ['section.products', 'pos.sell'],
   },
-  accounts: {
-    label: 'Accounts',
-    role: UserRole.VIEWER,
-    grants: ['section.products', 'inventory.reports', 'reports.finance'],
-  },
-};
+];
 
 /**
  * Parse the raw JSONB column into a validated grant list. Tolerant of legacy /
