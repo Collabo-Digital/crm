@@ -13,6 +13,9 @@ import {
   SyncStatus,
 } from '@prisma/client';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
+import { resolveLineTaxClassification } from '../gst/line-tax-classification.util';
+import { EXPORT_PLACE_OF_SUPPLY } from '../gst/constants/indian-states';
+import { DEFAULT_UQC } from '../gst/constants/uqc';
 import { catalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util';
 import { compositionInterStateError, isCompositionSeller } from '../gst/composition.util';
 import { randomUUID } from 'crypto';
@@ -493,6 +496,15 @@ export class DraftOrderService {
                 // ProductVariant.taxable was stored and never read by any tax
                 // path; a variant marked non-taxable was quoted with tax.
                 variantTaxable: v.taxable,
+                // Classified as its order and invoice classify it: an exempt,
+                // nil-rated, non-GST or exported line carries no tax whatever
+                // its rate. Only the supply type is read, so the unit is immaterial.
+                supplyType: resolveLineTaxClassification({
+                  variant: v,
+                  product: v.product,
+                  defaultUnitOfMeasure: DEFAULT_UQC,
+                  isExportSupply: placeOfSupplyCode === EXPORT_PLACE_OF_SUPPLY,
+                }).supplyType,
               };
             }),
             tx,
@@ -826,6 +838,13 @@ export class DraftOrderService {
                 // ProductVariant.taxable was stored and never read by any tax
                 // path; a variant marked non-taxable was quoted with tax.
                 variantTaxable: v.taxable,
+                // Same classification as create(), and as the order and invoice.
+                supplyType: resolveLineTaxClassification({
+                  variant: v,
+                  product: v.product,
+                  defaultUnitOfMeasure: DEFAULT_UQC,
+                  isExportSupply: placeOfSupplyCode === EXPORT_PLACE_OF_SUPPLY,
+                }).supplyType,
               };
             }),
             tx,
