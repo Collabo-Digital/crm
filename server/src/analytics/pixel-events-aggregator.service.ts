@@ -43,10 +43,15 @@ export class PixelEventsAggregator {
     }
 
     async rollup(since: Date, organizationId?: string): Promise<void> {
+        // Distinct visitors cannot be added up hour by hour, so every UTC day
+        // the window reaches is re-read whole. Raw events must therefore be
+        // kept for at least 48 hours.
+        const dayStart = new Date(since);
+        dayStart.setUTCHours(0, 0, 0, 0);
         const events = await this.prisma.rawAnalyticsEvent.findMany({
             where: {
                 ...(organizationId && { organizationId }),
-                occurredAt: { gte: since },
+                occurredAt: { gte: dayStart },
                 visitorId: { not: null },
                 eventName: {
                     in: [
