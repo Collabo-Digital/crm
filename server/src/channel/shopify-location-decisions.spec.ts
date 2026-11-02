@@ -119,6 +119,8 @@ function fakeDb(init: { warehouses?: Row[]; records?: Row[]; gstins?: Row[]; gst
       update: jest.fn(async () => ({})),
     },
     $transaction: jest.fn(async (fn: any) => fn(db)),
+    // Taking closed locations out of members' stores (auth/location-scope.util).
+    $executeRaw: jest.fn(async () => 0),
   };
   return { db, warehouses, records, settings };
 }
@@ -150,6 +152,8 @@ function build(init: Parameters<typeof fakeDb>[0], nodes: ReturnType<typeof node
 }
 
 const byId = (rows: Row[], id: string) => rows.find((r) => r.id === id)!;
+/** The locations taken out of members' and invitations' stores, one entry per table updated. */
+const scopeCleanups = (db: any) => db.$executeRaw.mock.calls.map((call: unknown[]) => call.slice(1).find(Array.isArray));
 const recordFor = (rows: Row[], shopifyLocationId: string) => rows.find((r) => r.shopifyLocationId === shopifyLocationId)!;
 
 describe('syncing a store’s Shopify locations', () => {
@@ -243,6 +247,7 @@ describe('syncing a store’s Shopify locations', () => {
 
     expect(byId(t.warehouses, 'wh_main').isActive).toBe(true);
     expect(byId(t.warehouses, 'wh_store').isActive).toBe(false);
+    expect(scopeCleanups(t.db)).toEqual([['wh_store'], ['wh_store']]);
   });
 
   it('deactivates the location linked to a Shopify location that was removed — not the default — and forgets the location', async () => {
@@ -265,6 +270,7 @@ describe('syncing a store’s Shopify locations', () => {
     expect(byId(t.warehouses, 'wh_gone').isActive).toBe(false);
     expect(byId(t.warehouses, 'wh_main').isActive).toBe(true);
     expect(t.records.map((r) => r.shopifyLocationId)).toEqual(['101']);
+    expect(scopeCleanups(t.db)).toEqual([['wh_gone'], ['wh_gone']]);
   });
 
   it('a location unlinked since waits for a decision again', async () => {

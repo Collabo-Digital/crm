@@ -22,6 +22,7 @@ import {
   warehouseGstinMismatch,
 } from './warehouse-gstin.util';
 import { LocationLinkService } from './location-links.service';
+import { onlyAtLocations, removeFromLocationScopes } from '../auth/location-scope.util';
 import {
   BulkLocationsDto,
   CreateWarehouseDto,
@@ -185,6 +186,14 @@ export class WarehouseService {
         'Set another warehouse as default instead of unsetting this one.',
       );
     }
+    // Switching a location off takes it out of the stores every member works
+    // at. Not while someone works only here: their list would empty, and an
+    // empty list means every location.
+    const closing = dto.isActive === false && warehouse.isActive;
+    if (closing) {
+      const stranded = await onlyAtLocations(this.prisma, orgId, [id]);
+      if (stranded.length > 0) throw new BadRequestException(strandedMessage(stranded, warehouse.name));
+    }
     if (dto.code !== undefined && dto.code !== warehouse.code) {
       // The code prefixes every rack and bin code, which are printed on
       // labels and scanned; renaming it would orphan them.
@@ -231,6 +240,7 @@ export class WarehouseService {
           data: { isDefault: false },
         });
       }
+      if (closing) await removeFromLocationScopes(tx, orgId, [id]);
       if (relink) {
         await this.links.unlink(tx, orgId, warehouse);
         if (dto.shopifyLocationId) {
@@ -521,4 +531,19 @@ function normalizeAddress(
     ...(stateCode ? { stateCode } : {}),
     ...(province && !address.province ? { province } : {}),
   };
+}
+
+/** "Priya Sharma and Ravi Kumar work only at Bandra. …" — at most three names. */
+function strandedMessage(names: string[], location: string): string {
+  const shown = names.slice(0, 3);
+  const more = names.length - shown.length;
+  const who =
+    more > 0
+      ? `${shown.join(', ')} and ${more} more`
+      : shown.length > 1
+        ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`
+        : shown[0];
+  return `${who} ${names.length === 1 ? 'works' : 'work'} only at ${location}. Choose another store for ${
+    names.length === 1 ? 'them' : 'each of them'
+  } in Settings → Team members, then switch this location off.`;
 }
