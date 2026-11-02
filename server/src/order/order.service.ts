@@ -2860,6 +2860,15 @@ export class OrderService {
     if (order.financialStatus === OrderFinancialStatus.PAID) {
       throw new BadRequestException('Order is already paid');
     }
+    if (order.cancelledAt) {
+      throw new BadRequestException('Cannot mark a cancelled order as paid.');
+    }
+    if (
+      order.financialStatus === OrderFinancialStatus.REFUNDED ||
+      order.financialStatus === OrderFinancialStatus.VOIDED
+    ) {
+      throw new BadRequestException('Cannot mark a refunded or voided order as paid.');
+    }
     const isShopify = order.channel.platform === ChannelPlatform.SHOPIFY;
 
     if (isShopify) {
@@ -2879,10 +2888,27 @@ export class OrderService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const row = await tx.order.update({
-        where: { id },
+      // Conditional on the checks above, so of two clicks that both passed
+      // them only one marks the order paid, invoices it and raises 'paid'.
+      const claimed = await tx.order.updateMany({
+        where: {
+          id,
+          organizationId: orgId,
+          cancelledAt: null,
+          financialStatus: {
+            notIn: [
+              OrderFinancialStatus.PAID,
+              OrderFinancialStatus.REFUNDED,
+              OrderFinancialStatus.VOIDED,
+            ],
+          },
+        },
         data: { financialStatus: OrderFinancialStatus.PAID },
       });
+      if (claimed.count === 0) {
+        throw new BadRequestException('Order is already paid');
+      }
+      const row = await tx.order.findUniqueOrThrow({ where: { id } });
       await tx.orderTimelineEvent.create({
         data: { orderId: id, actorId: userId, action: 'paid', message },
       });
