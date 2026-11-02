@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ChannelPlatform, Prisma, ProductStatus, StockLocationKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
@@ -10,6 +10,7 @@ import { displayVariantTitle } from '../product/variant-title.util';
 import { PosSettings, PosSettingsSchema, UpdatePosSettingsInput, parsePosSettings } from './pos-settings.schema';
 import { PosStaffService } from './pos-staff.service';
 import { round2 } from './pos-pricing';
+import { assertInLocationScope } from '../auth/location-scope.util';
 
 export type PosStore = { id: string; name: string; code: string | null; isDefault: boolean };
 export type PosProduct = {
@@ -37,6 +38,9 @@ export interface PosStoreContext {
 }
 
 export const DEFAULT_STORE_ID = 'default';
+
+/** A member limited to some stores (auth/location-scope.util) naming another one. */
+export const POS_OUT_OF_SCOPE = "You can only bill at the stores you work at. Pick one of your stores.";
 
 const variantSelect = {
     id: true,
@@ -94,7 +98,8 @@ export class PosCatalogService {
         return next;
     }
 
-    async setup(orgId: string, storeId?: string) {
+    /** `scope`: the stores a store-limited member works at; the rest are left out. */
+    async setup(orgId: string, storeId?: string, scope: string[] | null = null) {
         const [settings, org, profile, tax, warehousing, staff] = await Promise.all([
             this.settings(orgId),
             this.prisma.organization.findUnique({ where: { id: orgId }, select: { name: true, gstEnabled: true, currency: true } }),
@@ -106,12 +111,16 @@ export class PosCatalogService {
         if (!org) throw new NotFoundException('Organization not found');
         const storeName = profile.storeName.trim() || org.name;
         const stores: PosStore[] = warehousing
-            ? (await this.storeLocations(orgId)).map((w) => ({ id: w.id, name: w.name, code: w.code, isDefault: w.isDefault }))
+            ? (await this.storeLocations(orgId))
+                .filter((w) => !scope || scope.includes(w.id))
+                .map((w) => ({ id: w.id, name: w.name, code: w.code, isDefault: w.isDefault }))
             : [{ id: DEFAULT_STORE_ID, name: storeName, code: null, isDefault: true }];
         // With no Store location there is nothing to bill at: the till opens
         // to say so, with no stock to show — whatever store it last used,
-        // which may since have become a Warehouse.
-        const wanted = storeId && storeId !== DEFAULT_STORE_ID ? storeId : stores[0]?.id;
+        // which may since have become a Warehouse. A remembered store the
+        // member no longer works at opens their first store instead.
+        const named = storeId && storeId !== DEFAULT_STORE_ID ? storeId : undefined;
+        const wanted = named && !(warehousing && scope && !scope.includes(named)) ? named : stores[0]?.id;
         const store = stores.length > 0 && wanted ? await this.resolveStore(orgId, wanted) : null;
 
         const tileRows = store && settings.tileVariantIds.length
@@ -147,9 +156,10 @@ export class PosCatalogService {
     /**
      * The store a request names, or the first Store location; refuses one that
      * is not this org's, is switched off or is a Warehouse. Never falls back
-     * to a Warehouse: the till sells only where there is a shop.
+     * to a Warehouse: the till sells only where there is a shop. With a
+     * `scope`, only the member's own stores: another is a 403.
      */
-    async resolveStore(orgId: string, storeId?: string | null): Promise<PosStoreContext> {
+    async resolveStore(orgId: string, storeId?: string | null, scope: string[] | null = null): Promise<PosStoreContext> {
         const warehousing = await this.ledger.isWarehousingEnabled(orgId);
         const wanted = storeId && storeId !== DEFAULT_STORE_ID ? storeId : null;
         if (!warehousing) {
@@ -160,11 +170,20 @@ export class PosCatalogService {
             ]);
             return { id: DEFAULT_STORE_ID, warehouseId: null, name: profile.storeName.trim() || org?.name || '', stateCode: null };
         }
+        if (wanted) assertInLocationScope(scope, wanted, POS_OUT_OF_SCOPE);
         const warehouse = await this.prisma.warehouse.findFirst({
-            where: { organizationId: orgId, isActive: true, kind: StockLocationKind.STORE, ...(wanted ? { id: wanted } : {}) },
+            where: {
+                organizationId: orgId,
+                isActive: true,
+                kind: StockLocationKind.STORE,
+                ...(wanted ? { id: wanted } : scope ? { id: { in: scope } } : {}),
+            },
             orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
             select: { id: true, name: true, address: true, gstin: { select: { stateCode: true, isActive: true } } },
         });
+        if (!warehouse && !wanted && scope) {
+            throw new ForbiddenException("You don't work at any store, so you can't bill here. Ask an owner or admin to add you to a store.");
+        }
         if (!warehouse) {
             throw new BadRequestException(wanted ? "This store isn't available. Pick one from the list." : 'Add a store location before billing.');
         }
@@ -176,8 +195,8 @@ export class PosCatalogService {
      * Active products whose title, variant title, SKU or barcode contain every
      * word searched for; an exact barcode or SKU comes first.
      */
-    async products(orgId: string, query: { search?: string; storeId?: string; limit?: number }): Promise<PosProduct[]> {
-        const store = await this.resolveStore(orgId, query.storeId);
+    async products(orgId: string, query: { search?: string; storeId?: string; limit?: number }, scope: string[] | null = null): Promise<PosProduct[]> {
+        const store = await this.resolveStore(orgId, query.storeId, scope);
         const limit = Math.min(Math.max(Number(query.limit) || 20, 1), 50);
         const term = (query.search ?? '').trim();
         const words = term.split(/\s+/).filter(Boolean).slice(0, 6);
@@ -204,10 +223,10 @@ export class PosCatalogService {
     }
 
     /** The product with this exact barcode, else this SKU. */
-    async scan(orgId: string, code: string | undefined, storeId?: string): Promise<PosProduct> {
+    async scan(orgId: string, code: string | undefined, storeId?: string, scope: string[] | null = null): Promise<PosProduct> {
         const trimmed = (code ?? '').trim();
         if (!trimmed) throw new BadRequestException('Scan or type a barcode or SKU.');
-        const store = await this.resolveStore(orgId, storeId);
+        const store = await this.resolveStore(orgId, storeId, scope);
         const find = (where: Prisma.ProductVariantWhereInput) =>
             this.prisma.productVariant.findFirst({ where: { ...sellable(orgId), ...where }, select: variantSelect, orderBy: { createdAt: 'asc' } });
         const variant =

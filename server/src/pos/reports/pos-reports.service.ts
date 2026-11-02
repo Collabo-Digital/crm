@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PLACED_AT } from '../../common/utils/order-window.util';
+import { scopedLocationSql } from '../../auth/location-scope.util';
 import {
   resolveReportingTimeZone,
   zonedDateString,
@@ -45,9 +46,10 @@ interface PosWindow {
 export class PosReportsService {
   constructor(private readonly prisma: PrismaService) { }
 
-  async getSummary(orgId: string, query: QueryPosSummaryDto) {
+  /** `locationScope`: the stores a store-limited manager works at; bills elsewhere are left out. */
+  async getSummary(orgId: string, query: QueryPosSummaryDto, locationScope: string[] | null = null) {
     const window = await this.resolveWindow(orgId, query.from, query.to);
-    const scope = this.scope(orgId, window, query.storeId);
+    const scope = this.scope(orgId, window, query.storeId, locationScope);
     const fx = Prisma.sql`CASE
       WHEN o."exchange_rate" IS NOT NULL AND UPPER(o."base_currency") = ${window.currency}
       THEN o."exchange_rate"
@@ -132,8 +134,13 @@ export class PosReportsService {
     };
   }
 
-  /** The counter log, newest first: sales, approvals, wrong PINs, unlocks. */
-  async getActivity(orgId: string, query: QueryPosActivityDto) {
+  /**
+   * The counter log, newest first: sales, approvals, wrong PINs, unlocks. A
+   * store-limited manager sees what happened at their stores: entries whose
+   * bill or recorded till store is one of them. Entries that name no store
+   * (approvals, and unlocks from before the till sent its store) are left out.
+   */
+  async getActivity(orgId: string, query: QueryPosActivityDto, locationScope: string[] | null = null) {
     const limit = query.limit ?? 50;
     const window =
       query.from || query.to ? await this.resolveWindow(orgId, query.from, query.to) : null;
@@ -144,6 +151,12 @@ export class PosReportsService {
         organizationId: orgId,
         ...(query.type && { type: query.type }),
         ...(window && { createdAt: { gte: window.from, lt: window.to } }),
+        ...(locationScope && {
+          OR: [
+            { order: { dispatchWarehouseId: { in: locationScope } } },
+            ...locationScope.map((storeId) => ({ details: { path: ['storeId'], equals: storeId } })),
+          ],
+        }),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
@@ -187,10 +200,8 @@ export class PosReportsService {
   }
 
   /** POS bills in the window, less cancelled and deleted ones. Shared by every query. */
-  private scope(orgId: string, window: PosWindow, storeId?: string): Prisma.Sql {
-    const storeFilter = storeId
-      ? Prisma.sql`AND o."dispatch_warehouse_id" = ${storeId}`
-      : Prisma.empty;
+  private scope(orgId: string, window: PosWindow, storeId: string | undefined, locationScope: string[] | null): Prisma.Sql {
+    const storeFilter = scopedLocationSql(Prisma.sql`o."dispatch_warehouse_id"`, locationScope, storeId);
     return Prisma.sql`o."organization_id" = ${orgId}
       AND o."pos_sale" = true
       AND o."deleted_at"   IS NULL

@@ -21,6 +21,8 @@ import { BillValues, hasBillDocument } from './pos-bill-template';
 import { billToken, maskPhone, readBillToken } from './pos-bill-link';
 import { SendBillInput } from './pos-requests.schema';
 import { readPosMeta } from './pos-order-meta';
+import { POS_OUT_OF_SCOPE } from './pos-catalog.service';
+import { assertInLocationScope } from '../auth/location-scope.util';
 
 export type BillChannel = 'whatsapp';
 export type BillDeliveryStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'not_sent' | 'failed';
@@ -180,7 +182,7 @@ export class PosBillService {
      * bill sent to a number gets that number's customer; a bill with a
      * customer goes to the new number and leaves the customer as they are.
      */
-    async sendAgain(orgId: string, userId: string, orderId: string, input: SendBillInput): Promise<BillView> {
+    async sendAgain(orgId: string, userId: string, orderId: string, input: SendBillInput, scope: string[] | null = null): Promise<BillView> {
         let staffId: string | null = null;
         if (input.staffToken) {
             const staff = await this.staff.staffFromToken(orgId, userId, input.staffToken);
@@ -189,9 +191,14 @@ export class PosBillService {
         }
         const order = await this.prisma.order.findFirst({
             where: { id: orderId, organizationId: orgId, deletedAt: null, posSale: true },
-            select: { id: true, customer: { select: { id: true, phone: true, defaultAddress: true, firstName: true, lastName: true } } },
+            select: {
+                id: true,
+                dispatchWarehouseId: true,
+                customer: { select: { id: true, phone: true, defaultAddress: true, firstName: true, lastName: true } },
+            },
         });
         if (!order) throw new NotFoundException('That bill was not found.');
+        if (scope) assertInLocationScope(scope, order.dispatchWarehouseId, POS_OUT_OF_SCOPE);
         const customer = order.customer;
         const name = customer ? [customer.firstName, customer.lastName].filter(Boolean).join(' ') || null : null;
         const own = customer?.phone ? normalizePhone(customer.phone, countryCodeOf(customer.defaultAddress) ?? 'IN') : null;

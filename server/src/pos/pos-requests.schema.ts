@@ -28,7 +28,8 @@ export const UpdateStaffSchema = z
     .object({ name: StaffName.optional(), role: StaffRole.optional(), pin: PinSchema.optional(), isActive: z.boolean({ error: 'isActive must be true or false.' }).optional() })
     .strict();
 
-export const UnlockSchema = z.object({ pin: PinSchema }).strict();
+/** `storeId`: the store the till is open at, which a store-limited member must work at. */
+export const UnlockSchema = z.object({ pin: PinSchema, storeId: z.string().min(1).max(40).optional() }).strict();
 export const ApproveSchema = z
     .object({
         pin: PinSchema,

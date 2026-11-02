@@ -22,6 +22,8 @@ import { PosOrderMeta, readPosMeta } from './pos-order-meta';
 import { PosSettings } from './pos-settings.schema';
 import { PosApprovalReason, PosTokenClaims } from './pos-tokens';
 import { CollectPaymentInput, SaleCustomerInput, SaleInput } from './pos-requests.schema';
+import { assertInLocationScope } from '../auth/location-scope.util';
+import { POS_OUT_OF_SCOPE } from './pos-catalog.service';
 import {
     discountNeedsApproval,
     mainPaymentMethod,
@@ -98,7 +100,8 @@ export class PosSaleService {
         private readonly graphql: ShopifyGraphqlClient,
     ) { }
 
-    async createSale(orgId: string, userId: string, input: SaleInput): Promise<PosSaleResult> {
+    /** `scope`: the stores a store-limited member works at; a sale anywhere else is refused. */
+    async createSale(orgId: string, userId: string, input: SaleInput, scope: string[] | null = null): Promise<PosSaleResult> {
         // The same bill sent again (a retry after a dropped connection) is the bill already made.
         const saved = await this.findSale(orgId, input.clientSaleId);
         if (saved) return this.result(orgId, saved);
@@ -114,7 +117,7 @@ export class PosSaleService {
         if (settings.customerAtCheckout === 'required' && !phone && !customer?.customerId) {
             throw new BadRequestException("Add the customer's mobile number to bill.");
         }
-        const store = await this.catalog.resolveStore(orgId, input.storeId);
+        const store = await this.catalog.resolveStore(orgId, input.storeId, scope);
         const lines = await this.priceLines(orgId, input);
         const buyer = customer ? await this.findBuyer(orgId, customer, phone) : null;
         const approval = await this.checkApprovals(orgId, userId, settings, lines, input.approvalToken);
@@ -239,7 +242,13 @@ export class PosSaleService {
     }
 
     /** Takes a payment towards a bill's balance. */
-    async collectPayment(orgId: string, userId: string, orderId: string, input: CollectPaymentInput): Promise<PosSaleResult> {
+    async collectPayment(
+        orgId: string,
+        userId: string,
+        orderId: string,
+        input: CollectPaymentInput,
+        scope: string[] | null = null,
+    ): Promise<PosSaleResult> {
         const settings = await this.catalog.settings(orgId);
         const staff = await this.staffFor(orgId, userId, input.staffToken, settings.requireStaffPin);
         let change = 0;
@@ -252,6 +261,7 @@ export class PosSaleService {
                 include: { payments: { select: { amount: true } } },
             });
             if (!order) throw new NotFoundException('That bill was not found.');
+            if (scope) assertInLocationScope(scope, order.dispatchWarehouseId, POS_OUT_OF_SCOPE);
             if (order.cancelledAt) throw new BadRequestException("This bill was cancelled, so it can't take a payment.");
             const payable = round2(Number(order.totalPrice) + (readPosMeta(order.metadata)?.roundOff ?? 0));
             const paidBefore = round2(order.payments.reduce((sum, p) => sum + Number(p.amount), 0));

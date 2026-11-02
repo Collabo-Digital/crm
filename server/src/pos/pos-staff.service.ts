@@ -94,9 +94,13 @@ export class PosStaffService {
         return toStaffView(row);
     }
 
-    /** Unlocks the till for whoever this PIN belongs to, for 12 hours. */
-    async unlock(orgId: string, userId: string, pin: string) {
-        const staff = await this.staffForPin(orgId, userId, pin, 'unlock');
+    /**
+     * Unlocks the till for whoever this PIN belongs to, for 12 hours. The
+     * till's store, when the device says, goes on the counter log so store
+     * reports can tell which counter it was.
+     */
+    async unlock(orgId: string, userId: string, pin: string, storeId?: string) {
+        const staff = await this.staffForPin(orgId, userId, pin, 'unlock', storeId);
         const { token, claims } = signPosToken(this.tokenKey, {
             kind: 'staff',
             org: orgId,
@@ -104,7 +108,7 @@ export class PosStaffService {
             staff: staff.id,
             exp: Date.now() + STAFF_TOKEN_TTL_MS,
         });
-        await this.log(orgId, 'unlock', { posStaffId: staff.id, deviceUserId: userId });
+        await this.log(orgId, 'unlock', { posStaffId: staff.id, deviceUserId: userId, ...(storeId ? { details: { storeId } } : {}) });
         return { staff: toStaffView(staff), staffToken: token, expiresAt: new Date(claims.exp).toISOString() };
     }
 
@@ -182,14 +186,20 @@ export class PosStaffService {
      * would otherwise all pass a count none of them had added to yet. A right
      * PIN then gives its count back.
      */
-    private async staffForPin(orgId: string, userId: string, pin: string, purpose: 'unlock' | 'approval'): Promise<PosStaff> {
+    private async staffForPin(
+        orgId: string,
+        userId: string,
+        pin: string,
+        purpose: 'unlock' | 'approval',
+        storeId?: string,
+    ): Promise<PosStaff> {
         const key = `pos:pin_failures:${orgId}:${userId}`;
         const tries = Number(await this.redis.runScript('posPinFailure', COUNT_LUA, 1, [key], [PIN_FAILURE_WINDOW_S]));
         if (tries > MAX_PIN_FAILURES) throw this.locked();
 
         const matches = await this.matchPin(orgId, pin);
         if (matches.length === 0) {
-            await this.log(orgId, 'pin_failed', { deviceUserId: userId, details: { purpose } });
+            await this.log(orgId, 'pin_failed', { deviceUserId: userId, details: { purpose, ...(storeId ? { storeId } : {}) } });
             throw new UnauthorizedException("That PIN doesn't match anyone here.");
         }
         await this.redis.runScript('posPinGiveBack', GIVE_BACK_LUA, 1, [key], []);
