@@ -1,100 +1,104 @@
-import { Check, Mail, Sparkles } from "lucide-react";
+import { CalendarCheck, Check, Mail, Sparkles } from "lucide-react";
 
-import { cn, formatCurrency } from "~/lib/utils";
-import type { BillingCurrency, BillingPlan, BillingPlansResponse, Money, PricingPlan } from "~/types/api";
+import { cn } from "~/lib/utils";
+import { billingLine, buyable, formatPrice, monthlyPrice, planBullets } from "~/lib/plan-pricing";
+import type { BillingCurrency, BillingInterval, BillingPlan, BillingPlansResponse, PricingPlan } from "~/types/api";
 import { platformOffered } from "~/lib/channel-providers";
 
-/** Rupees as read in India (₹1,00,000), dollars as in the US ($59, not US$59). */
-const LOCALE: Record<BillingCurrency, string> = { INR: "en-IN", USD: "en-US" };
+export { formatCount, formatMinor, formatPrice, PRICING_NOTE } from "~/lib/plan-pricing";
 
-/** Whole amounts without decimals (₹5,000); fees to four places ($0.0024). */
-export function formatPrice(amount: number, currency: BillingCurrency): string {
-  const locale = LOCALE[currency];
-  return Number.isInteger(amount)
-    ? formatCurrency(amount, currency, { maximumFractionDigits: 0, locale })
-    : formatCurrency(amount, currency, { minimumFractionDigits: 2, maximumFractionDigits: 4, locale });
-}
-
-/** An amount in paise or cents. */
-export function formatMinor(amount: number, currency: BillingCurrency): string {
-  return formatCurrency(amount / 100, currency, { locale: LOCALE[currency] });
-}
-
-export function formatCount(n: number, currency: BillingCurrency): string {
-  return n.toLocaleString(LOCALE[currency]);
-}
-
-export const PRICING_NOTE =
-  "Every plan has every feature. A conversation is 24 hours of WhatsApp messages with one customer, starting with the first message either way. Usage over your plan is billed after each month ends. WhatsApp's own message charges are paid to Meta directly, at Meta's rates.";
-
-export function planFeatures(plan: PricingPlan, currency: BillingCurrency): string[] {
-  const n = (v: number) => formatCount(v, currency);
-  const fee = (m: Money) => formatPrice(m[currency], currency);
-  const { conversations, members, callingMinutes } = plan;
-  return [
-    conversations.included === null || !conversations.fee
-      ? "No conversation fee"
-      : `${n(conversations.included)} conversations a month, then ${fee(conversations.fee)} each`,
-    members.included === null || !members.fee
-      ? "Unlimited team members"
-      : `${n(members.included)} team members, then ${fee(members.fee)} a month each`,
-    callingMinutes.fee && callingMinutes.included !== null
-      ? `${n(callingMinutes.included)} WhatsApp calling minutes, then ${fee(callingMinutes.fee)} a minute`
-      : `${n(callingMinutes.included ?? 0)}+ WhatsApp calling minutes`,
-    ...(platformOffered("INSTAGRAM") ? [plan.instagram ? `Instagram: ${fee(plan.instagram)} a month per account` : "Instagram included"] : []),
-    ...(platformOffered("FACEBOOK") ? ["Messenger included"] : []),
-  ];
-}
-
-export function CurrencyToggle({ value, onChange }: { value: BillingCurrency; onChange: (currency: BillingCurrency) => void }) {
+function Toggle<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<{ value: T; label: React.ReactNode }>; onChange: (value: T) => void }) {
   return (
-    <div role="radiogroup" aria-label="Currency" className="inline-flex rounded-lg bg-muted p-0.5 text-xs font-medium">
-      {(["INR", "USD"] as const).map((c) => (
+    <div role="radiogroup" aria-label={label} className="inline-flex rounded-lg bg-muted p-0.5 text-xs font-medium">
+      {options.map((o) => (
         <button
-          key={c}
+          key={o.value}
           type="button"
           role="radio"
-          aria-checked={value === c}
-          onClick={() => onChange(c)}
+          aria-checked={value === o.value}
+          onClick={() => onChange(o.value)}
           className={cn(
             "rounded-md px-3 py-1 transition-colors",
-            value === c ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+            value === o.value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
           )}
         >
-          {c === "INR" ? "₹ Rupees" : "$ Dollars"}
+          {o.label}
         </button>
       ))}
     </div>
   );
 }
 
+export function CurrencyToggle({ value, onChange }: { value: BillingCurrency; onChange: (currency: BillingCurrency) => void }) {
+  return (
+    <Toggle
+      label="Currency"
+      value={value}
+      onChange={onChange}
+      options={[
+        { value: "INR", label: "₹ Rupees" },
+        { value: "USD", label: "$ Dollars" },
+      ]}
+    />
+  );
+}
+
+/** Yearly first: it is the better price. */
+export function IntervalToggle({ value, onChange, discountPercent }: { value: BillingInterval; onChange: (interval: BillingInterval) => void; discountPercent: number }) {
+  return (
+    <Toggle
+      label="Billing"
+      value={value}
+      onChange={onChange}
+      options={[
+        {
+          value: "YEARLY",
+          label: (
+            <>
+              Yearly <span className="ml-1 rounded bg-[#CEF17B] px-1 py-px text-micro font-semibold text-gray-900">{discountPercent}% off</span>
+            </>
+          ),
+        },
+        { value: "MONTHLY", label: "Monthly" },
+      ]}
+    />
+  );
+}
+
 interface PlanCardsProps {
   catalog: BillingPlansResponse;
   currency: BillingCurrency;
-  /** Choose-plan: the plan picked for checkout. */
+  interval: BillingInterval;
+  /** Choose-plan and Settings: the plan picked for checkout. */
   selected?: BillingPlan | null;
   /** Settings: the plan the workspace is on. */
   current?: BillingPlan | null;
-  /** Makes the self-serve plans pickable. */
+  /** Makes the plans bought at checkout pickable. */
   onSelect?: (plan: BillingPlan) => void;
+  className?: string;
 }
 
-export function PlanCards({ catalog, currency, selected, current, onSelect }: PlanCardsProps) {
+export function PlanCards({ catalog, currency, interval, selected, current, onSelect, className }: PlanCardsProps) {
   return (
-    <div role={onSelect ? "radiogroup" : undefined} aria-label={onSelect ? "Plan" : undefined} className="grid grid-cols-1 gap-4 md:grid-cols-3">
+    <div
+      role={onSelect ? "radiogroup" : undefined}
+      aria-label={onSelect ? "Plan" : undefined}
+      className={cn("grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3", className)}
+    >
       {catalog.plans.map((plan) => {
-        const buyable = plan.selfServe && (catalog.checkout[plan.id] ?? []).includes(currency);
+        const canBuy = buyable(catalog, plan, interval, currency);
         return (
           <PlanCard
             key={plan.id}
             plan={plan}
             currency={currency}
+            interval={interval}
             gstPercent={catalog.gstPercent}
             salesEmail={catalog.salesEmail}
             selected={selected === plan.id}
             current={current === plan.id}
-            unavailable={!!onSelect && plan.selfServe && !buyable}
-            onSelect={onSelect && buyable ? () => onSelect(plan.id) : undefined}
+            unavailable={!!onSelect && plan.selfServe && !canBuy}
+            onSelect={onSelect && canBuy ? () => onSelect(plan.id) : undefined}
           />
         );
       })}
@@ -105,6 +109,7 @@ export function PlanCards({ catalog, currency, selected, current, onSelect }: Pl
 interface PlanCardProps {
   plan: PricingPlan;
   currency: BillingCurrency;
+  interval: BillingInterval;
   gstPercent: number;
   salesEmail: string | null;
   selected: boolean;
@@ -113,11 +118,29 @@ interface PlanCardProps {
   onSelect?: () => void;
 }
 
-function PlanCard({ plan, currency, gstPercent, salesEmail, selected, current, unavailable, onSelect }: PlanCardProps) {
+/** Scale is sold after a demo, Enterprise on a contract: both by writing to the Collabo team. */
+function SalesLink({ plan, salesEmail }: { plan: PricingPlan; salesEmail: string | null }) {
+  if (!salesEmail) return <p className="mt-auto text-xs text-muted-foreground">Talk to your Collabo contact to set it up.</p>;
+  const demo = plan.sales === "demo";
+  const Icon = demo ? CalendarCheck : Mail;
+  return (
+    <a
+      href={`mailto:${salesEmail}?subject=${encodeURIComponent(demo ? `Collabo ${plan.name} demo` : `Collabo ${plan.name}`)}`}
+      className="mt-auto inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-input px-3 py-2 text-xs font-medium text-foreground hover:bg-muted"
+    >
+      <Icon className="size-3.5" aria-hidden /> {demo ? "Book a demo" : "Talk to us"}
+    </a>
+  );
+}
+
+function PlanCard({ plan, currency, interval, gstPercent, salesEmail, selected, current, unavailable, onSelect }: PlanCardProps) {
+  const price = monthlyPrice(plan, interval, currency);
+  const billed = billingLine(plan, interval, currency, gstPercent);
+  const bullets = planBullets(plan, currency, { instagram: platformOffered("INSTAGRAM"), messenger: platformOffered("FACEBOOK") });
   const body = (
     <>
       {plan.highlighted && (
-        <span className="absolute -top-2.5 right-5 inline-flex items-center gap-1 rounded-full bg-[#084734] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#CEF17B]">
+        <span className="absolute -top-2.5 right-5 inline-flex items-center gap-1 rounded-full bg-[#084734] px-2.5 py-0.5 text-micro font-semibold uppercase tracking-wide text-[#CEF17B]">
           <Sparkles className="size-3" aria-hidden />
           Popular
         </span>
@@ -128,27 +151,27 @@ function PlanCard({ plan, currency, gstPercent, salesEmail, selected, current, u
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{plan.tagline}</p>
         </div>
         {current && (
-          <span className="shrink-0 rounded-full bg-[#CEF17B]/40 px-2 py-0.5 text-[10px] font-semibold text-[#084734] dark:text-[#CEF17B]">Your plan</span>
+          <span className="shrink-0 rounded-full bg-[#CEF17B]/40 px-2 py-0.5 text-micro font-semibold text-[#084734] dark:text-[#CEF17B]">Your plan</span>
         )}
       </div>
 
-      {plan.price ? (
+      {price !== null ? (
         <div>
           <p className="flex items-baseline gap-1">
-            <span className="text-2xl font-bold text-foreground">{formatPrice(plan.price[currency], currency)}</span>
+            <span className="text-2xl font-bold text-foreground">{formatPrice(price, currency)}</span>
             <span className="text-sm text-muted-foreground">/month</span>
           </p>
-          <p className="text-[11px] text-muted-foreground">{currency === "INR" ? `+ ${gstPercent}% GST` : "Billed in US dollars"}</p>
+          <p className="text-caption text-muted-foreground">{billed}</p>
         </div>
       ) : (
         <div>
           <p className="text-2xl font-bold text-foreground">Custom</p>
-          <p className="text-[11px] text-muted-foreground">Priced for your volume</p>
+          <p className="text-caption text-muted-foreground">Priced for your volume</p>
         </div>
       )}
 
       <ul className="space-y-1.5">
-        {planFeatures(plan, currency).map((feature) => (
+        {bullets.map((feature) => (
           <li key={feature} className="flex items-start gap-2 text-xs text-foreground/80">
             <Check className="mt-0.5 size-3.5 shrink-0 text-[#084734] dark:text-[#CEF17B]" aria-hidden />
             <span>{feature}</span>
@@ -156,19 +179,12 @@ function PlanCard({ plan, currency, gstPercent, salesEmail, selected, current, u
         ))}
       </ul>
 
-      {!plan.selfServe && (
-        salesEmail ? (
-          <a
-            href={`mailto:${salesEmail}?subject=${encodeURIComponent("Collabo Enterprise")}`}
-            className="mt-auto inline-flex items-center justify-center gap-1.5 rounded-lg border border-input px-3 py-2 text-xs font-medium text-foreground hover:bg-muted"
-          >
-            <Mail className="size-3.5" aria-hidden /> Talk to us
-          </a>
-        ) : (
-          <p className="mt-auto text-xs text-muted-foreground">Talk to your Collabo contact to set it up.</p>
-        )
+      {!plan.selfServe && <SalesLink plan={plan} salesEmail={salesEmail} />}
+      {unavailable && (
+        <p className="mt-auto text-xs text-muted-foreground">
+          Not available {interval === "YEARLY" ? "yearly" : "monthly"} in {currency === "INR" ? "rupees" : "dollars"} yet.
+        </p>
       )}
-      {unavailable && <p className="mt-auto text-xs text-muted-foreground">Not available in {currency === "INR" ? "rupees" : "dollars"} yet.</p>}
     </>
   );
 

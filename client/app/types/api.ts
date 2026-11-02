@@ -46,8 +46,8 @@ export interface User {
 /** Metric used to decide a customer's loyalty tier. */
 export type LoyaltyMetric = "ORDERS" | "TOTAL_SPENT";
 
-/** Available pricing plan tiers. Mirrors the Prisma `BillingPlan` enum; ADVANCE is Enterprise. */
-export type BillingPlan = "BASIC" | "GROWTH" | "ADVANCE";
+/** Pricing plans. Mirrors the Prisma `BillingPlan` enum: BASIC is Starter, ADVANCE is Enterprise. */
+export type BillingPlan = "BASIC" | "GROWTH" | "PRO" | "SCALE" | "ADVANCE";
 
 /** The currencies plans are sold in. */
 export type BillingCurrency = "INR" | "USD";
@@ -89,41 +89,74 @@ export interface PlanAllowance {
   fee: Money | null;
 }
 
+/** How a plan is bought: at checkout, after a demo (Scale), or on a contract (Enterprise). */
+export type PlanSales = "checkout" | "demo" | "contract";
+
 /** One plan from GET /billing/plans. */
 export interface PricingPlan {
   id: BillingPlan;
   name: string;
   tagline: string;
-  /** A month, before GST. Null: priced per contract (Enterprise). */
-  price: Money | null;
+  /** A month, before GST, paid monthly, or a month's share when paid yearly. Null: priced per contract (Enterprise). */
+  price: Record<BillingInterval, Money> | null;
   highlighted?: boolean;
   selfServe: boolean;
+  sales: PlanSales;
+  /** Chats: 24 hours of WhatsApp with one customer. */
   conversations: PlanAllowance;
+  /** Full team seats. */
   members: PlanAllowance;
+  /** Each packing or till-only seat beyond the seats included. Null: by contract. */
+  opsSeat: Money | null;
+  storeLocations: PlanAllowance;
+  whatsappNumbers: PlanAllowance;
   callingMinutes: PlanAllowance;
   /** Each connected Instagram account, a month. Null: included. */
   instagram: Money | null;
+  /** What the plan has beyond its volumes. */
+  extras: string[];
 }
 
 /** Response from GET /billing/plans. */
 export interface BillingPlansResponse {
   plans: PricingPlan[];
   gstPercent: number;
-  /** The currencies each self-serve plan can be bought in right now. */
-  checkout: Partial<Record<BillingPlan, BillingCurrency[]>>;
+  yearlyDiscountPercent: number;
+  /** The currencies each self-serve plan can be bought in right now, monthly and yearly. */
+  checkout: Partial<Record<BillingPlan, Partial<Record<BillingInterval, BillingCurrency[]>>>>;
   salesEmail: string | null;
+  /** Trials and the payment step are on (BILLING_ENFORCEMENT). */
+  enforcement: boolean;
+  trialDays: number | null;
+}
+
+/** Where a workspace stands: trialing, active, in grace (payment needed) or expired (read-only). */
+export interface BillingAccess {
+  state: "trialing" | "active" | "grace" | "expired";
+  /** Off, every workspace is active. */
+  enforced: boolean;
+  trialEndsAt: string | null;
+  /** In grace and after: when the workspace turns, or turned, read-only. */
+  readOnlyFrom: string | null;
+  /** Trialing or in grace: days left, a part day counting as a day. */
+  daysLeft: number | null;
 }
 
 /** What an organization used in a month. */
 export interface BillingUsage {
   conversations: number;
   callingMinutes: number;
+  /** Full seats. */
   members: number;
+  /** Agents who only pack, pick, receive, dispatch or use the till. Missing on bills made before they were counted. */
+  opsSeats?: number;
+  storeLocations?: number;
+  whatsappNumbers?: number;
   instagramAccounts: number;
 }
 
 export interface UsageChargeLine {
-  key: "conversations" | "callingMinutes" | "members" | "instagram";
+  key: "conversations" | "callingMinutes" | "members" | "opsSeats" | "storeLocations" | "whatsappNumbers" | "instagram";
   quantity: number;
   /** In the main unit (rupees, dollars). */
   unitPrice: number;
@@ -161,10 +194,17 @@ export interface UsageBill {
 export interface BillingUsageSummary {
   /** This month, "2026-10" (UTC). */
   period: string;
-  usage: BillingUsage;
+  usage: Required<BillingUsage>;
+  /** The plan the workspace is on, a trial's included. */
+  plan: BillingPlan;
+  access: BillingAccess;
   subscription: {
     plan: BillingPlan;
-    status: SubscriptionStatus;
+    interval: BillingInterval | null;
+    /** Set up and invoiced by the Collabo team, with no Razorpay subscription. */
+    manual: boolean;
+    /** Null on a manual plan. */
+    status: SubscriptionStatus | null;
     currency: BillingCurrency;
     currentPeriodEnd: string | null;
   } | null;
@@ -172,6 +212,9 @@ export interface BillingUsageSummary {
   estimate: UsageCharges | null;
   bills: UsageBill[];
 }
+
+/** Payload for POST /billing/subscribe (owners): a plan for a workspace that exists. */
+export type SubscribeRequest = StartOnboardingCheckoutRequest;
 
 /** Response from POST /billing/onboarding-checkout. */
 export interface StartOnboardingCheckoutResponse {
@@ -474,6 +517,8 @@ export interface OrgResponse {
   loyaltyPlatinumMin: number;
   billingPlan: BillingPlan;
   billingInterval: BillingInterval | null;
+  /** Trialing, active, in grace or read-only. On the GET and create answers, not the PATCH one. */
+  billingAccess?: BillingAccess;
   onboardingStatus: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "SKIPPED";
   role: UserRole;
   createdAt: string;

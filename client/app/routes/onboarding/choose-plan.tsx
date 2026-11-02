@@ -7,6 +7,7 @@ import {
   Loader2,
   Rocket,
 } from "lucide-react";
+import type { BillingCurrency, BillingInterval } from "~/types/api";
 import { toast } from "sonner";
 
 import { useAuthStore } from "~/stores/auth.store";
@@ -14,7 +15,8 @@ import { loadScript } from "~/lib/load-script";
 import { billingService } from "~/services/billing.service";
 import { useStartOnboardingCheckoutMutation } from "~/hooks/use-billing-mutations";
 import { useBillingPlans } from "~/hooks/use-billing";
-import { CurrencyToggle, PlanCards, PRICING_NOTE } from "~/components/billing/plan-cards";
+import { CurrencyToggle, IntervalToggle, PlanCards, PRICING_NOTE } from "~/components/billing/plan-cards";
+import { buyable } from "~/lib/plan-pricing";
 import {
   choosePlanSchema,
   type ChoosePlanFormValues,
@@ -29,10 +31,13 @@ export function meta() {
 }
 
 /**
- * Onboarding step 1: pricing plan selection + Razorpay checkout.
+ * Onboarding step 1: pricing plan selection + Razorpay checkout, or a free
+ * trial. Shown only while trials and the payment step are on
+ * (BILLING_ENFORCEMENT; see OnboardingGuard).
  *
  * Flow:
- *   1. User picks a plan + interval.
+ *   1. User picks a plan + interval, or starts the free trial (straight on
+ *      to /onboarding/account-type; the workspace starts on Growth).
  *   2. We call POST /billing/onboarding-checkout — server creates a Razorpay
  *      Subscription and stores it as pending on the User.
  *   3. We open Razorpay Checkout.js modal with the subscription_id.
@@ -75,16 +80,25 @@ export default function ChoosePlanPage() {
     resolver: zodResolver(choosePlanSchema),
     mode: "onChange",
     defaultValues: {
-      // Enterprise is set up with the Collabo team, never bought here.
-      billingPlan: pendingPlan && pendingPlan !== "ADVANCE" ? pendingPlan : undefined,
-      // Plans are billed monthly: usage over a plan is billed each month.
-      billingInterval: pendingBillingInterval ?? "MONTHLY",
+      // Scale and Enterprise are set up with the Collabo team, never bought here.
+      billingPlan: pendingPlan && ["BASIC", "GROWTH", "PRO"].includes(pendingPlan) ? pendingPlan : undefined,
+      // Yearly first: it is the better price.
+      billingInterval: pendingBillingInterval ?? "YEARLY",
       currency: "INR",
     },
   });
 
   const selectedPlan = watch("billingPlan");
   const currency = watch("currency");
+  const interval = watch("billingInterval");
+
+  /** A plan that cannot be bought the new way is unpicked. */
+  function keepBuyable(nextInterval: BillingInterval, nextCurrency: BillingCurrency) {
+    const plan = catalog?.plans.find((p) => p.id === selectedPlan);
+    if (catalog && plan && !buyable(catalog, plan, nextInterval, nextCurrency)) {
+      setValue("billingPlan", undefined as never, { shouldValidate: true });
+    }
+  }
 
   /**
    * Polls /billing/pending-status until status flips to ACTIVE/AUTHENTICATED
@@ -195,13 +209,28 @@ export default function ChoosePlanPage() {
         </div>
         <h1 className="text-2xl font-bold text-gray-900">Choose your plan</h1>
         <p className="mt-1.5 text-sm text-gray-500">
-          Pick a plan and complete payment to continue. Cancel anytime from
-          settings.
+          {catalog?.trialDays
+            ? `Try Collabo free for ${catalog.trialDays} days, no card needed, or pick a plan and pay now.`
+            : "Pick a plan and complete payment to continue."}
         </p>
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-        <div className="flex justify-center">
+        <div className="flex flex-wrap justify-center gap-2">
+          <Controller
+            control={control}
+            name="billingInterval"
+            render={({ field }) => (
+              <IntervalToggle
+                value={field.value}
+                discountPercent={catalog?.yearlyDiscountPercent ?? 20}
+                onChange={(next) => {
+                  field.onChange(next);
+                  keepBuyable(next, currency);
+                }}
+              />
+            )}
+          />
           <Controller
             control={control}
             name="currency"
@@ -210,10 +239,7 @@ export default function ChoosePlanPage() {
                 value={field.value}
                 onChange={(next) => {
                   field.onChange(next);
-                  // A plan that cannot be bought in the new currency is unpicked.
-                  if (selectedPlan && !(catalog?.checkout[selectedPlan] ?? []).includes(next)) {
-                    setValue("billingPlan", undefined as never, { shouldValidate: true });
-                  }
+                  keepBuyable(interval, next);
                 }}
               />
             )}
@@ -228,6 +254,7 @@ export default function ChoosePlanPage() {
               <PlanCards
                 catalog={catalog}
                 currency={currency}
+                interval={interval}
                 selected={field.value}
                 onSelect={field.onChange}
               />
@@ -263,6 +290,17 @@ export default function ChoosePlanPage() {
           <p className="text-center text-xs text-gray-400">
             Select a plan to continue.
           </p>
+        )}
+
+        {catalog?.trialDays && (
+          <button
+            type="button"
+            onClick={() => navigate("/onboarding/account-type")}
+            disabled={isProcessing}
+            className="flex w-full items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-900 transition hover:bg-gray-50 disabled:opacity-60"
+          >
+            Start my {catalog.trialDays}-day free trial
+          </button>
         )}
       </form>
     </div>
