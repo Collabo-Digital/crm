@@ -19,6 +19,9 @@ import {
   StockBucket,
 } from '@prisma/client';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
+import { resolveLineTaxClassification } from '../gst/line-tax-classification.util';
+import { EXPORT_PLACE_OF_SUPPLY } from '../gst/constants/indian-states';
+import { DEFAULT_UQC } from '../gst/constants/uqc';
 import { catalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util';
 import { compositionInterStateError, isCompositionSeller } from '../gst/composition.util';
 import { ensureManualChannel } from '../channel/ensure-manual-channel';
@@ -1632,6 +1635,15 @@ export class OrderService {
                 variantGstRate: this.calculator.toNullableNumber(v.gstRate),
                 productGstRate: this.calculator.toNullableNumber(v.product.gstRate),
                 variantTaxable: v.taxable,
+                // Classified as its invoice classifies it: an exempt, nil-rated,
+                // non-GST or exported line carries no tax whatever its rate.
+                // Only the supply type is read, so the unit is immaterial.
+                supplyType: resolveLineTaxClassification({
+                  variant: v,
+                  product: v.product,
+                  defaultUnitOfMeasure: DEFAULT_UQC,
+                  isExportSupply: placeOfSupplyCode === EXPORT_PLACE_OF_SUPPLY,
+                }).supplyType,
               };
             }),
             tx,
