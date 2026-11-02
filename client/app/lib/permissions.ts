@@ -8,6 +8,7 @@ import type { UserRole } from "~/types/api";
  * not offer actions that would be refused.
  */
 export type PermissionKey =
+  | "products.edit"
   | "inventory.view"
   | "inventory.receive"
   | "inventory.adjust"

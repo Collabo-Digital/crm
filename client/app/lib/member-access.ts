@@ -24,9 +24,9 @@ export interface Capability {
 
 /**
  * What an Agent / Viewer may do inside a section, beyond opening it. The
- * server decides the inbox queue, every campaign action and every stock
- * action on these grants, so without them an Agent's inbox shows only chats
- * already assigned to them.
+ * server decides the inbox queue, every campaign action, every product change
+ * and every stock action on these grants, so without them an Agent's inbox
+ * shows only chats already assigned to them.
  */
 export const CAPABILITIES: Capability[] = [
   { key: "chat.view_unassigned", section: "chat", label: "See new, unassigned chats" },
@@ -35,6 +35,8 @@ export const CAPABILITIES: Capability[] = [
   { key: "campaigns.manage", section: "campaigns", label: "Create and edit broadcasts and segments", agentOnly: true },
   { key: "broadcasts.send", section: "campaigns", label: "Send broadcasts to customers", agentOnly: true },
   { key: "templates.manage", section: "campaigns", label: "Submit message templates to Meta", agentOnly: true },
+  // Not ticked with the section: on its own, Products only looks things up.
+  { key: "products.edit", section: "products", label: "Add and change products and prices", agentOnly: true },
   // Agents only: a viewer's stock page could not load its locations.
   { key: "inventory.view", section: "products", label: "See stock at each location", agentOnly: true },
   { key: "inventory.receive", section: "products", label: "Receive stock", agentOnly: true, needs: "inventory.view" },
