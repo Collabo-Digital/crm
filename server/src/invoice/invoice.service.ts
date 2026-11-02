@@ -73,9 +73,11 @@ import {
 import {
   Gstr1Accumulator,
   Gstr3bAccumulator,
+  inRupees,
   type Gstr1Return,
   type Gstr3bReturn,
   type ReturnInvoice,
+  type UnconvertedDocument,
 } from './gst-return.accumulator';
 import { summarizeDocumentSeries } from './document-series.util';
 import { isWithinInvoicingWindow, resolveSupplyDate } from './invoice-date.util';
@@ -1764,7 +1766,7 @@ export class InvoiceService {
   }
 
   /**
-   * Refunded orders whose invoice has not been credited.
+   * Refunded or cancelled orders whose invoice has not been credited.
    *
    * Returns the ISSUED invoice alongside the refund totals, so the UI can
    * pre-fill a credit note instead of making someone re-key the amount off a
@@ -1777,7 +1779,9 @@ export class InvoiceService {
       where: {
         organizationId: orgId,
         deletedAt: null,
-        refunds: { some: {} },
+        // Cancelling an order leaves its invoice ISSUED, and nothing else
+        // reverses it: a counter sale cancelled in the CRM has no refund row.
+        OR: [{ refunds: { some: {} } }, { cancelledAt: { not: null } }],
         invoices: { some: { status: InvoiceStatus.ISSUED } },
         // Deliberately NOT "has no credit note". An order part-credited once
         // is still under-credited if it is refunded again, and excluding it
@@ -1788,6 +1792,7 @@ export class InvoiceService {
         id: true,
         name: true,
         currency: true,
+        cancelledAt: true,
         refunds: { select: { amount: true, totalTax: true, processedAt: true, reason: true } },
         invoices: {
           // Both statuses in ONE selection — a relation may appear only once —
@@ -1837,16 +1842,24 @@ export class InvoiceService {
         new Prisma.Decimal(0),
       );
 
+      // A cancelled order owes a credit for its whole invoice, refunded or not:
+      // the supply it declares did not happen.
+      const dueAmount = order.cancelledAt
+        ? new Prisma.Decimal(invoice.grandTotal)
+        : refundedAmount;
+      const dueTax = order.cancelledAt
+        ? new Prisma.Decimal(invoice.totalTax)
+        : refundedTax;
+
       // Fully credited — nothing to warn about. Strictly less-than, so an exact
       // match settles the order rather than leaving a zero-value row on screen.
-      if (!creditedAmount.lessThan(refundedAmount)) return [];
+      if (!creditedAmount.lessThan(dueAmount)) return [];
 
       // What a credit note raised NOW should be for. Prefilling the gross
       // refund instead would be refused by createCreditNote as over-crediting
       // the moment any part of it had already been credited.
-      const pendingAmount = refundedAmount.minus(creditedAmount);
-      const pendingTax =
-        refundedTax === null ? null : refundedTax.minus(creditedTax);
+      const pendingAmount = dueAmount.minus(creditedAmount);
+      const pendingTax = dueTax === null ? null : dueTax.minus(creditedTax);
 
       return [
         {
@@ -1868,7 +1881,9 @@ export class InvoiceService {
               .map((r) => r.processedAt)
               .filter((d): d is Date => !!d)
               .sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
-          reason: order.refunds.find((r) => r.reason)?.reason ?? null,
+          reason: order.cancelledAt
+            ? 'Order cancelled'
+            : (order.refunds.find((r) => r.reason)?.reason ?? null),
         },
       ];
     });
@@ -2079,6 +2094,30 @@ export class InvoiceService {
     const scale = (value: Prisma.Decimal.Value) =>
       isFull ? dec(value) : money(dec(value).times(ratio));
 
+    // The note that credits the last of the goods takes what each line has
+    // left, not its share. Every note rounds its share half-up, so shares alone
+    // can reverse more of a tax head than the invoice charged (9.01 of 9.00).
+    const finishesGoods =
+      !credited.isZero() && goodsPart.greaterThan(0) && goodsPart.equals(goodsRemaining);
+    const creditedLines = finishesGoods
+      ? await tx.invoiceLineItem.findMany({
+          where: {
+            invoice: {
+              organizationId: orgId,
+              creditNoteForId: invoiceId,
+              status: InvoiceStatus.CREDIT_NOTE,
+            },
+          },
+          select: {
+            orderLineItemId: true,
+            taxableValue: true,
+            cgstAmount: true,
+            sgstAmount: true,
+            igstAmount: true,
+          },
+        })
+      : [];
+
     const financialYear = this.calculator.getFinancialYear(noteDate, timeZone);
     const noteNumber = await this.invoiceNumber.getNextCreditNoteNumber(
       orgId,
@@ -2087,10 +2126,16 @@ export class InvoiceService {
     );
 
     const lines = original.lineItems.map((li) => {
-      const taxableValue = scale(li.taxableValue);
-      const cgstAmount = scale(li.cgstAmount);
-      const sgstAmount = scale(li.sgstAmount);
-      const igstAmount = scale(li.igstAmount);
+      // A note's lines carry their invoice line's orderLineItemId.
+      const earlier = creditedLines.filter((c) => c.orderLineItemId === li.orderLineItemId);
+      const part = (field: 'taxableValue' | 'cgstAmount' | 'sgstAmount' | 'igstAmount') =>
+        finishesGoods
+          ? earlier.reduce((left, c) => left.minus(c[field]), dec(li[field]))
+          : scale(li[field]);
+      const taxableValue = part('taxableValue');
+      const cgstAmount = part('cgstAmount');
+      const sgstAmount = part('sgstAmount');
+      const igstAmount = part('igstAmount');
       const totalTax = cgstAmount.plus(sgstAmount).plus(igstAmount);
       return {
         orderLineItemId: li.orderLineItemId,
@@ -2267,11 +2312,12 @@ export class InvoiceService {
           b2cLargeThreshold: taxSettings.b2cLargeThreshold,
         });
 
-    await this.foldReturnInvoices(where, (invoice) =>
+    const unconverted = await this.foldReturnInvoices(where, (invoice) =>
       accumulator.addInvoice(invoice),
     );
 
     const result = accumulator.finish();
+    if (unconverted.length > 0) result.unconverted = unconverted;
 
     // GSTR-1 Table 13 — documents issued. Read separately from the fold and
     // AFTER it, for two reasons: it must include CANCELLED invoices (which the
@@ -2338,11 +2384,23 @@ export class InvoiceService {
     financialYear: string,
     period: string,
   ): Promise<Gstr3bReturn['reverseCharge']> {
+    // Fees are entered for a month ("04") or a quarter ("Q1"); a quarterly
+    // return owes the tax on its three months' entries as well.
+    const quarter = /^Q([1-4])$/i.exec(period);
     const rows = await this.prisma.inwardSupply.findMany({
       where: {
         organizationId: orgId,
         financialYear,
-        period,
+        period: quarter
+          ? {
+              in: [
+                period,
+                ...[0, 1, 2].map((i) =>
+                  String((((Number(quarter[1]) - 1) * 3 + i + 3) % 12) + 1).padStart(2, '0'),
+                ),
+              ],
+            }
+          : period,
         isReverseCharge: true,
       },
       select: { feeAmount: true, gstAmount: true },
@@ -2384,11 +2442,16 @@ export class InvoiceService {
    * Each page is folded and then dropped. Collecting pages into one array first
    * would keep exactly the memory footprint this exists to bound, since the
    * expensive part is `include: { lineItems: true }`.
+   *
+   * A return is filed in rupees, so a document in another currency reaches
+   * `fold` already converted at its order's rate, and one whose order has no
+   * rate into rupees is not folded at all. Those are returned, for the return
+   * to list.
    */
   private async foldReturnInvoices(
     where: Prisma.InvoiceWhereInput,
     fold: (invoice: ReturnInvoice) => void,
-  ): Promise<number> {
+  ): Promise<UnconvertedDocument[]> {
     const total = await this.prisma.invoice.count({ where });
 
     if (total > GST_RETURN_INVOICE_CAP) {
@@ -2401,6 +2464,7 @@ export class InvoiceService {
     }
 
     let cursor: string | undefined;
+    const unconverted: UnconvertedDocument[] = [];
 
     for (;;) {
       const page = await this.prisma.invoice.findMany({
@@ -2410,6 +2474,8 @@ export class InvoiceService {
           // Table 9B reports the number of the invoice being reversed; its
           // value decides whether a B2C note is CDNUR or nets out of B2CS.
           creditNoteFor: { select: { invoiceNumber: true, grandTotal: true } },
+          // The rate lives on the order; a credit note shares its invoice's.
+          order: { select: { exchangeRate: true, baseCurrency: true } },
         },
         orderBy: { id: 'asc' },
         take: GST_RETURN_PAGE_SIZE,
@@ -2417,18 +2483,41 @@ export class InvoiceService {
       });
 
       for (const invoice of page) {
-        fold({
+        const document = {
           ...invoice,
           creditNoteForNumber: invoice.creditNoteFor?.invoiceNumber ?? null,
           creditNoteForGrandTotal: invoice.creditNoteFor?.grandTotal ?? null,
-        } as unknown as ReturnInvoice);
+        } as unknown as ReturnInvoice;
+
+        if (!invoice.currency || invoice.currency.toUpperCase() === 'INR') {
+          fold(document);
+          continue;
+        }
+
+        // `exchangeRate` converts into `baseCurrency`, the org's currency when
+        // it was captured, so only a rate into INR can restate this in rupees.
+        // A null rate is unknown, never 1.
+        const rate =
+          invoice.order.baseCurrency?.toUpperCase() === 'INR'
+            ? invoice.order.exchangeRate
+            : null;
+        if (rate == null) {
+          unconverted.push({
+            invoiceNumber: invoice.invoiceNumber,
+            status: invoice.status,
+            currency: invoice.currency,
+            grandTotal: Number(invoice.grandTotal),
+          });
+          continue;
+        }
+        fold(inRupees(document, rate));
       }
 
       if (page.length < GST_RETURN_PAGE_SIZE) break;
       cursor = page[page.length - 1].id;
     }
 
-    return total;
+    return unconverted;
   }
 
   /**
@@ -2591,20 +2680,30 @@ export class InvoiceService {
       // states a number the list beneath it contradicts.
       //
       // Credit notes store POSITIVE amounts, as on the paper document, so this
-      // is a straight greater-than.
+      // is a straight greater-than. A cancelled order owes its whole invoice,
+      // refunded or not, as in the list; at most one invoice per order is
+      // ISSUED, so the SUM is that invoice's total.
       this.prisma.$queryRaw<Array<{ count: bigint }>>`
         SELECT COUNT(*) AS count
         FROM orders o
         WHERE o.organization_id = ${orgId}
           AND o.deleted_at IS NULL
-          AND EXISTS (SELECT 1 FROM order_refunds r WHERE r.order_id = o.id)
+          AND (
+            o.cancelled_at IS NOT NULL
+            OR EXISTS (SELECT 1 FROM order_refunds r WHERE r.order_id = o.id)
+          )
           AND EXISTS (
             SELECT 1 FROM invoices i
             WHERE i.order_id = o.id AND i.status = 'ISSUED'
           )
-          AND COALESCE(
-                (SELECT SUM(r.amount) FROM order_refunds r WHERE r.order_id = o.id), 0
-              ) > COALESCE(
+          AND CASE
+                WHEN o.cancelled_at IS NOT NULL THEN
+                  (SELECT SUM(i.grand_total) FROM invoices i
+                   WHERE i.order_id = o.id AND i.status = 'ISSUED')
+                ELSE COALESCE(
+                  (SELECT SUM(r.amount) FROM order_refunds r WHERE r.order_id = o.id), 0
+                )
+              END > COALESCE(
                 (SELECT SUM(i.grand_total) FROM invoices i
                  WHERE i.order_id = o.id AND i.status = 'CREDIT_NOTE'), 0
               )

@@ -446,8 +446,9 @@ export class MessageIngestService {
         const advance = statusAdvances(message.status, update.status);
         if (!advance && !update.pricing) return false;
 
-        await this.prisma.message.update({
-            where: { id: message.id },
+        // Webhooks for one message are handled side by side: the status moves only from one it advances from.
+        const { count } = await this.prisma.message.updateMany({
+            where: { id: message.id, ...(advance ? { status: { in: Object.values(MessageStatus).filter((s) => statusAdvances(s, update.status)) } } : {}) },
             data: {
                 ...(advance ? { status: update.status } : {}),
                 ...(update.status === MessageStatus.SENT && !message.sentAt ? { sentAt: update.at } : {}),
@@ -466,6 +467,8 @@ export class MessageIngestService {
                 ...(update.pricing ? { pricing: update.pricing as Prisma.InputJsonValue } : {}),
             },
         });
+        // Another webhook moved the status first: this one is decided again against where it is now.
+        if (advance && !count) return this.applyStatus(channel, externalId, update);
         if (advance && message.contactId) {
             const field =
                 update.status === MessageStatus.DELIVERED
@@ -729,7 +732,8 @@ export class MessageIngestService {
                 ...(customerId && !existing.customerId ? { customerId } : {}),
                 ...(isNewest ? { lastMessageAt: opts.at, lastMessagePreview: opts.preview } : {}),
                 ...(opts.inbound && opts.live ? { unreadCount: { increment: 1 } } : {}),
-                ...(opts.opensWindow ? { lastInboundAt: opts.at } : {}),
+                // An older message delivered late must not close the window early.
+                ...(opts.opensWindow && (!existing.lastInboundAt || opts.at > existing.lastInboundAt) ? { lastInboundAt: opts.at } : {}),
                 ...(opts.inbound && opts.live && !existing.awaitingReplySince ? { awaitingReplySince: opts.at } : {}),
                 ...(!opts.inbound && opts.live ? { lastOutboundAt: opts.at } : {}),
                 ...(opts.businessReply

@@ -17,6 +17,7 @@ import {
   ORDER_CREATE_MUTATION,
   PRODUCT_SET_MUTATION,
 } from './shopify-graphql.types';
+import { isPackableLine } from '../packing/packing-rules';
 
 /**
  * `pushOrder` is the only code that turns a CRM counter sale into a real
@@ -49,6 +50,7 @@ function offlineOrder(overrides: Record<string, unknown> = {}) {
     currency: 'INR',
     note: null,
     totalPrice: decimal('1769.90'),
+    financialStatus: 'PAID',
     metadata: { source: 'offline', paymentMethod: 'CARD' },
     externalId: 'manual_abc',
     channel: { platform: ChannelPlatform.MANUAL },
@@ -216,11 +218,11 @@ describe('ShopifyPushService.pushOrder', () => {
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(prisma.orderLineItem.update).toHaveBeenCalledWith({
       where: { id: 'li_1' },
-      data: { externalId: '15162543800372' },
+      data: { externalId: '15162543800372', requiresShipping: true },
     });
     expect(prisma.orderLineItem.update).toHaveBeenCalledWith({
       where: { id: 'li_2' },
-      data: { externalId: '15162543833140' },
+      data: { externalId: '15162543833140', requiresShipping: true },
     });
 
     expect(lastSyncPatch(prisma)).toMatchObject({
@@ -229,6 +231,23 @@ describe('ShopifyPushService.pushOrder', () => {
       shopifyOrderName: '#1008',
       attempts: 1,
     });
+  });
+
+  // Packing counts a line whose id starts `manual_` whatever requiresShipping
+  // says, because the CRM writes false on every line it creates. Adopting
+  // Shopify's ids takes that prefix away.
+  it('keeps the adopted lines packable', async () => {
+    const { service, prisma } = build(offlineOrder({ fulfillmentStatus: 'UNFULFILLED' }));
+
+    await service.pushOrder(ORDER_ID, ORG);
+
+    const writes = prisma.orderLineItem.update.mock.calls as Array<
+      [{ data: { externalId: string; requiresShipping?: boolean } }]
+    >;
+    expect(writes).toHaveLength(2);
+    for (const [{ data }] of writes) {
+      expect(isPackableLine({ quantity: 1, fulfilledQuantity: 0, requiresShipping: false, ...data })).toBe(true);
+    }
   });
 
   it('associates a customer that came from Shopify by GID', async () => {
@@ -384,6 +403,29 @@ describe('ShopifyPushService.pushOrder', () => {
     expect(graphql.request).not.toHaveBeenCalled();
     expect(lastSyncPatch(prisma)).toMatchObject({ status: 'FAILED', attempts: 0 });
     expect(lastSyncPatch(prisma).error).toMatch(reason);
+  });
+
+  // A SALE for the total is what makes Shopify call the order paid: its echo
+  // books the payment here, and a courier reading Shopify stops collecting the
+  // cash on delivery.
+  it.each(['PENDING', 'AUTHORIZED', 'PARTIALLY_PAID'])('sends no payment for an order still %s', async (financialStatus) => {
+    const { service, graphql } = build(offlineOrder({ financialStatus }));
+
+    await service.pushOrder(ORDER_ID, ORG);
+
+    const createCall = graphql.request.mock.calls.find((c) => c[1] === ORDER_CREATE_MUTATION);
+    expect(createCall?.[2]).toMatchObject({ order: { transactions: [] } });
+  });
+
+  it('sends the full SALE for a paid order refunded in part, as the money was taken', async () => {
+    const { service, graphql } = build(offlineOrder({ financialStatus: 'PARTIALLY_REFUNDED' }));
+
+    await service.pushOrder(ORDER_ID, ORG);
+
+    const createCall = graphql.request.mock.calls.find((c) => c[1] === ORDER_CREATE_MUTATION);
+    expect(createCall?.[2]).toMatchObject({
+      order: { transactions: [{ kind: 'SALE', status: 'SUCCESS', amountSet: { shopMoney: { amount: '1769.9' } } }] },
+    });
   });
 });
 

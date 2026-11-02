@@ -141,11 +141,16 @@ export class InventoryLedgerService {
     if (variants.length === 0) return;
     if (!(await this.isWarehousingEnabled(orgId))) return;
 
-    // Matches `runEnableSeed`: an untracked variant deliberately has no stock
-    // row, because its quantity is not managed. `trackQuantity` is optional
-    // here so callers that did not select it are not silently skipped —
-    // undefined means "not told", which the schema default treats as tracked.
-    const tracked = variants.filter((v) => v.trackQuantity !== false);
+    // Matches `runEnableSeed` and the sale path: a variant is tracked by its
+    // own switch, or by trackQuantityGlobally. An untracked variant
+    // deliberately has no stock row, because its quantity is not managed.
+    // `trackQuantity` is optional here so callers that did not select it are
+    // not silently skipped — undefined means "not told", which the schema
+    // default treats as tracked.
+    const trackGlobally =
+      variants.some((v) => v.trackQuantity === false) &&
+      (await this.settings.getProductSettings(orgId)).trackQuantityGlobally === true;
+    const tracked = variants.filter((v) => trackGlobally || v.trackQuantity !== false);
     if (tracked.length === 0) return;
 
     const warehouse = await db.warehouse.findFirst({
@@ -157,8 +162,19 @@ export class InventoryLedgerService {
     // flow that creates it.
     if (!warehouse) return;
 
+    // A variant stocked at any location already has its rows, and its cached
+    // quantity is the SUM over them: a default-location row seeded at that
+    // figure as well would count the same units twice.
+    const rows = await db.stockLevel.findMany({
+      where: { variantId: { in: tracked.map((v) => v.id) } },
+      select: { variantId: true },
+    });
+    const stocked = new Set(rows.map((row) => row.variantId));
+    const unstocked = tracked.filter((v) => !stocked.has(v.id));
+    if (unstocked.length === 0) return;
+
     await db.stockLevel.createMany({
-      data: tracked.map((v) => ({
+      data: unstocked.map((v) => ({
         organizationId: orgId,
         variantId: v.id,
         warehouseId: warehouse.id,
@@ -470,6 +486,16 @@ export class InventoryLedgerService {
     }
 
     const run = async (db: Prisma.TransactionClient) => {
+      if (movesStock) {
+        // applyMovement writes to whatever warehouse id it is given, so this
+        // one must be an active location of this org, as for every other
+        // stock write.
+        const warehouse = await db.warehouse.findFirst({
+          where: { id: args.warehouseId, organizationId: args.orgId, isActive: true },
+          select: { id: true },
+        });
+        if (!warehouse) throw new NotFoundException('Location not found');
+      }
       const before = await db.productVariant.findUnique({
         where: { id: args.variantId },
         select: { inventoryQuantity: true, sku: true },

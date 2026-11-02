@@ -1,5 +1,7 @@
 import { GstCalculatorService } from '../gst/gst-calculator.service';
+import { TaxResolverService } from '../gst/tax-resolver.service';
 import { OrderService } from './order.service';
+import type { CreateOfflineOrderDto } from './dto/create-offline-order.dto';
 
 /**
  * A draft priced with GST included (a WhatsApp cart from a tax-inclusive
@@ -11,12 +13,23 @@ import { OrderService } from './order.service';
  * (null: not made); `storeTaxesIncluded` is what its latest Shopify order
  * says (undefined: none synced).
  */
-function build(opts: { pricesIncludeTax?: boolean | null; storeTaxesIncluded?: boolean; composition?: boolean } = {}) {
+function build(
+  opts: {
+    pricesIncludeTax?: boolean | null;
+    storeTaxesIncluded?: boolean;
+    composition?: boolean;
+    /** Merged into the sold product. */
+    product?: Record<string, unknown>;
+    /** Price with the real rate chain, over an 18% rate for the state. */
+    realRates?: boolean;
+  } = {},
+) {
   const tx: any = {
     channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch_manual' }) },
     customer: {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'cust_1', billingStateCode: null, gstin: null }),
+      update: jest.fn(() => Promise.resolve(undefined)),
     },
     productVariant: {
       findMany: jest.fn().mockResolvedValue([
@@ -30,11 +43,22 @@ function build(opts: { pricesIncludeTax?: boolean | null; storeTaxesIncluded?: b
           trackQuantity: false,
           continueSellingWhenOutOfStock: true,
           inventoryQuantity: 50,
-          product: { id: 'prod_1', title: 'Shirt', vendor: null, vendorKey: null, gstRate: 18, channel: { currency: 'INR' } },
+          product: {
+            id: 'prod_1',
+            title: 'Shirt',
+            vendor: null,
+            vendorKey: null,
+            gstRate: 18,
+            channel: { currency: 'INR' },
+            ...opts.product,
+          },
         },
       ]),
       update: jest.fn().mockResolvedValue({ inventoryQuantity: 49 }),
     },
+    productCollection: { findMany: jest.fn(() => Promise.resolve([])) },
+    product: { findMany: jest.fn(() => Promise.resolve([{ id: 'prod_1', productType: null }])) },
+    stateTaxRate: { findFirst: jest.fn(() => Promise.resolve({ gstRate: 18 })) },
     organization: { findUnique: jest.fn().mockResolvedValue({ gstEnabled: true, currency: 'INR' }) },
     organizationGstin: { findFirst: jest.fn().mockResolvedValue({ stateCode: '29' }) },
     organizationSettings: {
@@ -69,10 +93,14 @@ function build(opts: { pricesIncludeTax?: boolean | null; storeTaxesIncluded?: b
         ),
     },
   };
+  // No rate can be had, should one be asked for.
+  const fx = { getRate: jest.fn(() => Promise.resolve(null)) };
   const service = new OrderService(
     prisma,
     new GstCalculatorService(),
-    { resolveLineGstRates: jest.fn().mockResolvedValue([18]) } as any,
+    opts.realRates
+      ? new TaxResolverService({} as never)
+      : ({ resolveLineGstRates: jest.fn().mockResolvedValue([18]) } as any),
     { createForOrderTx: jest.fn().mockResolvedValue({ id: 'inv_1' }) } as any,
     { enqueueOrderPush: jest.fn().mockResolvedValue(true) } as any,
     { findShopifyChannel: jest.fn().mockResolvedValue(null), recordFailure: jest.fn() } as any,
@@ -84,12 +112,12 @@ function build(opts: { pricesIncludeTax?: boolean | null; storeTaxesIncluded?: b
     } as any,
     { recomputeForCustomer: jest.fn().mockResolvedValue(undefined) } as any,
     { isWarehousingEnabled: jest.fn().mockResolvedValue(false), applyMovement: jest.fn() } as any,
-    { getRate: jest.fn() } as any,
+    fx as never,
     { add: jest.fn() } as any,
     { order: jest.fn(), invoiceIssued: jest.fn() } as any,
   );
   jest.spyOn(service as any, 'markPendingSync').mockResolvedValue(undefined);
-  return { service, tx, prisma };
+  return { service, tx, prisma, fx };
 }
 
 const dto = (over: Record<string, unknown> = {}) =>
@@ -240,5 +268,89 @@ describe('createOfflineOrder under the composition scheme', () => {
 
     const [[{ data }]] = createOrder.mock.calls as [[{ data: object }]];
     expect(data).toMatchObject({ placeOfSupplyCode: '32', gstType: 'IGST' });
+  });
+});
+
+/**
+ * Exempt, nil-rated, non-GST and exported goods carry no GST by what they are
+ * or where they go, whatever rate the chain would give them. The sale must
+ * charge what its invoice declares.
+ */
+describe('createOfflineOrder on goods that attract no GST', () => {
+  const sale = (product: Record<string, unknown>) => {
+    const built = build({ realRates: true, product });
+    return { service: built.service, createOrder: (built.tx as { order: { create: jest.Mock } }).order.create };
+  };
+  const line = { productVariantId: 'var_1', quantity: 1, unitPriceOverride: 1000 };
+
+  it('charges no GST on an exempt product the state rate would tax', async () => {
+    const { service, createOrder } = sale({ gstRate: null, supplyType: 'EXEMPT' });
+
+    await service.createOfflineOrder('org_1', 'user_1', dto({ lineItems: [line] }) as CreateOfflineOrderDto);
+
+    const [[{ data }]] = createOrder.mock.calls as [[{ data: object }]];
+    expect(data).toMatchObject({
+      totalTax: 0,
+      totalPrice: 1000,
+      lineItems: { create: [{ channelTaxAmount: 0, channelTaxLines: [] }] },
+    });
+  });
+
+  it('charges no GST on a sale shipped abroad', async () => {
+    const { service, createOrder } = sale({ gstRate: 18 });
+
+    await service.createOfflineOrder(
+      'org_1',
+      'user_1',
+      dto({ lineItems: [line], shippingAddress: { city: 'Austin', country_code: 'US' } }) as CreateOfflineOrderDto,
+    );
+
+    const [[{ data }]] = createOrder.mock.calls as [[{ data: object }]];
+    expect(data).toMatchObject({ placeOfSupplyCode: '96', totalTax: 0, totalPrice: 1000 });
+  });
+
+  it('still charges the state rate on taxable goods with no rate of their own', async () => {
+    const { service, createOrder } = sale({ gstRate: null, supplyType: 'TAXABLE' });
+
+    await service.createOfflineOrder('org_1', 'user_1', dto({ lineItems: [line] }) as CreateOfflineOrderDto);
+
+    const [[{ data }]] = createOrder.mock.calls as [[{ data: object }]];
+    expect(data).toMatchObject({ totalTax: 180, totalPrice: 1180 });
+  });
+});
+
+/**
+ * A typed price is already in the order's currency, so it needs no exchange
+ * rate: it is how the till sells a product priced in another currency when no
+ * rate can be had ("Type the price to sell it").
+ */
+describe('createOfflineOrder when no exchange rate can be had', () => {
+  const usdProduct = { channel: { currency: 'USD' } };
+
+  it('sells at a typed price', async () => {
+    const built = build({ product: usdProduct });
+    const { service, fx } = built;
+
+    await service.createOfflineOrder(
+      'org_1',
+      'user_1',
+      dto({ lineItems: [{ productVariantId: 'var_1', quantity: 1, unitPriceOverride: 1000 }] }) as CreateOfflineOrderDto,
+    );
+
+    expect(fx.getRate).not.toHaveBeenCalled();
+    const [[{ data }]] = (built.tx as { order: { create: jest.Mock } }).order.create.mock.calls as [[{ data: object }]];
+    expect(data).toMatchObject({ lineItems: { create: [{ price: 1000 }] } });
+  });
+
+  it('still refuses a catalogue price it cannot convert', async () => {
+    const { service } = build({ product: usdProduct });
+
+    await expect(
+      service.createOfflineOrder(
+        'org_1',
+        'user_1',
+        dto({ lineItems: [{ productVariantId: 'var_1', quantity: 1 }] }) as CreateOfflineOrderDto,
+      ),
+    ).rejects.toThrow('Cannot price this sale: no USD→INR exchange rate is available');
   });
 });

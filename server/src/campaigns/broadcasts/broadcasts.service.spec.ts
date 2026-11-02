@@ -1,12 +1,13 @@
 import { BadRequestException } from '@nestjs/common';
 import { BroadcastRecipientStatus as R, BroadcastStatus, MessageStatus } from '@prisma/client';
+import { UNCONFIRMED_SEND } from '../../messaging/send/platform-sender.service';
 import { assertOwnHeaderFile, parseVariables } from './broadcast-variables';
 import { BroadcastsService } from './broadcasts.service';
 import { NOT_SENT_READ_ONLY } from '../../billing/billing-access';
 
 const approved = { id: 'tpl_1', name: 'diwali', language: 'en', category: 'MARKETING', status: 'APPROVED', wabaId: 'waba_1', parameterFormat: 'POSITIONAL', components: [{ type: 'BODY', text: 'Hi' }] };
 
-function setup(over: { broadcast?: Record<string, unknown>; template?: Record<string, unknown> | null; readOnly?: boolean } = {}) {
+function setup(over: { broadcast?: Record<string, unknown>; template?: Record<string, unknown> | null; readOnly?: boolean; sender?: object } = {}) {
     const broadcast = { id: 'b_1', organizationId: 'org_1', channelId: 'ch_1', name: 'Diwali', campaign: null, status: BroadcastStatus.SENDING, templateId: 'tpl_1', variables: null, audience: null, startedAt: new Date(), ...over.broadcast };
     const template = over.template === undefined ? approved : over.template;
     const recipientUpdates: any[] = [];
@@ -28,6 +29,7 @@ function setup(over: { broadcast?: Record<string, unknown>; template?: Record<st
             }),
             count: jest.fn(async () => 0),
             groupBy: jest.fn(async () => []),
+            findUnique: jest.fn(() => Promise.resolve<{ messageId: string | null } | null>(null)),
         },
         message: {
             updateMany: jest.fn(async (args: any) => {
@@ -36,12 +38,14 @@ function setup(over: { broadcast?: Record<string, unknown>; template?: Record<st
             }),
             // m_2 was picked up by the sender before the stop.
             findMany: jest.fn(async () => [{ id: 'm_1' }]),
+            findUnique: jest.fn(() => Promise.resolve<{ id: string } | null>(null)),
         },
+        channel: { findUnique: jest.fn(() => Promise.resolve({ credentials: {} })) },
     };
     const queue = { add: jest.fn(async (...args: unknown[]) => queued.push(args)), remove: jest.fn(), addBulk: jest.fn() };
     const templates = { view: (t: unknown) => t, load: jest.fn(), channelFor: jest.fn() };
     const billingAccess = { isReadOnly: jest.fn(() => Promise.resolve(over.readOnly ?? false)) };
-    const service = new BroadcastsService(prisma as any, templates as any, {} as any, {} as any, {} as any, queue as any, billingAccess as any);
+    const service = new BroadcastsService(prisma as any, templates as any, {} as any, (over.sender ?? {}) as never, {} as any, queue as any, billingAccess as any);
     return { service, prisma, broadcast, recipientUpdates, messageUpdates, queued };
 }
 
@@ -103,6 +107,16 @@ describe('broadcasts', () => {
         await expect(service.retryFailed('org_1', 'b_1')).resolves.toEqual({ retrying: 1, notRetryable: 1 });
     });
 
+    it('retry leaves out a message whose hand-over to WhatsApp was never confirmed: it may have arrived', async () => {
+        const { service, prisma, recipientUpdates } = setup({ broadcast: { status: BroadcastStatus.COMPLETED } });
+        prisma.broadcastRecipient.findMany.mockResolvedValueOnce([
+            { id: 'r_unconfirmed', errorCode: null, errorMessage: UNCONFIRMED_SEND },
+            { id: 'r_paused', errorCode: null, errorMessage: 'Not sent: the template is paused.' },
+        ] as never);
+        await expect(service.retryFailed('org_1', 'b_1')).resolves.toEqual({ retrying: 1, notRetryable: 1 });
+        expect(recipientUpdates[0]).toMatchObject({ where: { id: { in: ['r_paused'] } }, data: { status: R.PENDING } });
+    });
+
     describe('finishing', () => {
         it('completes once nobody is pending or queued', async () => {
             const { service, prisma, broadcast, queued } = setup();
@@ -159,6 +173,91 @@ describe('who a broadcast leaves out', () => {
         // A message that failed after Meta accepted it still has sentAt; status says whether it arrived.
         expect(received.where).toMatchObject({ contactId: { in: ['911', '912', '913'] }, broadcastId: { in: ['b_0'] }, status: { in: [R.SENT, R.DELIVERED, R.READ] } });
         expect(received.where.sentAt).toBeUndefined();
+    });
+});
+
+const member = (id: string) => ({ id, externalId: id, waId: id, phone: `+${id}`, displayName: null, addressBookName: null, username: null, attributes: null, blockedAt: null, optedOutAt: null, optInAt: null, customer: null });
+
+describe('starting a broadcast', () => {
+    /** An audience of `size` people, and a recipients table whose writes fail from the `failFrom`th chunk on. */
+    function starting(size: number) {
+        const audience = Array.from({ length: size }, (_, i) => member(`9198${String(i).padStart(8, '0')}`));
+        const rows = new Map<string, { id: string; status: R }>();
+        const state = { failFrom: Infinity, chunks: 0 };
+        const prisma = {
+            broadcast: {
+                findUnique: jest.fn(() => Promise.resolve({ id: 'b_1', organizationId: 'org_1', channelId: 'ch_1', status: BroadcastStatus.SCHEDULED, templateId: 'tpl_1', variables: null, audience: { everyone: true }, startedAt: null })),
+                update: jest.fn(() => Promise.resolve({})),
+            },
+            messageTemplate: { findUnique: jest.fn(() => Promise.resolve(approved)) },
+            channelContact: { findMany: jest.fn(() => Promise.resolve(audience)) },
+            broadcastRecipient: {
+                count: jest.fn(() => Promise.resolve(rows.size)),
+                createMany: jest.fn(({ data }: { data: Array<{ contactId: string; status: R }> }) => {
+                    if (state.chunks++ >= state.failFrom) return Promise.reject(new Error('Connection terminated'));
+                    for (const d of data) if (!rows.has(d.contactId)) rows.set(d.contactId, { id: `r_${d.contactId}`, status: d.status });
+                    return Promise.resolve({ count: data.length });
+                }),
+                findMany: jest.fn(({ where }: { where: { status: R } }) => Promise.resolve([...rows.values()].filter((r) => r.status === where.status).map((r) => ({ id: r.id })))),
+            },
+            channel: { findUnique: jest.fn(() => Promise.resolve({ credentials: {} })) },
+        };
+        const queue = { add: jest.fn(() => Promise.resolve({})), addBulk: jest.fn((jobs: Array<{ data: { recipientIds: string[] } }>) => Promise.resolve(jobs)) };
+        const billingAccess = { isReadOnly: () => Promise.resolve(false) };
+        const service = new BroadcastsService(prisma as never, {} as never, {} as never, {} as never, {} as never, queue as never, billingAccess as never);
+        const queuedIds = () => queue.addBulk.mock.calls.flatMap(([jobs]) => jobs.flatMap((j) => j.data.recipientIds));
+        return { service, rows, state, queuedIds };
+    }
+
+    it('a start run again after writing part of the audience writes the rest and queues each person once', async () => {
+        const h = starting(1500);
+        h.state.failFrom = 1;
+        await expect(h.service.start('b_1')).rejects.toThrow('Connection terminated');
+        expect(h.rows.size).toBe(1000);
+        expect(h.queuedIds()).toEqual([]);
+
+        // BullMQ runs the job again.
+        h.state.failFrom = Infinity;
+        await h.service.start('b_1');
+        expect(h.rows.size).toBe(1500);
+        expect(h.queuedIds()).toHaveLength(1500);
+        expect(new Set(h.queuedIds()).size).toBe(1500);
+    });
+});
+
+describe('handing a batch to the send pipeline', () => {
+    const pending = { id: 'r_1', contactId: 'c_1', attempts: 0, status: R.PENDING, contact: member('919800000001') };
+    const sending = (send: () => Promise<unknown>) => {
+        const h = setup({ sender: { conversationFor: jest.fn(() => Promise.resolve('cv_1')), send: jest.fn(send) } });
+        h.prisma.broadcastRecipient.findMany.mockResolvedValueOnce([pending] as never);
+        return h;
+    };
+
+    it('keeps the message a send wrote before queueing its delivery failed: the outbound sweeper still sends it', async () => {
+        const { service, prisma, recipientUpdates } = sending(() => Promise.reject(new Error('Connection is closed.')));
+        prisma.message.findUnique.mockResolvedValueOnce({ id: 'm_9' });
+        await service.sendBatch('b_1', ['r_1']);
+        expect(recipientUpdates[0]).toMatchObject({ where: { id: 'r_1', status: R.PENDING }, data: { status: R.QUEUED, messageId: 'm_9' } });
+        expect(prisma.message.findUnique).toHaveBeenCalledWith({ where: { idempotencyKey: 'broadcast:r_1:0' }, select: { id: true } });
+
+        // Nothing written: failed, and Retry failed can send it.
+        const unsent = sending(() => Promise.reject(new Error('Conversation not found')));
+        await unsent.service.sendBatch('b_1', ['r_1']);
+        expect(unsent.recipientUpdates[0]).toMatchObject({ data: { status: R.FAILED, errorMessage: 'Conversation not found' } });
+    });
+
+    it('a second job for the same person leaves alone the message the first one queued for them', async () => {
+        const { service, prisma, messageUpdates } = sending(() => Promise.resolve({ ok: true, messageId: 'm_1', duplicate: true }));
+        prisma.broadcastRecipient.updateMany.mockResolvedValueOnce({ count: 0 });
+        prisma.broadcastRecipient.findUnique.mockResolvedValueOnce({ messageId: 'm_1' });
+        await service.sendBatch('b_1', ['r_1']);
+        expect(messageUpdates).toEqual([]);
+
+        // Stopped while it was being handed over: the message is taken back.
+        const stopped = sending(() => Promise.resolve({ ok: true, messageId: 'm_1' }));
+        stopped.prisma.broadcastRecipient.updateMany.mockResolvedValueOnce({ count: 0 });
+        await stopped.service.sendBatch('b_1', ['r_1']);
+        expect(stopped.messageUpdates[0]).toMatchObject({ where: { id: { in: ['m_1'] }, status: MessageStatus.QUEUED }, data: { status: MessageStatus.FAILED } });
     });
 });
 

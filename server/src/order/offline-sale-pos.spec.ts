@@ -1,6 +1,7 @@
 import { OrderFinancialStatus } from '@prisma/client';
 import { GstCalculatorService } from '../gst/gst-calculator.service';
 import { OrderService } from './order.service';
+import type { CreateOfflineOrderDto } from './dto/create-offline-order.dto';
 
 /**
  * The point of sale makes its bills through `createOfflineOrder` with a few
@@ -11,7 +12,7 @@ import { OrderService } from './order.service';
 const ORG = 'org_1';
 const USER = 'user_1';
 
-function build({ shirtDeletedAt = null }: { shirtDeletedAt?: Date | null } = {}) {
+function build({ shirtDeletedAt = null, gstEnabled = false }: { shirtDeletedAt?: Date | null; gstEnabled?: boolean } = {}) {
     const variants = [
         {
             id: 'var_shirt', title: 'M', sku: 'SH-M', price: 1000, gstRate: null, taxable: true,
@@ -37,8 +38,8 @@ function build({ shirtDeletedAt = null }: { shirtDeletedAt?: Date | null } = {})
             findMany: jest.fn(async ({ where }: any) => variants.filter((v) => where.id.in.includes(v.id))),
             update: jest.fn().mockResolvedValue({ inventoryQuantity: 9 }),
         },
-        organization: { findUnique: jest.fn().mockResolvedValue({ gstEnabled: false, currency: 'INR' }) },
-        organizationGstin: { findMany: jest.fn().mockResolvedValue([]) },
+        organization: { findUnique: jest.fn().mockResolvedValue({ gstEnabled, currency: 'INR' }) },
+        organizationGstin: { findMany: jest.fn(() => Promise.resolve([{ stateCode: '29', isDefault: true }])) },
         order: {
             findFirst: jest.fn().mockResolvedValue({ orderNumber: 1000 }),
             create: jest.fn(async ({ data }: any) => ({ id: 'order_1', name: '#M1001', customerId: data.customerId, financialStatus: data.financialStatus, lineItems: [] })),
@@ -57,11 +58,12 @@ function build({ shirtDeletedAt = null }: { shirtDeletedAt?: Date | null } = {})
     const ledger = { isWarehousingEnabled: jest.fn().mockResolvedValue(true), applyMovement: jest.fn().mockResolvedValue({}) };
     const loyalty = { recomputeForCustomer: jest.fn().mockResolvedValue(undefined) };
     const commerceEvents = { order: jest.fn(), invoiceIssued: jest.fn() };
+    const invoices = { createForOrderTx: jest.fn<Promise<unknown>, [unknown, string, string, Record<string, unknown>]>() };
     const service = new OrderService(
         prisma,
         new GstCalculatorService(),
         { resolveLineGstRates: jest.fn(async (_o: string, _p: string, lines: any[]) => lines.map(() => 0)) } as any,
-        { createForOrderTx: jest.fn() } as any,
+        invoices as never,
         { enqueueOrderPush: jest.fn().mockResolvedValue(true) } as any,
         { findShopifyChannel: jest.fn().mockResolvedValue(null), recordFailure: jest.fn() } as any,
         {} as any,
@@ -77,7 +79,7 @@ function build({ shirtDeletedAt = null }: { shirtDeletedAt?: Date | null } = {})
         { add: jest.fn(), getJob: jest.fn().mockResolvedValue(null) } as any,
         commerceEvents as any,
     );
-    return { service, tx, ledger, loyalty, commerceEvents };
+    return { service, tx, ledger, loyalty, commerceEvents, invoices };
 }
 
 const sale = (over: Record<string, unknown> = {}) =>
@@ -226,5 +228,24 @@ describe('createOfflineOrder — a point-of-sale bill', () => {
             }),
         ).rejects.toThrow('more than the bill');
         expect(tx.order.create).not.toHaveBeenCalled();
+    });
+});
+
+describe('createOfflineOrder — a GSTIN typed for a customer on file', () => {
+    it('invoices the GSTIN the sale was taxed on, not the one on file', async () => {
+        const built = build({ gstEnabled: true });
+        const { service, invoices } = built;
+        (built.tx as { customer: { findFirst: jest.Mock } }).customer.findFirst.mockResolvedValue({
+            id: 'cust_9', firstName: 'Asha', lastName: null, gstin: '29AAACA1234A1Z5', billingStateCode: null, defaultAddress: null,
+        });
+
+        await service.createOfflineOrder(
+            ORG,
+            USER,
+            sale({ customer: { customerId: 'cust_9', gstin: '29ABCDE1234F1Z5' }, generateInvoice: true }) as CreateOfflineOrderDto,
+        );
+
+        expect(invoices.createForOrderTx).toHaveBeenCalledTimes(1);
+        expect(invoices.createForOrderTx.mock.calls[0][3]).toMatchObject({ buyerGstin: '29ABCDE1234F1Z5', placeOfSupplyCode: '29' });
     });
 });

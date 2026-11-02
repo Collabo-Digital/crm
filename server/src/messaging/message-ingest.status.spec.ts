@@ -9,6 +9,7 @@ function build(found: unknown, inFlight: unknown) {
         message: {
             findFirst: jest.fn().mockResolvedValueOnce(found).mockResolvedValueOnce(inFlight),
             update: jest.fn().mockResolvedValue({}),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         },
     };
     const events = { publish: jest.fn() };
@@ -40,7 +41,7 @@ describe('MessageIngestService.applyStatus', () => {
             null,
         );
         await service.applyStatus(channel, 'wamid.1', { status: MessageStatus.SENT, at: secondsAgo(3), pricing: { billable: true } });
-        expect(prisma.message.update).toHaveBeenCalled();
+        expect(prisma.message.updateMany).toHaveBeenCalled();
         expect(events.publish).not.toHaveBeenCalled();
     });
 });
@@ -76,6 +77,28 @@ describe('MessageIngestService.applyStatus, failures that pause automations to a
     });
 });
 
+describe('MessageIngestService.applyStatus, two webhooks for one message at once', () => {
+    const row = { id: 'm1', conversationId: 'c1', contactId: null, organizationId: 'org1', sentAt: new Date() };
+
+    it('never takes a read message back to delivered', async () => {
+        // Both read it as sent; "read" was written first.
+        const { service, prisma, tracker, events } = build({ ...row, status: MessageStatus.SENT }, { ...row, status: MessageStatus.READ });
+        prisma.message.updateMany.mockResolvedValueOnce({ count: 0 });
+        expect(await service.applyStatus(channel, 'wamid.1', { status: MessageStatus.DELIVERED, at: secondsAgo(3) })).toBe(false);
+        expect(prisma.message.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'm1', status: { in: [MessageStatus.QUEUED, MessageStatus.SENT] } } }));
+        expect(prisma.message.update).not.toHaveBeenCalled();
+        expect(tracker.onStatus).not.toHaveBeenCalled();
+        expect(events.publish).not.toHaveBeenCalled();
+    });
+
+    it('still keeps the pricing a late "delivered" carries', async () => {
+        const { service, prisma } = build({ ...row, status: MessageStatus.SENT }, { ...row, status: MessageStatus.READ });
+        prisma.message.updateMany.mockResolvedValueOnce({ count: 0 });
+        await service.applyStatus(channel, 'wamid.1', { status: MessageStatus.DELIVERED, at: secondsAgo(3), pricing: { billable: true } });
+        expect(prisma.message.updateMany).toHaveBeenLastCalledWith({ where: { id: 'm1' }, data: { pricing: { billable: true } } });
+    });
+});
+
 describe('a played voice message', () => {
     const { QUEUED, SENT, DELIVERED, READ, PLAYED, FAILED } = MessageStatus;
 
@@ -91,19 +114,19 @@ describe('a played voice message', () => {
         const { service, prisma, tracker } = build({ ...sent, status: DELIVERED }, null);
         const at = secondsAgo(3);
         expect(await service.applyStatus(channel, 'wamid.1', { status: PLAYED, at })).toBe(true);
-        expect(prisma.message.update.mock.calls[0][0].data).toEqual({ status: PLAYED, readAt: at });
+        expect(prisma.message.updateMany.mock.calls[0][0].data).toEqual({ status: PLAYED, readAt: at });
         expect(tracker.onStatus).toHaveBeenCalledWith('m1', PLAYED, at, undefined);
     });
 
     it('keeps the time it was read when it was read first', async () => {
         const { service, prisma } = build({ ...sent, status: READ }, null);
         await service.applyStatus(channel, 'wamid.1', { status: PLAYED, at: secondsAgo(3) });
-        expect(prisma.message.update.mock.calls[0][0].data).toEqual({ status: PLAYED });
+        expect(prisma.message.updateMany.mock.calls[0][0].data).toEqual({ status: PLAYED });
     });
 
     it('stays played when a late read receipt arrives', async () => {
         const { service, prisma } = build({ ...sent, status: PLAYED }, null);
         expect(await service.applyStatus(channel, 'wamid.1', { status: READ, at: secondsAgo(3) })).toBe(false);
-        expect(prisma.message.update).not.toHaveBeenCalled();
+        expect(prisma.message.updateMany).not.toHaveBeenCalled();
     });
 });

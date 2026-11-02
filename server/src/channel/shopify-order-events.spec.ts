@@ -14,7 +14,7 @@ const NO_NEWS = { newlyDelivered: false, newlyOutForDelivery: false, refunds: []
 
 function build() {
   const tx = {
-    order: { upsert: jest.fn().mockResolvedValue({ id: 'o1' }) },
+    order: { upsert: jest.fn().mockResolvedValue({ id: 'o1' }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     orderTimelineEvent: {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({}),
@@ -94,6 +94,48 @@ describe('ShopifySyncService.upsertOrder — first sighting on a live webhook', 
     });
 
     expect(commerceEvents.order.mock.calls[0][1]).toContain('delivered');
+  });
+});
+
+describe('ShopifySyncService.upsertOrder — two deliveries of a new order racing', () => {
+  // `existing` is read outside the transaction, so the slower of two
+  // deliveries finds the order the faster one inserted a moment ago.
+  function race(storedIsNewer: boolean) {
+    const built = build();
+    built.tx.orderTimelineEvent.findFirst.mockResolvedValue({ id: 'ev_created' });
+    built.tx.order.updateMany.mockResolvedValue({ count: storedIsNewer ? 0 : 1 });
+    const children = jest.spyOn(
+      built.service as unknown as { writeOrderChildren: () => Promise<unknown> },
+      'writeOrderChildren',
+    );
+    return { ...built, children };
+  }
+
+  it('does not let an older delivery overwrite what a newer one stored', async () => {
+    const { service, tx, children } = race(true);
+
+    await service.upsertOrder(CHANNEL, ORG, paidFulfilledOrder(new Date(Date.now() - HOUR)), { live: true });
+
+    const [[upsert]] = tx.order.upsert.mock.calls as Array<[{ update: unknown }]>;
+    // Nothing of the payload; the order's own key keeps the upsert native.
+    expect(upsert.update).toEqual({ externalId: '5550001' });
+    expect(children).not.toHaveBeenCalled();
+  });
+
+  it('still writes a newer delivery over an older one', async () => {
+    const { service, tx, children } = race(false);
+    const cancelled = { ...paidFulfilledOrder(new Date(Date.now() - HOUR)), cancelled_at: new Date().toISOString() };
+
+    await service.upsertOrder(CHANNEL, ORG, cancelled, { live: true });
+
+    expect(tx.order.updateMany).toHaveBeenCalledTimes(1);
+    const [[write]] = tx.order.updateMany.mock.calls as Array<[{ where: unknown; data: Record<string, unknown> }]>;
+    expect(write.where).toEqual({
+      id: 'o1',
+      OR: [{ externalUpdatedAt: null }, { externalUpdatedAt: { lte: new Date(cancelled.updated_at) } }],
+    });
+    expect(write.data).toMatchObject({ cancelledAt: new Date(cancelled.cancelled_at) });
+    expect(children).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -216,6 +258,33 @@ describe('ShopifySyncService.writeOrderChildren — refunds', () => {
   it('leaves out a restock-only refund (no money moved) and an old one', async () => {
     const news = await run([refund(902, '0.00', new Date(Date.now() - HOUR)), refund(903, '250.00', new Date(Date.now() - 3 * 24 * HOUR))]);
     expect(news.refunds).toEqual([]);
+  });
+});
+
+describe('ShopifySyncService.writeOrderChildren — a line already stored', () => {
+  // A pushed CRM order's lines take Shopify's ids with requiresShipping true
+  // (ShopifyPushService.adoptShopifyLineItemIds), which keeps them on the
+  // packing queue. Shopify's flag on a custom line in the echo must not undo it.
+  it('does not rewrite requiresShipping', async () => {
+    const upsert = jest.fn((args: { update: Record<string, unknown> }) => Promise.resolve(args));
+    const tx = {
+      orderLineItem: {
+        findMany: jest.fn(() => Promise.resolve([])),
+        upsert,
+        deleteMany: jest.fn(() => Promise.resolve({ count: 0 })),
+      },
+    };
+    const service = new ShopifySyncService(
+      {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never, {} as never, {} as never,
+    );
+    const echoed = { id: 15162543833140, title: 'Gift wrap — Large', quantity: 2, price: '50.00', requires_shipping: false };
+    const maps = { variantByExternalId: new Map(), productByExternalId: new Map() };
+
+    await service['writeOrderChildren'](tx as never, 'o1', { id: 6418037801012 }, [echoed], maps);
+
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert.mock.calls[0][0].update).not.toHaveProperty('requiresShipping');
   });
 });
 

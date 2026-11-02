@@ -14,6 +14,7 @@ import { InvoiceService } from './invoice.service';
 import { CommerceEventsService } from '../commerce/commerce-events.service';
 import { IMAGE_STORAGE } from '../product/image-storage/image-storage.interface';
 import { GstReturnType } from './dto/query-gst-return.dto';
+import type { Gstr1Return, Gstr3bReturn } from './gst-return.accumulator';
 
 /**
  * `getGstReturn` assembles a STATUTORY FILING.
@@ -231,6 +232,109 @@ describe('InvoiceService.getGstReturn', () => {
     expect(result.outwardSupplies[0].gstRate).toBe(18);
     // Both invoices are B2C and inter-state, so both belong in table 3.2.
     expect(result.interState.byState[0].invoiceCount).toBe(2);
+  });
+
+  it('takes a quarter’s reverse charge from the months in it as well as the quarter', async () => {
+    prisma.invoice.count.mockResolvedValue(0);
+    prisma.invoice.findMany.mockResolvedValue([]);
+
+    await service.getGstReturn('org1', { ...query, period: 'Q2', returnType: GstReturnType.GSTR3B });
+    await service.getGstReturn('org1', { ...query, period: '08', returnType: GstReturnType.GSTR3B });
+
+    const periods = (prisma.inwardSupply.findMany.mock.calls as Array<[{ where: { period: unknown } }]>).map(
+      ([args]) => args.where.period,
+    );
+    expect(periods).toEqual([{ in: ['Q2', '07', '08', '09'] }, '08']);
+  });
+
+  it('files a dollar invoice and its credit note in rupees, at their order’s rate', async () => {
+    // Rupees stay as they are, whatever rate the order carries into the org's
+    // own currency.
+    const rupees = {
+      ...invoiceAt(1),
+      currency: 'INR',
+      order: { exchangeRate: '0.01050000', baseCurrency: 'USD' },
+    };
+    // USD 2,000 + 18% IGST at ₹95 is ₹2,24,200: above the ₹1,00,000 B2CL
+    // threshold, though 2,360 is not.
+    const dollarLine = {
+      ...invoiceAt(2).lineItems[0],
+      taxableValue: '2000.00',
+      igstAmount: '360.00',
+      totalTax: '360.00',
+    };
+    const dollars = {
+      ...invoiceAt(2),
+      currency: 'USD',
+      order: { exchangeRate: '95.00000000', baseCurrency: 'INR' },
+      subtotal: '2000.00',
+      totalIgst: '360.00',
+      totalTax: '360.00',
+      grandTotal: '2360.00',
+      lineItems: [dollarLine],
+    };
+    // Half of it credited in dollars: a note against a B2CL invoice is CDNUR.
+    const note = {
+      ...dollars,
+      id: 'inv_000003',
+      status: InvoiceStatus.CREDIT_NOTE,
+      invoiceNumber: 'CN-2026-27/000001',
+      creditNoteFor: { invoiceNumber: dollars.invoiceNumber, grandTotal: '2360.00' },
+      subtotal: '1000.00',
+      totalIgst: '180.00',
+      totalTax: '180.00',
+      grandTotal: '1180.00',
+      lineItems: [{ ...dollarLine, taxableValue: '1000.00', igstAmount: '180.00', totalTax: '180.00' }],
+    };
+    prisma.invoice.count.mockResolvedValue(3);
+    prisma.invoice.findMany.mockResolvedValue([rupees, dollars, note]);
+
+    const gstr1 = (await service.getGstReturn('org1', query)) as Gstr1Return;
+
+    expect(gstr1.b2cl).toMatchObject([
+      { invoiceNumber: dollars.invoiceNumber, taxableValue: 190000, igst: 34200, invoiceValue: 224200 },
+    ]);
+    expect(gstr1.b2cs).toMatchObject([{ taxableValue: 100, igst: 18 }]);
+    expect(gstr1.creditNotes).toMatchObject([
+      { section: 'CDNUR', urType: 'B2CL', taxableValue: 95000, igst: 17100, noteValue: 112100 },
+    ]);
+    expect(gstr1.totals).toMatchObject({ totalTaxable: 95100, totalIgst: 17118 });
+    expect(gstr1).not.toHaveProperty('unconverted');
+
+    const gstr3b = (await service.getGstReturn('org1', {
+      ...query,
+      returnType: GstReturnType.GSTR3B,
+    })) as Gstr3bReturn;
+
+    expect(gstr3b.taxPayable).toMatchObject({ igst: 17118, total: 17118 });
+  });
+
+  it('leaves out a foreign document with no rate into rupees, and lists it', async () => {
+    const rupees = { ...invoiceAt(1), currency: 'INR' };
+    // Neither converts: one order has no rate yet, the other only a rate into
+    // the org's own dollars.
+    const unresolved = {
+      ...invoiceAt(2),
+      currency: 'USD',
+      order: { exchangeRate: null, baseCurrency: null },
+    };
+    const intoDollars = {
+      ...invoiceAt(3),
+      currency: 'USD',
+      order: { exchangeRate: '1.00000000', baseCurrency: 'USD' },
+    };
+    prisma.invoice.count.mockResolvedValue(3);
+    prisma.invoice.findMany.mockResolvedValue([rupees, unresolved, intoDollars]);
+
+    const gstr1 = (await service.getGstReturn('org1', query)) as Gstr1Return;
+
+    expect(gstr1.totals).toMatchObject({ totalInvoices: 1, totalTaxable: 100, totalIgst: 18 });
+    expect(gstr1).toMatchObject({
+      unconverted: [
+        { invoiceNumber: unresolved.invoiceNumber, status: InvoiceStatus.ISSUED, currency: 'USD', grandTotal: 118 },
+        { invoiceNumber: intoDollars.invoiceNumber, status: InvoiceStatus.ISSUED, currency: 'USD', grandTotal: 118 },
+      ],
+    });
   });
 });
 
@@ -873,7 +977,13 @@ describe('InvoiceService credit notes', () => {
 
   // 1000 of goods + 180 GST + 100 of untaxed shipping.
   function build(
-    opts: { lines?: object[]; totals?: Record<string, string>; credited?: Record<string, string | null> } = {},
+    opts: {
+      lines?: object[];
+      totals?: Record<string, string>;
+      credited?: Record<string, string | null>;
+      /** Lines of the notes already raised, as `invoiceLineItem.findMany` reads them. */
+      creditedLines?: object[];
+    } = {},
   ) {
     const original = {
       id: 'inv_1',
@@ -903,6 +1013,9 @@ describe('InvoiceService credit notes', () => {
           _sum: { grandTotal: null, subtotal: null, totalTax: null, ...opts.credited },
         }),
         create: jest.fn(({ data }: any) => Promise.resolve(data)),
+      },
+      invoiceLineItem: {
+        findMany: jest.fn(() => Promise.resolve(opts.creditedLines ?? [])),
       },
       organization: {
         findUnique: jest.fn().mockResolvedValue({ gstEnabled: true, timezone: 'Asia/Kolkata' }),
@@ -1009,6 +1122,47 @@ describe('InvoiceService credit notes', () => {
     // Same share of each line: 18% stays 18%, 5% stays 5%.
     expect(note.lines[0].tax / note.lines[0].taxable).toBeCloseTo(0.18, 3);
     expect(note.lines[1].tax / note.lines[1].taxable).toBeCloseTo(0.05, 2);
+  });
+
+  it('credits what each tax head has left on the last note, never more than was charged', async () => {
+    // 100 + 9 CGST + 9 SGST. A first note for 0.59 took 0.05 of each head
+    // (0.045 rounded up) and 0.49 of goods.
+    const { raise, tx } = build({
+      lines: [
+        line({
+          taxableValue: '100.00',
+          cgstAmount: '9.00',
+          sgstAmount: '9.00',
+          totalTax: '18.00',
+          totalAmount: '118.00',
+        }),
+      ],
+      totals: {
+        grandTotal: '118.00',
+        subtotal: '100.00',
+        totalCgst: '9.00',
+        totalSgst: '9.00',
+        totalTax: '18.00',
+        shippingCharge: '0.00',
+      },
+      credited: { grandTotal: '0.59', subtotal: '0.49', totalTax: '0.10' },
+      creditedLines: [
+        { orderLineItemId: 'li_1', taxableValue: '0.49', cgstAmount: '0.05', sgstAmount: '0.05', igstAmount: '0.00' },
+      ],
+    });
+
+    const note = await raise({});
+    const [[{ data }]] = tx.invoice.create.mock.calls as unknown as [
+      [{ data: Record<'totalCgst' | 'totalSgst', unknown> }],
+    ];
+
+    // 9.00 - 0.05 of each head, not 8.955 rounded up to 8.96 (9.01 in all).
+    expect([Number(data.totalCgst), Number(data.totalSgst)]).toEqual([8.95, 8.95]);
+    expect(note).toMatchObject({ subtotal: 99.51, tax: 17.9, shipping: 0, total: 117.41 });
+    const [[{ where }]] = tx.invoiceLineItem.findMany.mock.calls as unknown as [[{ where: object }]];
+    expect(where).toEqual({
+      invoice: { organizationId: ORG, creditNoteForId: 'inv_1', status: InvoiceStatus.CREDIT_NOTE },
+    });
   });
 });
 
@@ -1361,5 +1515,71 @@ describe('InvoiceService.bulkCreate', () => {
 
     await expect(service.bulkCreate(ORG, ['a'])).rejects.toBeInstanceOf(BadRequestException);
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('InvoiceService.listRefundsNeedingCreditNote', () => {
+  // A ₹11,800 counter sale, invoiced and then cancelled. Nothing went back
+  // through a sales channel, so the order has no refund row.
+  const cancelledSale = (n: string, credited: Array<{ grandTotal: string; totalTax: string }>) => ({
+    id: `order_${n}`,
+    name: `#M${n}`,
+    currency: 'INR',
+    cancelledAt: new Date('2026-10-05T10:00:00.000Z'),
+    refunds: [],
+    invoices: [
+      {
+        id: `inv_${n}`,
+        invoiceNumber: `INV-26-27/00${n}`,
+        grandTotal: '11800.00',
+        totalTax: '1800.00',
+        status: InvoiceStatus.ISSUED,
+      },
+      ...credited.map((cn, i) => ({
+        id: `cn_${n}_${i}`,
+        invoiceNumber: `CN-26-27/00${n}${i}`,
+        status: InvoiceStatus.CREDIT_NOTE,
+        ...cn,
+      })),
+    ],
+  });
+
+  it('lists a cancelled order whose invoice is still issued, though nothing was refunded', async () => {
+    const findMany = jest.fn(() =>
+      Promise.resolve([
+        cancelledSale('1001', []),
+        cancelledSale('1002', [{ grandTotal: '5900.00', totalTax: '900.00' }]),
+        cancelledSale('1003', [{ grandTotal: '11800.00', totalTax: '1800.00' }]),
+      ]),
+    );
+    const service = new InvoiceService(
+      { order: { findMany } } as never,
+      {} as never,
+      new GstCalculatorService(),
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    const rows = await service.listRefundsNeedingCreditNote('org_1');
+
+    // The invoice's whole value and tax stay declared until a note reverses
+    // them, so that is what is owed, less what is already credited.
+    expect(
+      rows.map((r) => ({
+        invoiceId: r.invoiceId,
+        pendingAmount: r.pendingAmount.toFixed(2),
+        pendingTax: r.pendingTax?.toFixed(2),
+        reason: r.reason,
+      })),
+    ).toEqual([
+      { invoiceId: 'inv_1001', pendingAmount: '11800.00', pendingTax: '1800.00', reason: 'Order cancelled' },
+      { invoiceId: 'inv_1002', pendingAmount: '5900.00', pendingTax: '900.00', reason: 'Order cancelled' },
+    ]);
+    const [[{ where }]] = findMany.mock.calls as unknown as [[{ where: object }]];
+    expect(where).toMatchObject({
+      OR: [{ refunds: { some: {} } }, { cancelledAt: { not: null } }],
+    });
   });
 });

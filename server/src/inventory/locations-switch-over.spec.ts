@@ -86,18 +86,48 @@ describe('LocationsSwitchOver', () => {
 });
 
 describe('InventoryService.runSwitchOver', () => {
-  function buildInventory(enabled: boolean, defaultWarehouse: object | null = null) {
+  type SeedVariant = { id: string; sku: string; inventoryQuantity: number; trackQuantity: boolean };
+
+  function buildInventory(
+    enabled: boolean,
+    defaultWarehouse: object | null = null,
+    seed: { trackGlobally?: boolean; variants?: SeedVariant[] } = {},
+  ) {
     let current = defaultWarehouse;
+    const seeded: object[] = [];
+    const tx = {
+      stockLevel: {
+        findMany: jest.fn(() => Promise.resolve([])),
+        createMany: jest.fn(({ data }: { data: object[] }) => {
+          seeded.push(...data);
+          return Promise.resolve({ count: data.length });
+        }),
+      },
+      inventoryEvent: { createMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+    };
     const prisma = {
       warehouse: {
         findFirst: jest.fn(async () => current),
         create: jest.fn(async ({ data }: any) => (current = { id: 'wh_main', ...data })),
       },
       channel: { findFirst: jest.fn().mockResolvedValue({ metadata: { shopifyLocationId: 111 } }) },
-      productVariant: { findMany: jest.fn().mockResolvedValue([]) },
+      productVariant: {
+        // One page holds every variant here; the page after it is empty.
+        findMany: jest.fn(({ where, cursor }: { where: { trackQuantity?: boolean }; cursor?: object }) =>
+          Promise.resolve(
+            cursor
+              ? []
+              : (seed.variants ?? []).filter(
+                  (v) => where.trackQuantity === undefined || v.trackQuantity === where.trackQuantity,
+                ),
+          ),
+        ),
+      },
+      $transaction: jest.fn((fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
     };
     const settings = {
       getInventorySettings: jest.fn().mockResolvedValue({ warehousingEnabled: enabled }),
+      getProductSettings: jest.fn().mockResolvedValue({ trackQuantityGlobally: seed.trackGlobally ?? false }),
       setWarehousingEnabled: jest.fn().mockResolvedValue(undefined),
     };
     const ledger = { invalidateFlagCache: jest.fn() };
@@ -110,7 +140,7 @@ describe('InventoryService.runSwitchOver', () => {
       { add: jest.fn() } as any,
       pushQueue as any,
     );
-    return { service, prisma, settings, pushQueue };
+    return { service, prisma, settings, pushQueue, seeded };
   }
 
   it('is a no-op for a workspace already switched — a left-over job changes nothing', async () => {
@@ -162,5 +192,25 @@ describe('InventoryService.runSwitchOver', () => {
     await service.runSwitchOver('org_a');
 
     expect(settings.setWarehousingEnabled).toHaveBeenCalledWith('org_a', true, { linkShopifyLocations: false });
+  });
+
+  const untrackedTee = { id: 'v1', sku: 'TEE-1', inventoryQuantity: 20, trackQuantity: false };
+
+  it('seeds a variant whose own switch is off when the workspace tracks every variant', async () => {
+    const { service, seeded } = buildInventory(false, null, { trackGlobally: true, variants: [untrackedTee] });
+
+    await service.runSwitchOver('org_a');
+
+    // Sales count it as tracked. Without this row its first sale of 2 is
+    // taken from an empty one, leaving -2 where 20 were.
+    expect(seeded).toEqual([{ organizationId: 'org_a', variantId: 'v1', warehouseId: 'wh_main', available: 20 }]);
+  });
+
+  it('leaves that variant out when the workspace tracks per variant', async () => {
+    const { service, seeded } = buildInventory(false, null, { variants: [untrackedTee] });
+
+    await service.runSwitchOver('org_a');
+
+    expect(seeded).toEqual([]);
   });
 });

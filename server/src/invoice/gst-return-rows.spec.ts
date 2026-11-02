@@ -334,6 +334,25 @@ describe('buildGstr1Sections', () => {
     expect(titles).toHaveLength(8);
   });
 
+  it('lists, last, the documents left out for want of a rate into rupees', () => {
+    const unconverted: Gstr1Return['unconverted'] = [
+      { invoiceNumber: 'INV-26-27/000009', status: 'ISSUED', currency: 'USD', grandTotal: 2360 },
+      { invoiceNumber: 'CN-26-27/000002', status: 'CREDIT_NOTE', currency: 'USD', grandTotal: 1180 },
+    ];
+
+    for (const sections of [
+      buildGstr1Sections({ ...gstr1, unconverted }, INDIA_TZ),
+      buildGstr3bSections({ ...gstr3b, unconverted }),
+    ]) {
+      const last = sections[sections.length - 1];
+      expect(last.title).toContain('no exchange rate into rupees');
+      expect(last.rows).toEqual([
+        ['INV-26-27/000009', 'Invoice', 'USD', 2360],
+        ['CN-26-27/000002', 'Credit note', 'USD', 1180],
+      ]);
+    }
+  });
+
   it('emits Table 13 only when documents issued were attached', () => {
     expect(
       buildGstr1Sections(gstr1, INDIA_TZ).some((s) => s.title.startsWith('13')),

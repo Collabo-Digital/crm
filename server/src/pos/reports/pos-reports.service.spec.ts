@@ -199,6 +199,18 @@ describe('PosReportsService.getSummary', () => {
       expect(sqlOf($queryRaw.mock.calls[2])).toMatch(/ORDER BY quantity DESC, sales DESC\s+LIMIT 10/);
       expect(topProducts).toEqual([{ variantId: 'v1', title: 'Kurta — M', quantity: 3, sales: 2997 }]);
     });
+
+    // Every custom item of a rate rides on one hidden variant of the till's
+    // custom-item product, so the variant alone would lump "Alteration" and
+    // "Gift wrap" into one row.
+    it('ranks custom items by their names, not by the variant they share', async () => {
+      const { service, $queryRaw } = build();
+      await service.getSummary(ORG, { from: '2026-10-25', to: '2026-10-25' });
+
+      expect(sqlOf($queryRaw.mock.calls[2] as unknown[])).toMatch(
+        /GROUP BY li\."variant_id",\s+CASE WHEN li\."variant_id" IS NULL OR pr\."metadata"->>'posCustomItem' = 'true' THEN li\."title" END/,
+      );
+    });
   });
 });
 

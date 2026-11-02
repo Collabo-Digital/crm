@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SALES_FINANCIAL_STATUSES } from '../../common/utils/order-window.util';
 import { resolveReportingTimeZone, zonedDayStartDaysAgo } from '../../common/utils/zoned-date.util';
 import { ASSIGNABLE_ROLES } from '../../inbox/inbox-team.service';
 import { attributeOrders, csvLine, estimateCost, percentile, type Touch } from './messaging-metrics';
@@ -317,15 +318,23 @@ export class MessagingAnalyticsService {
      * Store orders placed in the period by customers who got a broadcast or
      * automation message in the week before, each credited to the latest one.
      * Revenue is in the organization's currency, at each order's booked rate.
+     *
+     * Sales are scoped as the dashboard scopes them. An order whose rate is
+     * unknown, or converts into another currency, is left out of every figure
+     * and counted in `unconvertedOrders`: booking it at 1 would read $2,545 as ₹2,545.
      */
     private async revenue(orgId: string, p: Period) {
         const windowMs = ATTRIBUTION_WINDOW_DAYS * DAY_MS;
         const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: orgId }, select: { currency: true } });
-        const orders = await this.prisma.$queryRaw<Array<{ id: string; customer_id: string; at: Date; revenue: number }>>(Prisma.sql`
-            SELECT id, customer_id, coalesce(external_created_at, created_at) AS at, (total_price * coalesce(exchange_rate, 1))::float AS revenue
+        const currency = (org.currency || 'USD').toUpperCase();
+        const sales = await this.prisma.$queryRaw<Array<{ id: string; customer_id: string; at: Date; revenue: number | null }>>(Prisma.sql`
+            SELECT id, customer_id, coalesce(external_created_at, created_at) AS at,
+                   CASE WHEN exchange_rate IS NOT NULL AND upper(base_currency) = ${currency} THEN (total_price * exchange_rate)::float END AS revenue
             FROM orders
-            WHERE organization_id = ${orgId} AND customer_id IS NOT NULL AND cancelled_at IS NULL
+            WHERE organization_id = ${orgId} AND customer_id IS NOT NULL AND deleted_at IS NULL AND cancelled_at IS NULL
+              AND financial_status::text IN (${Prisma.join(SALES_FINANCIAL_STATUSES)})
               AND coalesce(external_created_at, created_at) >= ${p.from} AND coalesce(external_created_at, created_at) < ${p.to}`);
+        const orders = sales.filter((o) => o.revenue !== null);
         const touches = await this.prisma.$queryRaw<Array<{ customer_id: string; at: Date; source: string; broadcast_id: string | null; automation_id: string | null }>>(Prisma.sql`
             SELECT coalesce(m.customer_id, c.customer_id) AS customer_id, coalesce(m.sent_at, m.created_at) AS at, m.source::text AS source,
                    br.broadcast_id, m.automation_id
@@ -362,6 +371,7 @@ export class MessagingAnalyticsService {
             currency: org.currency,
             ordersInPeriod: orders.length,
             revenueInPeriod: money(orders.reduce((n, o) => n + Number(o.revenue), 0)),
+            unconvertedOrders: sales.length - orders.length,
             orders: attributed.length,
             revenue: money(attributed.reduce((n, a) => n + a.order.revenue, 0)),
             bySource: {

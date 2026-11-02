@@ -50,4 +50,28 @@ describe('AnalyticsDashboardService.getDashboard', () => {
     expect(trend.length).toBeGreaterThan(0);
     for (const point of trend) expect(point.label).toMatch(/^\d{1,2} [A-Z][a-z]{2}$/);
   });
+
+  it('compares the 7 days it charts with the 7 days before them', async () => {
+    const service = build(Array.from({ length: 14 }, (_, i) => ({ date: daysAgo(i), metrics: { pixelAddToCartSessions: 1 } })));
+
+    const { stats, trend } = await service.getDashboard('org_1', { range: '7d', channel: 'all' });
+
+    expect(stats.find((s) => s.key === 'totalAddToCart')).toMatchObject({ value: 7, change: 0 });
+    expect(trend).toHaveLength(7);
+    expect(trend.reduce((n, p) => n + p.addToCart, 0)).toBe(7);
+  });
+
+  it('falls back to webhook counts day by day, as the trend does', async () => {
+    const service = build([
+      { date: daysAgo(0), metrics: { pixelAddToCartSessions: 2, pixelCheckoutStartedSessions: 1 } },
+      { date: daysAgo(3), metrics: { cartsCreatedFromWebhook: 5, checkoutsStartedFromWebhook: 3 } },
+    ]);
+
+    const { stats, trend } = await service.getDashboard('org_1', { range: '7d', channel: 'all' });
+    const value = Object.fromEntries(stats.map((s) => [s.key, s.value]));
+
+    expect(value).toMatchObject({ totalAddToCart: 7, totalCheckout: 4 });
+    expect(trend.reduce((n, p) => n + p.addToCart, 0)).toBe(7);
+    expect(trend.reduce((n, p) => n + p.reachedCheckout, 0)).toBe(4);
+  });
 });

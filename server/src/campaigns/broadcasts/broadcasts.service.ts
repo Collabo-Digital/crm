@@ -16,7 +16,7 @@ import { BillingAccessService, NOT_SENT_READ_ONLY } from '../../billing/billing-
 import { contactName } from '../../messaging/contact-name';
 import { MessagingSendService } from '../../messaging/send/messaging-send.service';
 import { ORIGIN_PRIORITY, broadcastPriority } from '../../messaging/send/outbound.queue';
-import { PlatformSenderService } from '../../messaging/send/platform-sender.service';
+import { PlatformSenderService, UNCONFIRMED_SEND } from '../../messaging/send/platform-sender.service';
 import { SegmentsService } from '../segments/segments.service';
 import { SegmentDefinition } from '../segments/segment-rules';
 import { TemplatesService } from '../templates/templates.service';
@@ -431,10 +431,11 @@ export class BroadcastsService {
         }
         const failed = await this.prisma.broadcastRecipient.findMany({
             where: { broadcastId: b.id, status: R.FAILED },
-            select: { id: true, errorCode: true },
+            select: { id: true, errorCode: true, errorMessage: true },
         });
-        const retryable = failed.filter((f) => !f.errorCode || !FINAL_ERRORS.has(f.errorCode)).map((f) => f.id);
-        if (!retryable.length) throw new BadRequestException('No failed messages can be retried; the rest failed for reasons a retry would repeat.');
+        // A hand-over WhatsApp never confirmed may have arrived, and a second copy is worse than a miss.
+        const retryable = failed.filter((f) => f.errorMessage !== UNCONFIRMED_SEND && (!f.errorCode || !FINAL_ERRORS.has(f.errorCode))).map((f) => f.id);
+        if (!retryable.length) throw new BadRequestException('No failed messages can be retried; the rest failed for reasons a retry would repeat, or may have reached the customer.');
         await this.headerMediaId(b, parseVariables(b.variables));
         await this.prisma.broadcastRecipient.updateMany({
             where: { id: { in: retryable } },
@@ -473,20 +474,19 @@ export class BroadcastsService {
             },
         });
 
-        if (!(await this.prisma.broadcastRecipient.count({ where: { broadcastId: b.id } }))) {
-            const evaluated = await this.evaluate(b.organizationId, b, audience, template.category, params, vars, 'send', mediaId);
-            for (let i = 0; i < evaluated.length; i += 1000) {
-                await this.prisma.broadcastRecipient.createMany({
-                    data: evaluated.slice(i, i + 1000).map((e) => ({
-                        organizationId: b.organizationId,
-                        broadcastId: b.id,
-                        contactId: e.id,
-                        status: e.reason ? R.SKIPPED : R.PENDING,
-                        skipReason: e.reason,
-                    })),
-                    skipDuplicates: true,
-                });
-            }
+        // Every run writes the whole audience, since an earlier run may have stopped partway; rows it wrote stay as they are.
+        const evaluated = await this.evaluate(b.organizationId, b, audience, template.category, params, vars, 'send', mediaId);
+        for (let i = 0; i < evaluated.length; i += 1000) {
+            await this.prisma.broadcastRecipient.createMany({
+                data: evaluated.slice(i, i + 1000).map((e) => ({
+                    organizationId: b.organizationId,
+                    broadcastId: b.id,
+                    contactId: e.id,
+                    status: e.reason ? R.SKIPPED : R.PENDING,
+                    skipReason: e.reason,
+                })),
+                skipDuplicates: true,
+            });
         }
         const pending = await this.prisma.broadcastRecipient.findMany({
             where: { broadcastId: b.id, status: R.PENDING },
@@ -523,6 +523,7 @@ export class BroadcastsService {
                 await this.prisma.broadcastRecipient.updateMany({ where: { id: r.id, status: R.PENDING }, data: { status: R.SKIPPED, skipReason: 'missing_value' } });
                 continue;
             }
+            const idempotencyKey = `broadcast:${r.id}:${r.attempts}`;
             try {
                 const conversationId = await this.sender.conversationFor(r.contactId);
                 const outcome = await this.sender.send({
@@ -530,7 +531,7 @@ export class BroadcastsService {
                     conversationId,
                     origin: 'broadcast',
                     priority: broadcastPriority(batch),
-                    idempotencyKey: `broadcast:${r.id}:${r.attempts}`,
+                    idempotencyKey,
                     payload: {
                         type: 'template',
                         name: template.name,
@@ -548,12 +549,19 @@ export class BroadcastsService {
                             ? { status: R.SKIPPED, skipReason: outcome.code === 'opted_out' ? 'opted_out' : 'blocked' }
                             : { status: R.FAILED, failedAt: new Date(), errorMessage: outcome.message },
                 });
-                // Stopped while this one was being handed over: its message is taken back too.
-                if (!count && outcome.ok) await this.withdrawMessages([outcome.messageId], 'Not sent: the broadcast was stopped.');
+                // Stopped while this one was being handed over: its message is taken back too, unless another job for them queued that same message first.
+                if (!count && outcome.ok) {
+                    const holder = await this.prisma.broadcastRecipient.findUnique({ where: { id: r.id }, select: { messageId: true } });
+                    if (holder?.messageId !== outcome.messageId) await this.withdrawMessages([outcome.messageId], 'Not sent: the broadcast was stopped.');
+                }
             } catch (err) {
+                // Queueing its delivery can fail after the message was written; the outbound sweeper still sends that message, so it stays theirs.
+                const written = await this.prisma.message.findUnique({ where: { idempotencyKey }, select: { id: true } });
                 await this.prisma.broadcastRecipient.updateMany({
                     where: { id: r.id, status: R.PENDING },
-                    data: { status: R.FAILED, failedAt: new Date(), errorMessage: err instanceof Error ? err.message : String(err) },
+                    data: written
+                        ? { status: R.QUEUED, messageId: written.id, queuedAt: new Date() }
+                        : { status: R.FAILED, failedAt: new Date(), errorMessage: err instanceof Error ? err.message : String(err) },
                 });
             }
         }

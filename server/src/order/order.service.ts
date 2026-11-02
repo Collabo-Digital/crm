@@ -19,6 +19,9 @@ import {
   StockBucket,
 } from '@prisma/client';
 import { resolvePlaceOfSupply } from '../gst/place-of-supply.util';
+import { resolveLineTaxClassification } from '../gst/line-tax-classification.util';
+import { EXPORT_PLACE_OF_SUPPLY } from '../gst/constants/indian-states';
+import { DEFAULT_UQC } from '../gst/constants/uqc';
 import { catalogPricesIncludeTax } from '../gst/catalog-prices-include-tax.util';
 import { compositionInterStateError, isCompositionSeller } from '../gst/composition.util';
 import { ensureManualChannel } from '../channel/ensure-manual-channel';
@@ -812,6 +815,7 @@ export class OrderService {
         JOIN "orders" o ON o."id" = li."order_id"
         WHERE o."organization_id" = ${orgId}
           AND o."deleted_at" IS NULL
+          AND o."cancelled_at" IS NULL
           AND o."financial_status"::text IN ('PAID', 'PARTIALLY_PAID')
           AND o."external_created_at" >= ${from}
           AND o."external_created_at" <= ${to}
@@ -1643,20 +1647,37 @@ export class OrderService {
                 variantGstRate: this.calculator.toNullableNumber(v.gstRate),
                 productGstRate: this.calculator.toNullableNumber(v.product.gstRate),
                 variantTaxable: v.taxable,
+                // Classified as its invoice classifies it: an exempt, nil-rated,
+                // non-GST or exported line carries no tax whatever its rate.
+                // Only the supply type is read, so the unit is immaterial.
+                supplyType: resolveLineTaxClassification({
+                  variant: v,
+                  product: v.product,
+                  defaultUnitOfMeasure: DEFAULT_UQC,
+                  isExportSupply: placeOfSupplyCode === EXPORT_PLACE_OF_SUPPLY,
+                }).supplyType,
               };
             }),
             tx,
           )
           : dto.lineItems.map(() => 0);
 
-        // Catalogue prices restated in the order's currency, once per line.
-        // Resolved before the loop because it may hit the FX provider and the
-        // loop body runs inside the Serializable transaction that prices the
-        // order — see `catalogueUnitPrice`.
-        const catalogueUnitPrices = await this.catalogueUnitPrices(
+        // Catalogue prices restated in the order's currency, once per line
+        // without a typed price. A typed price needs no rate, so it still
+        // sells when no rate can be had. Resolved before the loop because it
+        // may hit the FX provider and the loop body runs inside the
+        // Serializable transaction that prices the order — see
+        // `catalogueUnitPrice`.
+        const catalogueLines = [...dto.lineItems.entries()].filter(
+          ([, li]) => li.unitPriceOverride == null,
+        );
+        const cataloguePrices = await this.catalogueUnitPrices(
           orgId,
           orderCurrency,
-          dto.lineItems.map((li) => variantById.get(li.productVariantId)!),
+          catalogueLines.map(([, li]) => variantById.get(li.productVariantId)!),
+        );
+        const catalogueUnitPrices = new Map(
+          catalogueLines.map(([lineIndex], i) => [lineIndex, cataloguePrices[i]]),
         );
 
         for (const [lineIndex, li] of dto.lineItems.entries()) {
@@ -1664,7 +1685,7 @@ export class OrderService {
           const customTitle = customTitleAt(lineIndex);
           // The cashier's typed price is authoritative and is already in the
           // order's currency; only the catalogue fallback needs converting.
-          const unitPrice = li.unitPriceOverride ?? catalogueUnitPrices[lineIndex];
+          const unitPrice = li.unitPriceOverride ?? catalogueUnitPrices.get(lineIndex)!;
           const discount = li.discount ?? 0;
 
           // Validated here, not in the DTO: the unit price may come from the
@@ -1962,6 +1983,9 @@ export class OrderService {
                 // Passing the raw one made the invoice re-derive independently
                 // and disagree with the tax the order just charged.
                 placeOfSupplyCode,
+                // The GSTIN typed for this sale comes before the one on file,
+                // as it did for the place of supply above.
+                buyerGstin: dto.customer.gstin,
                 notes: dto.note,
               },
             );
@@ -2533,7 +2557,14 @@ export class OrderService {
       throw new BadRequestException('Order is already cancelled');
     }
     const isShopify = order.channel.platform === ChannelPlatform.SHOPIFY;
-    // Variants restocked into a warehouse bucket; pushed to Shopify after the
+    // A CRM sale pushed with BYPASS, by the same test as `pushOrder`: Collabo
+    // took its stock and Shopify never did, so the restock is Collabo's and
+    // Shopify must not add units it never took.
+    const stockMovedByCollabo =
+      !!order.metadata &&
+      typeof order.metadata === 'object' &&
+      (order.metadata as Record<string, unknown>).shopifyStockPushed === true;
+    // Variants restocked here that Shopify must hear of; pushed after the
     // transaction commits so a failed push can never roll back the cancel.
     const restockedVariantIds: string[] = [];
 
@@ -2567,7 +2598,7 @@ export class OrderService {
         orderId: orderGid,
         reason: dto.reason,
         refund: dto.refund ?? false,
-        restock: dto.restock ?? true,
+        restock: !stockMovedByCollabo && (dto.restock ?? true),
         notifyCustomer: dto.notifyCustomer ?? true,
         staffNote: dto.staffNote ?? null,
       };
@@ -2614,8 +2645,9 @@ export class OrderService {
 
       // Local restock for MANUAL channel orders. Shopify orders are restocked
       // server-side by the orderCancel mutation we already sent — adjusting
-      // inventory locally would double-count once the next pull-sync lands.
-      if (dto.restock && !isShopify) {
+      // inventory locally would double-count once the next pull-sync lands —
+      // except one whose stock Collabo moved, which Shopify was told not to.
+      if (dto.restock && (!isShopify || stockMovedByCollabo)) {
         const productSettings = await this.settings.getProductSettings(orgId);
         const trackGlobally = productSettings.trackQuantityGlobally === true;
 
@@ -2645,11 +2677,21 @@ export class OrderService {
 
         const lineItems = await tx.orderLineItem.findMany({
           where: { orderId: id },
-          include: { variant: true },
+          include: { variant: { include: { product: { select: { metadata: true } } } } },
         });
         for (const li of lineItems) {
           if (!li.variant) continue;
           if (!trackGlobally && li.variant.trackQuantity === false) continue;
+          // A point-of-sale custom item, on the hidden product the till marks:
+          // its sale took no stock, however the org tracks quantities.
+          const productMeta = li.variant.product.metadata;
+          if (
+            !!productMeta &&
+            typeof productMeta === 'object' &&
+            (productMeta as Record<string, unknown>).posCustomItem === true
+          ) {
+            continue;
+          }
 
           if (warehousing) {
             if (!restockWarehouseId) continue;
@@ -2694,6 +2736,10 @@ export class OrderService {
               referenceId: id,
             },
           });
+          // Shopify holds the figure this sale pushed and restocks nothing,
+          // so it learns the restocked one the same way, or the next pull
+          // takes the units back.
+          if (isShopify) restockedVariantIds.push(li.variant.id);
         }
       }
 
@@ -2826,6 +2872,15 @@ export class OrderService {
     if (order.financialStatus === OrderFinancialStatus.PAID) {
       throw new BadRequestException('Order is already paid');
     }
+    if (order.cancelledAt) {
+      throw new BadRequestException('Cannot mark a cancelled order as paid.');
+    }
+    if (
+      order.financialStatus === OrderFinancialStatus.REFUNDED ||
+      order.financialStatus === OrderFinancialStatus.VOIDED
+    ) {
+      throw new BadRequestException('Cannot mark a refunded or voided order as paid.');
+    }
     const isShopify = order.channel.platform === ChannelPlatform.SHOPIFY;
 
     if (isShopify) {
@@ -2845,10 +2900,27 @@ export class OrderService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const row = await tx.order.update({
-        where: { id },
+      // Conditional on the checks above, so of two clicks that both passed
+      // them only one marks the order paid, invoices it and raises 'paid'.
+      const claimed = await tx.order.updateMany({
+        where: {
+          id,
+          organizationId: orgId,
+          cancelledAt: null,
+          financialStatus: {
+            notIn: [
+              OrderFinancialStatus.PAID,
+              OrderFinancialStatus.REFUNDED,
+              OrderFinancialStatus.VOIDED,
+            ],
+          },
+        },
         data: { financialStatus: OrderFinancialStatus.PAID },
       });
+      if (claimed.count === 0) {
+        throw new BadRequestException('Order is already paid');
+      }
+      const row = await tx.order.findUniqueOrThrow({ where: { id } });
       await tx.orderTimelineEvent.create({
         data: { orderId: id, actorId: userId, action: 'paid', message },
       });

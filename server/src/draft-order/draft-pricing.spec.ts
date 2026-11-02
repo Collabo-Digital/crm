@@ -1,4 +1,5 @@
 import { GstCalculatorService } from '../gst/gst-calculator.service';
+import { TaxResolverService } from '../gst/tax-resolver.service';
 import { DraftOrderService } from './draft-order.service';
 
 /**
@@ -31,7 +32,7 @@ describe('DraftOrderService.create pricing', () => {
         ]),
       },
       organization: { findUnique: jest.fn().mockResolvedValue({ gstEnabled: true, currency: 'INR' }) },
-      organizationGstin: { findFirst: jest.fn().mockResolvedValue({ stateCode: '29' }) },
+      organizationGstin: { findMany: jest.fn().mockResolvedValue([{ stateCode: '29', isDefault: true }]) },
       organizationSettings: {
         findUnique: jest
           .fn()
@@ -185,7 +186,7 @@ describe('DraftOrderService under the composition scheme', () => {
         findUnique: jest.fn().mockResolvedValue({ gstEnabled: true, currency: 'INR' }),
         findUniqueOrThrow: jest.fn().mockResolvedValue({ gstEnabled: true, currency: 'INR' }),
       },
-      organizationGstin: { findFirst: jest.fn().mockResolvedValue({ stateCode: '29' }) },
+      organizationGstin: { findMany: jest.fn().mockResolvedValue([{ stateCode: '29', isDefault: true }]) },
       organizationSettings: {
         findUnique: jest.fn().mockResolvedValue({ taxSettings: { composition, pricesIncludeTax: false } }),
       },
@@ -262,5 +263,193 @@ describe('DraftOrderService under the composition scheme', () => {
 
     expect(tx.draftOrder.create).toHaveBeenCalledTimes(1);
     expect(tx.draftOrderLineItem.createMany).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * An exempt, nil-rated, non-GST or exported line carries no GST whatever rate
+ * the chain finds for it, on the order and its invoice; the draft, and so its
+ * payment link, must quote the same.
+ */
+describe('DraftOrderService line supply type', () => {
+  const lineItems = [{ productVariantId: 'v_1', quantity: 1 }];
+
+  function build() {
+    const tx = {
+      channel: { findFirst: jest.fn(() => Promise.resolve({ id: 'ch_manual' })) },
+      productVariant: {
+        findMany: jest.fn(() =>
+          Promise.resolve([
+            {
+              id: 'v_1',
+              title: 'Default Title',
+              sku: 'RICE',
+              price: 1000,
+              gstRate: null,
+              taxable: true,
+              supplyType: null,
+              product: { id: 'p_1', title: 'Rice', gstRate: null, supplyType: 'EXEMPT' },
+            },
+          ]),
+        ),
+      },
+      organization: {
+        findUnique: jest.fn(() => Promise.resolve({ gstEnabled: true, currency: 'INR' })),
+        findUniqueOrThrow: jest.fn(() => Promise.resolve({ gstEnabled: true, currency: 'INR' })),
+      },
+      organizationGstin: {
+        findFirst: jest.fn(() => Promise.resolve({ stateCode: '29' })),
+        findMany: jest.fn(() => Promise.resolve([{ stateCode: '29', isDefault: true }])),
+      },
+      organizationSettings: {
+        findUnique: jest.fn(() => Promise.resolve({ taxSettings: { composition: false, pricesIncludeTax: false } })),
+      },
+      order: { findFirst: jest.fn(() => Promise.resolve(null)) },
+      // The rate chain: no collection or product-type rate, 18% for the state.
+      productCollection: { findMany: jest.fn(() => Promise.resolve([])) },
+      product: { findMany: jest.fn(() => Promise.resolve([{ id: 'p_1', productType: null }])) },
+      stateTaxRate: { findFirst: jest.fn(() => Promise.resolve({ gstRate: 18 })) },
+      draftOrder: {
+        create: jest.fn(({ data }: { data: object }) => Promise.resolve({ id: 'd_1', ...data })),
+        updateMany: jest.fn<Promise<{ count: number }>, [{ data: object }]>(() => Promise.resolve({ count: 1 })),
+      },
+      draftOrderLineItem: {
+        deleteMany: jest.fn(() => Promise.resolve({ count: 1 })),
+        createMany: jest.fn(() => Promise.resolve({ count: 1 })),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
+      draftOrder: {
+        findFirst: jest.fn(() => Promise.resolve({ id: 'd_1', status: 'OPEN' })),
+        findUniqueOrThrow: jest.fn(() =>
+          Promise.resolve({ channelId: 'ch_manual', customerId: null, shippingAddress: null, billingAddress: null, metadata: {}, customer: null }),
+        ),
+      },
+    };
+    const service = new DraftOrderService(
+      prisma as never,
+      new GstCalculatorService(),
+      new TaxResolverService({} as never),
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { enqueueUpdate: jest.fn() } as never,
+      { getOrderSettings: jest.fn(() => Promise.resolve({ autoSyncToShopify: false })) } as never,
+    );
+    jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
+    return { service, tx };
+  }
+
+  it('quotes an exempt product with no tax, though the state rate is 18%', async () => {
+    const { service, tx } = build();
+
+    await service.create('org_1', 'u_1', { lineItems } as never);
+
+    expect(tx.draftOrder.create.mock.calls[0][0].data).toMatchObject({ subtotalPrice: 1000, totalTax: 0, totalPrice: 1000 });
+  });
+
+  it('keeps it untaxed when the draft is edited', async () => {
+    const { service, tx } = build();
+
+    await service.update('d_1', 'org_1', 'u_1', { lineItems: [{ productVariantId: 'v_1', quantity: 2 }] } as never);
+
+    expect(tx.draftOrder.updateMany.mock.calls[0][0].data).toMatchObject({ subtotalPrice: 2000, totalTax: 0, totalPrice: 2000 });
+  });
+});
+
+/**
+ * A seller registered in the state the goods go to supplies them from that
+ * registration, CGST+SGST, and the completed order is taxed so. Quoting from
+ * the default registration elsewhere charged IGST, and a different total.
+ */
+describe('DraftOrderService seller registration', () => {
+  const lineItems = [{ productVariantId: 'v_1', quantity: 1 }];
+  const shippingAddress = { province_code: 'KA' };
+
+  function build() {
+    const tx = {
+      channel: { findFirst: jest.fn(() => Promise.resolve({ id: 'ch_manual' })) },
+      productVariant: {
+        findMany: jest.fn(() =>
+          Promise.resolve([
+            {
+              id: 'v_1',
+              title: 'Default Title',
+              sku: 'SHIRT',
+              price: 100.05,
+              gstRate: null,
+              taxable: true,
+              product: { id: 'p_1', title: 'Shirt', gstRate: 18 },
+            },
+          ]),
+        ),
+      },
+      organization: {
+        findUnique: jest.fn(() => Promise.resolve({ gstEnabled: true, currency: 'INR' })),
+        findUniqueOrThrow: jest.fn(() => Promise.resolve({ gstEnabled: true, currency: 'INR' })),
+      },
+      // Registered in Maharashtra (the default) and in Karnataka.
+      organizationGstin: {
+        findMany: jest.fn(() =>
+          Promise.resolve([
+            { stateCode: '27', isDefault: true },
+            { stateCode: '29', isDefault: false },
+          ]),
+        ),
+      },
+      organizationSettings: {
+        findUnique: jest.fn(() => Promise.resolve({ taxSettings: { composition: false, pricesIncludeTax: false } })),
+      },
+      order: { findFirst: jest.fn(() => Promise.resolve(null)) },
+      draftOrder: {
+        create: jest.fn(({ data }: { data: object }) => Promise.resolve({ id: 'd_1', ...data })),
+        updateMany: jest.fn<Promise<{ count: number }>, [{ data: object }]>(() => Promise.resolve({ count: 1 })),
+      },
+      draftOrderLineItem: {
+        deleteMany: jest.fn(() => Promise.resolve({ count: 1 })),
+        createMany: jest.fn(() => Promise.resolve({ count: 1 })),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
+      draftOrder: {
+        findFirst: jest.fn(() => Promise.resolve({ id: 'd_1', status: 'OPEN' })),
+        findUniqueOrThrow: jest.fn(() =>
+          Promise.resolve({ channelId: 'ch_manual', customerId: null, shippingAddress, billingAddress: null, metadata: {}, customer: null }),
+        ),
+      },
+    };
+    const service = new DraftOrderService(
+      prisma as never,
+      new GstCalculatorService(),
+      { resolveLineGstRates: jest.fn(() => Promise.resolve([18])) } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { enqueueUpdate: jest.fn() } as never,
+      { getOrderSettings: jest.fn(() => Promise.resolve({ autoSyncToShopify: false })) } as never,
+    );
+    jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
+    return { service, tx };
+  }
+
+  it('quotes CGST and SGST from the registration in the state it ships to', async () => {
+    const { service, tx } = build();
+
+    await service.create('org_1', 'u_1', { lineItems, shippingAddress } as never);
+
+    // 9.00 + 9.00, not IGST 18.01 from the Maharashtra registration.
+    expect(tx.draftOrder.create.mock.calls[0][0].data).toMatchObject({ subtotalPrice: 100.05, totalTax: 18, totalPrice: 118.05 });
+  });
+
+  it('keeps that registration when the draft is edited', async () => {
+    const { service, tx } = build();
+
+    await service.update('d_1', 'org_1', 'u_1', { lineItems } as never);
+
+    expect(tx.draftOrder.updateMany.mock.calls[0][0].data).toMatchObject({ subtotalPrice: 100.05, totalTax: 18, totalPrice: 118.05 });
   });
 });

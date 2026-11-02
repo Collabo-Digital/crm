@@ -108,6 +108,8 @@ describe('OrderService.getVendorComparison', () => {
       // Same payment rule as the org-wide tile, so Total Sales keeps one
       // meaning across roles.
       expect(sql).toContain("IN ('PAID', 'PARTIALLY_PAID')");
+      // A cancelled order is no sale, paid or not, as on the org-wide tile.
+      expect(sql).toContain('o."cancelled_at" IS NULL');
       expect(boundOf(call)).toContain(VENDOR);
     }
   });

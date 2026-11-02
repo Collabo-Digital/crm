@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { AutomationEvent, AutomationRunStatus, AutomationStatus, ChannelPlatform, Prisma } from '@prisma/client';
+import { AutomationEvent, AutomationRunStatus, AutomationStatus, ChannelPlatform, MessageDirection, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../../redis/redis.service';
 import { AutomationJobs } from '../../messaging/automation-jobs';
@@ -168,7 +168,9 @@ export class AutomationDispatcher {
      * Give a reply to the one run waiting for it. A reply that answers an
      * automation's message (quotes it, as a tapped WhatsApp button does, or
      * taps one of its Instagram or Messenger buttons) belongs to that
-     * message's run, and to nobody if that run is no longer waiting. Any
+     * message's run, and to nobody if that run is no longer waiting. One
+     * that quotes a message of ours no run sent (a broadcast's, an agent's)
+     * answers that message, not a run: a "Yes" there confirms no order. Any
      * other reply goes to the live automation's run that started waiting
      * last. One "Cancel" must never answer two order confirmations, not even
      * when the event is retried. Returns 1 if a run took it.
@@ -185,6 +187,7 @@ export class AutomationDispatcher {
             return 1;
         }
         const answeredRunId = await this.answeredRun(event, payload);
+        if (answeredRunId === false) return 0;
         const run = await this.prisma.automationRun.findFirst({
             where: {
                 contactId: event.contactId,
@@ -238,13 +241,16 @@ export class AutomationDispatcher {
      * The run whose message this reply answers, if any: the message a
      * WhatsApp reply quotes, or the run named in a tapped Instagram or
      * Messenger button or quick reply (its payload is `<runId>.<stepKey>_<n>`).
+     * False when it quotes a message of ours that no run sent.
      */
-    private async answeredRun(event: AutomationEvent, payload: EventPayload): Promise<string | null> {
+    private async answeredRun(event: AutomationEvent, payload: EventPayload): Promise<string | false | null> {
         const quotedId = event.messageId
             ? (await this.prisma.message.findUnique({ where: { id: event.messageId }, select: { replyToMessageId: true } }))?.replyToMessageId
             : null;
         if (quotedId) {
-            return (await this.prisma.message.findUnique({ where: { id: quotedId }, select: { automationRunId: true } }))?.automationRunId ?? null;
+            const quoted = await this.prisma.message.findUnique({ where: { id: quotedId }, select: { automationRunId: true, direction: true } });
+            if (quoted?.automationRunId) return quoted.automationRunId;
+            return quoted?.direction === MessageDirection.OUTBOUND ? false : null;
         }
         return /^([a-z0-9]+)\..+_\d+$/.exec(payload.raw?.postbackPayload ?? payload.raw?.quickReplyPayload ?? '')?.[1] ?? null;
     }

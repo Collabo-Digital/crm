@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { ChannelPlatform, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
@@ -65,6 +66,24 @@ export interface ProductBreakdown {
 
 const SNAPSHOT_SOURCE_SHOPIFY_QL = 'shopify_ql';
 const SNAPSHOT_SOURCE_FALLBACK = 'shopify_orders_fb';
+
+/** Every metric key either refresh path writes; `byProduct` is the roll-ups'. */
+const SHOPIFY_REFRESH_KEYS: Array<keyof NormalisedDailyMetrics> = [
+  'date',
+  'sessions',
+  'pageviews',
+  'sessionsWithCartAdditions',
+  'reachedCheckoutCount',
+  'addedToCartRate',
+  'reachedCheckoutRate',
+  'conversionRate',
+  'bounceRate',
+  'avgSessionDuration',
+  'orders',
+  'revenue',
+  'currency',
+  'byReferrer',
+];
 
 /** Diagnostic result returned from a refresh call — surfaced via the API
  * so the analytics page can show what happened without log-diving. */
@@ -584,6 +603,12 @@ export class ShopifyAnalyticsService {
 
   // ─── Persistence ─────────────────────────────────────────────────────────
 
+  /**
+   * The pixel and webhook roll-ups write their counts onto these same daily
+   * rows, so a refreshed day keeps every key but this refresh's own. Those are
+   * dropped first, including any the new values lack: `byReferrer` belongs on
+   * the latest day only, and the overview sums it across days.
+   */
   private async upsertSnapshots(
     organizationId: string,
     channelId: string,
@@ -591,29 +616,14 @@ export class ShopifyAnalyticsService {
     source: string,
   ): Promise<void> {
     for (const day of days) {
-      const date = new Date(`${day.date}T00:00:00.000Z`);
       const metrics = this.stripUndefined(day);
-      await this.prisma.analyticsSnapshot.upsert({
-        where: {
-          channelId_date_granularity: {
-            channelId,
-            date,
-            granularity: 'DAILY',
-          },
-        },
-        create: {
-          organizationId,
-          channelId,
-          date,
-          granularity: 'DAILY',
-          source,
-          metrics: metrics as Prisma.InputJsonValue,
-        },
-        update: {
-          source,
-          metrics: metrics as Prisma.InputJsonValue,
-        },
-      });
+      await this.prisma.$executeRaw(Prisma.sql`
+        INSERT INTO "analytics_snapshots" ("id", "organization_id", "channel_id", "date", "granularity", "source", "metrics", "updated_at")
+        VALUES (${randomUUID()}, ${organizationId}, ${channelId}, ${day.date}::date, 'DAILY', ${source}, ${JSON.stringify(metrics)}::jsonb, CURRENT_TIMESTAMP)
+        ON CONFLICT ("channel_id", "date", "granularity") DO UPDATE SET
+          "source" = EXCLUDED."source",
+          "metrics" = ("analytics_snapshots"."metrics" - ${SHOPIFY_REFRESH_KEYS}::text[]) || EXCLUDED."metrics",
+          "updated_at" = CURRENT_TIMESTAMP`);
     }
   }
 

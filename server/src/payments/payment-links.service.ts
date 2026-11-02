@@ -52,6 +52,9 @@ const phoneOf = (address: unknown): string | null => {
 };
 /** A draft completed in the CRM records how it was paid. */
 const draftPaymentMethod = (method: string | null): 'UPI' | 'CARD' | 'OTHER' => (method === 'upi' ? 'UPI' : method === 'card' ? 'CARD' : 'OTHER');
+/** The order's 'paid' timeline event for a payment by this link: how a follow-up run again knows the order was paid by it. */
+const paidVia = (link: Pick<PaymentLink, 'provider' | 'paymentId'>): string =>
+    `Paid online with ${link.provider === PaymentProvider.WHATSAPP_PAY ? 'WhatsApp Pay' : 'a Razorpay payment link'}${link.paymentId ? ` (${link.paymentId})` : ''}`;
 
 /**
  * Payment links from the merchant's own Razorpay account, sent in chat: for
@@ -457,18 +460,26 @@ export class PaymentLinksService implements OnModuleInit, OnApplicationShutdown 
         let orderId = link.orderId;
         try {
             const actor = await this.store.actorFor(link.organizationId, link.createdById);
-            const via = `Paid online with ${link.provider === PaymentProvider.WHATSAPP_PAY ? 'WhatsApp Pay' : 'a Razorpay payment link'}${link.paymentId ? ` (${link.paymentId})` : ''}`;
+            const via = paidVia(link);
             if (link.orderId) {
                 const order = await this.prisma.order.findUnique({ where: { id: link.orderId }, select: { financialStatus: true } });
                 if (order && order.financialStatus !== OrderFinancialStatus.PAID) await this.orders.markPaid(link.orderId, link.organizationId, actor, via);
                 if (link.tagOnPaid) await this.store.tagOrder(link.organizationId, link.orderId, link.tagOnPaid, actor);
             } else if (link.draftOrderId) {
-                const done = await this.drafts.complete(link.draftOrderId, link.organizationId, actor, {
-                    paymentPending: false,
-                    paymentMethod: draftPaymentMethod(link.paymentMethod),
-                    generateInvoice: true,
-                });
-                orderId = (done as { order?: { id?: string } | null }).order?.id ?? null;
+                // An edit after the link went out changes the total; completing would record the new total as paid in full.
+                const draft = await this.prisma.draftOrder.findUnique({ where: { id: link.draftOrderId }, select: { totalPrice: true, currency: true } });
+                if (draft && (!draft.totalPrice.equals(link.amount) || draft.currency !== link.currency)) {
+                    problems.push(
+                        `The draft order now totals ${formatMoney(draft.totalPrice.toString(), draft.currency)}, but ${formatMoney(link.amount.toString(), link.currency)} was paid on this ${link.provider === PaymentProvider.WHATSAPP_PAY ? 'bill' : 'link'}, so the draft was not completed. Settle the difference with the customer, then complete the draft.`,
+                    );
+                } else {
+                    const done = await this.drafts.complete(link.draftOrderId, link.organizationId, actor, {
+                        paymentPending: false,
+                        paymentMethod: draftPaymentMethod(link.paymentMethod),
+                        generateInvoice: true,
+                    });
+                    orderId = (done as { order?: { id?: string } | null }).order?.id ?? null;
+                }
             }
         } catch (err) {
             problems.push(err instanceof Error ? err.message : String(err));
@@ -500,8 +511,9 @@ export class PaymentLinksService implements OnModuleInit, OnApplicationShutdown 
 
     /**
      * Why this payment has to be refunded: another link or bill for the same
-     * order or draft was paid first, or the order was cancelled. Null when it
-     * is the payment that counts.
+     * order or draft was paid first, the order was cancelled or already paid
+     * another way, or the draft was completed or deleted. Null when it is the
+     * payment that counts.
      */
     private async refundNeeded(link: PaymentLink): Promise<{ message: string; orderId: string | null } | null> {
         if (!link.orderId && !link.draftOrderId) return null;
@@ -531,9 +543,22 @@ export class PaymentLinksService implements OnModuleInit, OnApplicationShutdown 
             };
         }
         if (link.orderId) {
-            const order = await this.prisma.order.findUnique({ where: { id: link.orderId }, select: { name: true, cancelledAt: true } });
+            const order = await this.prisma.order.findUnique({ where: { id: link.orderId }, select: { name: true, cancelledAt: true, financialStatus: true } });
             if (order?.cancelledAt) {
                 return { message: `Order ${order.name} was cancelled before this payment came in. Refund ${amount} to the customer from ${from}.`, orderId: link.orderId };
+            }
+            // Paid by this link when its follow-up is run again (a restart): markPaid recorded the payment.
+            if (order?.financialStatus === OrderFinancialStatus.PAID) {
+                const own = await this.prisma.orderTimelineEvent.findFirst({ where: { orderId: link.orderId, action: 'paid', message: paidVia(link) }, select: { id: true } });
+                if (!own) return { message: `Order ${order.name} was already paid before this payment came in. Refund ${amount} to the customer from ${from}.`, orderId: link.orderId };
+            }
+        } else if (link.draftOrderId) {
+            const draft = await this.prisma.draftOrder.findUnique({ where: { id: link.draftOrderId }, select: { name: true, completedAt: true, completedOrderId: true, deletedAt: true } });
+            const name = draft?.name ? `Draft order ${draft.name}` : 'The draft order';
+            if (draft?.deletedAt) return { message: `${name} was deleted before this payment came in. Refund ${amount} to the customer from ${from}.`, orderId: null };
+            // Completed after this payment came in is this link's own follow-up, run again.
+            if (draft?.completedAt && draft.completedAt < paidAt) {
+                return { message: `${name} was already completed before this payment came in. Refund ${amount} to the customer from ${from}.`, orderId: draft.completedOrderId };
             }
         }
         return null;

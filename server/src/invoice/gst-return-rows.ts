@@ -315,7 +315,29 @@ export function buildGstr1Sections(data: Gstr1Return, timeZone: string): CsvSect
     });
   }
 
+  sections.push(...unconvertedSections(data));
+
   return sections;
+}
+
+/**
+ * Documents the return left out for want of a rate into rupees. Emitted only
+ * when there are some, so the pack never reads as complete without them.
+ */
+function unconvertedSections(data: Gstr1Return | Gstr3bReturn): CsvSection[] {
+  if (!data.unconverted?.length) return [];
+  return [
+    {
+      title: 'Not in this return — no exchange rate into rupees on the order',
+      headers: ['Document number', 'Document type', 'Currency', 'Value in that currency'],
+      rows: data.unconverted.map((doc) => [
+        doc.invoiceNumber,
+        doc.status === 'CREDIT_NOTE' ? 'Credit note' : 'Invoice',
+        doc.currency,
+        doc.grandTotal,
+      ]),
+    },
+  ];
 }
 
 export const GSTR3B_SECTION_OUTWARD = '3.1(a) — Outward taxable supplies';
@@ -440,6 +462,7 @@ export function buildGstr3bSections(data: Gstr3bReturn): CsvSection[] {
         ],
       ],
     },
+    ...unconvertedSections(data),
   ];
 }
 

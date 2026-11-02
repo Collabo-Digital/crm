@@ -15,7 +15,18 @@ const ORG = 'org_1';
 const ORDER = 'order_1';
 const USER = 'user_1';
 
-function build({ warehousing, dispatchWarehouseId = null as string | null }) {
+const shirtLine = {
+  id: 'li_1',
+  quantity: 3,
+  variant: { id: 'var_1', trackQuantity: true, inventoryQuantity: 5, product: { metadata: null } },
+};
+
+function build({
+  warehousing,
+  dispatchWarehouseId = null as string | null,
+  order = {} as Record<string, unknown>,
+  lineItems = [shirtLine] as object[],
+}) {
   const updated = { id: ORDER, dispatchWarehouseId };
   const tx: any = {
     order: {
@@ -23,9 +34,7 @@ function build({ warehousing, dispatchWarehouseId = null as string | null }) {
       findUniqueOrThrow: jest.fn().mockResolvedValue(updated),
     },
     orderLineItem: {
-      findMany: jest.fn().mockResolvedValue([
-        { id: 'li_1', quantity: 3, variant: { id: 'var_1', trackQuantity: true, inventoryQuantity: 5 } },
-      ]),
+      findMany: jest.fn(() => Promise.resolve(lineItems)),
     },
     warehouse: { findFirst: jest.fn().mockResolvedValue({ id: 'wh_default' }) },
     productVariant: { update: jest.fn().mockResolvedValue({ inventoryQuantity: 8 }) },
@@ -34,6 +43,7 @@ function build({ warehousing, dispatchWarehouseId = null as string | null }) {
   };
   const prisma: any = {
     $transaction: jest.fn(async (fn: any) => fn(tx)),
+    orderFulfillment: { updateMany: jest.fn(() => Promise.resolve({ count: 0 })) },
   };
   const ledger = {
     isWarehousingEnabled: jest.fn().mockResolvedValue(warehousing),
@@ -46,20 +56,31 @@ function build({ warehousing, dispatchWarehouseId = null as string | null }) {
   const settings = {
     getProductSettings: jest.fn().mockResolvedValue({ trackQuantityGlobally: true }),
   };
+  // Shopify answers the fulfilment read, then the cancel.
+  const graphql = {
+    request: jest
+      .fn<Promise<unknown>, [unknown, string, Record<string, unknown>]>()
+      .mockResolvedValueOnce({ order: { fulfillments: [] } })
+      .mockResolvedValueOnce({ orderCancel: { orderCancelUserErrors: [] } }),
+  };
+  const oauth = {
+    getAccessToken: jest.fn(() => Promise.resolve({ token: 'shpat_1', shopDomain: 'shop.myshopify.com' })),
+  };
 
   const service = new OrderService(
     prisma, {} as any, {} as any, {} as any, {} as any,
-    {} as any, {} as any, {} as any, settings as any, { recomputeForCustomer: jest.fn() } as any,
+    {} as any, graphql as never, oauth as never, settings as any, { recomputeForCustomer: jest.fn() } as any,
     ledger as any, {} as any /* fx */, queue as any, { order: jest.fn() } as any /* commerceEvents */,
   );
-  // A MANUAL order with nothing to cancel remotely.
+  // A MANUAL order with nothing to cancel remotely, unless told otherwise.
   (service as any).loadOrderWithChannel = jest.fn().mockResolvedValue({
     id: ORDER,
     cancelledAt: null,
     customerId: null,
     channel: { id: 'ch_manual', platform: ChannelPlatform.MANUAL },
+    ...order,
   });
-  return { service, tx, ledger, queue };
+  return { service, tx, ledger, queue, graphql };
 }
 
 const dto = { reason: 'CUSTOMER' as any, restock: true };
@@ -117,5 +138,113 @@ describe('OrderService.cancel restock', () => {
       select: { inventoryQuantity: true },
     });
     expect(queue.add).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A CRM sale pushed to Shopify and rebadged onto its channel. Collabo took its
+ * stock and the push told Shopify not to (BYPASS, `shopifyStockPushed`), so
+ * cancelling it must put the units back in Collabo, and Shopify must not add
+ * units it never took.
+ */
+describe('OrderService.cancel of a CRM sale pushed to Shopify', () => {
+  const pushedSale = {
+    externalId: '5001',
+    channel: { id: 'ch_shopify', platform: ChannelPlatform.SHOPIFY },
+    metadata: { source: 'offline', shopifyStockPushed: true },
+  };
+  const cancelVariables = (graphql: { request: jest.Mock<Promise<unknown>, [unknown, string, Record<string, unknown>]> }) =>
+    graphql.request.mock.calls[1][2];
+
+  it('restocks the location the sale took the units from, and Shopify restocks nothing', async () => {
+    const { service, ledger, queue, graphql } = build({
+      warehousing: true,
+      dispatchWarehouseId: 'wh_store',
+      order: pushedSale,
+    });
+
+    await service.cancel(ORDER, ORG, USER, { reason: 'CUSTOMER', restock: true });
+
+    expect(ledger.applyMovement).toHaveBeenCalledTimes(1);
+    expect(ledger.applyMovement).toHaveBeenCalledWith(
+      expect.objectContaining({ warehouseId: 'wh_store', variantId: 'var_1', quantity: 3, reason: 'restock' }),
+      expect.anything(),
+    );
+    expect(cancelVariables(graphql)).toMatchObject({ restock: false });
+    expect(queue.add).toHaveBeenCalledWith(
+      'push-availability',
+      expect.objectContaining({ organizationId: ORG, variantIds: ['var_1'] }),
+      expect.anything(),
+    );
+  });
+
+  it('puts the units back on the variant and pushes its figure in a workspace without locations', async () => {
+    const built = build({ warehousing: false, order: pushedSale });
+    const { service, ledger, queue, graphql } = built;
+
+    await service.cancel(ORDER, ORG, USER, { reason: 'CUSTOMER', restock: true });
+
+    expect(ledger.applyMovement).not.toHaveBeenCalled();
+    expect((built.tx as { productVariant: { update: jest.Mock } }).productVariant.update).toHaveBeenCalledWith({
+      where: { id: 'var_1' },
+      data: { inventoryQuantity: { increment: 3 } },
+      select: { inventoryQuantity: true },
+    });
+    expect(cancelVariables(graphql)).toMatchObject({ restock: false });
+    expect(queue.add).toHaveBeenCalledWith(
+      'push-availability',
+      expect.objectContaining({ organizationId: ORG, variantIds: ['var_1'] }),
+      expect.anything(),
+    );
+  });
+
+  it('leaves the restock of an order Shopify took the stock for to Shopify', async () => {
+    const { service, ledger, queue, graphql } = build({
+      warehousing: true,
+      order: { ...pushedSale, metadata: { source: 'shopify' } },
+    });
+
+    await service.cancel(ORDER, ORG, USER, { reason: 'CUSTOMER', restock: true });
+
+    expect(ledger.applyMovement).not.toHaveBeenCalled();
+    expect(cancelVariables(graphql)).toMatchObject({ restock: true });
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A point-of-sale custom item rides on a hidden, untracked variant, and the
+ * sale never takes stock for it, even when the org tracks every variant. So
+ * its cancellation must not put any back.
+ */
+describe('OrderService.cancel of a bill with a custom item', () => {
+  const customLine = {
+    id: 'li_2',
+    quantity: 2,
+    variant: { id: 'var_custom', trackQuantity: false, inventoryQuantity: 0, product: { metadata: { posCustomItem: true } } },
+  };
+
+  it('restocks only the stocked line, in a workspace with locations', async () => {
+    const { service, ledger, queue } = build({ warehousing: true, lineItems: [shirtLine, customLine] });
+
+    await service.cancel(ORDER, ORG, USER, { reason: 'CUSTOMER', restock: true });
+
+    expect(ledger.applyMovement).toHaveBeenCalledTimes(1);
+    expect(ledger.applyMovement).toHaveBeenCalledWith(expect.objectContaining({ variantId: 'var_1' }), expect.anything());
+    expect(queue.add).toHaveBeenCalledWith(
+      'push-availability',
+      expect.objectContaining({ variantIds: ['var_1'] }),
+      expect.anything(),
+    );
+  });
+
+  it('restocks only the stocked line, in a workspace without locations', async () => {
+    const built = build({ warehousing: false, lineItems: [shirtLine, customLine] });
+
+    await built.service.cancel(ORDER, ORG, USER, { reason: 'CUSTOMER', restock: true });
+
+    const update = (built.tx as { productVariant: { update: jest.Mock } }).productVariant.update;
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'var_1' } }));
   });
 });

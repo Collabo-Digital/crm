@@ -187,11 +187,38 @@ export class WarehouseService {
         'Set another warehouse as default instead of unsetting this one.',
       );
     }
-    // Switching a location off takes it out of the stores every member works
-    // at. Not while someone works only here: their list would empty, and an
-    // empty list means every location.
+    // Against the location as this edit leaves it: the stored flag alone lets
+    // one edit make a location both the default and inactive.
+    if (dto.isDefault === true && !(dto.isActive ?? warehouse.isActive)) {
+      throw new BadRequestException(
+        'An inactive location cannot be the default. Make it active first.',
+      );
+    }
     const closing = dto.isActive === false && warehouse.isActive;
     if (closing) {
+      // An inactive location takes no adjustment, while its units still count
+      // in each variant's cached quantity: stock left there is sold from other
+      // locations and can never be corrected.
+      const holding = await this.prisma.stockLevel.findFirst({
+        where: {
+          warehouseId: id,
+          OR: [
+            { available: { not: 0 } },
+            { reserved: { not: 0 } },
+            { qc: { not: 0 } },
+            { damaged: { not: 0 } },
+          ],
+        },
+        select: { id: true },
+      });
+      if (holding) {
+        throw new BadRequestException(
+          `${warehouse.name} still holds stock. Set every quantity there to 0 before making it inactive.`,
+        );
+      }
+      // Switching a location off takes it out of the stores every member works
+      // at. Not while someone works only here: their list would empty, and an
+      // empty list means every location.
       const stranded = await onlyAtLocations(this.prisma, orgId, [id]);
       if (stranded.length > 0) throw new BadRequestException(strandedMessage(stranded, warehouse.name));
     }

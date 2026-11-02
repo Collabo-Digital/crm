@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { ChannelPlatform, OrderFinancialStatus } from '@prisma/client';
@@ -23,6 +24,8 @@ function build(opts: {
   displayFinancialStatus?: string | null;
   captureStatus?: string;
   unsettled?: { amount: string; currencyCode: string } | null;
+  /** Merged into the order the service loads. */
+  order?: Record<string, unknown>;
 } = {}) {
   const authTx = {
     id: 'gid://shopify/OrderTransaction/1', kind: 'AUTHORIZATION', status: 'SUCCESS',
@@ -51,7 +54,11 @@ function build(opts: {
       }),
   };
   const tx = {
-    order: { update: jest.fn(async ({ data }: any) => ({ id: ORDER, ...data })) },
+    order: {
+      update: jest.fn(async ({ data }: any) => ({ id: ORDER, ...data })),
+      updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
+      findUniqueOrThrow: jest.fn(() => Promise.resolve({ id: ORDER, financialStatus: OrderFinancialStatus.PAID })),
+    },
     orderTimelineEvent: { create: jest.fn().mockResolvedValue({}) },
   };
   const prisma = {
@@ -60,6 +67,7 @@ function build(opts: {
         id: ORDER, externalId: '999', organizationId: ORG,
         financialStatus: OrderFinancialStatus.PARTIALLY_PAID,
         channel: { id: 'ch_1', platform: ChannelPlatform.SHOPIFY },
+        ...opts.order,
       }),
     },
     $transaction: jest.fn(async (fn: any) => fn(tx)),
@@ -68,13 +76,14 @@ function build(opts: {
   const oauth = {
     getAccessToken: jest.fn().mockResolvedValue({ token: 'test-only', shopDomain: 'example.myshopify.com' }),
   };
+  const commerceEvents = { order: jest.fn(() => Promise.resolve(undefined)) };
   const service = new OrderService(
     prisma as any, {} as any, {} as any, invoices as any, {} as any, {} as any,
     graphql as any, oauth as any, {} as any, {} as any, {} as any, {} as any,
-    {} as any, { order: jest.fn() } as any /* commerceEvents */,
+    {} as any, commerceEvents as never,
   );
   const captureInput = () => graphql.request.mock.calls[1][2].input;
-  return { service, prisma, tx, graphql, invoices, captureInput };
+  return { service, prisma, tx, graphql, invoices, captureInput, commerceEvents };
 }
 
 describe('capture — what is recorded', () => {
@@ -185,6 +194,72 @@ describe('capture — the ceiling and the currency', () => {
       /totalUnsettledSet\s*{.*presentmentMoney\s*{\s*amount\s+currencyCode\s*}/,
     );
     expect(ORDER_CAPTURE_MUTATION).toMatch(/order\s*{\s*displayFinancialStatus\s*}/);
+  });
+});
+
+/**
+ * Marking an order paid fires the 'paid' automations and, with auto-invoicing
+ * on, issues an invoice the GST return counts, so it is refused on an order
+ * that is over, and happens once however many clicks race to it.
+ */
+describe('markPaid', () => {
+  const unpaidManualOrder = (over: Record<string, unknown> = {}) => ({
+    externalId: 'manual_1',
+    financialStatus: OrderFinancialStatus.PENDING,
+    cancelledAt: null,
+    channel: { id: 'ch_manual', platform: ChannelPlatform.MANUAL },
+    ...over,
+  });
+
+  it('refuses a cancelled order, and nothing follows', async () => {
+    const { service, prisma, invoices, commerceEvents } = build({
+      order: unpaidManualOrder({ cancelledAt: new Date('2026-10-30T10:00:00Z') }),
+    });
+
+    const refusal = service.markPaid(ORDER, ORG, 'u1');
+
+    await expect(refusal).rejects.toBeInstanceOf(BadRequestException);
+    await expect(refusal).rejects.toThrow('Cannot mark a cancelled order as paid.');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(invoices.autoInvoiceForPaidOrder).not.toHaveBeenCalled();
+    expect(commerceEvents.order).not.toHaveBeenCalled();
+  });
+
+  it.each([OrderFinancialStatus.REFUNDED, OrderFinancialStatus.VOIDED])('refuses a %s order', async (financialStatus) => {
+    const { service, prisma } = build({ order: unpaidManualOrder({ financialStatus }) });
+
+    await expect(service.markPaid(ORDER, ORG, 'u1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('marks an open, unpaid order paid, and invoices it', async () => {
+    const { service, tx, invoices, commerceEvents } = build({ order: unpaidManualOrder() });
+
+    await service.markPaid(ORDER, ORG, 'u1');
+
+    expect(tx.order.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: ORDER,
+        organizationId: ORG,
+        cancelledAt: null,
+        financialStatus: {
+          notIn: [OrderFinancialStatus.PAID, OrderFinancialStatus.REFUNDED, OrderFinancialStatus.VOIDED],
+        },
+      },
+      data: { financialStatus: OrderFinancialStatus.PAID },
+    });
+    expect(invoices.autoInvoiceForPaidOrder).toHaveBeenCalledWith(ORG, ORDER);
+    expect(commerceEvents.order).toHaveBeenCalledWith(ORDER, ['paid']);
+  });
+
+  it('refuses the loser of two racing clicks, which raises no second paid', async () => {
+    const { service, tx, invoices, commerceEvents } = build({ order: unpaidManualOrder() });
+    tx.order.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(service.markPaid(ORDER, ORG, 'u1')).rejects.toThrow('Order is already paid');
+    expect(tx.orderTimelineEvent.create).not.toHaveBeenCalled();
+    expect(invoices.autoInvoiceForPaidOrder).not.toHaveBeenCalled();
+    expect(commerceEvents.order).not.toHaveBeenCalled();
   });
 });
 

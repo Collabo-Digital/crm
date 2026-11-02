@@ -24,7 +24,8 @@ describe('switching a location off', () => {
       },
       organizationMember: { findMany: jest.fn(() => Promise.resolve(members)) },
       teamInvite: { findMany: jest.fn(() => Promise.resolve(invites)) },
-      stockLevel: { groupBy: jest.fn(() => Promise.resolve([])) },
+      // The store holds no stock, so only the members decide whether it may close.
+      stockLevel: { groupBy: jest.fn(() => Promise.resolve([])), findFirst: jest.fn(() => Promise.resolve(null)) },
       organization: { findUnique: jest.fn(() => Promise.resolve({ gstEnabled: false })) },
       organizationGstin: { findMany: jest.fn(() => Promise.resolve([])), count: jest.fn(() => Promise.resolve(0)) },
       shopifyLocationLink: { findMany: jest.fn(() => Promise.resolve([])) },

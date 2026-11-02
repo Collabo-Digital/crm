@@ -110,8 +110,10 @@ export class AnalyticsDashboardService {
   async getDashboard(orgId: string, query: QueryAnalyticsDto): Promise<AnalyticsDashboard> {
     const channel = query.channel ?? 'all';
     const days = rangeToDays(query.range);
-    const since = this.daysAgo(days);
-    const prevSince = this.daysAgo(days * 2);
+    // Today and the days before it, `days` in all: the days the trend charts,
+    // compared with as many days before them.
+    const since = this.daysAgo(days - 1);
+    const prevSince = this.daysAgo(days * 2 - 1);
 
     const channelIds = await this.resolveChannelIds(orgId, channel);
     // Filter requested but the org has no channels on that platform —
@@ -186,14 +188,12 @@ export class AnalyticsDashboardService {
     const sum = (pick: (m: MetricBlob) => number | undefined) =>
       metrics.reduce((acc, m) => acc + (pick(m) ?? 0), 0);
 
-    const pixelAtc = sum((m) => m.pixelAddToCartSessions);
-    const webhookAtc = sum((m) => m.cartsCreatedFromWebhook);
-    const pixelCheckout = sum((m) => m.pixelCheckoutStartedSessions);
-    const webhookCheckout = sum((m) => m.checkoutsStartedFromWebhook);
+    // Source picked day by day, as `buildTrend` picks it, so the cards add up
+    // to the chart beside them.
+    const addToCart = sum((m) => m.pixelAddToCartSessions ?? m.cartsCreatedFromWebhook);
+    const checkout = sum((m) => m.pixelCheckoutStartedSessions ?? m.checkoutsStartedFromWebhook);
     const completed = sum((m) => m.pixelCheckoutCompletedSessions);
 
-    const addToCart = pixelAtc > 0 ? pixelAtc : webhookAtc;
-    const checkout = pixelCheckout > 0 ? pixelCheckout : webhookCheckout;
     const abandoned = Math.max(0, addToCart - completed);
     return { addToCart, checkout, abandoned };
   }

@@ -113,6 +113,69 @@ export interface ReturnInvoice {
   lineItems: ReturnLineItem[];
 }
 
+/**
+ * A document priced in another currency whose order carries no rate into
+ * rupees. A return is filed in rupees, so it is left out of every figure and
+ * listed instead: adding it unconverted would book $2,000 as ₹2,000.
+ */
+export interface UnconvertedDocument {
+  invoiceNumber: string;
+  /** ISSUED or CREDIT_NOTE. */
+  status: InvoiceStatus;
+  currency: string;
+  /** In `currency`, not rupees. */
+  grandTotal: number;
+}
+
+/**
+ * The same document with every amount in rupees, at `rate` rupees per unit of
+ * its own currency.
+ *
+ * Lines are converted and rounded to the paisa, and the document's taxable
+ * value and tax heads are their sums, so the converted document adds up the way
+ * a rupee one does: the line-wise tables (B2CS, HSN, 3.1(a)) agree with the
+ * invoice-wise ones and with the totals. The B2CL threshold then compares
+ * rupees with rupees.
+ */
+export function inRupees(
+  invoice: ReturnInvoice,
+  rate: Prisma.Decimal.Value,
+): ReturnInvoice {
+  const convert = (value: unknown) =>
+    dec(value).times(rate).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+
+  const lineItems = (invoice.lineItems ?? []).map((item) => {
+    const cgstAmount = convert(item.cgstAmount);
+    const sgstAmount = convert(item.sgstAmount);
+    const igstAmount = convert(item.igstAmount);
+    return {
+      ...item,
+      taxableValue: convert(item.taxableValue),
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      totalTax: cgstAmount.plus(sgstAmount).plus(igstAmount),
+    };
+  });
+  const sum = (pick: (item: (typeof lineItems)[number]) => Prisma.Decimal) =>
+    lineItems.reduce((total, item) => total.plus(pick(item)), ZERO);
+
+  return {
+    ...invoice,
+    subtotal: sum((item) => item.taxableValue),
+    totalCgst: sum((item) => item.cgstAmount),
+    totalSgst: sum((item) => item.sgstAmount),
+    totalIgst: sum((item) => item.igstAmount),
+    totalTax: sum((item) => item.totalTax),
+    grandTotal: convert(invoice.grandTotal),
+    creditNoteForGrandTotal:
+      invoice.creditNoteForGrandTotal == null
+        ? invoice.creditNoteForGrandTotal
+        : convert(invoice.creditNoteForGrandTotal),
+    lineItems,
+  };
+}
+
 export interface Gstr1B2bInvoiceRow {
   invoiceNumber: string;
   invoiceDate: Date | string;
@@ -257,6 +320,12 @@ export interface Gstr1Return {
   nilRated: Gstr1NilRatedRow[];
   /** Table 9B — credit notes against earlier invoices (CDNR / CDNUR). */
   creditNotes: Gstr1CreditNoteRow[];
+  /**
+   * Documents left out of every figure here for want of a rate into rupees.
+   * Attached by the service, and only when there is one, so a rupee-only
+   * return is unchanged.
+   */
+  unconverted?: UnconvertedDocument[];
   totals: {
     totalTaxable: number;
     totalCgst: number;
@@ -367,6 +436,8 @@ export interface Gstr3bReturn {
      */
     entriesWithUnknownTax: number;
   };
+  /** As on GSTR-1: documents left out for want of a rate into rupees. */
+  unconverted?: UnconvertedDocument[];
   taxPayable: {
     cgst: number;
     sgst: number;
