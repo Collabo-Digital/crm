@@ -232,8 +232,9 @@ export default function ProductDetailPage() {
   // Back to the list as it was left: same page, search and filters.
   const productsPath = useListReturnPath("products", "/products");
   const { isVendor, role, permissions } = useCurrentRole();
-  // Without products.edit the page is for looking up: every field is
-  // disabled, and the reason is written out above them.
+  // Without products.edit the page is for looking up: every product field is
+  // disabled, with the reason written out above them. The stock at each
+  // location still follows inventory.adjust.
   const readOnly = !canEditProducts(role, permissions);
   const { data: product, isLoading, isError, refetch } = useProduct(id);
   const { data: org } = useCurrentOrg();
@@ -811,7 +812,10 @@ export default function ProductDetailPage() {
     savingRef.current = true;
     setIsSavingAll(true);
     try {
-      const data = buildProductPatch();
+      // A member without products.edit saves stock at locations only. Any
+      // product difference is the editor's own markup (Quill rewrites the
+      // description's spaces), which the API would refuse from them.
+      const data = readOnly ? {} : buildProductPatch();
       if (Object.keys(data).length > 0) {
         await updateMutation.mutateAsync({ id: product.id, data });
       }
@@ -819,7 +823,7 @@ export default function ProductDetailPage() {
       // The default variant of a simple product is included: Overview edits
       // the same draft the variant panel does.
       const variantUpdates: Array<UpdateVariantRequest & { variantId: string }> = [];
-      for (const variant of product.variants ?? []) {
+      for (const variant of readOnly ? [] : product.variants ?? []) {
         const was = base.variantDrafts[variant.id];
         const draft = variantDrafts[variant.id];
         if (!was || !draft) continue;
@@ -889,7 +893,8 @@ export default function ProductDetailPage() {
 
   /** Saving never pushes on its own; the pill's toggle opts in. */
   function afterSuccessfulSave() {
-    if (!product || !isOnShopify) return;
+    // Pushing is a product change: a member without products.edit saved stock only.
+    if (!product || !isOnShopify || readOnly) return;
     if (!syncOnSave) {
       setAfterSave(true);
       return;
@@ -1178,8 +1183,8 @@ export default function ProductDetailPage() {
           <div className="space-y-0.5">
             <AlertTitle>You can look this product up, not change it</AlertTitle>
             <AlertDescription>
-              Changing products, prices and stock counts needs "Add and change products and prices". An owner or admin
-              can turn it on for you in Settings › Team members.
+              Changing products and their prices needs "Add and change products and prices". An owner or admin can
+              turn it on for you in Settings › Team members.
             </AlertDescription>
           </div>
         </Alert>
@@ -1750,7 +1755,8 @@ export default function ProductDetailPage() {
                 onWarehouseChange={patchWarehouseDraft}
                 onLevelsLoaded={seedWarehouses}
                 onRevertVariant={revertVariant}
-                disabled={isSaving || readOnly}
+                disabled={isSaving}
+                readOnly={readOnly}
                 warehousingEnabled={warehousingEnabled}
                 trackForced={trackForced}
                 oversellForced={oversellForced}
@@ -2068,10 +2074,12 @@ export default function ProductDetailPage() {
         }}
       />
 
-      {!readOnly && <ProductSavePill
+      {/* Shown to a member without products.edit too: the stock at each
+          location is theirs to change with inventory.adjust. */}
+      <ProductSavePill
         changes={pendingChanges}
         isSaving={isSaving}
-        canSync={isOnShopify}
+        canSync={isOnShopify && !readOnly}
         syncOnSave={syncOnSave}
         onToggleSync={toggleSyncOnSave}
         onSave={requestSave}
@@ -2082,7 +2090,7 @@ export default function ProductDetailPage() {
           syncMutation.mutate(product.id, { onSuccess: () => setAfterSave(false) })
         }
         onDismissAfterSave={() => setAfterSave(false)}
-      />}
+      />
     </div >
   );
 }

@@ -57,6 +57,7 @@ export function VariantPriceStockCard({
   onLevelsLoaded,
   onRevertVariant,
   disabled,
+  readOnly,
   warehousingEnabled,
   trackForced,
   oversellForced,
@@ -79,6 +80,8 @@ export function VariantPriceStockCard({
   onRevertVariant: (variantId: string) => void;
   /** The page is saving. */
   disabled: boolean;
+  /** The member may not change products (no products.edit). */
+  readOnly: boolean;
   warehousingEnabled: boolean;
   trackForced: boolean;
   oversellForced: boolean;
@@ -146,6 +149,7 @@ export function VariantPriceStockCard({
         oversellForced={oversellForced}
         isVendor={isVendor}
         disabled={disabled}
+        readOnly={readOnly}
         onChange={(patch) => onDraftChange(editingVariant, patch)}
         onWarehouseChange={(warehouseId, value) =>
           onWarehouseChange(v.id, warehouseId, value)

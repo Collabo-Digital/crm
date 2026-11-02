@@ -101,7 +101,8 @@ export function VariantInlineEditor({
   trackForced,
   oversellForced,
   isVendor,
-  disabled,
+  disabled: saving,
+  readOnly,
   onChange,
   onWarehouseChange,
   onLevelsLoaded,
@@ -123,6 +124,8 @@ export function VariantInlineEditor({
   isVendor: boolean;
   /** The page is saving. */
   disabled: boolean;
+  /** The member may not change products (no products.edit). */
+  readOnly: boolean;
   onChange: (patch: Partial<VariantDraft>) => void;
   onWarehouseChange: (warehouseId: string, value: string) => void;
   /** Seeds the page's per-warehouse draft; see VariantWarehouseStockEditor. */
@@ -133,6 +136,9 @@ export function VariantInlineEditor({
   const [advanced, setAdvanced] = useState(true);
   const generateSkus = useGenerateSkusMutation();
   const canLabel = useCurrentRole().can("inventory.labels");
+  // The quantity at each location is left out: it saves as a stock correction,
+  // which inventory.adjust decides, so the stock editor checks that itself.
+  const disabled = saving || readOnly;
 
   const changes = changedVariantFields(baseline, draft, { warehousingEnabled }).map(
     (key) => VARIANT_FIELD_LABELS[key],
@@ -319,7 +325,7 @@ export function VariantInlineEditor({
                     values={warehouseQty?.form ?? {}}
                     onChange={onWarehouseChange}
                     onLevelsLoaded={onLevelsLoaded}
-                    disabled={disabled || !trackQuantity}
+                    disabled={saving || !trackQuantity}
                   />
                 ) : (
                   <div className="rounded-lg border border-border px-4 py-3 text-caption text-muted-foreground">
