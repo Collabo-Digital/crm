@@ -60,7 +60,7 @@ const trigger = (id: string, over: Row = {}, once: string = 'ever'): Row => ({
     ...over,
 });
 
-function harness(opts: { events: Row[]; triggers?: Row[]; ranBefore?: string[]; waiting?: Row | null; order?: Row | null }) {
+function harness(opts: { events: Row[]; triggers?: Row[]; ranBefore?: string[]; waiting?: Row | null; order?: Row | null; messages?: Record<string, Row> }) {
     const events = new Map(opts.events.map((e) => [e.id, e]));
     const ranBefore = new Set(opts.ranBefore ?? []);
     const created: Row[] = [];
@@ -98,7 +98,7 @@ function harness(opts: { events: Row[]; triggers?: Row[]; ranBefore?: string[]; 
         },
         channelContact: { findUnique: jest.fn(async () => ({ customerId: null, attributes: {} })), update: jest.fn() },
         automation: { update: jest.fn(async () => ({})) },
-        message: { findUnique: jest.fn(async () => null) },
+        message: { findUnique: jest.fn(({ where }: { where: { id: string } }) => Promise.resolve(opts.messages?.[where.id] ?? null)) },
         order: { findUnique: jest.fn(async () => opts.order ?? null) },
     };
     const jobs = { run: jest.fn(), resume: jest.fn() };
@@ -202,6 +202,22 @@ describe('AutomationDispatcher — the recommended pack', () => {
         const typed = harness({ events: [tap({ type: 'text', text: { body: 'yes' } }, 'yes')], waiting: waitingRun });
         await typed.dispatcher.handle('e1');
         expect(handedVars(typed)).not.toHaveProperty('last_reply_payload');
+    });
+
+    it('gives a tap on a broadcast’s or an agent’s message to no waiting run', async () => {
+        const messages = { in1: { replyToMessageId: 'bm1' }, bm1: { automationRunId: null, direction: 'OUTBOUND' } };
+        const broadcastTap = harness({ events: [{ ...tap({ type: 'button', button: { text: 'Yes', payload: 'Yes' } }, 'Yes'), messageId: 'in1' }], waiting: waitingRun, messages });
+        await broadcastTap.dispatcher.handle('e1');
+        expect(broadcastTap.jobs.resume).not.toHaveBeenCalled();
+        expect(broadcastTap.prisma.automationRun.updateMany).not.toHaveBeenCalled();
+
+        // A reply quoting nothing, or the customer's own message, still goes to the run waiting for one.
+        const typed = harness({ events: [tap({ type: 'text', text: { body: 'Yes' } }, 'Yes')], waiting: waitingRun, messages });
+        await typed.dispatcher.handle('e1');
+        expect(typed.jobs.resume).toHaveBeenCalledWith('r1', 'reply');
+        const ownQuoted = harness({ events: [{ ...tap({ type: 'text', text: { body: 'Yes' } }, 'Yes'), messageId: 'in1' }], waiting: waitingRun, messages: { ...messages, bm1: { automationRunId: null, direction: 'INBOUND' } } });
+        await ownQuoted.dispatcher.handle('e1');
+        expect(ownQuoted.jobs.resume).toHaveBeenCalledWith('r1', 'reply');
     });
 
     const orderEvent = (eventType: string, occurredAt = at(0)) => event({ eventType, externalId: 'ord1:created', orderId: 'ord1', text: null, occurredAt, payload: { raw: { vars: {} } } });
