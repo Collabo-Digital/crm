@@ -137,6 +137,7 @@ export const SOURCE_LABEL: Partial<Record<MessageSource, string>> = {
   BUSINESS_APP: "WhatsApp Business app",
   OTHER_APP: "Another app",
   SYSTEM: "Collabo",
+  API: "API",
 };
 
 export const PRESENCE_LABEL: Record<InboxPresence, string> = {

@@ -3993,7 +3993,9 @@ export type MessageSource =
   | "BROADCAST"
   | "BUSINESS_APP"
   | "OTHER_APP"
-  | "SYSTEM";
+  | "SYSTEM"
+  /** Sent by another system through the public API, with an API key. */
+  | "API";
 export type InboxAvailability = "ONLINE" | "AWAY";
 export type InboxPresence = "online" | "away" | "offline";
 export type InboxShareScope = "PERSONAL" | "TEAM" | "ORGANIZATION";
