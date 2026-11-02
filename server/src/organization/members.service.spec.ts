@@ -45,13 +45,19 @@ describe('MembersService', () => {
       prisma.product.findFirst.mockResolvedValue({ id: 'p1' });
       await service.updateRole('org', 'm1', UserRole.VENDOR, ' Acme ');
       expect(prisma.product.findFirst.mock.calls[0][0].where).toMatchObject({ organizationId: 'org', OR: [{ vendorKey: 'Acme' }, { vendor: 'Acme' }] });
-      expect(prisma.organizationMember.update).toHaveBeenCalledWith({ where: { id: 'm1' }, data: { role: UserRole.VENDOR, vendorScope: 'Acme' } });
+      expect(prisma.organizationMember.update).toHaveBeenCalledWith({ where: { id: 'm1', role: { not: UserRole.OWNER } }, data: { role: UserRole.VENDOR, vendorScope: 'Acme' } });
     });
 
     it('clears the vendor when the member moves to another role', async () => {
       const { service, prisma } = build(UserRole.VENDOR);
       await service.updateRole('org', 'm1', UserRole.AGENT);
-      expect(prisma.organizationMember.update).toHaveBeenCalledWith({ where: { id: 'm1' }, data: { role: UserRole.AGENT, vendorScope: null } });
+      expect(prisma.organizationMember.update).toHaveBeenCalledWith({ where: { id: 'm1', role: { not: UserRole.OWNER } }, data: { role: UserRole.AGENT, vendorScope: null } });
+    });
+
+    it('changes the role only while the member is still not the owner, in case a transfer to them just committed', async () => {
+      const { service, prisma } = build(UserRole.ADMIN);
+      await service.updateRole('org', 'm1', UserRole.MANAGER);
+      expect(prisma.organizationMember.update).toHaveBeenCalledWith({ where: { id: 'm1', role: { not: UserRole.OWNER } }, data: { role: UserRole.MANAGER, vendorScope: null } });
     });
 
     it('refuses INFLUENCER, which only an influencer invitation grants', async () => {
@@ -67,7 +73,8 @@ describe('MembersService', () => {
 
       await service.remove('org', 'm1');
 
-      expect(prisma.organizationMember.update).toHaveBeenCalledWith({ where: { id: 'm1' }, data: { isActive: false } });
+      // Written only while still not the owner: a transfer to them may have just committed.
+      expect(prisma.organizationMember.update).toHaveBeenCalledWith({ where: { id: 'm1', role: { not: UserRole.OWNER } }, data: { isActive: false } });
       expect(prisma.conversation.findMany.mock.calls[0][0].where).toEqual({
         organizationId: { in: ['org'] },
         assignedUserId: 'u2',

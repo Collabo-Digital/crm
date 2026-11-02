@@ -86,8 +86,10 @@ export class MembersService {
         }
         const scope = role === UserRole.VENDOR ? await resolveVendorScope(this.prisma, orgId, vendorScope) : null;
 
+        // Written only while still not the owner: an ownership transfer to
+        // this member may have committed since the check above.
         const updated = await this.prisma.organizationMember.update({
-            where: { id: memberId },
+            where: { id: memberId, role: { not: UserRole.OWNER } },
             data: { role, vendorScope: scope },
         });
 
@@ -155,8 +157,9 @@ export class MembersService {
         }
 
         const { removed, released } = await this.prisma.$transaction(async (tx) => ({
+            // Not the owner at write time either (see updateRole).
             removed: await tx.organizationMember.update({
-                where: { id: memberId },
+                where: { id: memberId, role: { not: UserRole.OWNER } },
                 data: { isActive: false },
             }),
             released: await releaseMemberWork(tx, [orgId], member.userId),
