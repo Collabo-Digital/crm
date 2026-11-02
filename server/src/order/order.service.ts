@@ -814,6 +814,7 @@ export class OrderService {
         JOIN "orders" o ON o."id" = li."order_id"
         WHERE o."organization_id" = ${orgId}
           AND o."deleted_at" IS NULL
+          AND o."cancelled_at" IS NULL
           AND o."financial_status"::text IN ('PAID', 'PARTIALLY_PAID')
           AND o."external_created_at" >= ${from}
           AND o."external_created_at" <= ${to}
