@@ -105,3 +105,35 @@ describe('EmailService — user-supplied names are escaped in invitation HTML', 
         expect(html()).not.toMatch(/<a href="https:\/\/evil|<b>Invitee|<i>Inviter/);
     });
 });
+
+describe('EmailService — an ownership transfer tells both people', () => {
+    function build() {
+        const sendMail = jest.fn().mockResolvedValue(undefined);
+        (nodemailer.createTransport as jest.Mock).mockReturnValueOnce({ verify: jest.fn(), sendMail });
+        const values: Record<string, unknown> = {
+            nodeEnv: 'production',
+            frontendUrl: 'https://app.example.test',
+            'smtp.host': 'smtp.example.test',
+            'smtp.user': 'user',
+            'smtp.pass': 'pass',
+        };
+        const service = new EmailService({ get: (key: string) => values[key] } as never);
+        return { service, sent: () => sendMail.mock.calls as Array<[{ to: string; subject: string; html: string }]> };
+    }
+
+    it('mails the new owner and the old one, with the names escaped', async () => {
+        const { service, sent } = build();
+
+        await service.sendOwnershipTransferred({
+            orgName: '<b>Acme</b>',
+            previous: { email: 'asha@example.test', name: 'Asha <K>' },
+            next: { email: 'ravi@example.test', name: 'Ravi "R"' },
+        });
+
+        const byRecipient = Object.fromEntries(sent().map(([mail]) => [mail.to, mail]));
+        expect(Object.keys(byRecipient).sort()).toEqual(['asha@example.test', 'ravi@example.test']);
+        expect(byRecipient['ravi@example.test'].html).toContain('You are now the owner of &lt;b&gt;Acme&lt;/b&gt;');
+        expect(byRecipient['asha@example.test'].html).toContain('ask Ravi &quot;R&quot; to pass ownership back');
+        for (const [mail] of sent()) expect(mail.html).not.toMatch(/<b>Acme|Asha <K>/);
+    });
+});

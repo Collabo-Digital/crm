@@ -17,6 +17,7 @@ export type PermissionKey =
   | "inventory.labels"
   | "inventory.reports"
   | "reports.finance"
+  | "pos.sell"
   | "campaigns.view"
   | "campaigns.manage"
   | "chat.view_all"

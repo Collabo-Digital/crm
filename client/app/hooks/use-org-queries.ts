@@ -8,6 +8,7 @@ export const orgKeys = {
   list: () => [...orgKeys.all, "list"] as const,
   detail: (orgId: string) => [...orgKeys.all, "detail", orgId] as const,
   members: (orgId: string) => [...orgKeys.all, "members", orgId] as const,
+  jobTemplates: (orgId: string) => [...orgKeys.all, "job-templates", orgId] as const,
   invites: (orgId: string) => [...orgKeys.all, "invites", orgId] as const,
   influencers: (orgId: string) => [...orgKeys.all, "influencers", orgId] as const,
 };
@@ -41,6 +42,16 @@ export function useOrgMembers(orgId?: string | null) {
     queryKey: orgKeys.members(orgId!),
     queryFn: () => orgService.listMembers(orgId!),
     enabled: !!orgId,
+  });
+}
+
+/** The job templates for the access editor. They change only with a deploy. */
+export function useJobTemplates(orgId?: string | null) {
+  return useQuery({
+    queryKey: orgKeys.jobTemplates(orgId!),
+    queryFn: () => orgService.jobTemplates(orgId!),
+    enabled: !!orgId,
+    staleTime: Infinity,
   });
 }
 

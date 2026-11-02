@@ -2,6 +2,7 @@ import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserRole } from '@prisma/client';
 import { PermissionsGuard } from './permissions.guard';
+import { RequireAnyPermission, RequirePermissions } from '../decorators/require-permissions.decorator';
 import type { PermissionKey } from '../permissions';
 
 function contextFor(user: Record<string, unknown> | undefined): ExecutionContext {
@@ -59,7 +60,7 @@ describe('PermissionsGuard', () => {
     ).toThrow(ForbiddenException);
   });
 
-  it('lets a VIEWER through with an explicit grant (Accounts preset)', () => {
+  it('lets a VIEWER through with an explicit grant', () => {
     required = ['reports.finance'];
     expect(
       guard.canActivate(
@@ -88,5 +89,44 @@ describe('PermissionsGuard', () => {
     expect(() =>
       guard.canActivate(contextFor({ role: UserRole.AGENT })),
     ).toThrow(ForbiddenException);
+  });
+});
+
+describe('PermissionsGuard with @RequireAnyPermission', () => {
+  class Stock {
+    @RequireAnyPermission('inventory.adjust', 'inventory.receive')
+    adjust() {}
+    @RequirePermissions('inventory.view')
+    @RequireAnyPermission('inventory.adjust', 'inventory.receive')
+    both() {}
+  }
+  const stock = Stock.prototype as unknown as Record<'adjust' | 'both', () => void>;
+  const guard = new PermissionsGuard(new Reflector());
+  const run = (handler: () => void, user: Record<string, unknown>) =>
+    guard.canActivate({
+      getHandler: () => handler,
+      getClass: () => Stock,
+      switchToHttp: () => ({ getRequest: () => ({ user }) }),
+    } as unknown as ExecutionContext);
+
+  it('passes on any one of the keys', () => {
+    expect(run(stock.adjust, { role: UserRole.AGENT, permissions: ['inventory.receive'] })).toBe(true);
+    expect(run(stock.adjust, { role: UserRole.AGENT, permissions: ['inventory.adjust'] })).toBe(true);
+  });
+
+  it('refuses none of them, naming both', () => {
+    expect(() => run(stock.adjust, { role: UserRole.AGENT, permissions: ['inventory.view'] })).toThrow(
+      new ForbiddenException('Missing permission: inventory.adjust or inventory.receive'),
+    );
+  });
+
+  it('still asks for every key of @RequirePermissions beside it', () => {
+    expect(() => run(stock.both, { role: UserRole.AGENT, permissions: ['inventory.receive'] })).toThrow(ForbiddenException);
+    expect(run(stock.both, { role: UserRole.AGENT, permissions: ['inventory.view', 'inventory.receive'] })).toBe(true);
+  });
+
+  it('lets managers through and keeps vendors out', () => {
+    expect(run(stock.adjust, { role: UserRole.MANAGER, permissions: [] })).toBe(true);
+    expect(() => run(stock.adjust, { role: UserRole.VENDOR, permissions: ['inventory.receive'] })).toThrow(ForbiddenException);
   });
 });

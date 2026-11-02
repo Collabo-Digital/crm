@@ -1,6 +1,6 @@
 import { Navigate, useLocation } from "react-router";
 import { useAuthStore } from "~/stores/auth.store";
-import { getLandingPath } from "~/lib/sections";
+import { getLandingPath } from "~/lib/landing-path";
 
 /**
  * Protects /auth/* routes from authenticated users.

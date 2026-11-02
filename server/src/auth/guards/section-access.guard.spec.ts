@@ -2,7 +2,7 @@ import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserRole } from '@prisma/client';
 import { SectionAccessGuard } from './section-access.guard';
-import { RequireSection, REQUIRE_SECTION_KEY } from '../decorators/require-section.decorator';
+import { RequireSection, REQUIRE_SECTION_KEY, SectionOrPermission } from '../decorators/require-section.decorator';
 import { buildSessionPayload } from '../session-payload.util';
 import type { SectionKey } from '../permissions';
 
@@ -100,6 +100,46 @@ describe('RequireSection', () => {
     expect(read(Ctrl.prototype.shared)).toEqual(['section.orders', 'section.customers']);
     expect(read(Ctrl.prototype.lifted)).toEqual([]);
     expect(read(Ctrl.prototype.plain)).toEqual(['section.orders']);
+  });
+});
+
+describe('SectionOrPermission', () => {
+  @RequireSection('orders')
+  class Till {
+    @SectionOrPermission('pos.sell')
+    sell() {}
+    settings() {}
+  }
+  const till = Till.prototype as unknown as Record<'sell' | 'settings', () => void>;
+  const guard = new SectionAccessGuard(new Reflector());
+  const run = (handler: () => void, user: Record<string, unknown>) => {
+    const context = {
+      getHandler: () => handler,
+      getClass: () => Till,
+      switchToHttp: () => ({ getRequest: () => ({ user }) }),
+    } as unknown as ExecutionContext;
+    try {
+      return guard.canActivate(context);
+    } catch (err) {
+      if (err instanceof ForbiddenException) return false;
+      throw err;
+    }
+  };
+
+  it('opens the route to a member holding the permission without the section', () => {
+    expect(run(till.sell, { role: UserRole.AGENT, permissions: ['section.products', 'pos.sell'] })).toBe(true);
+  });
+
+  it('still opens it to the section, as before', () => {
+    expect(run(till.sell, { role: UserRole.AGENT, permissions: ['section.orders'] })).toBe(true);
+  });
+
+  it('opens nothing else in the section', () => {
+    expect(run(till.settings, { role: UserRole.AGENT, permissions: ['section.products', 'pos.sell'] })).toBe(false);
+  });
+
+  it('refuses a member with neither', () => {
+    expect(run(till.sell, { role: UserRole.AGENT, permissions: ['section.products', 'inventory.pack'] })).toBe(false);
   });
 });
 

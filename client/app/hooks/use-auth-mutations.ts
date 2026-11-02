@@ -6,7 +6,7 @@ import { authService } from "~/services/auth.service";
 import { useAuthStore } from "~/stores/auth.store";
 import { handleMutationError } from "~/lib/handle-mutation-error";
 import { readTokenOrgId } from "~/lib/jwt";
-import { getLandingPath } from "~/lib/sections";
+import { getLandingPath } from "~/lib/landing-path";
 import { defaultGrantsForRole } from "~/lib/permissions";
 import { safeNext, withNext } from "~/lib/return-path";
 import type {

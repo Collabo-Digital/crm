@@ -1,6 +1,6 @@
 import { Navigate } from "react-router";
 import { useAuthStore } from "~/stores/auth.store";
-import { getLandingPath } from "~/lib/sections";
+import { getLandingPath } from "~/lib/landing-path";
 
 /**
  * Home page (/) — pure redirect, no UI.

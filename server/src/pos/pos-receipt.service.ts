@@ -65,9 +65,10 @@ export class PosReceiptService {
         this.links = billLinks(config);
     }
 
-    async receipt(orgId: string, orderId: string) {
+    /** `posSaleOnly` keeps a caller who may not open orders to the bills of counter sales. */
+    async receipt(orgId: string, orderId: string, { posSaleOnly = false }: { posSaleOnly?: boolean } = {}) {
         const order = await this.prisma.order.findFirst({
-            where: { id: orderId, organizationId: orgId, deletedAt: null },
+            where: { id: orderId, organizationId: orgId, deletedAt: null, ...(posSaleOnly && { posSale: true }) },
             include: {
                 lineItems: {
                     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -260,7 +261,10 @@ export class PosReceiptService {
      * answers whether it had been printed before this call. One statement, so
      * two tills printing at once get one original between them.
      */
-    async markPrinted(orgId: string, orderId: string): Promise<{ printedBefore: boolean }> {
+    async markPrinted(orgId: string, orderId: string, { posSaleOnly = false }: { posSaleOnly?: boolean } = {}): Promise<{ printedBefore: boolean }> {
+        if (posSaleOnly && !(await this.prisma.order.findFirst({ where: { id: orderId, organizationId: orgId, deletedAt: null, posSale: true }, select: { id: true } }))) {
+            throw new NotFoundException('That bill was not found.');
+        }
         const first = await this.prisma.$executeRaw`
             UPDATE "orders"
             SET "metadata" = jsonb_set(

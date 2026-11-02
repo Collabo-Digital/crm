@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Patch, Delete, Body, Param } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Delete, Body, Param, HttpCode } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -8,11 +8,13 @@ import { AllowVendor } from '../auth/decorators/allow-vendor.decorator';
 import { AllowInfluencer } from '../auth/decorators/allow-influencer.decorator';
 import { UserService } from '../user/user.service';
 import { OrganizationService } from './organization.service';
+import { OwnershipService } from './ownership.service';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { CreatePersonalDto } from './dto/create-personal.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { UpgradeToOrganizationDto } from './dto/upgrade-to-organization.dto';
 import { DeleteOrganizationDto } from './dto/delete-organization.dto';
+import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
 
 // JWT required. @NoOrgRequired: create/list orgs must work before JWT has orgId.
 @Controller('organizations')
@@ -21,6 +23,7 @@ export class OrganizationController {
   constructor(
     private readonly orgService: OrganizationService,
     private readonly userService: UserService,
+    private readonly ownership: OwnershipService,
   ) { }
 
   // POST /api/v1/organizations — create a team org
@@ -86,5 +89,15 @@ export class OrganizationController {
   @Throttle({ default: { ttl: 60_000, limit: 5 } })
   delete(@Param('orgId') orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: DeleteOrganizationDto) {
     return this.orgService.delete(orgId, user.sub, dto);
+  }
+
+  // POST /api/v1/organizations/:orgId/transfer-ownership — the owner hands
+  // the workspace to an admin and becomes an admin (OWNER only). The body
+  // carries the owner's password, so a few tries a minute, as for deletion.
+  @Post(':orgId/transfer-ownership')
+  @HttpCode(200)
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  transferOwnership(@Param('orgId') orgId: string, @CurrentUser() user: JwtPayload, @Body() dto: TransferOwnershipDto) {
+    return this.ownership.transfer(orgId, user.sub, dto);
   }
 }

@@ -16,7 +16,7 @@ import { SendInviteDto } from './dto/send-invite.dto';
 import { EmailService } from '../email/email.service';
 import { UserService } from '../user/user.service';
 import { resolveVendorScope } from './vendor-scope';
-import { extractGrants, sectionGrants, SECTION_SCOPED_ROLES } from '../auth/permissions';
+import { extractGrants, namesAccess, SECTION_SCOPED_ROLES } from '../auth/permissions';
 import { resolveLocationScope, storeScopingAllowed } from '../auth/location-scope.util';
 
 /** How long an invitation stays claimable. */
@@ -85,11 +85,12 @@ export class InvitesService {
 
         // 2c. Section access applies to AGENT / VIEWER only — every other role
         // resolves its access from the role itself. A list that names no
-        // section would silently mean "everything", so it is refused.
+        // section (nor a section-less job, such as the till) would silently
+        // mean "everything", so it is refused.
         let grants: string[] | null = null;
         if (dto.grants && SECTION_SCOPED_ROLES.includes(dto.role)) {
             grants = [...new Set(dto.grants)];
-            if (sectionGrants(grants).length === 0) {
+            if (!namesAccess(grants)) {
                 throw new BadRequestException('Select at least one section this member can access.');
             }
         }

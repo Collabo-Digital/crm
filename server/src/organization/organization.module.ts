@@ -6,6 +6,7 @@ import { MessagingModule } from '../messaging/messaging.module';
 import { OrganizationService } from './organization.service';
 import { MembersService } from './members.service';
 import { InvitesService } from './invites.service';
+import { OwnershipService } from './ownership.service';
 import { OrganizationController } from './organization.controller';
 import { MembersController } from './members.controller';
 import { InfluencersController } from './influencers.controller';
@@ -25,7 +26,7 @@ import { InvitesController } from './invites.controller';
 @Module({
   imports: [UserModule, BillingModule, ChannelModule, MessagingModule],
   controllers: [OrganizationController, MembersController, InvitesController, InfluencersController],
-  providers: [OrganizationService, MembersService, InvitesService],
+  providers: [OrganizationService, MembersService, InvitesService, OwnershipService],
   exports: [OrganizationService, MembersService],
 })
 export class OrganizationModule { }

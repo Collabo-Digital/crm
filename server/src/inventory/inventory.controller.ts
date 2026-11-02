@@ -9,9 +9,9 @@ import {
 import { UserRole } from '@prisma/client';
 import { OrgId } from '../auth/decorators/org-id.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
+import type { JwtPayload, SessionPayload } from '../auth/interfaces/jwt-payload.interface';
 import { Roles, ORG_OPERATORS } from '../auth/decorators/roles.decorator';
-import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
+import { RequireAnyPermission, RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { RequireSection } from '../auth/decorators/require-section.decorator';
 import { locationScopeFor } from '../auth/location-scope.util';
 import { PrismaService } from '../prisma/prisma.service';
@@ -23,14 +23,15 @@ import {
 } from './dto/adjustment.dto';
 import { QueryLedgerDto, QueryStockDto } from './dto/query-stock.dto';
 import { GenerateCodesDto } from './dto/generate-skus.dto';
+import { assertMayAdjust } from './goods-receipt';
 
 /**
  * Inventory V1 — Phase A surface. EVERY route declares explicit @Roles
  * (RolesGuard is allow-by-default; new endpoints never inherit that trap) and
- * a @RequirePermissions key resolved against OrganizationMember.permissions
- * (OWNER/ADMIN/MANAGER hold every key implicitly). A store-limited Manager or
- * Agent reads and changes stock at their own locations only
- * (auth/location-scope.util).
+ * a @RequirePermissions (or @RequireAnyPermission) key resolved against
+ * OrganizationMember.permissions (OWNER/ADMIN/MANAGER hold every key
+ * implicitly). A store-limited Manager or Agent reads and changes stock at
+ * their own locations only (auth/location-scope.util).
  */
 const ORG_MEMBERS: UserRole[] = [...ORG_OPERATORS, UserRole.VIEWER];
 
@@ -91,14 +92,17 @@ export class InventoryController {
     return this.inventory.getVariantStock(orgId, variantId, await locationScopeFor(this.prisma, user));
   }
 
+  // Goods in is an adjustment too: inventory.receive books units received,
+  // and only those (see assertMayAdjust).
   @Post('adjustments')
   @Roles(...ORG_OPERATORS)
-  @RequirePermissions('inventory.adjust')
+  @RequireAnyPermission('inventory.adjust', 'inventory.receive')
   async createAdjustment(
     @OrgId() orgId: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: SessionPayload,
     @Body() dto: CreateAdjustmentDto,
   ) {
+    assertMayAdjust(user, dto.reason, [dto]);
     return this.inventory.createAdjustment(orgId, user.sub, dto, await locationScopeFor(this.prisma, user));
   }
 
@@ -107,12 +111,13 @@ export class InventoryController {
   // the batch instead of leaving it half applied.
   @Post('adjustments/bulk')
   @Roles(...ORG_OPERATORS)
-  @RequirePermissions('inventory.adjust')
+  @RequireAnyPermission('inventory.adjust', 'inventory.receive')
   async createAdjustmentsBulk(
     @OrgId() orgId: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: SessionPayload,
     @Body() dto: BulkAdjustmentDto,
   ) {
+    assertMayAdjust(user, dto.reason, dto.items);
     return this.inventory.createAdjustmentsBulk(orgId, user.sub, dto, await locationScopeFor(this.prisma, user));
   }
 

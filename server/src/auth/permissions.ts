@@ -4,10 +4,10 @@ import { UserRole } from '@prisma/client';
  * Fine-grained capability keys stored in `OrganizationMember.permissions`
  * (JSONB, shape: `{ grants: PermissionKey[], preset?: string }`).
  *
- * Design: warehouse-floor "roles" (Receiver, Picker, Packer, Dispatch,
- * Accounts) are NOT UserRole enum values — they are capability sets granted to
- * existing roles, surfaced in the team UI as named presets. A Picker is an
- * AGENT holding only `inventory.pick`. This avoids a Postgres enum migration,
+ * Design: jobs (Packer, Warehouse, Cashier, Accountant, Marketing) are NOT
+ * UserRole enum values — they are capability sets granted to existing roles,
+ * surfaced in the team UI as job templates (PERMISSION_PRESETS). A Cashier is
+ * an AGENT holding `pos.sell`. This avoids a Postgres enum migration,
  * keeps the RolesGuard→VendorAccessGuard ordering intact, and lets merchants
  * tweak per-user capabilities without new roles.
  *
@@ -46,7 +46,18 @@ export const PERMISSION_KEYS = [
   'inventory.dispatch',
   'inventory.labels',
   'inventory.reports',
+  /**
+   * Reading the money: invoices, GST returns and payment fees. Checked on top
+   * of the Invoices section, so an Accountant (an AGENT holding it) reads them
+   * while issuing, cancelling and filing stay with ORG_MANAGERS.
+   */
   'reports.finance',
+  /**
+   * The point-of-sale till, opened without the Orders section: a Cashier holds
+   * it and no `section.orders`, the way a Packer holds `inventory.pack`. The
+   * till's settings, staff and store reports stay with ORG_MANAGERS.
+   */
+  'pos.sell',
   /**
    * Campaign access, split read/write from the start.
    *
@@ -86,55 +97,80 @@ export interface MemberPermissions {
   preset?: string;
 }
 
+/** A job template for the Agent role, as the team screen offers it. */
+export interface PermissionPreset {
+  id: string;
+  label: string;
+  /** What the job can do and what it leaves out, shown under the buttons. */
+  description: string;
+  grants: PermissionKey[];
+}
+
 /**
- * Named grant bundles for the team UI. Purely templates — assigning one copies
- * its grants onto the member; nothing references the preset afterwards, so
- * merchants can tweak individual grants freely.
+ * The job templates on the team screen (Settings › Team members, "Start from a
+ * job"), served to the client by `GET /organizations/:orgId/members/job-templates`
+ * so this is the only list. Purely templates — picking one fills the member's
+ * sections and abilities, which stay editable; nothing references the template
+ * afterwards.
+ *
+ * Every template names a section, or a section-less job: a member with
+ * neither is unrestricted (see `resolveSections`). The Packer, Warehouse and
+ * Cashier stay within the grants billed as an ops seat. The Accountant has no
+ * Orders section, because Agents can change orders.
  */
-export const PERMISSION_PRESETS: Record<
-  string,
-  { label: string; role: UserRole; grants: PermissionKey[] }
-> = {
-  warehouse_manager: {
-    label: 'Warehouse Manager',
-    role: UserRole.MANAGER,
+export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
+  {
+    id: 'support',
+    label: 'Support agent',
+    description: 'Answers chats in the Inbox, including new ones nobody has picked up yet. Nothing else.',
+    grants: ['section.chat', 'chat.view_unassigned'],
+  },
+  {
+    id: 'marketing',
+    label: 'Marketing',
+    description:
+      'Creates and sends broadcasts, submits message templates to Meta and builds segments in Campaigns. Can see automations but not change them. No orders, chats or customers.',
+    grants: ['section.campaigns', 'campaigns.view', 'campaigns.manage', 'broadcasts.send', 'templates.manage'],
+  },
+  {
+    id: 'accountant',
+    label: 'Accountant',
+    description:
+      'Sees and downloads invoices, GST returns and payment fees, and opens Analytics. Cannot issue, cancel or change anything. No orders, chats or customers.',
+    grants: ['section.invoices', 'section.analytics', 'reports.finance'],
+  },
+  {
+    id: 'warehouse',
+    label: 'Warehouse',
+    description:
+      'Receives stock, prints labels and packs orders, from Products and the Packing list. No orders, customers or sales figures.',
+    // No inventory.adjust: it is not an ops-seat grant. Ticking "Adjust stock
+    // counts" on the member adds it, and makes theirs a full seat.
     grants: [
+      'section.products',
       'inventory.view',
       'inventory.receive',
-      'inventory.adjust',
       'inventory.pick',
       'inventory.pack',
       'inventory.dispatch',
       'inventory.labels',
-      'inventory.reports',
     ],
   },
-  receiver: {
-    label: 'Receiver',
-    role: UserRole.AGENT,
-    grants: ['section.products', 'inventory.view', 'inventory.receive', 'inventory.labels'],
-  },
-  picker: {
-    label: 'Picker',
-    role: UserRole.AGENT,
-    grants: ['section.products', 'inventory.view', 'inventory.pick'],
-  },
-  packer: {
+  {
+    id: 'packer',
     label: 'Packer',
-    role: UserRole.AGENT,
-    grants: ['section.products', 'inventory.view', 'inventory.pack'],
+    description: 'Packs orders with the Packing list and scanner, and can look products up. No orders, customers or sales figures.',
+    grants: ['section.products', 'inventory.pack'],
   },
-  dispatch: {
-    label: 'Dispatch',
-    role: UserRole.AGENT,
-    grants: ['section.products', 'inventory.view', 'inventory.dispatch'],
+  {
+    id: 'cashier',
+    label: 'Cashier',
+    description: 'Sells at the till in Point of sale, finding products and customers there. Nothing else: no orders, products, store reports or till settings.',
+    // No section: the till is the whole job (see SECTIONLESS_JOBS). Products
+    // would let an Agent change catalogue prices, which the till sells at.
+    grants: ['pos.sell'],
   },
-  accounts: {
-    label: 'Accounts',
-    role: UserRole.VIEWER,
-    grants: ['section.products', 'inventory.reports', 'reports.finance'],
-  },
-};
+];
 
 /**
  * Parse the raw JSONB column into a validated grant list. Tolerant of legacy /
@@ -192,6 +228,18 @@ export function canBrowseCustomers(role: UserRole, grants: readonly string[]): b
 /** Roles whose section access is chosen per member (the invite checkboxes). */
 export const SECTION_SCOPED_ROLES: UserRole[] = [UserRole.AGENT, UserRole.VIEWER];
 
+/**
+ * Grants that are a whole job without any section. A member holding one and
+ * no section has chosen access, not "not configured": a Cashier holding
+ * `pos.sell` alone opens the till and no section at all.
+ */
+export const SECTIONLESS_JOBS: PermissionKey[] = ['pos.sell'];
+
+/** Does this grant list say what the member opens: a section, or a section-less job? */
+export function namesAccess(grants: readonly string[]): boolean {
+  return sectionGrants(grants).length > 0 || SECTIONLESS_JOBS.some((key) => grants.includes(key));
+}
+
 export function sectionGrants(grants: readonly string[]): SectionKey[] {
   const known = new Set<string>(SECTION_KEYS);
   return grants.filter((g): g is SectionKey => known.has(g));
@@ -200,11 +248,12 @@ export function sectionGrants(grants: readonly string[]): SectionKey[] {
 /**
  * Which sections a member may open: `'all'`, or the granted set.
  *
- * An AGENT / VIEWER with no `section.*` key at all is unrestricted. That is
- * the state of every member who joined before section access existed, so
- * nobody is locked out by a deploy and no backfill is needed. New data cannot
- * drift back into it by accident: the invite and the member PATCH both refuse
- * a grant list that names no section.
+ * An AGENT / VIEWER with no `section.*` key at all is unrestricted, unless
+ * they hold a section-less job (SECTIONLESS_JOBS). That is the state of every
+ * member who joined before section access existed, so nobody is locked out
+ * by a deploy and no backfill is needed. New data cannot drift back into it
+ * by accident: the invite and the member PATCH both refuse a grant list that
+ * names neither a section nor such a job.
  *
  * VENDOR resolves to `'all'` here on purpose — VendorAccessGuard and the
  * vendor scope already decide what a vendor reaches.
@@ -215,7 +264,7 @@ export function resolveSections(
 ): 'all' | Set<SectionKey> {
   if (!SECTION_SCOPED_ROLES.includes(role)) return 'all';
   const sections = sectionGrants(grants);
-  return sections.length === 0 ? 'all' : new Set(sections);
+  return namesAccess(grants) ? new Set(sections) : 'all';
 }
 
 /**

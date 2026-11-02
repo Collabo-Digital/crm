@@ -1,7 +1,8 @@
 import { SetMetadata } from '@nestjs/common';
-import type { SectionKey } from '../permissions';
+import type { PermissionKey, SectionKey } from '../permissions';
 
 export const REQUIRE_SECTION_KEY = 'requireSection';
+export const SECTION_OR_PERMISSION_KEY = 'sectionOrPermission';
 
 type SectionName = SectionKey extends `section.${infer S}` ? S : never;
 
@@ -19,3 +20,11 @@ export const RequireSection = (...sections: SectionName[]) =>
     REQUIRE_SECTION_KEY,
     sections.map((s) => `section.${s}` as SectionKey),
   );
+
+/**
+ * Also open a route to a member who holds `key` without its section. The till
+ * belongs to Orders, but a Cashier holds `pos.sell` and no Orders section, the
+ * way a Packer holds `inventory.pack`. Members with the section pass as before.
+ */
+export const SectionOrPermission = (key: PermissionKey) =>
+  SetMetadata(SECTION_OR_PERMISSION_KEY, key);

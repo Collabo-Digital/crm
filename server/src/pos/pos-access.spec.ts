@@ -11,6 +11,10 @@ import { SectionAccessGuard } from '../auth/guards/section-access.guard';
 import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { PosController } from './pos.controller';
 import { PosPublicController } from './pos-public.controller';
+import { PosReportsController } from './reports/pos-reports.controller';
+import { OrderController } from '../order/order.controller';
+import { ProductController } from '../product/product.controller';
+import { CustomerController } from '../customer/customer.controller';
 
 /**
  * Who may use the till, read off the real decorators and run through the
@@ -98,5 +102,87 @@ describe('point-of-sale access', () => {
     it('prints a receipt for an agent who has Orders but not Invoices', () => {
         expect(passes(proto.receipt, { role: UserRole.AGENT, permissions: ['section.orders'] })).toBe(true);
         expect(passes(proto.receiptPrinted, { role: UserRole.AGENT, permissions: ['section.orders'] })).toBe(true);
+    });
+});
+
+describe('a Cashier (pos.sell without the Orders section)', () => {
+    const CASHIER = { role: UserRole.AGENT, permissions: ['pos.sell'] };
+
+    it.each(handlers.filter(([name]) => !MANAGER_ONLY.includes(name)))('%s lets them sell', (_name, fn) => {
+        expect(passes(fn, CASHIER)).toBe(true);
+    });
+
+    it.each(handlers.filter(([name]) => MANAGER_ONLY.includes(name)))('%s stays with managers', (_name, fn) => {
+        expect(passes(fn, CASHIER)).toBe(false);
+    });
+
+    it('keeps them out of the store reports', () => {
+        const reports = PosReportsController.prototype as unknown as Record<string, (...a: unknown[]) => unknown>;
+        const run = (handler: (...a: unknown[]) => unknown) => {
+            const context = {
+                getHandler: () => handler,
+                getClass: () => PosReportsController,
+                switchToHttp: () => ({ getRequest: () => ({ user: CASHIER }) }),
+            } as unknown as ExecutionContext;
+            try {
+                return new RolesGuard(reflector).canActivate(context) && new SectionAccessGuard(reflector).canActivate(context);
+            } catch (err) {
+                if (err instanceof ForbiddenException) return false;
+                throw err;
+            }
+        };
+        expect(run(reports.getSummary)).toBe(false);
+        expect(run(reports.getActivity)).toBe(false);
+    });
+
+    it('opens no order, product or customer outside the till', () => {
+        const run = (controller: { prototype: object }, name: string) => {
+            const handler = (controller.prototype as Record<string, (...a: unknown[]) => unknown>)[name];
+            const context = {
+                getHandler: () => handler,
+                getClass: () => controller,
+                switchToHttp: () => ({ getRequest: () => ({ user: CASHIER }) }),
+            } as unknown as ExecutionContext;
+            try {
+                return new SectionAccessGuard(reflector).canActivate(context);
+            } catch (err) {
+                if (err instanceof ForbiddenException) return false;
+                throw err;
+            }
+        };
+        expect(run(OrderController, 'findOne')).toBe(false);
+        expect(run(OrderController, 'findAll')).toBe(false);
+        expect(run(ProductController, 'findAll')).toBe(false);
+        expect(run(ProductController, 'updateVariant')).toBe(false);
+        expect(run(CustomerController, 'findAll')).toBe(false);
+    });
+
+    it('needs the permission itself: products alone opens nothing here', () => {
+        expect(passes(proto.setup, { role: UserRole.AGENT, permissions: ['section.products'] })).toBe(false);
+        expect(passes(proto.createSale, { role: UserRole.AGENT, permissions: ['section.products', 'inventory.pack'] })).toBe(false);
+    });
+
+    it('is no way in for a viewer or a vendor holding it', () => {
+        expect(passes(proto.setup, { role: UserRole.VIEWER, permissions: ['section.products', 'pos.sell'] })).toBe(false);
+        expect(passes(proto.createSale, { role: UserRole.VENDOR, vendorScope: 'Acme', permissions: ['pos.sell'] })).toBe(false);
+    });
+
+    it('reads and prints only the bills of counter sales', async () => {
+        const receipts = { receipt: jest.fn(() => Promise.resolve({})), markPrinted: jest.fn(() => Promise.resolve({ printedBefore: false })) };
+        const prisma = { organizationMember: { findUnique: jest.fn(() => Promise.resolve({ locationScope: [] })) } };
+        const controller = new PosController({} as never, {} as never, {} as never, receipts as never, {} as never, prisma as never);
+        const user = (permissions: string[]) => ({ sub: 'u1', email: 'a@test.local', orgId: 'org_1', role: UserRole.AGENT, permissions, emailVerified: true, memberships: [] });
+
+        await controller.receipt(user(['section.products', 'pos.sell']), 'order_1');
+        await controller.receiptPrinted(user(['section.products', 'pos.sell']), 'order_1');
+        await controller.receipt(user(['section.orders']), 'order_2');
+        await controller.receipt({ ...user([]), role: UserRole.MANAGER }, 'order_3');
+
+        expect(receipts.receipt.mock.calls).toEqual([
+            ['org_1', 'order_1', { posSaleOnly: true }],
+            ['org_1', 'order_2', { posSaleOnly: false }],
+            ['org_1', 'order_3', { posSaleOnly: false }],
+        ]);
+        expect(receipts.markPrinted).toHaveBeenCalledWith('org_1', 'order_1', { posSaleOnly: true });
     });
 });

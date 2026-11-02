@@ -3,6 +3,7 @@ import { UserRole } from '@prisma/client';
 
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { PERMISSION_PRESETS } from '../auth/permissions';
 import { OrganizationService } from './organization.service';
 import { MembersService } from './members.service';
 import { UpdateMemberRoleDto } from './dto/update-member-role.dto';
@@ -26,6 +27,14 @@ export class MembersController {
             UserRole.OWNER, UserRole.ADMIN, UserRole.MANAGER, UserRole.AGENT, UserRole.VIEWER,
         ]);
         return this.membersService.findAll(orgId, { userId: user.sub, role: membership.role });
+    }
+
+    // GET job-templates — the "Start from a job" buttons on the access editor,
+    // for the OWNER and ADMIN who use it. The client keeps no copy of them.
+    @Get('job-templates')
+    async jobTemplates(@Param('orgId') orgId: string, @CurrentUser() user: JwtPayload) {
+        await this.orgService.requireRole(orgId, user.sub, [UserRole.OWNER, UserRole.ADMIN]);
+        return PERMISSION_PRESETS;
     }
 
     // PATCH — only OWNER and ADMIN can change roles

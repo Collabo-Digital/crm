@@ -25,7 +25,7 @@ import { ModalFrame, ModalTitle } from "~/components/app/order-dialog-primitives
 import { cn } from "~/lib/utils";
 import { useAuthStore } from "~/stores/auth.store";
 import { useThemeStore } from "~/stores/theme.store";
-import { useCurrentOrg, useOrgMembers, useOrgInvites } from "~/hooks/use-org-queries";
+import { useCurrentOrg, useJobTemplates, useOrgMembers, useOrgInvites } from "~/hooks/use-org-queries";
 import {
   useUpdateOrganizationMutation,
   useDeleteOrganizationMutation,
@@ -62,13 +62,12 @@ import { StoreProfileTab } from "~/components/app/settings/store-profile-tab";
 import { UpgradeOrganizationDialog } from "~/components/app/settings/upgrade-organization-dialog";
 import {
   CapabilityPicker,
-  DEFAULT_CAPABILITIES,
   JobPresetPicker,
-  MANAGED_CAPABILITY_KEYS,
   SectionAccessPicker,
-  accessGrants,
 } from "~/components/app/settings/section-access-picker";
-import { AVAILABLE_SECTIONS, isSectionScopedRole, sectionKey, sectionsInGrants, type SectionId } from "~/lib/sections";
+import { TransferOwnershipDialog } from "~/components/app/settings/transfer-ownership-dialog";
+import { DEFAULT_CAPABILITIES, accessGrants, canSaveAccess, editorAccess, type JobTemplate } from "~/lib/member-access";
+import { AVAILABLE_SECTIONS, isSectionScopedRole, namesAccess, sectionKey, sectionsInGrants, type SectionId } from "~/lib/sections";
 import { LocationScopePicker, MemberLocationScope } from "~/components/app/settings/location-scope-picker";
 import { isLocationScopedRole } from "~/lib/location-scope";
 import { formatCurrency } from "~/lib/utils";
@@ -270,11 +269,21 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
   // Stores a Manager / Agent will work at; empty = every location.
   const [locationScope, setLocationScope] = useState<string[]>([]);
   const sendInvite = useSendInviteMutation(orgId);
+  const { data: templates = [] } = useJobTemplates(orgId);
+
+  function pickTemplate(template: JobTemplate) {
+    const access = editorAccess(template.grants);
+    setSections(access.sections);
+    setCapabilities(access.capabilities);
+  }
 
   const needsVendor = role === "VENDOR";
   const needsSections = isSectionScopedRole(role);
 
-  const canSend = !!email.trim() && (!needsVendor || !!vendorScope);
+  const canSend =
+    !!email.trim() && (!needsVendor || !!vendorScope) && (!needsSections || canSaveAccess(role, sections, capabilities));
+  // A job that is access on its own (the till) may leave every section unticked.
+  const tillOnly = needsSections && accessGrants(role, sections, capabilities).includes("pos.sell");
 
   function handleSendInvite() {
     if (!canSend) return;
@@ -326,14 +335,7 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
       {needsVendor && <VendorPicker value={vendorScope} onChange={setVendorScope} />}
 
       {role === "AGENT" && (
-        <JobPresetPicker
-          sections={sections}
-          capabilities={capabilities}
-          onPick={(preset) => {
-            setSections([...preset.sections]);
-            setCapabilities([...preset.capabilities]);
-          }}
-        />
+        <JobPresetPicker templates={templates} sections={sections} capabilities={capabilities} onPick={pickTemplate} />
       )}
 
       {needsSections && (
@@ -341,7 +343,7 @@ function InviteForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
           <p className="text-caption font-medium text-muted-foreground">
             Sections this {role === "VIEWER" ? "viewer" : "agent"} can open — the rest show as locked
           </p>
-          <SectionAccessPicker value={sections} onChange={setSections} />
+          <SectionAccessPicker value={sections} onChange={setSections} allowNone={tillOnly} />
           <CapabilityPicker role={role} sections={sections} value={capabilities} onChange={setCapabilities} />
         </div>
       )}
@@ -358,27 +360,28 @@ const AVAILABLE_SECTION_KEYS = new Set(AVAILABLE_SECTIONS.map((s) => sectionKey(
 /** Short label for a grant list: how many of the sections it opens. */
 function sectionAccessLabel(grants: string[] | undefined) {
   const granted = sectionsInGrants(grants ?? []).filter((id) => AVAILABLE_SECTION_KEYS.has(sectionKey(id)));
-  if (sectionsInGrants(grants ?? []).length === 0) return "Full access";
+  if (!namesAccess(grants ?? [])) return "Full access";
   return `${granted.length} of ${AVAILABLE_SECTIONS.length} sections`;
 }
 
 /** Inline editor for which sections an Agent / Viewer can open. */
 function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: OrgMember; onDone: () => void }) {
   const grants = member.permissions ?? [];
-  const configured = sectionsInGrants(grants);
-  // Not configured yet = full access, so the editor opens with everything ticked.
-  const [sections, setSections] = useState<SectionId[]>(() =>
-    configured.length === 0
-      ? AVAILABLE_SECTIONS.map((s) => s.id)
-      : configured.filter((id) => AVAILABLE_SECTION_KEYS.has(sectionKey(id))),
-  );
-  const [capabilities, setCapabilities] = useState<string[]>(() => grants.filter((g) => MANAGED_CAPABILITY_KEYS.has(g)));
+  const [sections, setSections] = useState<SectionId[]>(() => editorAccess(grants).sections);
+  const [capabilities, setCapabilities] = useState<string[]>(() => editorAccess(grants).capabilities);
   const updatePermissions = useUpdateMemberPermissionsMutation(orgId);
+  const { data: templates = [] } = useJobTemplates(orgId);
+
+  function pickTemplate(template: JobTemplate) {
+    const access = editorAccess(template.grants);
+    setSections(access.sections);
+    setCapabilities(access.capabilities);
+  }
 
   function handleSave() {
-    // The endpoint replaces the whole list: keep every grant this editor does
-    // not manage (inventory.*, and sections this build does not show).
-    const kept = grants.filter((g) => !AVAILABLE_SECTION_KEYS.has(g) && !MANAGED_CAPABILITY_KEYS.has(g));
+    // The endpoint replaces the whole list: keep the sections this build does
+    // not show. Every other grant is in `capabilities`.
+    const kept = grants.filter((g) => g.startsWith("section.") && !AVAILABLE_SECTION_KEYS.has(g));
     updatePermissions.mutate(
       { memberId: member.id, data: { grants: [...kept, ...accessGrants(member.role, sections, capabilities)] } },
       { onSuccess: onDone },
@@ -389,20 +392,23 @@ function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: 
     <div className="space-y-3 rounded-lg border border-dashed border-brand bg-brand/5 p-3">
       {member.role === "AGENT" && (
         <JobPresetPicker
+          templates={templates}
           sections={sections}
           capabilities={capabilities}
           disabled={updatePermissions.isPending}
-          onPick={(preset) => {
-            setSections([...preset.sections]);
-            setCapabilities([...preset.capabilities]);
-          }}
+          onPick={pickTemplate}
         />
       )}
       <p className="text-caption font-medium text-muted-foreground">
         Sections {member.user.firstName} can open — the rest show as locked
-        {configured.length === 0 && " (currently full access)"}
+        {!namesAccess(grants) && " (currently full access)"}
       </p>
-      <SectionAccessPicker value={sections} onChange={setSections} disabled={updatePermissions.isPending} />
+      <SectionAccessPicker
+        value={sections}
+        onChange={setSections}
+        disabled={updatePermissions.isPending}
+        allowNone={accessGrants(member.role, sections, capabilities).includes("pos.sell")}
+      />
       <CapabilityPicker
         role={member.role}
         sections={sections}
@@ -411,7 +417,7 @@ function MemberAccessEditor({ orgId, member, onDone }: { orgId: string; member: 
         disabled={updatePermissions.isPending}
       />
       <div className="flex items-center gap-2">
-        <Button type="button" onClick={handleSave} disabled={updatePermissions.isPending || sections.length === 0}>
+        <Button type="button" onClick={handleSave} disabled={updatePermissions.isPending || !canSaveAccess(member.role, sections, capabilities)}>
           {updatePermissions.isPending && <Loader2 className="animate-spin" />}
           Save access
         </Button>
@@ -1690,6 +1696,11 @@ export default function SettingsPage() {
   // Only an Owner / Admin may change someone's access (the server enforces it).
   const myRole = members?.find((m) => m.user.id === authUser?.id)?.role;
   const canManageAccess = myRole === "OWNER" || myRole === "ADMIN";
+  // The owner may hand the workspace to an admin; a personal one has no team to hand it to.
+  const canTransferOwnership = myRole === "OWNER" && org?.type !== "PERSONAL";
+  const admins = staffMembers.filter((m) => m.role === "ADMIN" && m.user.id !== authUser?.id);
+  // The transfer-ownership dialog, open while the owner picks an admin and confirms.
+  const [transferring, setTransferring] = useState(false);
 
   // General: the workspace's details and region, one form saved together.
   const [orgName, setOrgName] = useState<string | null>(null);
@@ -2180,7 +2191,7 @@ export default function SettingsPage() {
                                     onSuccess: () => {
                                       if (
                                         isSectionScopedRole(selectedRole as UserRole) &&
-                                        sectionsInGrants(member.permissions ?? []).length === 0
+                                        !namesAccess(member.permissions ?? [])
                                       ) {
                                         setAccessMemberId(member.id);
                                       }
@@ -2234,6 +2245,27 @@ export default function SettingsPage() {
 
                 {vendorMember && canManageTeam && currentOrgId && (
                   <VendorRoleDialog orgId={currentOrgId} member={vendorMember} onClose={() => setVendorMember(null)} />
+                )}
+
+                {canTransferOwnership && !membersLoading && (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-foreground">Transfer ownership</p>
+                      <p className="text-caption text-muted-foreground">
+                        {admins.length > 0
+                          ? "Hand this workspace to one of its admins. You stay on as an admin."
+                          : "To hand this workspace to a teammate, make them an admin first."}
+                      </p>
+                    </div>
+                    {admins.length > 0 && (
+                      <Button type="button" variant="outline" onClick={() => setTransferring(true)}>
+                        Transfer ownership
+                      </Button>
+                    )}
+                  </div>
+                )}
+                {transferring && canTransferOwnership && currentOrgId && (
+                  <TransferOwnershipDialog orgId={currentOrgId} admins={admins} onClose={() => setTransferring(false)} />
                 )}
               </Section>
 

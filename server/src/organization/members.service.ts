@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
-import { extractGrants, sectionGrants, SECTION_SCOPED_ROLES } from '../auth/permissions';
+import { extractGrants, namesAccess, SECTION_SCOPED_ROLES } from '../auth/permissions';
 import { resolveLocationScope, storeScopingAllowed } from '../auth/location-scope.util';
 import { ChannelService } from '../channel/channel.service';
 import { InboxEventsService } from '../messaging/inbox-events.service';
@@ -88,8 +88,10 @@ export class MembersService {
         }
         const scope = role === UserRole.VENDOR ? await resolveVendorScope(this.prisma, orgId, vendorScope) : null;
 
+        // Written only while still not the owner: an ownership transfer to
+        // this member may have committed since the check above.
         const updated = await this.prisma.organizationMember.update({
-            where: { id: memberId },
+            where: { id: memberId, role: { not: UserRole.OWNER } },
             data: { role, vendorScope: scope },
         });
 
@@ -118,9 +120,9 @@ export class MembersService {
         if (member.role === UserRole.OWNER) {
             throw new ForbiddenException('The organization owner already has full access');
         }
-        // No section at all would read as "not configured" = full access —
-        // never what an admin clearing the last checkbox meant.
-        if (SECTION_SCOPED_ROLES.includes(member.role) && sectionGrants(grants).length === 0) {
+        // No section (and no section-less job) would read as "not configured"
+        // = full access — never what an admin clearing the last checkbox meant.
+        if (SECTION_SCOPED_ROLES.includes(member.role) && !namesAccess(grants)) {
             throw new BadRequestException('Select at least one section this member can access.');
         }
 
@@ -178,8 +180,9 @@ export class MembersService {
         }
 
         const { removed, released } = await this.prisma.$transaction(async (tx) => ({
+            // Not the owner at write time either (see updateRole).
             removed: await tx.organizationMember.update({
-                where: { id: memberId },
+                where: { id: memberId, role: { not: UserRole.OWNER } },
                 data: { isActive: false },
             }),
             released: await releaseMemberWork(tx, [orgId], member.userId),

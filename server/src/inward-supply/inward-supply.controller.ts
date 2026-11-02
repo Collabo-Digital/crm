@@ -10,13 +10,15 @@ import {
 import { OrgId } from '../auth/decorators/org-id.decorator';
 import { ORG_MANAGERS, Roles } from '../auth/decorators/roles.decorator';
 import { RequireSection } from '../auth/decorators/require-section.decorator';
+import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { InwardSupplyService } from './inward-supply.service';
 import { UpsertInwardSupplyDto } from './dto/upsert-inward-supply.dto';
 import { QueryInwardSuppliesDto } from './dto/query-inward-supplies.dto';
 
-// Part of the GST return, on the Invoices page.
+// Part of the GST return, on the Invoices page, and read on the same terms.
 @Controller('payment-fees')
 @RequireSection('invoices')
+@RequirePermissions('reports.finance')
 export class InwardSupplyController {
   constructor(private readonly paymentFees: InwardSupplyService) {}
 

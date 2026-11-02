@@ -59,6 +59,7 @@ import {
 import { cn } from "~/lib/utils";
 import { useSelectedLocation } from "~/hooks/use-selected-location";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import {
   useCodeStatus,
   useInventoryStatus,
@@ -151,6 +152,13 @@ function StockScreen() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const bulkAdjust = useBulkAdjustmentMutation();
+  // What this member may do to stock, as the server decides it: correct
+  // counts (inventory.adjust), book goods in only (inventory.receive), and
+  // print labels and fix product codes (inventory.labels).
+  const { can } = useCurrentRole();
+  const canAdjust = can("inventory.adjust");
+  const canReceive = can("inventory.receive");
+  const canLabel = can("inventory.labels");
 
   const setDraft = (stockLineId: string, value: string | undefined) => {
     setSaveError(null);
@@ -245,7 +253,7 @@ function StockScreen() {
           <AvailableCell
             line={line}
             draft={drafts[line.id]}
-            onChange={(value) => setDraft(line.id, value)}
+            onChange={canAdjust ? (value) => setDraft(line.id, value) : undefined}
           />
         ),
       },
@@ -270,7 +278,7 @@ function StockScreen() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setDraft is stable in effect
-    [drafts],
+    [drafts, canAdjust],
   );
 
   const table = useDataTableState({
@@ -399,7 +407,7 @@ function StockScreen() {
   // current page's selection while the buttons acted org-wide, so the number
   // beside a button routinely described a different set from the one it
   // changed. Zero means nothing needs fixing and the button drops its badge.
-  const codeStatus = useCodeStatus();
+  const codeStatus = useCodeStatus(canLabel);
   const pendingCodes = codeStatus.data
     ? codeStatus.data.missingSku +
       codeStatus.data.missingBarcode +
@@ -478,29 +486,31 @@ function StockScreen() {
             </span>
           )}
         </h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            size="action"
-            onClick={() => setCodesOpen(true)}
-          >
-            <Barcode className="size-3.5" />
-            {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}
-          </Button>
-          {labelHref ? (
-            <Button asChild variant="brand" size="action">
-              <Link to={labelHref} target="_blank">
+        {canLabel && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="action"
+              onClick={() => setCodesOpen(true)}
+            >
+              <Barcode className="size-3.5" />
+              {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}
+            </Button>
+            {labelHref ? (
+              <Button asChild variant="brand" size="action">
+                <Link to={labelHref} target="_blank">
+                  <Printer className="size-3.5" />
+                  Print labels ({selectedIds.size})
+                </Link>
+              </Button>
+            ) : (
+              <Button size="action" disabled variant="outline" title="Select rows to print labels">
                 <Printer className="size-3.5" />
-                Print labels ({selectedIds.size})
-              </Link>
-            </Button>
-          ) : (
-            <Button size="action" disabled variant="outline" title="Select rows to print labels">
-              <Printer className="size-3.5" />
-              Print labels
-            </Button>
-          )}
-        </div>
+                Print labels
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Stats */}
@@ -569,17 +579,26 @@ function StockScreen() {
         noun="stock lines"
         tabs={{ ariaLabel: "Filter by stock level", items: STOCK_TABS }}
         searchPlaceholder="Search by SKU, barcode or title…"
-        selection={{
-          isSelected: (line) => selectedIds.has(line.variantId),
-          onToggle: toggleSelect,
-          onToggleAll: toggleSelectAllOnPage,
-          label: (line) => `Select ${line.productTitle}`,
-        }}
-        rowActions={(line) => (
-          <Button variant="outline" size="xs" onClick={() => setAdjusting(line)}>
-            Adjust
-          </Button>
-        )}
+        // Rows are picked to print their labels.
+        selection={
+          canLabel
+            ? {
+                isSelected: (line) => selectedIds.has(line.variantId),
+                onToggle: toggleSelect,
+                onToggleAll: toggleSelectAllOnPage,
+                label: (line) => `Select ${line.productTitle}`,
+              }
+            : undefined
+        }
+        rowActions={
+          canAdjust || canReceive
+            ? (line) => (
+                <Button variant="outline" size="xs" onClick={() => setAdjusting(line)}>
+                  {canAdjust ? "Adjust" : "Receive"}
+                </Button>
+              )
+            : undefined
+        }
         actionsWidth={90}
         emptyState={{
           icon: Boxes,
@@ -615,9 +634,9 @@ function StockScreen() {
         error={saveError}
       />
 
-      <ProductCodesDialog open={codesOpen} onOpenChange={setCodesOpen} />
+      {canLabel && <ProductCodesDialog open={codesOpen} onOpenChange={setCodesOpen} />}
 
-      {adjusting && <AdjustStockDialog line={adjusting} onClose={() => setAdjusting(null)} />}
+      {adjusting && <AdjustStockDialog line={adjusting} receiveOnly={!canAdjust} onClose={() => setAdjusting(null)} />}
     </div>
   );
 }
@@ -686,6 +705,7 @@ function UnavailableCell({ line }: { line: StockLine }) {
  * While a row is dirty the saved value stays visible, struck through, so the
  * merchant can always see what they are about to change it from.
  */
+/** Without `onChange` (the member may not correct counts) the figure is read-only. */
 function AvailableCell({
   line,
   draft,
@@ -693,7 +713,7 @@ function AvailableCell({
 }: {
   line: StockLine;
   draft: string | undefined;
-  onChange: (value: string | undefined) => void;
+  onChange?: (value: string | undefined) => void;
 }) {
   const value = draft ?? String(line.available);
   const dirty = draft !== undefined && draft !== String(line.available);
@@ -702,7 +722,7 @@ function AvailableCell({
 
   const step = (by: number) => {
     const base = Number.isInteger(parsed) ? parsed : line.available;
-    onChange(String(base + by));
+    onChange?.(String(base + by));
   };
 
   return (
@@ -730,6 +750,9 @@ function AvailableCell({
             {line.available}
           </span>
         )}
+        {!onChange ? (
+          <span className="text-label font-semibold tabular-nums">{line.available}</span>
+        ) : (
         <div className="inline-flex h-8 items-stretch overflow-hidden rounded-lg border border-border bg-card">
           <button
             type="button"
@@ -760,6 +783,7 @@ function AvailableCell({
             +
           </button>
         </div>
+        )}
       </div>
       {invalid && (
         <p className="mt-1 text-right text-[10px] text-danger">Whole numbers only.</p>
@@ -768,11 +792,16 @@ function AvailableCell({
   );
 }
 
-function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => void }) {
+/**
+ * `receiveOnly` is goods in, for a member who may receive stock but not
+ * correct it: units are added, with the reason "Received", and nothing else
+ * is offered (the server refuses the rest).
+ */
+function AdjustStockDialog({ line, receiveOnly = false, onClose }: { line: StockLine; receiveOnly?: boolean; onClose: () => void }) {
   const [bucket, setBucket] = useState<StockBucket>("AVAILABLE");
   const [mode, setMode] = useState<"add" | "remove" | "set">("add");
   const [qty, setQty] = useState<string>("");
-  const [reason, setReason] = useState<string>("correction");
+  const [reason, setReason] = useState<string>(receiveOnly ? "received" : "correction");
   const [note, setNote] = useState("");
   const adjust = useCreateAdjustmentMutation();
 
@@ -801,7 +830,7 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
 
   return (
     <ModalShell
-      title="Adjust stock"
+      title={receiveOnly ? "Receive stock" : "Adjust stock"}
       subtitle={`${line.productTitle}${line.variantTitle !== "Default Title" ? ` — ${line.variantTitle}` : ""} · ${line.warehouse.name}`}
       onClose={onClose}
     >
@@ -821,7 +850,8 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {BUCKETS.map((b) => (
+                {/* Goods in never lands in Reserved: that is what orders hold. */}
+                {BUCKETS.filter((b) => !receiveOnly || b !== "RESERVED").map((b) => (
                   <SelectItem key={b} value={b}>
                     {BUCKET_TERMS[b].label}
                   </SelectItem>
@@ -829,6 +859,7 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
               </SelectContent>
             </Select>
           </label>
+          {!receiveOnly && (
           <label className="space-y-1">
             <span className="font-medium text-gray-700 dark:text-gray-300">Action</span>
             <Select value={mode} onValueChange={(v) => setMode(v as "add")}>
@@ -842,6 +873,7 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
               </SelectContent>
             </Select>
           </label>
+          )}
         </div>
         <label className="block space-y-1">
           <span className="font-medium text-gray-700 dark:text-gray-300">
@@ -861,6 +893,12 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
           />
         </label>
         <div className="grid grid-cols-2 gap-3">
+          {receiveOnly ? (
+            <div className="space-y-1">
+              <span className="font-medium text-gray-700 dark:text-gray-300">Reason</span>
+              <p className="flex h-8 items-center text-muted-foreground">{reasonLabel("received")}</p>
+            </div>
+          ) : (
           <label className="space-y-1">
             <span className="font-medium text-gray-700 dark:text-gray-300">Reason</span>
             <Select value={reason} onValueChange={setReason}>
@@ -876,13 +914,14 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
               </SelectContent>
             </Select>
           </label>
+          )}
           <label className="space-y-1">
             <span className="font-medium text-gray-700 dark:text-gray-300">Note (optional)</span>
             <Input
               value={note}
               onChange={(e) => setNote(e.target.value)}
               className="h-8 text-xs"
-              placeholder="e.g. cycle count Aug"
+              placeholder={receiveOnly ? "e.g. supplier bill number" : "e.g. cycle count Aug"}
             />
           </label>
         </div>
@@ -902,7 +941,7 @@ function AdjustStockDialog({ line, onClose }: { line: StockLine; onClose: () => 
         )}
       </div>
       <DialogFooter
-        confirmLabel={mode === "set" ? `Set ${BUCKET_TERMS[bucket].label} to ${valid ? parsed : "…"}` : mode === "add" ? "Add units" : "Remove units"}
+        confirmLabel={receiveOnly ? "Receive units" : mode === "set" ? `Set ${BUCKET_TERMS[bucket].label} to ${valid ? parsed : "…"}` : mode === "add" ? "Add units" : "Remove units"}
         onConfirm={submit}
         onClose={onClose}
         pending={adjust.isPending}
