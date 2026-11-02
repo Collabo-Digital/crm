@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { Switch } from "~/components/ui/switch";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import { useGenerateSkusMutation } from "~/hooks/use-inventory-mutations";
 import { COMMON_UQC, GST_RATE_OPTIONS, GST_SUPPLY_TYPES } from "~/lib/gst-uqc";
 import { CODE_TERMS } from "~/lib/inventory-vocabulary";
@@ -131,6 +132,7 @@ export function VariantInlineEditor({
 }) {
   const [advanced, setAdvanced] = useState(true);
   const generateSkus = useGenerateSkusMutation();
+  const canLabel = useCurrentRole().can("inventory.labels");
 
   const changes = changedVariantFields(baseline, draft, { warehousingEnabled }).map(
     (key) => VARIANT_FIELD_LABELS[key],
@@ -210,7 +212,7 @@ export function VariantInlineEditor({
                 onChange={(e) => onChange({ sku: e.target.value })}
                 disabled={disabled}
               />
-              {!draft.sku.trim() && (
+              {!draft.sku.trim() && canLabel && (
                 <Button
                   type="button"
                   variant="outline"

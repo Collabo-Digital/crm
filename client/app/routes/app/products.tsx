@@ -89,7 +89,7 @@ const STOCK_OPTIONS: ReadonlyArray<{ value: StockStatus; label: string }> = [
 
 export default function ProductsPage() {
   const navigate = useNavigate();
-  const { role, isVendor, permissions } = useCurrentRole();
+  const { role, isVendor, permissions, can } = useCurrentRole();
   // Mirror the server's product write routes: every change takes products.edit
   // (owners, admins and managers hold it), and permanent delete and CSV import
   // are ORG_MANAGERS. A vendor edits and pushes only its own products, and adds
@@ -98,6 +98,8 @@ export default function ProductsPage() {
   const canManage = role === "OWNER" || role === "ADMIN" || role === "MANAGER";
   const canChange = canEditProducts(role, permissions);
   const canEdit = canChange && !isVendor;
+  // Product codes are inventory.labels, as on the Inventory page.
+  const canLabel = can("inventory.labels");
   // The whole view — page, search, filters, sort, page size — lives in the
   // URL so Back from a product (and the product page's breadcrumb) return to
   // the exact list the row was opened from, while the navbar's bare link
@@ -120,7 +122,7 @@ export default function ProductsPage() {
 
   // Org-wide, so the badge is honest about what the dialog will change. Hidden
   // from vendors along with the rest of the catalogue-wide actions.
-  const codeStatus = useCodeStatus(!isVendor);
+  const codeStatus = useCodeStatus(canLabel);
   const pendingCodes = codeStatus.data
     ? codeStatus.data.missingSku +
       codeStatus.data.missingBarcode +
@@ -402,14 +404,16 @@ export default function ProductsPage() {
                 their home. The Inventory page carries the same dialog, but it
                 is gated on warehousing — without this trigger an org that has
                 not enabled it cannot reach the flow at all. */}
-            <Button
-              variant="outline"
-              size="action"
-              onClick={() => setCodesOpen(true)}
-            >
-              <Barcode className="size-3.5" />
-              {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}
-            </Button>
+            {canLabel && (
+              <Button
+                variant="outline"
+                size="action"
+                onClick={() => setCodesOpen(true)}
+              >
+                <Barcode className="size-3.5" />
+                {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}
+              </Button>
+            )}
             </div>
             {canEdit && (
               <Button
@@ -439,7 +443,9 @@ export default function ProductsPage() {
               {canManage && (
                 <DropdownMenuItem onSelect={() => setImportOpen(true)}><Upload /> Import products</DropdownMenuItem>
               )}
-              <DropdownMenuItem onSelect={() => setCodesOpen(true)}><Barcode /> {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}</DropdownMenuItem>
+              {canLabel && (
+                <DropdownMenuItem onSelect={() => setCodesOpen(true)}><Barcode /> {pendingCodes > 0 ? `Product codes (${pendingCodes})` : "Product codes"}</DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
           {canEdit && (
@@ -451,7 +457,7 @@ export default function ProductsPage() {
         </AppBarActions>
       )}
 
-      <ProductCodesDialog open={codesOpen} onOpenChange={setCodesOpen} />
+      {canLabel && <ProductCodesDialog open={codesOpen} onOpenChange={setCodesOpen} />}
 
       {/* Floating bulk-action dock — only up while a product is selected */}
       {showDock && (

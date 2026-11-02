@@ -4,6 +4,7 @@ import { Pencil } from "lucide-react";
 
 import { Input } from "~/components/ui/input";
 import { Tip } from "~/components/ui/tooltip";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import { STOCK_TERMS } from "~/lib/inventory-vocabulary";
 import { useSelectedLocation } from "~/hooks/use-selected-location";
 import { useVariantStock } from "~/hooks/use-inventory-queries";
@@ -43,6 +44,10 @@ export function VariantWarehouseStockEditor({
   onLevelsLoaded: (seed: Record<string, string>) => void;
   disabled?: boolean;
 }) {
+  // The quantities save as stock corrections and the locations as stock rows,
+  // both of which the API keeps for inventory.adjust.
+  const canAdjust = useCurrentRole().can("inventory.adjust");
+  const locked = disabled || !canAdjust;
   const stock = useVariantStock(variantId);
   const { locationId } = useSelectedLocation({ sync: false });
   const seededLocationsKey = useRef<string | null>(null);
@@ -99,20 +104,25 @@ export function VariantWarehouseStockEditor({
   if (!levels || levels.length === 0) {
     return (
       <div className={shell}>
-        This variant isn&apos;t stocked at any location yet.{" "}
-        <button
-          type="button"
-          className="underline disabled:opacity-50"
-          onClick={() => setLocationsDialogOpen(true)}
-          disabled={disabled}
-        >
-          Choose locations
-        </button>{" "}
-        or set a quantity from{" "}
-        <Link to="/products/inventory" className="underline">
-          Inventory
-        </Link>
-        .
+        This variant isn&apos;t stocked at any location yet.
+        {canAdjust && (
+          <>
+            {" "}
+            <button
+              type="button"
+              className="underline disabled:opacity-50"
+              onClick={() => setLocationsDialogOpen(true)}
+              disabled={disabled}
+            >
+              Choose locations
+            </button>{" "}
+            or set a quantity from{" "}
+            <Link to="/products/inventory" className="underline">
+              Inventory
+            </Link>
+            .
+          </>
+        )}
         {locationsDialog}
       </div>
     );
@@ -132,7 +142,7 @@ export function VariantWarehouseStockEditor({
               aria-label="Edit locations"
               className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
               onClick={() => setLocationsDialogOpen(true)}
-              disabled={disabled}
+              disabled={locked}
             >
               <Pencil className="size-3" />
             </button>
@@ -144,10 +154,17 @@ export function VariantWarehouseStockEditor({
       </div>
       {/* The Inventory screen says this in its explainer; a merchant typing a
           quantity here deserves the same warning without having to go there. */}
-      <p className="bg-warning-subtle px-4 py-2 text-micro text-muted-foreground">
-        Saved here and pushed to Shopify. If the same quantity changes in both
-        places, the next sync from Shopify wins.
-      </p>
+      {canAdjust ? (
+        <p className="bg-warning-subtle px-4 py-2 text-micro text-muted-foreground">
+          Saved here and pushed to Shopify. If the same quantity changes in both
+          places, the next sync from Shopify wins.
+        </p>
+      ) : (
+        <p className="bg-muted/50 px-4 py-2 text-micro text-muted-foreground">
+          Changing these needs &ldquo;Adjust stock counts&rdquo;. An owner or admin can turn it on in
+          Settings › Team members.
+        </p>
+      )}
       {levels.map((level) => {
         const held = level.reserved + level.qc + level.damaged;
         return (
@@ -190,7 +207,7 @@ export function VariantWarehouseStockEditor({
               )}
               value={values[level.warehouseId] ?? ""}
               onChange={(e) => onChange(level.warehouseId, e.target.value)}
-              disabled={disabled}
+              disabled={locked}
             />
           </div>
         );
