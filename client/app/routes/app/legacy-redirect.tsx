@@ -1,5 +1,5 @@
 import { Navigate, useLocation } from "react-router";
-import { getLandingPath } from "~/lib/sections";
+import { getLandingPath } from "~/lib/landing-path";
 
 /**
  * Top-level paths that moved under a section pill, so the navbar could present

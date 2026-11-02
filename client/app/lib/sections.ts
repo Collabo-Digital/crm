@@ -1,5 +1,4 @@
-import { useAuthStore } from "~/stores/auth.store";
-import { hasPermission } from "~/lib/permissions";
+import { hasPermission } from "./permissions.ts";
 import type { UserRole } from "~/types/api";
 
 /**
@@ -142,7 +141,10 @@ export function resolveAccess(
 
 // Pages whose API is ORG_MANAGERS-only (`@Roles(...ORG_MANAGERS)`) whatever the
 // member's sections. Checked first, so no other rule can open them.
-const MANAGER_ONLY_PREFIXES = ["/orders/pos/reports"];
+const MANAGER_ONLY_PREFIXES = ["/orders/pos/reports", "/analytics/messaging"];
+
+/** The till and its printed receipt, without the till's settings or reports. */
+const isTill = (pathname: string) => pathname === "/orders/pos" || isUnder(pathname, "/orders/pos/receipts");
 const MANAGER_ROLES: ReadonlyArray<UserRole | undefined> = ["OWNER", "ADMIN", "MANAGER"];
 
 export function canAccessPath(access: SectionAccess, pathname: string): boolean {
@@ -159,6 +161,9 @@ export function canAccessPath(access: SectionAccess, pathname: string): boolean 
       hasPermission(access.role, access.grants, key);
     return can("inventory.pack") && (!isUnder(pathname, "/orders/packing/accuracy") || can("inventory.reports"));
   }
+  // The till opens on pos.sell as well as on the Orders section: a Cashier
+  // holds pos.sell without section.orders. Vendors hold no permission.
+  if (isTill(pathname) && hasPermission(access.role, access.grants, "pos.sell")) return true;
   if (access.role === "VENDOR") {
     return (
       !VENDOR_DENIED_PREFIXES.some((p) => isUnder(pathname, p)) &&
@@ -194,6 +199,16 @@ export function canAccessPath(access: SectionAccess, pathname: string): boolean 
     return false;
   }
 
+  // Invoices too: the invoice and GST-return API refuses an AGENT / VIEWER
+  // without `reports.finance`, which the access editor grants with the section.
+  if (
+    section === "invoices" &&
+    isSectionScopedRole(access.role) &&
+    !access.grants.includes("reports.finance")
+  ) {
+    return false;
+  }
+
   // Inventory sits inside Products but keeps its own key: the stock API
   // refuses an AGENT / VIEWER without `inventory.view` whatever their sections.
   if (
@@ -210,21 +225,14 @@ export function canAccessPath(access: SectionAccess, pathname: string): boolean 
 export function firstAllowedPath(access: SectionAccess): string {
   // An influencer has no dashboard; their work starts at their own channels.
   if (access.role === "INFLUENCER") return "/settings/channels";
-  // A Packer's work is the packing list, whichever section comes first in the nav.
-  if (canAccessPath(access, "/orders/packing") && !canAccessPath(access, "/orders")) return "/orders/packing";
+  // A Packer's work is the packing list and a Cashier's the till, whichever
+  // section comes first in the nav.
+  if (!canAccessPath(access, "/orders")) {
+    if (canAccessPath(access, "/orders/packing")) return "/orders/packing";
+    if (canAccessPath(access, "/orders/pos")) return "/orders/pos";
+  }
   return (
     AVAILABLE_SECTIONS.find((s) => canAccessPath(access, s.prefix))?.prefix ??
     "/profile"
-  );
-}
-
-/** Landing path for the signed-in member, for callers outside React. */
-export function getLandingPath(): string {
-  const { organizations, currentOrgId } = useAuthStore.getState();
-  const membership =
-    organizations.find((m) => m.organization.id === currentOrgId) ??
-    organizations[0];
-  return firstAllowedPath(
-    resolveAccess(membership?.role, membership?.permissions ?? []),
   );
 }
