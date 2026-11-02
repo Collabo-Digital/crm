@@ -66,6 +66,7 @@ import {
   useGstFilings,
 } from "~/hooks/use-invoice-queries";
 import { useInvoiceActionGates } from "~/hooks/use-invoice-action-gates";
+import { useCurrentRole } from "~/hooks/use-current-role";
 import { useCurrentOrg } from "~/hooks/use-org-queries";
 import { useOrganizationSettings } from "~/hooks/use-settings-queries";
 import { useGstins } from "~/hooks/use-gst-queries";
@@ -241,6 +242,7 @@ function InvoicesView() {
   const { data: org } = useCurrentOrg();
   const currency = org?.currency ?? "INR";
   const { canIssue, canCancel } = useInvoiceActionGates();
+  const { can } = useCurrentRole();
   // Composition taxpayers file CMP-08 and GSTR-4, so the GSTR-1 reminder is
   // not theirs and the returns below are for reference only.
   const composition = useOrganizationSettings().data?.taxSettings.composition ?? false;
@@ -266,7 +268,8 @@ function InvoicesView() {
         (f.sellerGstinId ?? null) === (sellerGstinId || null),
     ) ?? null;
 
-  const warehouses = useWarehouses();
+  // The location list needs inventory.view, which an Accountant does not hold.
+  const warehouses = useWarehouses(can("inventory.view"));
   const activeWarehouses = (warehouses.data ?? []).filter((w) => w.isActive);
   const scopedWarehouse =
     activeWarehouses.find((w) => w.id === warehouseScopeId) ?? null;
@@ -772,13 +775,15 @@ function InvoicesView() {
                             </>
                           )}
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => setPendingCreditTarget(r)}
-                          className="text-micro font-medium text-brand-strong underline-offset-2 hover:underline"
-                        >
-                          Raise credit note
-                        </button>
+                        {canCancel && (
+                          <button
+                            type="button"
+                            onClick={() => setPendingCreditTarget(r)}
+                            className="text-micro font-medium text-brand-strong underline-offset-2 hover:underline"
+                          >
+                            Raise credit note
+                          </button>
+                        )}
                       </li>
                     ))}
                     {pendingCredits.length > 5 && (

@@ -23,6 +23,7 @@ import { CreditNoteDialog } from "~/components/app/credit-note-dialog";
 import { useInvoice, useInvoicePdf } from "~/hooks/use-invoice-queries";
 import { useUpdateInvoiceMutation } from "~/hooks/use-invoice-mutations";
 import { useInvoiceActionGates } from "~/hooks/use-invoice-action-gates";
+import { useSectionAccess } from "~/hooks/use-section-access";
 import { isString, useSessionState } from "~/hooks/use-session-state";
 import { downloadInvoicePdf } from "~/lib/invoice-pdf";
 import {
@@ -105,6 +106,8 @@ export default function InvoicePage() {
   const { id } = useParams<{ id: string }>();
   const { data: invoice, isLoading, isError, refetch } = useInvoice(id);
   const { canCancel } = useInvoiceActionGates();
+  // An Accountant reads invoices without the order book.
+  const opensOrders = useSectionAccess().canAccess("/orders");
   const pdf = useInvoicePdf(id);
   const [pdfFailed, setPdfFailed] = useState(false);
   // The list mirrors its filters to the session; go back to the same view.
@@ -321,12 +324,16 @@ export default function InvoicePage() {
                 <p className="text-micro uppercase tracking-wider text-muted-foreground">
                   Order
                 </p>
-                <Button variant="ghost" size="sm" className="-ml-2 mt-1" asChild>
-                  <Link to={`/orders/${current.order.id}`}>
-                    <ShoppingBag />
-                    {current.order.name}
-                  </Link>
-                </Button>
+                {opensOrders ? (
+                  <Button variant="ghost" size="sm" className="-ml-2 mt-1" asChild>
+                    <Link to={`/orders/${current.order.id}`}>
+                      <ShoppingBag />
+                      {current.order.name}
+                    </Link>
+                  </Button>
+                ) : (
+                  <p className="mt-1 text-sm text-foreground">{current.order.name}</p>
+                )}
               </div>
               {canCancel && current.status === "ISSUED" && (
                 <div className="space-y-2 border-t pt-3">

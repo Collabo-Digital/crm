@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { downloadInvoicePdf } from "~/lib/invoice-pdf";
+import { useSectionAccess } from "~/hooks/use-section-access";
 
 import { Button } from "~/components/ui/button";
 import {
@@ -47,6 +48,9 @@ import type { Invoice } from "~/types/api";
  * page-sized slice it is holding.
  */
 export function useInvoiceColumns(currency: string): ColumnDef<Invoice>[] {
+  // An Accountant reads invoices without the order book: the order is a name, not a link.
+  const { canAccess } = useSectionAccess();
+  const opensOrders = canAccess("/orders");
   return useMemo(
     () => [
       {
@@ -158,17 +162,20 @@ export function useInvoiceColumns(currency: string): ColumnDef<Invoice>[] {
         key: "order",
         label: "Order",
         width: 100,
-        cell: (invoice) => (
-          <Link
-            to={`/orders/${invoice.order.id}`}
-            className="truncate text-muted-foreground underline-offset-3 hover:text-foreground hover:underline"
-          >
-            {invoice.order.name}
-          </Link>
-        ),
+        cell: (invoice) =>
+          opensOrders ? (
+            <Link
+              to={`/orders/${invoice.order.id}`}
+              className="truncate text-muted-foreground underline-offset-3 hover:text-foreground hover:underline"
+            >
+              {invoice.order.name}
+            </Link>
+          ) : (
+            <span className="truncate text-muted-foreground">{invoice.order.name}</span>
+          ),
       },
     ],
-    [currency],
+    [currency, opensOrders],
   );
 }
 
@@ -219,6 +226,7 @@ export function InvoiceRowActions({
   onCancel: (invoice: Invoice) => void;
 }) {
   const [downloading, setDownloading] = useState(false);
+  const opensOrders = useSectionAccess().canAccess(`/orders/${invoice.order.id}`);
 
   async function downloadPdf() {
     setDownloading(true);
@@ -258,13 +266,15 @@ export function InvoiceRowActions({
           <Eye />
           View details
         </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link to={`/orders/${invoice.order.id}`}>
-            <ShoppingBag />
-            Open order
-            <DropdownMenuShortcut>{invoice.order.name}</DropdownMenuShortcut>
-          </Link>
-        </DropdownMenuItem>
+        {opensOrders && (
+          <DropdownMenuItem asChild>
+            <Link to={`/orders/${invoice.order.id}`}>
+              <ShoppingBag />
+              Open order
+              <DropdownMenuShortcut>{invoice.order.name}</DropdownMenuShortcut>
+            </Link>
+          </DropdownMenuItem>
+        )}
 
         <DropdownMenuSeparator />
 
