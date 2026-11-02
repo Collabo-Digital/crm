@@ -13,6 +13,8 @@ import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { Roles, ORG_OPERATORS } from '../auth/decorators/roles.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { RequireSection } from '../auth/decorators/require-section.decorator';
+import { locationScopeFor } from '../auth/location-scope.util';
+import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from './inventory.service';
 import { SkuGeneratorService } from './sku-generator.service';
 import {
@@ -26,7 +28,9 @@ import { GenerateCodesDto } from './dto/generate-skus.dto';
  * Inventory V1 — Phase A surface. EVERY route declares explicit @Roles
  * (RolesGuard is allow-by-default; new endpoints never inherit that trap) and
  * a @RequirePermissions key resolved against OrganizationMember.permissions
- * (OWNER/ADMIN/MANAGER hold every key implicitly).
+ * (OWNER/ADMIN/MANAGER hold every key implicitly). A store-limited Manager or
+ * Agent reads and changes stock at their own locations only
+ * (auth/location-scope.util).
  */
 const ORG_MEMBERS: UserRole[] = [...ORG_OPERATORS, UserRole.VIEWER];
 
@@ -38,6 +42,7 @@ export class InventoryController {
   constructor(
     private readonly inventory: InventoryService,
     private readonly skuGenerator: SkuGeneratorService,
+    private readonly prisma: PrismaService,
   ) {}
 
   // Status is intentionally permission-free (any member): the client shell
@@ -58,18 +63,19 @@ export class InventoryController {
   @Get('stock')
   @Roles(...ORG_MEMBERS)
   @RequirePermissions('inventory.view')
-  listStock(@OrgId() orgId: string, @Query() query: QueryStockDto) {
-    return this.inventory.listStock(orgId, query);
+  async listStock(@OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Query() query: QueryStockDto) {
+    return this.inventory.listStock(orgId, query, await locationScopeFor(this.prisma, user));
   }
 
   @Get('stock/stats')
   @Roles(...ORG_MEMBERS)
   @RequirePermissions('inventory.view')
-  getStockStats(
+  async getStockStats(
     @OrgId() orgId: string,
+    @CurrentUser() user: JwtPayload,
     @Query('warehouseId') warehouseId?: string,
   ) {
-    return this.inventory.getStockStats(orgId, warehouseId);
+    return this.inventory.getStockStats(orgId, warehouseId, await locationScopeFor(this.prisma, user));
   }
 
   // NOTE: declared after 'stock/stats' — NestJS matches routes in declaration
@@ -77,19 +83,23 @@ export class InventoryController {
   @Get('stock/:variantId')
   @Roles(...ORG_MEMBERS)
   @RequirePermissions('inventory.view')
-  getVariantStock(@OrgId() orgId: string, @Param('variantId') variantId: string) {
-    return this.inventory.getVariantStock(orgId, variantId);
+  async getVariantStock(
+    @OrgId() orgId: string,
+    @CurrentUser() user: JwtPayload,
+    @Param('variantId') variantId: string,
+  ) {
+    return this.inventory.getVariantStock(orgId, variantId, await locationScopeFor(this.prisma, user));
   }
 
   @Post('adjustments')
   @Roles(...ORG_OPERATORS)
   @RequirePermissions('inventory.adjust')
-  createAdjustment(
+  async createAdjustment(
     @OrgId() orgId: string,
     @CurrentUser() user: JwtPayload,
     @Body() dto: CreateAdjustmentDto,
   ) {
-    return this.inventory.createAdjustment(orgId, user.sub, dto);
+    return this.inventory.createAdjustment(orgId, user.sub, dto, await locationScopeFor(this.prisma, user));
   }
 
   // Saves every edited quantity on one screen at once. Atomic: see
@@ -98,26 +108,26 @@ export class InventoryController {
   @Post('adjustments/bulk')
   @Roles(...ORG_OPERATORS)
   @RequirePermissions('inventory.adjust')
-  createAdjustmentsBulk(
+  async createAdjustmentsBulk(
     @OrgId() orgId: string,
     @CurrentUser() user: JwtPayload,
     @Body() dto: BulkAdjustmentDto,
   ) {
-    return this.inventory.createAdjustmentsBulk(orgId, user.sub, dto);
+    return this.inventory.createAdjustmentsBulk(orgId, user.sub, dto, await locationScopeFor(this.prisma, user));
   }
 
   @Get('ledger')
   @Roles(...ORG_MEMBERS)
   @RequirePermissions('inventory.view')
-  listLedger(@OrgId() orgId: string, @Query() query: QueryLedgerDto) {
-    return this.inventory.listLedger(orgId, query);
+  async listLedger(@OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Query() query: QueryLedgerDto) {
+    return this.inventory.listLedger(orgId, query, await locationScopeFor(this.prisma, user));
   }
 
   @Get('lookup')
   @Roles(...ORG_OPERATORS)
   @RequirePermissions('inventory.view')
-  lookup(@OrgId() orgId: string, @Query('code') code: string) {
-    return this.inventory.lookup(orgId, code ?? '');
+  async lookup(@OrgId() orgId: string, @CurrentUser() user: JwtPayload, @Query('code') code: string) {
+    return this.inventory.lookup(orgId, code ?? '', await locationScopeFor(this.prisma, user));
   }
 
   @Post('labels/generate-skus')

@@ -108,7 +108,7 @@ describe('stats controllers route by role', () => {
 
   it('passes the vendor scope into product stats and types', () => {
     const productService = { getStats: jest.fn(), getProductTypes: jest.fn() };
-    const c = new ProductController(productService as any);
+    const c = new ProductController(productService as any, {} as any);
 
     c.getStats(vendor as any, undefined);
     c.getProductTypes(vendor as any);
@@ -119,7 +119,7 @@ describe('stats controllers route by role', () => {
 
   it('passes no scope for an owner', () => {
     const productService = { getStats: jest.fn(), getProductTypes: jest.fn() };
-    const c = new ProductController(productService as any);
+    const c = new ProductController(productService as any, {} as any);
     const owner = { role: UserRole.OWNER, orgId: 'o1' } as any;
 
     c.getStats(owner, undefined);

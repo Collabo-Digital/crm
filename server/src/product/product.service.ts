@@ -1212,7 +1212,7 @@ export class ProductService {
    * remembered on the product for the push to apply, and the product is marked
    * out of sync. A change at a CRM-only location stays in the CRM.
    */
-  async setVariantLocations(variantId: string, orgId: string, dto: SetVariantLocationsDto) {
+  async setVariantLocations(variantId: string, orgId: string, dto: SetVariantLocationsDto, scope: string[] | null = null) {
     if (!(await this.inventoryLedger.isWarehousingEnabled(orgId))) {
       throw new BadRequestException('Warehousing is not enabled for this organization.');
     }
@@ -1236,6 +1236,7 @@ export class ProductService {
         orgId,
         variantId,
         dto.warehouseIds,
+        scope,
       );
 
       // CRM-only locations have nothing on Shopify to change.

@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -7,6 +8,7 @@ import {
 import { Prisma, PrismaClient, StockBucket } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationSettingsService } from '../organization-settings/organization-settings.service';
+import { inLocationScope, STOCK_OUT_OF_SCOPE } from '../auth/location-scope.util';
 
 /** Either the root client or an open transaction — every method accepts both. */
 export type Db = PrismaService | Prisma.TransactionClient;
@@ -236,12 +238,17 @@ export class InventoryLedgerService {
    *
    * Runs in the caller's transaction. Returns what changed, with each
    * location's Shopify id, so the caller can mirror it to Shopify.
+   *
+   * `scope`: the locations a store-limited member works at. Their dialog
+   * shows only those, so the rest stay as they are, and adding one of the
+   * rest is refused.
    */
   async setVariantLocations(
     db: Db,
     orgId: string,
     variantId: string,
     warehouseIds: string[],
+    scope: string[] | null = null,
   ): Promise<{
     added: Array<{ warehouseId: string; shopifyLocationId: string | null }>;
     removed: Array<{ warehouseId: string; shopifyLocationId: string | null }>;
@@ -273,10 +280,21 @@ export class InventoryLedgerService {
       },
     });
 
-    // Rows at a deactivated location are left alone: the dialog cannot show
-    // them, so their absence from the list is not a request to remove them.
+    if (scope) {
+      const stocked = new Set(rows.map((row) => row.warehouseId));
+      if (requestedWarehouseIds.some((id) => !scope.includes(id) && !stocked.has(id))) {
+        throw new ForbiddenException(STOCK_OUT_OF_SCOPE);
+      }
+    }
+
+    // Rows at a deactivated location, or one the member does not work at, are
+    // left alone: the dialog cannot show them, so their absence from the list
+    // is not a request to remove them.
     const rowsToRemove = rows.filter(
-      (row) => row.warehouse.isActive && !requestedWarehouseIds.includes(row.warehouseId),
+      (row) =>
+        row.warehouse.isActive &&
+        !requestedWarehouseIds.includes(row.warehouseId) &&
+        inLocationScope(scope, row.warehouseId),
     );
     for (const row of rowsToRemove) {
       if (row.available !== 0 || row.reserved !== 0 || row.qc !== 0 || row.damaged !== 0) {

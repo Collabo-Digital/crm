@@ -33,6 +33,12 @@ import {
   CreateAdjustmentDto,
 } from './dto/adjustment.dto';
 import { QueryLedgerDto, QueryStockDto } from './dto/query-stock.dto';
+import {
+  assertInLocationScope,
+  scopedLocationFilter,
+  scopedLocationSql,
+  STOCK_OUT_OF_SCOPE,
+} from '../auth/location-scope.util';
 
 @Injectable()
 export class InventoryService {
@@ -290,7 +296,9 @@ export class InventoryService {
 
   // ─────────────────────────── stock reads ───────────────────────────
 
-  async listStock(orgId: string, query: QueryStockDto) {
+  // `scope` (here and below): the locations a store-limited member works at.
+  // Reads list those only; changes anywhere else are refused.
+  async listStock(orgId: string, query: QueryStockDto, scope: string[] | null = null) {
     await this.assertWarehousing(orgId);
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -302,7 +310,8 @@ export class InventoryService {
       organizationId: orgId,
       variant: { product: { deletedAt: null } },
     };
-    if (query.warehouseId) where.warehouseId = query.warehouseId;
+    const warehouseId = scopedLocationFilter(scope, query.warehouseId);
+    if (warehouseId) where.warehouseId = warehouseId;
     if (query.q) {
       where.variant = {
         product: { deletedAt: null },
@@ -404,7 +413,7 @@ export class InventoryService {
   // box and stock filter narrow the table beneath them, not these numbers, so
   // "low stock lines" keeps meaning "lines low in this warehouse" instead of
   // collapsing to the row count whenever the table is filtered to low stock.
-  async getStockStats(orgId: string, warehouseId?: string) {
+  async getStockStats(orgId: string, warehouseId?: string, locationScope: string[] | null = null) {
     await this.assertWarehousing(orgId);
     const org = await this.prisma.organization.findUnique({
       where: { id: orgId },
@@ -415,15 +424,14 @@ export class InventoryService {
     // organizationId stays in every clause, so a warehouseId belonging to
     // another org yields zeros rather than leaking — the same property
     // listStock leans on instead of a separate ownership lookup.
+    const locations = scopedLocationFilter(locationScope, warehouseId);
     const scope: Prisma.StockLevelWhereInput = {
       organizationId: orgId,
       // Matches listStock: deleted products must not inflate the stat tiles.
       variant: { product: { deletedAt: null } },
-      ...(warehouseId ? { warehouseId } : {}),
+      ...(locations ? { warehouseId: locations } : {}),
     };
-    const warehouseFilter = warehouseId
-      ? Prisma.sql`AND sl."warehouse_id" = ${warehouseId}`
-      : Prisma.empty;
+    const warehouseFilter = scopedLocationSql(Prisma.sql`sl."warehouse_id"`, locationScope, warehouseId);
 
     const [sums, low, oversold, valueRows] = await Promise.all([
       this.prisma.stockLevel.aggregate({
@@ -461,7 +469,7 @@ export class InventoryService {
     };
   }
 
-  async getVariantStock(orgId: string, variantId: string) {
+  async getVariantStock(orgId: string, variantId: string, scope: string[] | null = null) {
     const variant = await this.prisma.productVariant.findFirst({
       where: { id: variantId, product: { organizationId: orgId } },
       select: {
@@ -475,9 +483,10 @@ export class InventoryService {
     });
     if (!variant) throw new NotFoundException('Variant not found');
 
+    const atLocations = scope ? { warehouseId: { in: scope } } : {};
     const [levels, reservations, events] = await Promise.all([
       this.prisma.stockLevel.findMany({
-        where: { variantId },
+        where: { variantId, ...atLocations },
         include: {
           warehouse: { select: { id: true, name: true, code: true } },
           defaultLocation: { select: { fullCode: true } },
@@ -490,12 +499,12 @@ export class InventoryService {
         ],
       }),
       this.prisma.stockReservation.findMany({
-        where: { variantId, status: 'ACTIVE' },
+        where: { variantId, status: 'ACTIVE', ...atLocations },
         orderBy: { createdAt: 'desc' },
         take: 50,
       }),
       this.prisma.inventoryEvent.findMany({
-        where: { organizationId: orgId, variantId },
+        where: { organizationId: orgId, variantId, ...atLocations },
         orderBy: { createdAt: 'desc' },
         take: 20,
       }),
@@ -506,7 +515,8 @@ export class InventoryService {
 
   // ─────────────────────────── adjustments ───────────────────────────
 
-  async createAdjustment(orgId: string, userId: string, dto: CreateAdjustmentDto) {
+  async createAdjustment(orgId: string, userId: string, dto: CreateAdjustmentDto, scope: string[] | null = null) {
+    assertInLocationScope(scope, dto.warehouseId, STOCK_OUT_OF_SCOPE);
     await this.assertWarehousing(orgId);
     if ((dto.delta === undefined) === (dto.setTo === undefined)) {
       throw new BadRequestException('Provide exactly one of `delta` or `setTo`.');
@@ -574,7 +584,9 @@ export class InventoryService {
     orgId: string,
     userId: string,
     dto: BulkAdjustmentDto,
+    scope: string[] | null = null,
   ) {
+    assertInLocationScope(scope, dto.warehouseId, STOCK_OUT_OF_SCOPE);
     await this.assertWarehousing(orgId);
     const warehouse = await this.resolveWarehouse(orgId, dto.warehouseId);
 
@@ -707,12 +719,13 @@ export class InventoryService {
 
   // ─────────────────────────── ledger + lookup ───────────────────────────
 
-  async listLedger(orgId: string, query: QueryLedgerDto) {
+  async listLedger(orgId: string, query: QueryLedgerDto, scope: string[] | null = null) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 25;
     const where: Prisma.InventoryEventWhereInput = { organizationId: orgId };
     if (query.variantId) where.variantId = query.variantId;
-    if (query.warehouseId) where.warehouseId = query.warehouseId;
+    const warehouseId = scopedLocationFilter(scope, query.warehouseId);
+    if (warehouseId) where.warehouseId = warehouseId;
     if (query.reason) where.reason = query.reason;
     if (query.dateFrom || query.dateTo) {
       where.createdAt = {
@@ -765,7 +778,7 @@ export class InventoryService {
    * matches are returned for the operator to disambiguate (duplicate SKUs are
    * legal — Shopify allows them).
    */
-  async lookup(orgId: string, code: string) {
+  async lookup(orgId: string, code: string, scope: string[] | null = null) {
     const trimmed = code.trim();
     if (!trimmed) throw new BadRequestException('Scan code is empty.');
 
@@ -784,6 +797,7 @@ export class InventoryService {
         },
       },
       stockLevels: {
+        ...(scope ? { where: { warehouseId: { in: scope } } } : {}),
         select: {
           warehouseId: true,
           available: true,

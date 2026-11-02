@@ -55,6 +55,10 @@ export function inLocationScope(scope: string[] | null, locationId: string | nul
   return scope === null || (!!locationId && scope.includes(locationId));
 }
 
+/** Changing stock, or a location's set-up, somewhere the member does not work. */
+export const STOCK_OUT_OF_SCOPE =
+  'You can only change stock at the locations you work at. Ask an owner or admin to add this one to your stores.';
+
 export function assertInLocationScope(
   scope: string[] | null,
   locationId: string | null | undefined,

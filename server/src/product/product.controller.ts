@@ -45,6 +45,8 @@ import {
   ORG_OPERATORS_AND_VENDORS,
 } from '../auth/decorators/roles.decorator';
 import { vendorScopeFor } from '../auth/vendor-scope.util';
+import { assertInLocationScope, locationScopeFor, STOCK_OUT_OF_SCOPE } from '../auth/location-scope.util';
+import { PrismaService } from '../prisma/prisma.service';
 import { ProductService } from './product.service';
 import { QueryProductsDto } from './dto/query-products.dto';
 import { CreateProductDto } from './dto/create-product.dto';
@@ -71,7 +73,22 @@ import {
 @RequireSection('products')
 @Controller('products')
 export class ProductController {
-  constructor(private readonly productService: ProductService) { }
+  constructor(
+    private readonly productService: ProductService,
+    private readonly prisma: PrismaService,
+  ) { }
+
+  /**
+   * A store-limited member (auth/location-scope.util) sets quantities only at
+   * the locations they work at: the per-location boxes and opening stock are
+   * stock changes like any adjustment. Costs a query only when a body names one.
+   */
+  private async assertStockLocations(user: JwtPayload, variants: StockLines[] | undefined) {
+    const ids = stockLocationsOf(variants);
+    if (ids.length === 0) return;
+    const scope = await locationScopeFor(this.prisma, user);
+    for (const id of ids) assertInLocationScope(scope, id, STOCK_OUT_OF_SCOPE);
+  }
 
   // ── COLLECTION-LEVEL ROUTES ─────────────────────────────────────────────
 
@@ -85,7 +102,8 @@ export class ProductController {
 
   @Post()
   @Roles(...ORG_OPERATORS)
-  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProductDto) {
+  async create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProductDto) {
+    await this.assertStockLocations(user, dto.variants);
     return this.productService.create(user.orgId!, user.sub, dto);
   }
 
@@ -121,26 +139,28 @@ export class ProductController {
   @Patch('variants/:variantId')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
-  updateVariant(
+  async updateVariant(
     @Param('variantId') variantId: string,
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateVariantDto,
   ) {
+    await this.assertStockLocations(user, [dto]);
     return this.productService.updateVariant(variantId, user.orgId!, dto, vendorScopeFor(user));
   }
 
   // Which locations the variant is stocked at. It moves no quantity, but it
   // creates and removes stock rows, so it sits behind the same permission as a
   // stock adjustment — and is not open to vendors, who do not manage locations.
+  // A store-limited member changes only the locations they work at.
   @Put('variants/:variantId/locations')
   @Roles(...ORG_OPERATORS)
   @RequirePermissions('inventory.adjust')
-  setVariantLocations(
+  async setVariantLocations(
     @Param('variantId') variantId: string,
     @CurrentUser() user: JwtPayload,
     @Body() dto: SetVariantLocationsDto,
   ) {
-    return this.productService.setVariantLocations(variantId, user.orgId!, dto);
+    return this.productService.setVariantLocations(variantId, user.orgId!, dto, await locationScopeFor(this.prisma, user));
   }
 
   @Delete('variants/:variantId')
@@ -189,11 +209,12 @@ export class ProductController {
   @Post(':id/variants')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
-  createVariant(
+  async createVariant(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
     @Body() dto: CreateVariantDto,
   ) {
+    await this.assertStockLocations(user, [dto]);
     return this.productService.createVariant(id, user.orgId!, dto, vendorScopeFor(user));
   }
 
@@ -210,11 +231,12 @@ export class ProductController {
   @Patch(':id/variants/bulk')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
-  bulkUpdateVariants(
+  async bulkUpdateVariants(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
     @Body() dto: BulkUpdateVariantsDto,
   ) {
+    await this.assertStockLocations(user, dto.updates);
     return this.productService.bulkUpdateVariants(
       id,
       user.orgId!,
@@ -374,11 +396,12 @@ export class ProductController {
   @Patch(':id')
   @AllowVendor()
   @Roles(...ORG_OPERATORS_AND_VENDORS)
-  update(
+  async update(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateProductDto,
   ) {
+    await this.assertStockLocations(user, dto.variants);
     return this.productService.update(id, user.orgId!, dto, vendorScopeFor(user));
   }
 
@@ -394,4 +417,14 @@ export class ProductController {
   syncToShopify(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productService.syncToShopify(id, user.orgId!, vendorScopeFor(user));
   }
+}
+
+type StockLines = { warehouseId?: string; stock?: Array<{ warehouseId: string }> };
+
+/** Every location a product or variant body sets a quantity at. */
+function stockLocationsOf(variants: StockLines[] | undefined): string[] {
+  return (variants ?? []).flatMap((v) => [
+    ...(v.warehouseId ? [v.warehouseId] : []),
+    ...(v.stock ?? []).map((line) => line.warehouseId),
+  ]);
 }

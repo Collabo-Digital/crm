@@ -41,10 +41,11 @@ export class WarehouseService {
     private readonly links: LocationLinkService,
   ) {}
 
-  async findAll(orgId: string) {
+  /** `scope`: the locations a store-limited member works at; the rest are left out. */
+  async findAll(orgId: string, scope: string[] | null = null) {
     const [warehouses, units, gst, shopifyNames] = await Promise.all([
       this.prisma.warehouse.findMany({
-        where: { organizationId: orgId },
+        where: { organizationId: orgId, ...(scope ? { id: { in: scope } } : {}) },
         orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
         include: { _count: { select: { locations: true, stockLevels: true } } },
       }),
