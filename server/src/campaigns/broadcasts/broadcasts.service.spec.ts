@@ -229,6 +229,20 @@ describe('handing a batch to the send pipeline', () => {
         await unsent.service.sendBatch('b_1', ['r_1']);
         expect(unsent.recipientUpdates[0]).toMatchObject({ data: { status: R.FAILED, errorMessage: 'Conversation not found' } });
     });
+
+    it('a second job for the same person leaves alone the message the first one queued for them', async () => {
+        const { service, prisma, messageUpdates } = sending(() => Promise.resolve({ ok: true, messageId: 'm_1', duplicate: true }));
+        prisma.broadcastRecipient.updateMany.mockResolvedValueOnce({ count: 0 });
+        prisma.broadcastRecipient.findUnique.mockResolvedValueOnce({ messageId: 'm_1' });
+        await service.sendBatch('b_1', ['r_1']);
+        expect(messageUpdates).toEqual([]);
+
+        // Stopped while it was being handed over: the message is taken back.
+        const stopped = sending(() => Promise.resolve({ ok: true, messageId: 'm_1' }));
+        stopped.prisma.broadcastRecipient.updateMany.mockResolvedValueOnce({ count: 0 });
+        await stopped.service.sendBatch('b_1', ['r_1']);
+        expect(stopped.messageUpdates[0]).toMatchObject({ where: { id: { in: ['m_1'] }, status: MessageStatus.QUEUED }, data: { status: MessageStatus.FAILED } });
+    });
 });
 
 describe('broadcast header files', () => {

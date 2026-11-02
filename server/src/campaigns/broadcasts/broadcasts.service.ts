@@ -545,8 +545,11 @@ export class BroadcastsService {
                             ? { status: R.SKIPPED, skipReason: outcome.code === 'opted_out' ? 'opted_out' : 'blocked' }
                             : { status: R.FAILED, failedAt: new Date(), errorMessage: outcome.message },
                 });
-                // Stopped while this one was being handed over: its message is taken back too.
-                if (!count && outcome.ok) await this.withdrawMessages([outcome.messageId], 'Not sent: the broadcast was stopped.');
+                // Stopped while this one was being handed over: its message is taken back too, unless another job for them queued that same message first.
+                if (!count && outcome.ok) {
+                    const holder = await this.prisma.broadcastRecipient.findUnique({ where: { id: r.id }, select: { messageId: true } });
+                    if (holder?.messageId !== outcome.messageId) await this.withdrawMessages([outcome.messageId], 'Not sent: the broadcast was stopped.');
+                }
             } catch (err) {
                 // Queueing its delivery can fail after the message was written; the outbound sweeper still sends that message, so it stays theirs.
                 const written = await this.prisma.message.findUnique({ where: { idempotencyKey }, select: { id: true } });
