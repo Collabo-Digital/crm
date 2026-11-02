@@ -3,7 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { ThrottlerException, ThrottlerStorageService } from '@nestjs/throttler';
 import { BillingPlan } from '@prisma/client';
 
-import { ApiKeyGuard } from './api-key.guard';
+import { ApiKeyGuard, publicApiLimit } from './api-key.guard';
 import { PublicApiController } from './public-api.controller';
 
 describe('ApiKeyGuard plan limits', () => {
@@ -41,6 +41,13 @@ describe('ApiKeyGuard plan limits', () => {
         expect(Number(headers['Retry-After'])).toBeGreaterThan(0);
         // Another endpoint has its own count.
         await expect(call('templates')).resolves.toBe(true);
+    });
+
+    it('lets the controller\'s throttle allow 2,000 a minute for a key, and 600 by address without one', () => {
+        const withHeaders = (headers: Record<string, string>) => ({ switchToHttp: () => ({ getRequest: () => ({ headers }) }) }) as unknown as ExecutionContext;
+        expect(publicApiLimit(withHeaders({ authorization: 'Bearer ck_live_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }))).toBe(2_000);
+        expect(publicApiLimit(withHeaders({ 'x-api-key': 'ck_live_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }))).toBe(2_000);
+        expect(publicApiLimit(withHeaders({}))).toBe(600);
     });
 
     it('leaves a key on Scale or Enterprise to the controller\'s 2,000 a minute', async () => {

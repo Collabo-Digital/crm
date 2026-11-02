@@ -19,6 +19,12 @@ type WithCaller = Request & { apiCaller?: ApiCaller };
  */
 export const PUBLIC_API_CEILING = 2_000;
 const MINUTE_MS = 60_000;
+/** Calls without a key, counted by address. */
+const WITHOUT_KEY = 600;
+
+/** The controller throttle's limit: the ceiling for a presented key, 600 by address without one. */
+export const publicApiLimit = (context: ExecutionContext): number =>
+    presentedKey(context.switchToHttp().getRequest<Request>()) ? PUBLIC_API_CEILING : WITHOUT_KEY;
 
 /** The calling key's organization and scopes, set by ApiKeyGuard. */
 export const Caller = createParamDecorator((_: unknown, ctx: ExecutionContext): ApiCaller => (ctx.switchToHttp().getRequest<WithCaller>()).apiCaller!);
