@@ -10,12 +10,15 @@ describe('seatOf', () => {
         expect(agent(['section.products', 'inventory.view', 'inventory.pack'])).toBe('ops');
         expect(agent(['section.products', 'inventory.view', 'inventory.receive', 'inventory.pick', 'inventory.dispatch', 'inventory.labels'])).toBe('ops');
         // The till's own key, compared as it is stored.
-        expect(agent(['pos.sell'])).toBe('ops');
+        expect(agent(['section.products', 'pos.sell'])).toBe('ops');
     });
 
-    it('gives a full seat to an agent with anything more, or with no grants (every section)', () => {
+    it('gives a full seat to an agent with anything more, or who can open every section', () => {
         expect(agent(['section.products', 'inventory.pack', 'section.chat'])).toBe('full');
         expect(agent(['inventory.adjust'])).toBe('full');
+        // No section key at all is every section: a Packer made before section keys existed, or a till key alone.
+        expect(agent(['inventory.view', 'inventory.pack'])).toBe('full');
+        expect(agent(['pos.sell'])).toBe('full');
         expect(agent([])).toBe('full');
         expect(agent(undefined)).toBe('full');
         expect(seatOf(UserRole.AGENT, { grants: 'inventory.pack' })).toBe('full');
@@ -37,7 +40,8 @@ describe('UsageService.usage', () => {
                     { role: UserRole.OWNER, permissions: null },
                     { role: UserRole.AGENT, permissions: { grants: ['section.chat'] } },
                     { role: UserRole.AGENT, permissions: { grants: ['section.products', 'inventory.view', 'inventory.pack'] } },
-                    { role: UserRole.AGENT, permissions: { grants: ['pos.sell'] } },
+                    { role: UserRole.AGENT, permissions: { grants: ['section.products', 'pos.sell'] } },
+                    { role: UserRole.AGENT, permissions: { grants: ['inventory.view', 'inventory.pick'] } },
                 ])),
             },
             warehouse: { count: jest.fn(() => Promise.resolve(3)) },
@@ -45,7 +49,7 @@ describe('UsageService.usage', () => {
         };
         const usage = await new UsageService(prisma as never, {} as never).usage('org_1', '2026-10');
 
-        expect(usage).toEqual({ conversations: 2_345, callingMinutes: 3, members: 2, opsSeats: 2, storeLocations: 3, whatsappNumbers: 2, instagramAccounts: 1 });
+        expect(usage).toEqual({ conversations: 2_345, callingMinutes: 3, members: 3, opsSeats: 2, storeLocations: 3, whatsappNumbers: 2, instagramAccounts: 1 });
         expect(prisma.organizationMember.findMany).toHaveBeenCalledWith({
             where: { organizationId: 'org_1', isActive: true, role: { in: ['OWNER', 'ADMIN', 'MANAGER', 'AGENT'] } },
             select: { role: true, permissions: true },
