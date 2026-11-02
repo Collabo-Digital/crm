@@ -42,7 +42,9 @@ export const posService = {
   updateStaff: (id: string, data: { name?: string; role?: PosStaffRole; pin?: string; isActive?: boolean }) =>
     apiClient.patch<PosStaffView>(`/pos/staff/${id}`, data).then((r) => r.data),
 
-  unlock: (pin: string) => apiClient.post<PosUnlockResult>("/pos/unlock", { pin }, pinRequest()).then((r) => r.data),
+  /** `storeId`: the store the till is open at; a member limited to some stores must work there. */
+  unlock: ({ pin, storeId }: { pin: string; storeId?: string }) =>
+    apiClient.post<PosUnlockResult>("/pos/unlock", { pin, storeId }, pinRequest()).then((r) => r.data),
   approve: (data: { pin: string; reason: PosApprovalReason; amount?: number }) =>
     apiClient.post<PosApprovalResult>("/pos/approve", data, pinRequest()).then((r) => r.data),
 

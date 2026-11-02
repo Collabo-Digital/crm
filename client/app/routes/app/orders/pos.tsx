@@ -391,7 +391,7 @@ export default function PosPage() {
       );
       return;
     }
-    unlock.mutate(pin, {
+    unlock.mutate({ pin, storeId: data?.warehousingEnabled ? activeStore?.id : undefined }, {
       onSuccess: (r) => {
         const session = { staff: r.staff, staffToken: r.staffToken, expiresAt: r.expiresAt };
         saveStaffSession(orgId, session);
