@@ -1,11 +1,13 @@
 import {
     BadRequestException,
     ConflictException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { inLocationScope } from '../auth/location-scope.util';
 import {
     resolveReportingTimeZone,
     zonedDayEndExclusive,
@@ -45,6 +47,17 @@ type Tx = Prisma.TransactionClient;
 
 const isUniqueViolation = (err: unknown) =>
     err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
+
+/** A store-limited packer (auth/location-scope.util) on an order that goes out from elsewhere. */
+export const PACKING_OUT_OF_SCOPE = "This order goes out from a location you don't work at, so you can't pack it.";
+
+/**
+ * Is this order a store-limited member's to pack? Orders go out from their
+ * dispatch location; one with none yet belongs to no location, so everyone
+ * who packs sees it, as everyone sees the online orders list.
+ */
+const packsAt = (scope: string[] | null, dispatchWarehouseId: string | null) =>
+    !dispatchWarehouseId || inLocationScope(scope, dispatchWarehouseId);
 
 const HOLD_LABELS: Record<string, string> = {
     items_short: 'items short',
@@ -139,6 +152,11 @@ interface QueueSqlRow {
  * (so two packers on one order scan side by side), and every change of status
  * or of which lines exist takes it FOR UPDATE, so a hold or finish never
  * interleaves with a scan.
+ *
+ * `scope` (on every entry point): the locations a store-limited member works
+ * at. The queue, lookups and tasks are theirs for orders going out from those
+ * locations and for orders with no location yet; other tasks read as not
+ * found and refuse changes with a 403.
  */
 @Injectable()
 export class PackingService {
@@ -149,8 +167,9 @@ export class PackingService {
     async queue(
         orgId: string,
         q: { bucket: Bucket; warehouseId?: string; search?: string; page: number; limit: number },
+        scope: string[] | null = null,
     ) {
-        const cte = this.queueSql(orgId, q);
+        const cte = this.queueSql(orgId, q, scope);
         const order =
             q.bucket === 'to_pack'
                 ? Prisma.sql`ORDER BY "placed_at" ASC, "id" ASC`
@@ -236,10 +255,11 @@ export class PackingService {
      * The orders that can be packed, each with its bucket. Mirrors
      * `ineligibleReason`, `isPackableLine` and `bucketOf` in packing-rules.
      */
-    private queueSql(orgId: string, f: { warehouseId?: string; search?: string }): Prisma.Sql {
+    private queueSql(orgId: string, f: { warehouseId?: string; search?: string }, scope: string[] | null): Prisma.Sql {
         const filters: Prisma.Sql[] = [];
         if (f.warehouseId === 'none') filters.push(Prisma.sql`o."dispatch_warehouse_id" IS NULL`);
         else if (f.warehouseId) filters.push(Prisma.sql`o."dispatch_warehouse_id" = ${f.warehouseId}`);
+        if (scope) filters.push(this.scopeSql(scope));
         const term = f.search?.trim();
         if (term) {
             const like = `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
@@ -339,21 +359,27 @@ export class PackingService {
             AND o."source_name" IS DISTINCT FROM 'pos'`;
     }
 
+    /** Packs at no location, or at one of the member's. Mirrors `packsAt`. */
+    private scopeSql(scope: string[]): Prisma.Sql {
+        return Prisma.sql`(o."dispatch_warehouse_id" IS NULL OR o."dispatch_warehouse_id" = ANY(${scope}::text[]))`;
+    }
+
     /** A packing slip's barcode (the order id), or an exact order name. */
-    async lookup(orgId: string, raw: string | undefined) {
+    async lookup(orgId: string, raw: string | undefined, scope: string[] | null = null) {
         const code = (raw ?? '').trim();
         if (!code) throw new BadRequestException('Scan a packing slip or type an order number.');
         const byId = await this.prisma.order.findFirst({
             where: { id: code, organizationId: orgId, deletedAt: null },
-            select: { id: true },
+            select: { id: true, dispatchWarehouseId: true },
         });
-        if (byId) return { orderId: byId.id };
+        if (byId && packsAt(scope, byId.dispatchWarehouseId)) return { orderId: byId.id };
 
         const names = code.startsWith('#') ? [code] : [code, `#${code}`];
         const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
             SELECT o."id" FROM "orders" o
             WHERE ${this.eligibleSql(orgId)}
               AND o."name" IN (${Prisma.join(names)})
+              ${scope ? Prisma.sql`AND ${this.scopeSql(scope)}` : Prisma.empty}
               AND EXISTS (
                   SELECT 1 FROM "order_line_items" li
                   WHERE li."order_id" = o."id"
@@ -375,9 +401,10 @@ export class PackingService {
      * is left to ship. An order packed and not shipped since gets its PACKED
      * task back rather than a second task asking to pack it all again.
      */
-    async start(orgId: string, userId: string, orderId: string) {
+    async start(orgId: string, userId: string, orderId: string, scope: string[] | null = null) {
         const order = await this.loadOrder(orgId, orderId);
         if (!order) throw new NotFoundException('Order not found.');
+        if (!packsAt(scope, order.dispatchWarehouseId)) throw new ForbiddenException(PACKING_OUT_OF_SCOPE);
         const refusal = ineligibleReason(order);
         if (refusal) throw new ConflictException(refusal);
 
@@ -435,8 +462,8 @@ export class PackingService {
         return this.view(orgId, taskId, order);
     }
 
-    async getTask(orgId: string, taskId: string) {
-        const task = await this.findTask(orgId, taskId);
+    async getTask(orgId: string, taskId: string, scope: string[] | null = null) {
+        const task = await this.findTask(orgId, taskId, scope, 'read');
         const order = await this.loadOrder(orgId, task.orderId);
         if (!order) throw new NotFoundException('This order was deleted.');
         if (OPEN_STATUSES.includes(task.status) && !ineligibleReason(order)) {
@@ -450,8 +477,14 @@ export class PackingService {
      * unique in an organization). Every outcome is recorded; a retry with the
      * same clientScanId returns the first outcome and changes nothing.
      */
-    async scan(orgId: string, userId: string, taskId: string, body: { code: string; clientScanId: string }) {
-        await this.findTask(orgId, taskId);
+    async scan(
+        orgId: string,
+        userId: string,
+        taskId: string,
+        body: { code: string; clientScanId: string },
+        scope: string[] | null = null,
+    ) {
+        await this.findTask(orgId, taskId, scope);
         const code = body.code.trim();
         const prior = await this.priorEvent(taskId, body.clientScanId);
         if (prior) return this.scanReply(orgId, taskId, prior);
@@ -519,8 +552,9 @@ export class PackingService {
         taskId: string,
         lineId: string,
         body: { qty: number; clientScanId: string; reason?: string },
+        scope: string[] | null = null,
     ) {
-        return this.lineAction(orgId, userId, taskId, body.clientScanId, async (tx) => {
+        return this.lineAction(orgId, userId, taskId, body.clientScanId, scope, async (tx) => {
             const line = await this.lockLine(tx, taskId, lineId);
             const left = line.qtyRequired - line.qtyPicked;
             if (left <= 0) throw new ConflictException('Every item on this line is already packed.');
@@ -543,8 +577,15 @@ export class PackingService {
      * one unit was scanned. Units above the scanned and hand-confirmed ones
      * are recorded as counted.
      */
-    count(orgId: string, userId: string, taskId: string, lineId: string, body: { packed: number; clientScanId: string }) {
-        return this.lineAction(orgId, userId, taskId, body.clientScanId, async (tx) => {
+    count(
+        orgId: string,
+        userId: string,
+        taskId: string,
+        lineId: string,
+        body: { packed: number; clientScanId: string },
+        scope: string[] | null = null,
+    ) {
+        return this.lineAction(orgId, userId, taskId, body.clientScanId, scope, async (tx) => {
             const line = await this.lockLine(tx, taskId, lineId);
             const refusal = countRefusal(line, body.packed);
             if (refusal) {
@@ -561,8 +602,8 @@ export class PackingService {
     }
 
     /** Takes back one packed unit: counted first, then hand-confirmed, then scanned. */
-    undo(orgId: string, userId: string, taskId: string, lineId: string, body: { clientScanId: string }) {
-        return this.lineAction(orgId, userId, taskId, body.clientScanId, async (tx) => {
+    undo(orgId: string, userId: string, taskId: string, lineId: string, body: { clientScanId: string }, scope: string[] | null = null) {
+        return this.lineAction(orgId, userId, taskId, body.clientScanId, scope, async (tx) => {
             const line = await this.lockLine(tx, taskId, lineId);
             const source = undoSource(line);
             if (!source) throw new ConflictException('Nothing on this line is packed yet.');
@@ -578,8 +619,15 @@ export class PackingService {
         });
     }
 
-    setProblem(orgId: string, userId: string, taskId: string, lineId: string, body: { reason: string; qty: number }) {
-        return this.lineAction(orgId, userId, taskId, null, async (tx) => {
+    setProblem(
+        orgId: string,
+        userId: string,
+        taskId: string,
+        lineId: string,
+        body: { reason: string; qty: number },
+        scope: string[] | null = null,
+    ) {
+        return this.lineAction(orgId, userId, taskId, null, scope, async (tx) => {
             const line = await this.lockLine(tx, taskId, lineId);
             const unpacked = line.qtyRequired - line.qtyPicked;
             if (unpacked <= 0) throw new ConflictException('Every item on this line is packed, so there is nothing to report.');
@@ -592,8 +640,8 @@ export class PackingService {
         });
     }
 
-    clearProblem(orgId: string, userId: string, taskId: string, lineId: string) {
-        return this.lineAction(orgId, userId, taskId, null, async (tx) => {
+    clearProblem(orgId: string, userId: string, taskId: string, lineId: string, scope: string[] | null = null) {
+        return this.lineAction(orgId, userId, taskId, null, scope, async (tx) => {
             const line = await this.lockLine(tx, taskId, lineId);
             if (!line.problemReason && line.problemQty === 0) return null;
             await tx.pickTaskLine.update({ where: { id: line.id }, data: { problemReason: null, problemQty: 0 } });
@@ -602,8 +650,8 @@ export class PackingService {
     }
 
     /** Puts the order on hold with a reason. Holding a held order updates its reason. */
-    async hold(orgId: string, userId: string, taskId: string, body: { reason: string; note?: string }) {
-        const task = await this.findTask(orgId, taskId);
+    async hold(orgId: string, userId: string, taskId: string, body: { reason: string; note?: string }, scope: string[] | null = null) {
+        const task = await this.findTask(orgId, taskId, scope);
         const name = await this.actorName(userId);
         await this.prisma.$transaction(async (tx) => {
             const status = await this.lockTask(tx, orgId, taskId, 'update');
@@ -623,8 +671,8 @@ export class PackingService {
         return this.view(orgId, taskId);
     }
 
-    async resume(orgId: string, userId: string, taskId: string) {
-        const task = await this.findTask(orgId, taskId);
+    async resume(orgId: string, userId: string, taskId: string, scope: string[] | null = null) {
+        const task = await this.findTask(orgId, taskId, scope);
         const name = await this.actorName(userId);
         await this.prisma.$transaction(async (tx) => {
             const status = await this.lockTask(tx, orgId, taskId, 'update');
@@ -645,8 +693,8 @@ export class PackingService {
      * `partial` sends what is packed now and is offered for prepaid orders
      * only. Shipping itself stays with the fulfil dialog and courier apps.
      */
-    async finish(orgId: string, userId: string, taskId: string, body: { mode: 'all' | 'partial' }) {
-        const task = await this.findTask(orgId, taskId);
+    async finish(orgId: string, userId: string, taskId: string, body: { mode: 'all' | 'partial' }, scope: string[] | null = null) {
+        const task = await this.findTask(orgId, taskId, scope);
         if (task.status === 'PACKED') return this.view(orgId, taskId);
         const order = await this.loadOrder(orgId, task.orderId);
         if (!order) throw new NotFoundException('This order was deleted.');
@@ -679,8 +727,8 @@ export class PackingService {
     }
 
     /** "Start over": cancels a PACKING or ON_HOLD task. Opening the order again starts afresh. */
-    async cancel(orgId: string, userId: string, taskId: string) {
-        const task = await this.findTask(orgId, taskId);
+    async cancel(orgId: string, userId: string, taskId: string, scope: string[] | null = null) {
+        const task = await this.findTask(orgId, taskId, scope);
         const name = await this.actorName(userId);
         await this.prisma.$transaction(async (tx) => {
             const status = await this.lockTask(tx, orgId, taskId, 'update');
@@ -701,7 +749,7 @@ export class PackingService {
      * range (bare dates are days in the organization's reporting zone;
      * default the last 30 days).
      */
-    async accuracy(orgId: string, q: { from?: string; to?: string; warehouseId?: string }) {
+    async accuracy(orgId: string, q: { from?: string; to?: string; warehouseId?: string }, scope: string[] | null = null) {
         const org = await this.prisma.organization.findUnique({ where: { id: orgId }, select: { timezone: true } });
         const timeZone = resolveReportingTimeZone(org ?? {});
         const to = q.to ? zonedDayEndExclusive(q.to, timeZone) : new Date();
@@ -710,13 +758,16 @@ export class PackingService {
             throw new BadRequestException('Use dates like 2026-10-28.');
         }
 
-        const warehouse =
-            q.warehouseId === 'none' ? { pickTask: { warehouseId: null } }
-                : q.warehouseId ? { pickTask: { warehouseId: q.warehouseId } }
+        const asked: Prisma.PickTaskWhereInput =
+            q.warehouseId === 'none' ? { warehouseId: null }
+                : q.warehouseId ? { warehouseId: q.warehouseId }
                     : {};
+        // Packing at no location, or at one of the member's, as in the queue.
+        const own: Prisma.PickTaskWhereInput = scope ? { OR: [{ warehouseId: null }, { warehouseId: { in: scope } }] } : {};
+        const pickTask = { ...asked, ...own };
         const groups = await this.prisma.pickTaskEvent.groupBy({
             by: ['actorId', 'kind'],
-            where: { organizationId: orgId, createdAt: { gte: from, lt: to }, ...warehouse },
+            where: { organizationId: orgId, createdAt: { gte: from, lt: to }, ...(Object.keys(pickTask).length ? { pickTask } : {}) },
             _count: { _all: true },
             _sum: { qty: true },
         });
@@ -785,12 +836,23 @@ export class PackingService {
         }));
     }
 
-    private async findTask(orgId: string, taskId: string) {
+    /** With a `scope`, a task for an order going out from elsewhere is not found to read and refused to change. */
+    private async findTask(orgId: string, taskId: string, scope: string[] | null = null, use: 'read' | 'change' = 'change') {
         const task = await this.prisma.pickTask.findFirst({
             where: { id: taskId, organizationId: orgId },
             select: { id: true, orderId: true, status: true },
         });
         if (!task) throw new NotFoundException('This packing task was not found.');
+        if (scope) {
+            const order = await this.prisma.order.findFirst({
+                where: { id: task.orderId, organizationId: orgId },
+                select: { dispatchWarehouseId: true },
+            });
+            if (!packsAt(scope, order?.dispatchWarehouseId ?? null)) {
+                if (use === 'read') throw new NotFoundException('This packing task was not found.');
+                throw new ForbiddenException(PACKING_OUT_OF_SCOPE);
+            }
+        }
         return task;
     }
 
@@ -956,9 +1018,10 @@ export class PackingService {
         userId: string,
         taskId: string,
         clientScanId: string | null,
+        scope: string[] | null,
         act: (tx: Tx) => Promise<EventDraft | null>,
     ) {
-        await this.findTask(orgId, taskId);
+        await this.findTask(orgId, taskId, scope);
         if (clientScanId && (await this.priorEvent(taskId, clientScanId))) return this.view(orgId, taskId);
         try {
             await this.prisma.$transaction(async (tx) => {
