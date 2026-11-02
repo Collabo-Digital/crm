@@ -73,9 +73,11 @@ import {
 import {
   Gstr1Accumulator,
   Gstr3bAccumulator,
+  inRupees,
   type Gstr1Return,
   type Gstr3bReturn,
   type ReturnInvoice,
+  type UnconvertedDocument,
 } from './gst-return.accumulator';
 import { summarizeDocumentSeries } from './document-series.util';
 import { isWithinInvoicingWindow, resolveSupplyDate } from './invoice-date.util';
@@ -2267,11 +2269,12 @@ export class InvoiceService {
           b2cLargeThreshold: taxSettings.b2cLargeThreshold,
         });
 
-    await this.foldReturnInvoices(where, (invoice) =>
+    const unconverted = await this.foldReturnInvoices(where, (invoice) =>
       accumulator.addInvoice(invoice),
     );
 
     const result = accumulator.finish();
+    if (unconverted.length > 0) result.unconverted = unconverted;
 
     // GSTR-1 Table 13 — documents issued. Read separately from the fold and
     // AFTER it, for two reasons: it must include CANCELLED invoices (which the
@@ -2384,11 +2387,16 @@ export class InvoiceService {
    * Each page is folded and then dropped. Collecting pages into one array first
    * would keep exactly the memory footprint this exists to bound, since the
    * expensive part is `include: { lineItems: true }`.
+   *
+   * A return is filed in rupees, so a document in another currency reaches
+   * `fold` already converted at its order's rate, and one whose order has no
+   * rate into rupees is not folded at all. Those are returned, for the return
+   * to list.
    */
   private async foldReturnInvoices(
     where: Prisma.InvoiceWhereInput,
     fold: (invoice: ReturnInvoice) => void,
-  ): Promise<number> {
+  ): Promise<UnconvertedDocument[]> {
     const total = await this.prisma.invoice.count({ where });
 
     if (total > GST_RETURN_INVOICE_CAP) {
@@ -2401,6 +2409,7 @@ export class InvoiceService {
     }
 
     let cursor: string | undefined;
+    const unconverted: UnconvertedDocument[] = [];
 
     for (;;) {
       const page = await this.prisma.invoice.findMany({
@@ -2410,6 +2419,8 @@ export class InvoiceService {
           // Table 9B reports the number of the invoice being reversed; its
           // value decides whether a B2C note is CDNUR or nets out of B2CS.
           creditNoteFor: { select: { invoiceNumber: true, grandTotal: true } },
+          // The rate lives on the order; a credit note shares its invoice's.
+          order: { select: { exchangeRate: true, baseCurrency: true } },
         },
         orderBy: { id: 'asc' },
         take: GST_RETURN_PAGE_SIZE,
@@ -2417,18 +2428,41 @@ export class InvoiceService {
       });
 
       for (const invoice of page) {
-        fold({
+        const document = {
           ...invoice,
           creditNoteForNumber: invoice.creditNoteFor?.invoiceNumber ?? null,
           creditNoteForGrandTotal: invoice.creditNoteFor?.grandTotal ?? null,
-        } as unknown as ReturnInvoice);
+        } as unknown as ReturnInvoice;
+
+        if (!invoice.currency || invoice.currency.toUpperCase() === 'INR') {
+          fold(document);
+          continue;
+        }
+
+        // `exchangeRate` converts into `baseCurrency`, the org's currency when
+        // it was captured, so only a rate into INR can restate this in rupees.
+        // A null rate is unknown, never 1.
+        const rate =
+          invoice.order.baseCurrency?.toUpperCase() === 'INR'
+            ? invoice.order.exchangeRate
+            : null;
+        if (rate == null) {
+          unconverted.push({
+            invoiceNumber: invoice.invoiceNumber,
+            status: invoice.status,
+            currency: invoice.currency,
+            grandTotal: Number(invoice.grandTotal),
+          });
+          continue;
+        }
+        fold(inRupees(document, rate));
       }
 
       if (page.length < GST_RETURN_PAGE_SIZE) break;
       cursor = page[page.length - 1].id;
     }
 
-    return total;
+    return unconverted;
   }
 
   /**

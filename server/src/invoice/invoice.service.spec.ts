@@ -14,6 +14,7 @@ import { InvoiceService } from './invoice.service';
 import { CommerceEventsService } from '../commerce/commerce-events.service';
 import { IMAGE_STORAGE } from '../product/image-storage/image-storage.interface';
 import { GstReturnType } from './dto/query-gst-return.dto';
+import type { Gstr1Return, Gstr3bReturn } from './gst-return.accumulator';
 
 /**
  * `getGstReturn` assembles a STATUTORY FILING.
@@ -231,6 +232,96 @@ describe('InvoiceService.getGstReturn', () => {
     expect(result.outwardSupplies[0].gstRate).toBe(18);
     // Both invoices are B2C and inter-state, so both belong in table 3.2.
     expect(result.interState.byState[0].invoiceCount).toBe(2);
+  });
+
+  it('files a dollar invoice and its credit note in rupees, at their order’s rate', async () => {
+    // Rupees stay as they are, whatever rate the order carries into the org's
+    // own currency.
+    const rupees = {
+      ...invoiceAt(1),
+      currency: 'INR',
+      order: { exchangeRate: '0.01050000', baseCurrency: 'USD' },
+    };
+    // USD 2,000 + 18% IGST at ₹95 is ₹2,24,200: above the ₹1,00,000 B2CL
+    // threshold, though 2,360 is not.
+    const dollarLine = {
+      ...invoiceAt(2).lineItems[0],
+      taxableValue: '2000.00',
+      igstAmount: '360.00',
+      totalTax: '360.00',
+    };
+    const dollars = {
+      ...invoiceAt(2),
+      currency: 'USD',
+      order: { exchangeRate: '95.00000000', baseCurrency: 'INR' },
+      subtotal: '2000.00',
+      totalIgst: '360.00',
+      totalTax: '360.00',
+      grandTotal: '2360.00',
+      lineItems: [dollarLine],
+    };
+    // Half of it credited in dollars: a note against a B2CL invoice is CDNUR.
+    const note = {
+      ...dollars,
+      id: 'inv_000003',
+      status: InvoiceStatus.CREDIT_NOTE,
+      invoiceNumber: 'CN-2026-27/000001',
+      creditNoteFor: { invoiceNumber: dollars.invoiceNumber, grandTotal: '2360.00' },
+      subtotal: '1000.00',
+      totalIgst: '180.00',
+      totalTax: '180.00',
+      grandTotal: '1180.00',
+      lineItems: [{ ...dollarLine, taxableValue: '1000.00', igstAmount: '180.00', totalTax: '180.00' }],
+    };
+    prisma.invoice.count.mockResolvedValue(3);
+    prisma.invoice.findMany.mockResolvedValue([rupees, dollars, note]);
+
+    const gstr1 = (await service.getGstReturn('org1', query)) as Gstr1Return;
+
+    expect(gstr1.b2cl).toMatchObject([
+      { invoiceNumber: dollars.invoiceNumber, taxableValue: 190000, igst: 34200, invoiceValue: 224200 },
+    ]);
+    expect(gstr1.b2cs).toMatchObject([{ taxableValue: 100, igst: 18 }]);
+    expect(gstr1.creditNotes).toMatchObject([
+      { section: 'CDNUR', urType: 'B2CL', taxableValue: 95000, igst: 17100, noteValue: 112100 },
+    ]);
+    expect(gstr1.totals).toMatchObject({ totalTaxable: 95100, totalIgst: 17118 });
+    expect(gstr1).not.toHaveProperty('unconverted');
+
+    const gstr3b = (await service.getGstReturn('org1', {
+      ...query,
+      returnType: GstReturnType.GSTR3B,
+    })) as Gstr3bReturn;
+
+    expect(gstr3b.taxPayable).toMatchObject({ igst: 17118, total: 17118 });
+  });
+
+  it('leaves out a foreign document with no rate into rupees, and lists it', async () => {
+    const rupees = { ...invoiceAt(1), currency: 'INR' };
+    // Neither converts: one order has no rate yet, the other only a rate into
+    // the org's own dollars.
+    const unresolved = {
+      ...invoiceAt(2),
+      currency: 'USD',
+      order: { exchangeRate: null, baseCurrency: null },
+    };
+    const intoDollars = {
+      ...invoiceAt(3),
+      currency: 'USD',
+      order: { exchangeRate: '1.00000000', baseCurrency: 'USD' },
+    };
+    prisma.invoice.count.mockResolvedValue(3);
+    prisma.invoice.findMany.mockResolvedValue([rupees, unresolved, intoDollars]);
+
+    const gstr1 = (await service.getGstReturn('org1', query)) as Gstr1Return;
+
+    expect(gstr1.totals).toMatchObject({ totalInvoices: 1, totalTaxable: 100, totalIgst: 18 });
+    expect(gstr1).toMatchObject({
+      unconverted: [
+        { invoiceNumber: unresolved.invoiceNumber, status: InvoiceStatus.ISSUED, currency: 'USD', grandTotal: 118 },
+        { invoiceNumber: intoDollars.invoiceNumber, status: InvoiceStatus.ISSUED, currency: 'USD', grandTotal: 118 },
+      ],
+    });
   });
 });
 
