@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { UserService } from '../user/user.service';
 import { OrganizationController } from './organization.controller';
 import { OrganizationService } from './organization.service';
+import { OwnershipService } from './ownership.service';
 import { DeleteOrganizationDto } from './dto/delete-organization.dto';
 
 describe('OrganizationController', () => {
@@ -14,6 +15,7 @@ describe('OrganizationController', () => {
       providers: [
         { provide: OrganizationService, useValue: {} },
         { provide: UserService, useValue: {} },
+        { provide: OwnershipService, useValue: {} },
       ],
     }).compile();
 
@@ -28,7 +30,7 @@ describe('OrganizationController', () => {
 describe('DELETE /organizations/:orgId', () => {
   it("hands the owner's password and the typed name to the service", async () => {
     const orgs = { delete: jest.fn(() => Promise.resolve({ message: 'Organization deleted' })) };
-    const controller = new OrganizationController(orgs as never, {} as never);
+    const controller = new OrganizationController(orgs as never, {} as never, {} as never);
     const confirm = { password: 'owner-password', confirmName: 'Acme' };
 
     await controller.delete('org-a', { sub: 'u1', email: 'o@test.local' }, confirm);

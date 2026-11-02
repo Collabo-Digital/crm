@@ -259,6 +259,55 @@ export class EmailService implements OnModuleInit {
             .replace(/"/g, '&quot;');
     }
 
+    /**
+     * Both sides of an ownership transfer. The old owner is told too, so a
+     * transfer made from someone else's hands on their account is noticed.
+     */
+    async sendOwnershipTransferred(params: {
+        orgName: string;
+        previous: { email: string; name: string };
+        next: { email: string; name: string };
+    }): Promise<void> {
+        const { orgName, previous, next } = params;
+        if (this.isDev) {
+            this.logger.log(`[DEV] Ownership of ${orgName} passed from ${previous.email} to ${next.email}`);
+            return;
+        }
+        const org = this.escape(orgName);
+        const from = this.escape(previous.name);
+        const to = this.escape(next.name);
+        const team = this.button(`${this.frontendUrl}/settings/members`, 'Open team settings');
+
+        await Promise.all([
+            this.send(
+                {
+                    to: next.email,
+                    subject: `You are now the owner of ${orgName}`,
+                    html: this.layout(`
+                        <h2 style="margin: 0 0 12px 0; font-size: 22px;">You are now the owner of ${org}</h2>
+                        <p>${from} has made you the owner of <strong>${org}</strong>. As the owner, you can change the plan and billing, pass the workspace on, or delete it.</p>
+                        <p>${from} stays on as an admin.</p>
+                        ${team}
+                    `),
+                },
+                'ownership-received',
+            ),
+            this.send(
+                {
+                    to: previous.email,
+                    subject: `You passed ${orgName} to ${next.name}`,
+                    html: this.layout(`
+                        <h2 style="margin: 0 0 12px 0; font-size: 22px;">${to} now owns ${org}</h2>
+                        <p>You passed <strong>${org}</strong> to ${to}, and you are now an admin.</p>
+                        <p>If you did not do this, change your password now and ask ${to} to pass ownership back.</p>
+                        ${team}
+                    `),
+                },
+                'ownership-passed',
+            ),
+        ]);
+    }
+
     async sendTeamInvite(email: string, orgName: string, token: string): Promise<void> {
         const inviteLink = `${this.frontendUrl}/auth/invite?token=${token}`;
 
