@@ -2088,14 +2088,27 @@ export default function SettingsPage() {
                   <p className="text-xs text-muted-foreground">
                     {membersLoading ? "Loading…" : `${staffMembers.length} member${staffMembers.length !== 1 ? "s" : ""}`}
                   </p>
-                  {canManageTeam && (
+                  {/* The server refuses every invite to a personal workspace. */}
+                  {canManageTeam && org?.type !== "PERSONAL" && (
                     <Button type="button" onClick={() => setShowInvite(true)}>
                       <Plus /> Invite member
                     </Button>
                   )}
+                  {canManageTeam && org?.type === "PERSONAL" && (
+                    <Button type="button" variant="outline" onClick={() => setOrgSheetMode("default")}>
+                      Set up for a team
+                      <ChevronRight />
+                    </Button>
+                  )}
                 </div>
+                {canManageTeam && org?.type === "PERSONAL" && (
+                  <p className="mb-4 text-caption text-muted-foreground">
+                    Personal workspaces are for one person. Set this one up for a team, or create an
+                    organization, to invite people.
+                  </p>
+                )}
 
-                {showInvite && canManageTeam && currentOrgId && (
+                {showInvite && canManageTeam && currentOrgId && org?.type !== "PERSONAL" && (
                   <div className="mb-4">
                     <InviteForm orgId={currentOrgId} onDone={() => setShowInvite(false)} />
                   </div>
