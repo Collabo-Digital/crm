@@ -10,6 +10,11 @@ export default [
   // templates. Public, like the bill.
   route("t/:token", "routes/public/track.tsx"),
   route("c/:token", "routes/public/cart.tsx"),
+  // Collabo's legal pages, linked from sign-up and from the Meta app's settings
+  // (privacy policy, terms, data deletion instructions). Public, like the bill.
+  route("privacy", "routes/public/privacy.tsx"),
+  route("terms", "routes/public/terms.tsx"),
+  route("data-deletion", "routes/public/data-deletion.tsx"),
 
   layout("routes/auth/_layout.tsx", [
     route("auth/login", "routes/auth/login.tsx"),

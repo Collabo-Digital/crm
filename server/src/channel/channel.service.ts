@@ -469,6 +469,28 @@ export class ChannelService {
     for (const channel of channels) await this.release(channel);
   }
 
+  /**
+   * Disconnect an Instagram account whose owner removed Collabo from it, or
+   * asked Meta to have their data deleted. Meta names the account by the
+   * app-scoped id Instagram Login returns as `/me.id`; the professional
+   * account id is matched too, in case a callback ever carries that one.
+   * Returns how many connections were released, in any workspace.
+   */
+  async disconnectInstagramAccount(metaUserId: string): Promise<number> {
+    const channels = await this.prisma.channel.findMany({
+      where: {
+        platform: ChannelPlatform.INSTAGRAM,
+        status: { not: ChannelStatus.DISCONNECTED },
+        OR: [
+          { externalStoreId: metaUserId },
+          { credentials: { path: ['instagramScopedId'], equals: metaUserId } },
+        ],
+      },
+    });
+    for (const channel of channels) await this.release(channel);
+    return channels.length;
+  }
+
   /** Revoke what we can remotely, then clear the grant and the account claim. */
   private async release(channel: Channel): Promise<void> {
     const { id: channelId, organizationId: orgId } = channel;
