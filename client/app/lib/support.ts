@@ -14,7 +14,6 @@ export function supportEmailLink(subject?: string): string {
 
 export const supportWhatsAppLink: string | null = SUPPORT_WHATSAPP ? `https://wa.me/${SUPPORT_WHATSAPP}` : null;
 
-// Collabo's own Terms and Privacy pages are not published on collabo.store
-// yet; these are the pages the sign-up has always linked to.
-export const TERMS_URL: string = import.meta.env.VITE_TERMS_URL || "https://grow100x.app/terms-and-conditions.html";
-export const PRIVACY_URL: string = import.meta.env.VITE_PRIVACY_URL || "https://grow100x.app/privacy-policy.html";
+// Collabo's own pages, served by this app (routes/public/privacy.tsx, terms.tsx).
+export const TERMS_URL: string = import.meta.env.VITE_TERMS_URL || "/terms";
+export const PRIVACY_URL: string = import.meta.env.VITE_PRIVACY_URL || "/privacy";

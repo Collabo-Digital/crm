@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ServiceUnavailableException, Controller, Post, Get, Patch, Delete, Body, Param, Query, Res, Logger, HttpCode } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomBytes } from 'node:crypto';
 import { requireMessagingChannel } from './messaging-channels';
 import type { Response, Request } from 'express';
 import { ChannelPlatform, SyncStatus, UserRole } from '@prisma/client';
@@ -31,6 +32,7 @@ import { MetaPagesOAuthService } from './meta-pages-oauth.service';
 import { MetaPagesCallbackDto } from './dto/meta-pages-callback.dto';
 import { WhatsAppCallbackDto } from './dto/whatsapp-callback.dto';
 import { classifyMetaCallbackError } from './channel-connection.util';
+import { parseMetaSignedRequest } from './meta-signed-request.util';
 import { ShopifyPixelService } from './shopify-pixel.service';
 import { RateLimitStateService } from '../rate-limit/rate-limit-state.service';
 import { Priority } from '../rate-limit/rate-limit.types';
@@ -222,6 +224,50 @@ export class ChannelController {
         `${frontendUrl}/settings/channels?error=instagram_connect_failed&reason=${reason}`,
       );
     }
+  }
+
+  // POST /channels/instagram/deauthorize — Meta's Deauthorize callback, sent
+  // when an account owner removes Collabo under Instagram → Apps and websites.
+  // The token is already dead on Meta's side; this stops us treating the
+  // account as connected. Always 200 for a valid request, even when no
+  // connection matches, so Meta does not retry.
+  @Public()
+  @Post('instagram/deauthorize')
+  @HttpCode(200)
+  async instagramDeauthorize(@Body('signed_request') signedRequest: string) {
+    const request = this.parseSignedRequest(signedRequest);
+    const released = await this.channelService.disconnectInstagramAccount(request.userId);
+    this.logger.log(`Instagram deauthorize for ${request.userId}: ${released} connection(s) released`);
+    return { success: true };
+  }
+
+  // POST /channels/instagram/data-deletion — Meta's Data deletion request
+  // callback. Deletes the access token and profile we hold for the account
+  // (the same release a disconnect does) and answers with the status page and
+  // confirmation code Meta shows the person. Written raw: Meta reads `url` and
+  // `confirmation_code` at the top level, not inside our `{ success, data }`.
+  @Public()
+  @Post('instagram/data-deletion')
+  async instagramDataDeletion(@Body('signed_request') signedRequest: string, @Res() res: Response) {
+    const request = this.parseSignedRequest(signedRequest);
+    const released = await this.channelService.disconnectInstagramAccount(request.userId);
+    const code = randomBytes(8).toString('hex');
+    this.logger.log(
+      `Instagram data deletion ${code} for ${request.userId}: ${released} connection(s) released`,
+    );
+    return res.status(200).json({
+      url: `${this.config.get<string>('frontendUrl')}/data-deletion?code=${code}`,
+      confirmation_code: code,
+    });
+  }
+
+  private parseSignedRequest(signedRequest: unknown) {
+    const request = parseMetaSignedRequest(signedRequest, [
+      this.config.get<string>('instagram.loginAppSecret'),
+      this.config.get<string>('meta.appSecret'),
+    ]);
+    if (!request) throw new BadRequestException('Invalid signed_request');
+    return request;
   }
 
   // GET /channels/instagram/pending/:id — the accounts one login granted, for
