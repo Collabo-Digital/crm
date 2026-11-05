@@ -79,6 +79,9 @@ import {
     ORDER_CHECKOUT_TOKENS_QUERY,
     OrderCheckoutTokensResponse,
     OrderCheckoutTokensVariables,
+    PRODUCT_HANDLES_QUERY,
+    ProductHandlesResponse,
+    ProductHandlesVariables,
     OrderNode,
     ORDERS_LIST_QUERY,
     ORDERS_COUNT_QUERY,
@@ -110,6 +113,9 @@ import { pulledBarcodePatch } from './pulled-barcode.util';
 import { parseProductSettings } from '../organization-settings/schemas/product-settings.schema';
 
 const GRAPHQL_PAGE_SIZE = 50;
+
+/// Shopify's `nodes(ids:)` takes at most 250 ids per query.
+const PRODUCT_HANDLES_BATCH = 250;
 
 /// Orders are fetched in smaller pages than everything else. Even with the
 /// refunds fan-out moved to `drainRefunds`, an order node is by far the most
@@ -643,6 +649,7 @@ export class ShopifySyncService {
                     'recording a false COMPLETED (which would stamp a watermark and skip the data).',
                 );
             }
+            await this.backfillProductHandles(channelId, getAuth);
             await this.completeSyncLog(syncLog.id, processed, failed);
         } catch (error) {
             await this.failSyncLog(syncLog.id, processed, failed, error);
@@ -869,6 +876,50 @@ export class ShopifySyncService {
             if (node?.checkoutToken) tokens.set(node.id, node.checkoutToken);
         }
         return tokens;
+    }
+
+    /**
+     * Fill `handle` on this channel's products that have none: those stored
+     * before the column existed and unchanged in Shopify since, which the
+     * incremental pull never fetches again. Without a handle a product has no
+     * storefront link, so the WhatsApp catalog holds it back. Writes only the
+     * handle, and only where it is still null, so nothing else is re-pulled
+     * or overwritten. A failure is logged and leaves the sync's result alone;
+     * the next sync tries again.
+     */
+    private async backfillProductHandles(channelId: string, getAuth: ShopifyAuthResolver) {
+        try {
+            // Only real Shopify ids: a CRM-made product not pushed yet carries
+            // `manual_…`, and one invalid gid fails the whole nodes query.
+            const missing = (
+                await this.prisma.product.findMany({
+                    where: { channelId, handle: null },
+                    select: { id: true, externalId: true },
+                })
+            ).filter((p) => /^\d+$/.test(p.externalId));
+            let filled = 0;
+            for (let i = 0; i < missing.length; i += PRODUCT_HANDLES_BATCH) {
+                const batch = missing.slice(i, i + PRODUCT_HANDLES_BATCH);
+                const res = await this.graphql.request<ProductHandlesResponse, ProductHandlesVariables>(
+                    await getAuth(),
+                    PRODUCT_HANDLES_QUERY,
+                    { ids: batch.map((p) => `gid://shopify/Product/${p.externalId}`) },
+                );
+                const byExternalId = new Map<string, string>();
+                for (const node of res.nodes) {
+                    if (node?.handle) byExternalId.set(ShopifyGraphqlClient.extractId(node.id), node.handle);
+                }
+                for (const p of batch) {
+                    const handle = byExternalId.get(p.externalId);
+                    if (!handle) continue;
+                    const { count } = await this.prisma.product.updateMany({ where: { id: p.id, handle: null }, data: { handle } });
+                    filled += count;
+                }
+            }
+            if (filled) this.logger.log(`Filled ${filled} missing product handle(s) on channel ${channelId}.`);
+        } catch (err) {
+            this.logger.warn(`Product handles could not be filled on channel ${channelId}: ${err instanceof Error ? err.message : err}`);
+        }
     }
 
     // ─── ORDERS GRAPHQL PAGINATION ───

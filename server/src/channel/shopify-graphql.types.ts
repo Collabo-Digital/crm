@@ -390,6 +390,28 @@ export interface OrderCheckoutTokensVariables {
   ids: string[];
 }
 
+/**
+ * Handles for products stored before `products.handle` existed. The pull is
+ * incremental, so a product unchanged in Shopify since then is never pulled
+ * again and would keep a null handle (no storefront link) for good.
+ */
+export const PRODUCT_HANDLES_QUERY = /* GraphQL */ `
+  query ProductHandles($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Product { id handle }
+    }
+  }
+`;
+
+export interface ProductHandlesResponse {
+  /** Null for an id that no longer resolves (a deleted product). */
+  nodes: Array<{ id: string; handle: string | null } | null>;
+}
+
+export interface ProductHandlesVariables {
+  ids: string[];
+}
+
 // ─── Common shapes for Phase 1 mutations ────────────────────────────────────
 
 /**
