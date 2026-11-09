@@ -1,6 +1,9 @@
+import './instrumentation';
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
+import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { json } from 'express';
 import type { IncomingMessage } from 'node:http';
@@ -13,6 +16,10 @@ import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 import { EXPORT_EXPOSED_HEADERS } from './common/utils/export-headers.util';
 
+const API_PREFIX = 'api/v1';
+const PIXEL_ROUTE_PREFIX = `/${API_PREFIX}/analytics/pixel`;
+const WIDGET_ROUTE_PREFIX = `/${API_PREFIX}/widget/`;
+
 /// Express defaults to 100kb, which a Shopify order webhook for a large cart
 /// exceeds — and the 413 is raised BEFORE HMAC verification, so the handler
 /// never runs and we cannot even log the miss. Shopify counts those as failed
@@ -20,27 +27,32 @@ import { EXPORT_EXPOSED_HEADERS } from './common/utils/export-headers.util';
 const REQUEST_BODY_LIMIT = '2mb';
 /// Meta's webhooks go up to 3 MB (WhatsApp Business app history chunks are
 /// the largest), and a 413 is raised before the signature is even checked.
-const META_WEBHOOK_PATHS = ['/api/v1/webhooks/whatsapp', '/api/v1/webhooks/messenger', '/api/v1/webhooks/instagram'];
+const META_WEBHOOK_PATHS = [
+  `/${API_PREFIX}/webhooks/whatsapp`,
+  `/${API_PREFIX}/webhooks/messenger`,
+  `/${API_PREFIX}/webhooks/instagram`,
+];
 const META_WEBHOOK_BODY_LIMIT = '5mb';
 
-async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    rawBody: true,
-  });
-  const config = app.get(ConfigService);
+const CORS_PREFLIGHT_CACHE_SECONDS = 86400;
+const COMPRESSION_MIN_BYTES = 1024;
+const GZIP_LEVEL = 6;
+const BROTLI_QUALITY = 4;
+const EVENT_STREAM_CONTENT_TYPE = 'text/event-stream';
 
-  const trustProxy = Number(process.env.TRUST_PROXY);
-  if (trustProxy > 0) app.set('trust proxy', trustProxy);
+function applySecurityMiddleware(app: NestExpressApplication) {
+  const trustedProxyHops = Number(process.env.TRUST_PROXY);
+  if (trustedProxyHops > 0) app.set('trust proxy', trustedProxyHops);
 
-  // Security. API responses (JSON, files, PDFs) carry no page policy. The web
-  // app's Content-Security-Policy comes with its build (client/public/_headers):
+  // API responses (JSON, files, PDFs) carry no page policy. The web app's
+  // Content-Security-Policy comes with its build (client/public/_headers):
   // Cloudflare sends it, and with SERVE_STATIC=true so does the SPA mount in
   // app.module.ts, for the app's pages and files only.
-  app.use(helmet({
-    contentSecurityPolicy: false,
-  }));
+  app.use(helmet({ contentSecurityPolicy: false }));
   app.use(cookieParser());
+}
 
+function applyCompression(app: NestExpressApplication) {
   // Response compression lives here, not in Caddy: only the DigitalOcean
   // deploy has a proxy in front, while the single-container compose, Render
   // and Railway shapes hit Node directly. Caddy passes an already-encoded
@@ -49,59 +61,76 @@ async function bootstrap() {
   // static assets and is far too slow for per-request JSON.
   app.use(
     compression({
-      threshold: 1024, // webhook acks, pixel hits and health checks stay raw
-      level: 6,
-      brotli: { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } },
+      threshold: COMPRESSION_MIN_BYTES, // webhook acks, pixel hits and health checks stay raw
+      level: GZIP_LEVEL,
+      brotli: { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY } },
       // Server-sent events must reach the browser as they happen; compression
       // would hold each small event back until its buffer filled.
-      filter: (req, res) =>
-        !String(res.getHeader('Content-Type') ?? '').includes('text/event-stream') &&
-        !(req.headers.accept ?? '').includes('text/event-stream') &&
-        compression.filter(req, res),
+      filter: (request, response) =>
+        !String(response.getHeader('Content-Type') ?? '').includes(EVENT_STREAM_CONTENT_TYPE) &&
+        !(request.headers.accept ?? '').includes(EVENT_STREAM_CONTENT_TYPE) &&
+        compression.filter(request, response),
     }),
   );
+}
 
-  // Must precede route handling. `rawBody: true` above still captures the
-  // untouched buffer the Shopify HMAC check needs — up to this same limit.
-  // The Meta webhooks get their own parser first; the global one then skips
-  // a body that is already read.
+/// Pixel ingest and the website widget must accept any storefront origin;
+/// everything else stays locked to the CRM frontend.
+function applyCors(app: NestExpressApplication, frontendUrl: string) {
+  const createPublicCorsOptions = (methods: string[]): CorsOptions => ({
+    origin: true,
+    credentials: false,
+    methods,
+    maxAge: CORS_PREFLIGHT_CACHE_SECONDS,
+  });
+
+  const pixelCorsOptions = createPublicCorsOptions(['POST', 'OPTIONS']);
+  // Sign-ups check each widget's allowed domains.
+  const widgetCorsOptions = createPublicCorsOptions(['GET', 'POST', 'OPTIONS']);
+  const frontendCorsOptions: CorsOptions = {
+    origin: frontendUrl,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    exposedHeaders: EXPORT_EXPOSED_HEADERS,
+    maxAge: CORS_PREFLIGHT_CACHE_SECONDS,
+  };
+
+  app.enableCors((request: IncomingMessage, applyCorsOptions) => {
+    if (request.url?.startsWith(PIXEL_ROUTE_PREFIX)) {
+      applyCorsOptions(null, pixelCorsOptions);
+    } else if (request.url?.startsWith(WIDGET_ROUTE_PREFIX)) {
+      applyCorsOptions(null, widgetCorsOptions);
+    } else {
+      applyCorsOptions(null, frontendCorsOptions);
+    }
+  });
+}
+
+function applyBodyParsers(app: NestExpressApplication) {
   app.use(
     META_WEBHOOK_PATHS,
     json({
       limit: META_WEBHOOK_BODY_LIMIT,
-      verify: (req: RawBodyRequest<IncomingMessage>, _res, buffer) => {
-        req.rawBody = buffer;
+      verify: (request: RawBodyRequest<IncomingMessage>, _response, rawBodyBuffer) => {
+        request.rawBody = rawBodyBuffer;
       },
     }),
   );
   app.useBodyParser('json', { limit: REQUEST_BODY_LIMIT });
   app.useBodyParser('urlencoded', { limit: REQUEST_BODY_LIMIT, extended: true });
+}
 
-  // CORS — pixel ingest and the website widget must accept any storefront
-  // origin; everything else stays locked to the CRM frontend.
-  app.enableCors((req, cb) => {
-    if (req.url?.startsWith('/api/v1/analytics/pixel')) {
-      cb(null, { origin: true, credentials: false, methods: ['POST', 'OPTIONS'], maxAge: 86400 });
-    } else if (req.url?.startsWith('/api/v1/widget/')) {
-      // The website widget runs on merchants' own sites; sign-ups check each widget's allowed domains.
-      cb(null, { origin: true, credentials: false, methods: ['GET', 'POST', 'OPTIONS'], maxAge: 86400 });
-    } else {
-      cb(null, {
-        origin: config.get<string>('frontendUrl'),
-        credentials: true,
-        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        // The app is on another origin, so the browser hides these from it
-        // unless exposed — and the "file was cut off" notice never fires.
-        exposedHeaders: EXPORT_EXPOSED_HEADERS,
-        maxAge: 86400,
-      });
-    }
-  });
+async function bootstrap() {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+  const configService = app.get(ConfigService);
 
-  // API versioning
-  app.setGlobalPrefix('api/v1');
+  applySecurityMiddleware(app);
+  applyCompression(app);
+  applyCors(app, configService.getOrThrow<string>('frontendUrl'));
+  applyBodyParsers(app);
 
-  // Global validation — strips unknown props, rejects non-whitelisted, auto-transforms
+  app.setGlobalPrefix(API_PREFIX);
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -111,11 +140,12 @@ async function bootstrap() {
     }),
   );
 
-  // Graceful shutdown
   app.enableShutdownHooks();
 
-  const port = config.get<number>('port')!;
-  await app.listen(port);
+  await app.listen(configService.getOrThrow<number>('port'));
 }
 
-bootstrap();
+bootstrap().catch((error) => {
+  console.error('API failed to start', error);
+  process.exit(1);
+});

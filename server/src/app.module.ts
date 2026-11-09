@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ServeStaticModule } from '@nestjs/serve-static';
@@ -8,7 +8,9 @@ import { BullModule } from '@nestjs/bullmq';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import type { Response } from 'express';
 import { join } from 'path';
+import { BullMQOtel } from 'bullmq-otel';
 
+import { SERVICE_NAME, shutdownTracing } from './instrumentation';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import configuration from './config/configuration';
@@ -105,6 +107,7 @@ import { PackingModule } from './packing/packing.module';
         connection: {
           url: config.get<string>('redis.url'),
         },
+        telemetry: new BullMQOtel(SERVICE_NAME)
       }),
     }),
     EmailModule,
@@ -163,4 +166,8 @@ import { PackingModule } from './packing/packing.module';
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
   ],
 })
-export class AppModule { }
+export class AppModule implements OnApplicationShutdown {
+  onApplicationShutdown() {
+    return shutdownTracing();
+  }
+}
