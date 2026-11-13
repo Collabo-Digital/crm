@@ -6,7 +6,7 @@ import { getLandingPath } from "~/lib/sections";
  * Protects /auth/* routes from authenticated users.
  *
  * - Authenticated with orgs → /dashboard (except /auth/invite which is always accessible)
- * - Authenticated without orgs → /onboarding/account-type
+ * - Authenticated without orgs → /onboarding (the setup wizard)
  * - Not authenticated → render children (show auth pages)
  *
  * The invite page is always accessible because an existing logged-in user
@@ -27,7 +27,7 @@ export function GuestGuard({ children }: { children: React.ReactNode }) {
   }
 
   if (isAuthenticated && organizations.length === 0) {
-    return <Navigate to="/onboarding/account-type" replace />;
+    return <Navigate to="/onboarding" replace />;
   }
 
   return <>{children}</>;

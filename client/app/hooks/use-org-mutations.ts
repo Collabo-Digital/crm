@@ -6,11 +6,8 @@ import { authService } from "~/services/auth.service";
 import { useAuthStore } from "~/stores/auth.store";
 import { orgKeys } from "~/hooks/use-org-queries";
 import { handleMutationError } from "~/lib/handle-mutation-error";
-import { takeAfterOnboarding } from "~/lib/return-path";
-import { SessionChangedError } from "~/lib/session-stamp";
 import type {
   CreateOrganizationRequest,
-  CreatePersonalRequest,
   UpdateOrganizationRequest,
   DeleteOrganizationRequest,
   UpgradeToOrganizationRequest,
@@ -23,84 +20,8 @@ import type {
 
 // ─── Organization Mutations ─────────────────────────────────────────────────
 
-/** Mutation hook for creating a new organization. Sets it as active and navigates to dashboard. */
-export function useCreateOrganizationMutation() {
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const setCurrentOrg = useAuthStore((s) => s.setCurrentOrg);
-  const clearPendingPlan = useAuthStore((s) => s.clearPendingPlan);
-
-  return useMutation({
-    mutationFn: (data: CreateOrganizationRequest) => orgService.create(data),
-    onSuccess: (org) => {
-      queryClient.invalidateQueries({ queryKey: orgKeys.list() });
-      setCurrentOrg(org.id);
-      clearPendingPlan();
-      toast.success(`${org.name} created successfully!`);
-      navigate("/dashboard");
-    },
-    onError: (error) => handleMutationError(error, "Failed to create organization."),
-  });
-}
-
-/** Mutation hook for creating a personal workspace, and moving the session into it. */
-export function useCreatePersonalMutation() {
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const setTokens = useAuthStore((s) => s.setTokens);
-  const setCurrentOrg = useAuthStore((s) => s.setCurrentOrg);
-  const setOrganizations = useAuthStore((s) => s.setOrganizations);
-  const existingOrgs = useAuthStore((s) => s.organizations);
-  const clearPendingPlan = useAuthStore((s) => s.clearPendingPlan);
-
-  return useMutation({
-    mutationFn: async (data: CreatePersonalRequest) => {
-      const org = await orgService.createPersonal(data);
-      // The token minted at sign-up names no org, and the server would run
-      // this workspace's requests in whichever org it resolves first. The
-      // workspace exists either way (a second try is refused), so a failed
-      // switch is left to AuthGuard, which retries it before showing it.
-      const tokens = await authService.switchOrg({ orgId: org.id }).catch((error: unknown) => {
-        if (error instanceof SessionChangedError) throw error;
-        return null;
-      });
-      return { org, tokens };
-    },
-    onSuccess: ({ org, tokens }) => {
-      queryClient.invalidateQueries({ queryKey: orgKeys.list() });
-
-      // Add the new personal workspace to auth store so AuthGuard allows dashboard access
-      const newMembership = {
-        id: crypto.randomUUID(),
-        organizationId: org.id,
-        role: "OWNER" as const,
-        isActive: true,
-        organization: {
-          id: org.id,
-          name: org.name,
-          slug: org.slug,
-          type: org.type || ("PERSONAL" as const),
-          logo: org.logo || null,
-          timezone: org.timezone || "UTC",
-          currency: org.currency || "USD",
-          industry: org.industry || null,
-          website: org.website || null,
-          billingPlan: org.billingPlan,
-          billingInterval: org.billingInterval,
-          onboardingStatus: "COMPLETED" as const,
-          createdAt: org.createdAt || new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        },
-      };
-      setOrganizations([...existingOrgs, newMembership]);
-      if (tokens) setTokens(tokens.accessToken, tokens.refreshToken);
-      setCurrentOrg(org.id);
-      clearPendingPlan();
-      navigate(takeAfterOnboarding() ?? "/dashboard");
-    },
-    onError: (error) => handleMutationError(error, "Failed to create workspace."),
-  });
-}
+// The setup wizard creates the first workspace: see useSaveOrganizationStep
+// in hooks/use-onboarding.ts.
 
 /** Mutation hook for updating an existing organization's settings. */
 export function useUpdateOrganizationMutation(orgId: string) {

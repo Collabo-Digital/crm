@@ -239,7 +239,6 @@ const SMALL_TEXT_ALLOWANCE: Record<string, number> = {
   "routes/app/admin/user-detail.tsx": 2,
   "routes/app/products/inventory.tsx": 5,
   "routes/app/products/inventory/warehouses.tsx": 6,
-  "routes/onboarding/invite-team.tsx": 1,
 };
 
 describe("type floor", () => {

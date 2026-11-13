@@ -25,11 +25,21 @@ export default [
     route("auth/invite", "routes/auth/invite.tsx"),
   ]),
 
+  // The setup wizard. "/onboarding" forwards to the step to resume at, and so
+  // do the URLs of the three pages the wizard replaced.
   layout("routes/onboarding/_layout.tsx", [
+    route("onboarding", "routes/onboarding/index.tsx"),
     route("onboarding/choose-plan", "routes/onboarding/choose-plan.tsx"),
-    route("onboarding/account-type", "routes/onboarding/account-type.tsx"),
-    route("onboarding/create-organization", "routes/onboarding/create-organization.tsx"),
-    route("onboarding/invite-team", "routes/onboarding/invite-team.tsx"),
+    route("onboarding/welcome", "routes/onboarding/welcome.tsx"),
+    route("onboarding/organization", "routes/onboarding/organization.tsx"),
+    route("onboarding/business", "routes/onboarding/business.tsx"),
+    route("onboarding/channels", "routes/onboarding/channels.tsx"),
+    route("onboarding/team", "routes/onboarding/team.tsx"),
+    route("onboarding/review", "routes/onboarding/review.tsx"),
+    route("onboarding/done", "routes/onboarding/done.tsx"),
+    route("onboarding/account-type", "routes/onboarding/index.tsx", { id: "onboarding-legacy-account-type" }),
+    route("onboarding/create-organization", "routes/onboarding/index.tsx", { id: "onboarding-legacy-create-organization" }),
+    route("onboarding/invite-team", "routes/onboarding/index.tsx", { id: "onboarding-legacy-invite-team" }),
   ]),
 
   layout("routes/app/_layout.tsx", [

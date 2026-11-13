@@ -535,6 +535,42 @@ export interface UpgradeToOrganizationRequest {
   timezone?: string;
 }
 
+// ─── Setup wizard (onboarding) ────────────────────────────────────────────
+
+/** Who the workspace is for. Read from the workspace type on the server. */
+export type OnboardingAudience = "solo" | "team";
+
+/** The wizard steps the server tracks: the ones after the workspace exists. */
+export type OnboardingServerStep = "organization" | "business" | "channels" | "team" | "review";
+
+/** The Business profile answers. Blank or empty until answered. */
+export interface OnboardingBusinessProfile {
+  sellModel: string;
+  categories: string[];
+  ordersPerMonth: string;
+  teamSize: string;
+  priorities: string[];
+}
+
+/** GET and PATCH /organizations/:orgId/onboarding. Owner only. */
+export interface OnboardingState {
+  status: Organization["onboardingStatus"];
+  audience: OnboardingAudience;
+  progress: {
+    currentStep: OnboardingServerStep;
+    completedSteps: OnboardingServerStep[];
+    businessProfile: OnboardingBusinessProfile;
+  };
+}
+
+/** One wizard save. Every key is optional; `finish` closes the wizard. */
+export interface UpdateOnboardingRequest {
+  currentStep?: OnboardingServerStep;
+  completeStep?: OnboardingServerStep;
+  businessProfile?: Partial<OnboardingBusinessProfile>;
+  finish?: boolean;
+}
+
 /** Response from POST /loyalty/recompute. */
 export interface RecomputeLoyaltyResponse {
   updated: number;

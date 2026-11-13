@@ -9,12 +9,21 @@ import { useAuthStore } from "~/stores/auth.store";
 
 const row = "flex min-h-14 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted focus-visible:outline-offset-[-2px]";
 
-/** Help and support, from the account menu and the phone's More sheet. */
-export function HelpDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+/** Help and support, from the account menu, the phone's More sheet and the setup wizard. */
+export function HelpDialog({
+  open,
+  onOpenChange,
+  hideSetupGuide = false,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The setup wizard hides the guide: it sits on the dashboard, past the wizard. */
+  hideSetupGuide?: boolean;
+}) {
   const navigate = useNavigate();
   const { role } = useCurrentRole();
   const orgId = useAuthStore((s) => s.currentOrgId);
-  const canSetUp = role === "OWNER" || role === "ADMIN";
+  const canSetUp = !hideSetupGuide && (role === "OWNER" || role === "ADMIN");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

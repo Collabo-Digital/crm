@@ -13,6 +13,8 @@ import { CreatePersonalDto } from './dto/create-personal.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { UpgradeToOrganizationDto } from './dto/upgrade-to-organization.dto';
 import { DeleteOrganizationDto } from './dto/delete-organization.dto';
+import { ZodValidationPipe } from '../organization-settings/zod-validation.pipe';
+import { UpdateOnboardingSchema, type UpdateOnboardingInput } from './onboarding-data';
 
 // JWT required. @NoOrgRequired: create/list orgs must work before JWT has orgId.
 @Controller('organizations')
@@ -65,6 +67,23 @@ export class OrganizationController {
     @Body() dto: UpdateOrganizationDto,
   ) {
     return this.orgService.update(orgId, user.sub, dto);
+  }
+
+  // GET /api/v1/organizations/:orgId/onboarding — setup wizard progress (OWNER only)
+  @Get(':orgId/onboarding')
+  getOnboarding(@Param('orgId') orgId: string, @CurrentUser() user: JwtPayload) {
+    return this.orgService.getOnboarding(orgId, user.sub);
+  }
+
+  // PATCH /api/v1/organizations/:orgId/onboarding — save answers, complete a
+  // step, or finish (OWNER only)
+  @Patch(':orgId/onboarding')
+  updateOnboarding(
+    @Param('orgId') orgId: string,
+    @CurrentUser() user: JwtPayload,
+    @Body(new ZodValidationPipe(UpdateOnboardingSchema)) update: UpdateOnboardingInput,
+  ) {
+    return this.orgService.updateOnboarding(orgId, user.sub, update);
   }
 
   // POST /api/v1/organizations/:orgId/upgrade-to-organization

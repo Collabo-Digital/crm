@@ -14,7 +14,7 @@ import { workspaceScope } from "~/lib/workspace-scope";
  * Protects /app/* routes.
  *
  * - Not authenticated → /auth/login, coming back here after signing in
- * - No organizations → /onboarding/account-type, coming back here after it
+ * - No organizations → /onboarding (the setup wizard), coming back here after it
  * - Token scoped to one of the user's workspaces → `currentOrgId` follows the
  *   token, since the server runs every request in the token's org
  * - Token with no org (or one this browser doesn't know) → get a token scoped
@@ -71,7 +71,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   if (needsWorkspace) {
-    return <Navigate to="/onboarding/account-type" replace />;
+    return <Navigate to="/onboarding" replace />;
   }
 
   if (switchTo) {

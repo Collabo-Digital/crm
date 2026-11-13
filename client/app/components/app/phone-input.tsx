@@ -88,11 +88,25 @@ export function PhoneInput({
   value,
   onChange,
   defaultCountry = "IN",
+  id,
+  hideLabel = false,
+  error,
+  onBlur,
 }: {
   label: string;
   value: string | undefined;
   onChange: (value: string | undefined) => void;
   defaultCountry?: CountryCode;
+  /** The number field's id, for a form that draws its own `<label htmlFor>`. */
+  id?: string;
+  /** The form draws the label; `label` still names the field for screen readers. */
+  hideLabel?: boolean;
+  /**
+   * The form owns the error: it is shown (or, when null, not shown) whether or
+   * not the field has been left, and the built-in message stays off.
+   */
+  error?: string | null;
+  onBlur?: () => void;
 }) {
   const initial = split(value, defaultCountry);
   const [country, setCountry] = useState<CountryCode>(initial.country);
@@ -143,6 +157,7 @@ export function PhoneInput({
 
   function handleBlur() {
     setTouched(true);
+    onBlur?.();
     const digits = national.replace(/\D/g, "");
     if (digits && !national.trim().startsWith("+")) {
       setNational(new AsYouType(country).input(digits));
@@ -169,17 +184,21 @@ export function PhoneInput({
     );
   }, [query]);
 
-  const invalid = touched && !isPhoneValidOrEmpty(value);
+  const ownsError = error === undefined;
+  const invalid = ownsError ? touched && !isPhoneValidOrEmpty(value) : !!error;
   const dial = `+${getCountryCallingCode(country)}`;
 
   return (
     <div className="block">
-      <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
-        {label}
-      </span>
+      {!hideLabel && (
+        <span className="text-caption font-medium text-gray-600 dark:text-gray-400">
+          {label}
+        </span>
+      )}
       <div
         className={cn(
-          "mt-1 flex h-8 w-full items-stretch overflow-hidden rounded-lg border bg-white dark:bg-gray-800 focus-within:ring-1",
+          "flex h-8 w-full items-stretch overflow-hidden rounded-lg border bg-white dark:bg-gray-800 focus-within:ring-1",
+          !hideLabel && "mt-1",
           invalid
             ? "border-destructive focus-within:ring-destructive/40"
             : "border-input focus-within:border-ring focus-within:ring-ring",
@@ -255,16 +274,17 @@ export function PhoneInput({
           type="tel"
           inputMode="tel"
           autoComplete="tel"
+          id={id}
           aria-label={label}
           aria-invalid={invalid || undefined}
-          aria-describedby={invalid ? errorId : undefined}
+          aria-describedby={invalid && ownsError ? errorId : undefined}
           value={national}
           onChange={(e) => handleType(e.target.value)}
           onBlur={handleBlur}
           className="min-w-0 flex-1 bg-transparent px-2 text-xs focus:outline-none"
         />
       </div>
-      {invalid && (
+      {invalid && ownsError && (
         <p id={errorId} className="mt-1 text-caption text-destructive">
           Enter a valid phone number for {countryName(country)}.
         </p>
