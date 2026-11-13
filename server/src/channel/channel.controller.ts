@@ -71,6 +71,7 @@ export class ChannelController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: ConnectShopifyDto,
   ) {
+    await this.channelService.assertOrgCanConnectChannels(user.orgId!);
     const authUrl = await this.shopifyOAuth.getInstallUrl(
       user.orgId!,
       user.sub,
@@ -155,6 +156,7 @@ export class ChannelController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: ManualConnectShopifyDto,
   ) {
+    await this.channelService.assertOrgCanConnectChannels(user.orgId!);
     const result = await this.shopifyOAuth.manualConnect(user.orgId!, dto.shopDomain, dto.apiKey, dto.apiSecret, dto.accessToken);
 
     // Auto-trigger initial sync after successful connection (bulk priority).
@@ -184,6 +186,7 @@ export class ChannelController {
     @Body() dto: ConnectInstagramDto,
   ) {
     requireMessagingChannel(ChannelPlatform.INSTAGRAM);
+    await this.channelService.assertOrgCanConnectChannels(user.orgId!);
     const authUrl = await this.instagramOAuth.getInstallUrl(
       user.orgId!,
       user.sub,
@@ -304,6 +307,7 @@ export class ChannelController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: WhatsAppInstallDto,
   ) {
+    await this.channelService.assertOrgCanConnectChannels(user.orgId!);
     return this.whatsappOAuth.getSignupConfig(
       user.orgId!,
       user.sub,
@@ -329,6 +333,7 @@ export class ChannelController {
   @Roles(UserRole.OWNER, UserRole.ADMIN)
   async installMessenger(@CurrentUser() user: JwtPayload) {
     requireMessagingChannel(ChannelPlatform.FACEBOOK);
+    await this.channelService.assertOrgCanConnectChannels(user.orgId!);
     return this.metaPages.getConnectConfig(user.orgId!, user.sub);
   }
 

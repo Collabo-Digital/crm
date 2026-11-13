@@ -8,11 +8,12 @@ export const settingsKeys = {
   all: ["organization-settings"] as const,
 };
 
-/** Fetch all domain settings for the current org. */
-export function useOrganizationSettings() {
+/** Fetch all domain settings for the current org. Pass `enabled: false` while there is no workspace yet (the setup wizard). */
+export function useOrganizationSettings(enabled = true) {
   return useQuery({
     queryKey: settingsKeys.all,
     queryFn: () => organizationSettingsService.get(),
+    enabled,
   });
 }
 

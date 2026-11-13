@@ -6,7 +6,7 @@ import { getLandingPath } from "~/lib/sections";
  * Home page (/) — pure redirect, no UI.
  *
  * - Authenticated with orgs → /dashboard
- * - Authenticated without orgs → /onboarding/account-type
+ * - Authenticated without orgs → /onboarding (the setup wizard)
  * - Not authenticated → /auth/login
  */
 export default function Home() {
@@ -17,7 +17,7 @@ export default function Home() {
   }
 
   if (isAuthenticated) {
-    return <Navigate to="/onboarding/account-type" replace />;
+    return <Navigate to="/onboarding" replace />;
   }
 
   return <Navigate to="/auth/login" replace />;

@@ -4,7 +4,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { Channel, ChannelPlatform, ChannelStatus, SyncStatus, UserRole, Prisma } from '@prisma/client';
+import { Channel, ChannelPlatform, ChannelStatus, OrganizationType, SyncStatus, UserRole, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { describeRateLimit } from '../rate-limit/rate-limit-state.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
@@ -44,6 +44,24 @@ export class ChannelService {
     private readonly whatsappAccount: WhatsAppAccountService,
     private readonly encryption: EncryptionService,
   ) { }
+
+  /**
+   * Personal workspaces can't connect channels. Checked where a connection
+   * starts: every later step needs the state that step issued, and a workspace
+   * never turns back into a personal one. Connections a personal workspace
+   * already has are left alone.
+   */
+  async assertOrgCanConnectChannels(orgId: string): Promise<void> {
+    const organization = await this.prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { type: true },
+    });
+    if (organization?.type === OrganizationType.PERSONAL) {
+      throw new ForbiddenException(
+        "Personal workspaces can't connect channels. Upgrade to a team workspace in Settings.",
+      );
+    }
+  }
 
   /**
    * Project a channel row for the API: derived connection state and a

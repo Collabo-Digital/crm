@@ -59,3 +59,42 @@ export function forgetAfterOnboarding() {
     // Nothing stored, then.
   }
 }
+
+// The setup wizard's Sales channels step starts a Shopify or Instagram
+// connection, and both come back to Settings › Channels. This marks that the
+// trip started in the wizard, so that page can send the result back there.
+const CONNECT_FROM_SETUP_KEY = "crm-connect-from-setup";
+/** Longer than any sign-in at Shopify or Instagram takes; after it, a result belongs to Settings. */
+const CONNECT_FROM_SETUP_TTL_MS = 15 * 60 * 1000;
+
+/** The wizard is about to hand over to Shopify or Instagram. */
+export function rememberConnectFromSetup() {
+  try {
+    sessionStorage.setItem(CONNECT_FROM_SETUP_KEY, String(Date.now()));
+  } catch {
+    // Storage blocked: the result shows in Settings › Channels instead.
+  }
+}
+
+/** The wizard has shown the result, or moved on without it: a later result belongs to Settings. */
+export function forgetConnectFromSetup() {
+  try {
+    sessionStorage.removeItem(CONNECT_FROM_SETUP_KEY);
+  } catch {
+    // Nothing stored, then.
+  }
+}
+
+/**
+ * Did this connection start in the setup wizard, recently? Asking doesn't
+ * clear the mark (the wizard does, once it has shown the result), so it is
+ * safe to ask twice: React runs a page's first effect twice in development.
+ */
+export function connectStartedInSetup(): boolean {
+  try {
+    const startedAt = Number(sessionStorage.getItem(CONNECT_FROM_SETUP_KEY));
+    return startedAt > 0 && Date.now() - startedAt < CONNECT_FROM_SETUP_TTL_MS;
+  } catch {
+    return false;
+  }
+}

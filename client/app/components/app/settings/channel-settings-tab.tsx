@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link2 } from "lucide-react";
@@ -24,9 +24,10 @@ import {
   useRefreshAfterChannelSync,
   channelKeys,
 } from "~/hooks/use-channel-queries";
-import { orgKeys } from "~/hooks/use-org-queries";
+import { orgKeys, useCurrentOrg } from "~/hooks/use-org-queries";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { CHANNEL_PROVIDERS, connectErrorMessage, type ChannelProvider } from "~/lib/channel-providers";
+import { connectStartedInSetup } from "~/lib/return-path";
 import type { Channel, ChannelPlatform } from "~/types/api";
 
 /**
@@ -60,9 +61,14 @@ export function ChannelSettingsTab() {
   const [linkingChannelId, setLinkingChannelId] = useState<string | null>(null);
 
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { role, isInfluencer } = useCurrentRole();
   const canManage = !!role && MANAGE_ROLES.includes(role);
+  // A personal ("Just me") workspace keeps the channels it already has, but the
+  // server refuses it any new connection until it becomes a team workspace.
+  const isPersonalWorkspace = useCurrentOrg().data?.type === "PERSONAL";
+  const canConnect = canManage && !isPersonalWorkspace;
   // An influencer is offered Instagram and nothing else — a Connect Shopify
   // button would only produce a refusal, since the server closes those routes
   // to them.
@@ -82,6 +88,13 @@ export function ChannelSettingsTab() {
     const select = searchParams.get("select");
     const pending = searchParams.get("pending");
     const installShop = searchParams.get("install_shop");
+
+    // The setup wizard started this connection: its Sales channels step shows
+    // the result, so the owner carries on where they left off.
+    if ((connected || error || select) && connectStartedInSetup()) {
+      navigate({ pathname: "/onboarding/channels", search: searchParams.toString() }, { replace: true });
+      return;
+    }
 
     if (connected) {
       const refreshed = searchParams.get("note") === "refreshed";
@@ -185,12 +198,21 @@ export function ChannelSettingsTab() {
             Only owners and admins can connect or disconnect channels.
           </p>
         )}
+        {canManage && isPersonalWorkspace && (
+          <p className="mt-2 text-caption text-muted-foreground">
+            A Just me workspace can't connect channels.{" "}
+            <Link to="/settings/general" className="font-medium text-brand-strong underline underline-offset-4">
+              Upgrade to a team workspace
+            </Link>{" "}
+            to connect your store and messaging accounts.
+          </p>
+        )}
       </div>
 
       <ChannelProviderCards
         providers={providers}
         channels={channels}
-        canManage={canManage}
+        canManage={canConnect}
         onConnect={(provider) => startConnect(provider)}
         extra={(provider, active) =>
           provider.platform === "SHOPIFY" && canManage && active.length > 0 ? (

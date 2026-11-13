@@ -8,6 +8,7 @@ import {
   AutomationStatus,
   BroadcastRecipientStatus,
   BroadcastStatus,
+  OnboardingStatus,
   Organization,
   OrganizationType,
   UserRole,
@@ -26,6 +27,10 @@ import { CreatePersonalDto } from './dto/create-personal.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { UpgradeToOrganizationDto } from './dto/upgrade-to-organization.dto';
 import { DeleteOrganizationDto } from './dto/delete-organization.dto';
+import { applyOnboardingUpdate, parseOnboardingData, type UpdateOnboardingInput } from './onboarding-data';
+
+/** The only columns the setup wizard reads, so its queries never load the whole row. */
+const ONBOARDING_SELECT = { type: true, onboardingStatus: true, onboardingData: true } as const;
 
 @Injectable()
 export class OrganizationService {
@@ -58,6 +63,7 @@ export class OrganizationService {
           website: dto.website,
           billingPlan: dto.billingPlan,
           billingInterval: dto.billingInterval,
+          onboardingStatus: OnboardingStatus.IN_PROGRESS,
           members: { create: { userId, role: UserRole.OWNER } },
         },
         include: { members: true },
@@ -111,6 +117,7 @@ export class OrganizationService {
           type: OrganizationType.PERSONAL,
           billingPlan: dto.billingPlan,
           billingInterval: dto.billingInterval,
+          onboardingStatus: OnboardingStatus.IN_PROGRESS,
           members: { create: { userId, role: UserRole.OWNER } },
         },
         include: { members: true },
@@ -130,6 +137,53 @@ export class OrganizationService {
     await this.redis.deleteSession(userId);
 
     return this.formatOrg(org, UserRole.OWNER);
+  }
+
+  // ─── SETUP WIZARD ───
+  // The owner runs setup, so only the owner reads or writes its progress.
+  async getOnboarding(orgId: string, userId: string) {
+    await this.requireRole(orgId, userId, [UserRole.OWNER]);
+    const organization = await this.prisma.organization.findUniqueOrThrow({
+      where: { id: orgId },
+      select: ONBOARDING_SELECT,
+    });
+
+    return this.formatOnboarding(organization);
+  }
+
+  // One wizard save: partial answers, a completed step, the step to resume
+  // at, or finish. Finishing is what closes the wizard for the workspace.
+  async updateOnboarding(orgId: string, userId: string, update: UpdateOnboardingInput) {
+    await this.requireRole(orgId, userId, [UserRole.OWNER]);
+
+    return this.prisma.$transaction(async (tx) => {
+      // Answers autosave, so two saves can land together. The row lock makes
+      // the second wait, then merge into what the first wrote.
+      await tx.$queryRaw`SELECT 1 FROM "organizations" WHERE "id" = ${orgId} FOR UPDATE`;
+      const organization = await tx.organization.findUniqueOrThrow({
+        where: { id: orgId },
+        select: ONBOARDING_SELECT,
+      });
+      if (organization.onboardingStatus !== OnboardingStatus.IN_PROGRESS) {
+        throw new ConflictException("Setup isn't open for this workspace.");
+      }
+
+      const isPersonalWorkspace = organization.type === OrganizationType.PERSONAL;
+      const { progress, finished } = applyOnboardingUpdate(
+        parseOnboardingData(organization.onboardingData),
+        update,
+        isPersonalWorkspace,
+      );
+      const updatedOrganization = await tx.organization.update({
+        where: { id: orgId },
+        data: {
+          onboardingData: progress,
+          ...(finished && { onboardingStatus: OnboardingStatus.COMPLETED }),
+        },
+        select: ONBOARDING_SELECT,
+      });
+      return this.formatOnboarding(updatedOrganization);
+    });
   }
 
   // ─── LIST USER'S ORGS ───
@@ -353,6 +407,16 @@ export class OrganizationService {
       onboardingStatus: org.onboardingStatus,
       role,
       createdAt: org.createdAt,
+    };
+  }
+
+  // What the wizard needs to draw itself. `audience` is read from the
+  // workspace type, so upgrading a personal workspace switches it by itself.
+  private formatOnboarding(organization: Pick<Organization, keyof typeof ONBOARDING_SELECT>) {
+    return {
+      status: organization.onboardingStatus,
+      audience: organization.type === OrganizationType.PERSONAL ? ('solo' as const) : ('team' as const),
+      progress: parseOnboardingData(organization.onboardingData),
     };
   }
 }
