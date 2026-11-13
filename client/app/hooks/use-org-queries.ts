@@ -10,6 +10,7 @@ export const orgKeys = {
   members: (orgId: string) => [...orgKeys.all, "members", orgId] as const,
   invites: (orgId: string) => [...orgKeys.all, "invites", orgId] as const,
   influencers: (orgId: string) => [...orgKeys.all, "influencers", orgId] as const,
+  onboarding: (orgId: string) => [...orgKeys.all, "onboarding", orgId] as const,
 };
 
 /** Fetch all organizations for the current user */

@@ -25,9 +25,9 @@ function resolvePostAuthRoute(nextStep: string | null): string {
   // The member's first accessible section — /dashboard unless it is locked.
   if (nextStep !== "choose-plan") return getLandingPath();
   // Users who pick a plan but close the tab before creating their org can log
-  // back in without re-picking — skip ahead to account-type.
+  // back in without re-picking — skip ahead to the setup wizard.
   const { pendingPlan } = useAuthStore.getState();
-  return pendingPlan ? "/onboarding/account-type" : "/onboarding/choose-plan";
+  return pendingPlan ? "/onboarding" : "/onboarding/choose-plan";
 }
 
 /**

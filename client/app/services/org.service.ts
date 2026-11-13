@@ -13,6 +13,8 @@ import type {
   InviteInfluencerRequest,
   InfluencerRow,
   OrgInvite,
+  OnboardingState,
+  UpdateOnboardingRequest,
 } from "~/types/api";
 
 /**
@@ -45,6 +47,18 @@ export const orgService = {
   upgradeToOrganization: (orgId: string, data: UpgradeToOrganizationRequest) =>
     apiClient
       .post<OrgResponse>(`/organizations/${orgId}/upgrade-to-organization`, data)
+      .then((response) => response.data),
+
+  // ─── Setup wizard ───
+
+  /** The workspace's setup progress. OWNER only. */
+  getOnboarding: (orgId: string) =>
+    apiClient.get<OnboardingState>(`/organizations/${orgId}/onboarding`).then((response) => response.data),
+
+  /** One wizard save: answers, a completed step, the step to resume at, or finish. OWNER only. */
+  updateOnboarding: (orgId: string, data: UpdateOnboardingRequest) =>
+    apiClient
+      .patch<OnboardingState>(`/organizations/${orgId}/onboarding`, data)
       .then((response) => response.data),
 
   /** The server checks the owner's password and the typed name before deleting. */

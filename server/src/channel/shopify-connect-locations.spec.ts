@@ -27,7 +27,7 @@ function build(outcome: Outcome, pack: { wabaId?: string; packOrg?: string } = {
   const locationDecisions = { onConnect: jest.fn().mockResolvedValue(outcome) };
   const controller = new ChannelController(
     prisma as never,
-    {} as never,
+    { assertOrgCanConnectChannels: jest.fn().mockResolvedValue(undefined) } as never,
     shopifyOAuth as never,
     {} as never,
     {} as never,

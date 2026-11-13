@@ -6,6 +6,9 @@ import { SectionCard } from "~/components/app/section-card";
 import { Button } from "~/components/ui/button";
 import { useCurrentRole } from "~/hooks/use-current-role";
 import { useSetupProgress } from "~/hooks/use-dashboard-queries";
+import { useOnboarding } from "~/hooks/use-onboarding";
+import { useCurrentOrg } from "~/hooks/use-org-queries";
+import { onboardingSteps } from "~/lib/onboarding-steps";
 import { cn } from "~/lib/utils";
 import { useAuthStore } from "~/stores/auth.store";
 import type { SetupProgress } from "~/types/api";
@@ -40,14 +43,18 @@ export function showSetupGuide(orgId: string | null) {
 type Step = {
   title: string;
   why: string;
+  /** Not for a "Just me" workspace, which can't connect channels or invite people. */
+  teamOnly?: boolean;
   done: (p: SetupProgress) => boolean;
   actions: (p: SetupProgress) => Array<{ label: string; to: string } | false>;
 };
 
-const STEPS: Step[] = [
+/** The first jobs of a new store. Also the setup wizard's "Recommended next". */
+export const SETUP_STEPS: Step[] = [
   {
     title: "Connect your WhatsApp number",
     why: "Chat with customers and send order updates from Collabo.",
+    teamOnly: true,
     done: (p) => p.whatsapp,
     actions: () => [{ label: "Connect WhatsApp", to: "/settings/channels" }],
   },
@@ -72,12 +79,15 @@ const STEPS: Step[] = [
   {
     title: "Invite your team",
     why: "Give packers, agents and managers their own sign-in, with only what they need.",
+    teamOnly: true,
     done: (p) => p.team,
     actions: () => [{ label: "Invite", to: "/settings/members" }],
   },
   {
     title: "Turn on the recommended messages",
     why: "Order confirmations, cash-on-delivery checks and cart reminders go out by themselves.",
+    // They are sent over WhatsApp, which a "Just me" workspace can't connect.
+    teamOnly: true,
     done: (p) => p.automations,
     actions: () => [{ label: "Turn on", to: "/campaigns/automations" }],
   },
@@ -95,6 +105,9 @@ export function GetStartedCard({ className }: { className?: string }) {
   const canSetUp = role === "OWNER" || role === "ADMIN";
   const [hidden, setHidden] = useState(() => readHidden(orgId));
   const { data } = useSetupProgress(canSetUp && !hidden);
+  // Only the owner runs the setup wizard, and only they may read its progress.
+  const { data: onboarding } = useOnboarding(role === "OWNER" ? orgId : null);
+  const isPersonalWorkspace = useCurrentOrg().data?.type === "PERSONAL";
 
   useEffect(() => {
     const sync = () => setHidden(readHidden(orgId));
@@ -103,7 +116,32 @@ export function GetStartedCard({ className }: { className?: string }) {
     return () => window.removeEventListener(CHANGED, sync);
   }, [orgId]);
 
+  // Setup was left part-way: the way back in comes before the checklist, and can't be hidden.
+  if (onboarding?.status === "IN_PROGRESS") {
+    const wizardSteps = onboardingSteps(onboarding.audience);
+    const at = Math.max(wizardSteps.findIndex((step) => step.id === onboarding.progress.currentStep), 0);
+    return (
+      <SectionCard
+        className={className}
+        title="Finish setting up your workspace"
+        description={`You're on step ${at + 1} of ${wizardSteps.length}: ${wizardSteps[at].title}. Everything so far is saved.`}
+        action={
+          <Button asChild size="sm">
+            <Link to="/onboarding">Resume setup</Link>
+          </Button>
+        }
+      >
+        <div className="px-5 py-4" aria-hidden>
+          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+            <div className="h-full rounded-full bg-success" style={{ width: `${((at + 1) / wizardSteps.length) * 100}%` }} />
+          </div>
+        </div>
+      </SectionCard>
+    );
+  }
+
   if (!canSetUp || hidden || !data || !orgId) return null;
+  const STEPS = SETUP_STEPS.filter((step) => !(step.teamOnly && isPersonalWorkspace));
   const done = STEPS.filter((step) => step.done(data)).length;
   if (done === STEPS.length) return null;
 
